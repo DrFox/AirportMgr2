@@ -17,8 +17,9 @@ EFlightPhase FlightPhaseFromTransition(const FAgentTransition& Transition, EFlig
 {
 	// A TAXI THAT GOES ON goes the way it was going: Turnaround or later means the taxi OUT, anything earlier the taxi
 	// in. EAgentPhase::Taxiing happens twice and the agent cannot tell the two apart - only the flight can - which is
-	// why this takes Current at all. The comparison reads EFlightPhase's declaration order, which its own comment pins.
-	const EFlightPhase TaxiGoesOn = Current >= EFlightPhase::Turnaround ? EFlightPhase::TaxiOut : EFlightPhase::TaxiIn;
+	// why this takes Current at all. Asked through FlightPhase::HasReachedStand, not by comparing phases (#442): the
+	// comparison read EFlightPhase's declaration order, which was load-bearing for this and nothing else that said so.
+	const EFlightPhase TaxiGoesOn = FlightPhase::HasReachedStand(Current) ? EFlightPhase::TaxiOut : EFlightPhase::TaxiIn;
 
 	// EVERY CAUSE BY NAME, NO default (#436): the default of FlightPhaseFromAgent's switch on To is where a new pair
 	// hid - a cause added to EAgentEvent lands here as a BUILD ERROR on a missing case (C4062, raised above), not as
@@ -42,7 +43,7 @@ EFlightPhase FlightPhaseFromTransition(const FAgentTransition& Transition, EFlig
 		// #436; it used to be the live agent's, asked a drain late, and was right only because the agent was asked
 		// whether it was STILL parked first. (Moved here from UFlightBoard::OnAgentPhase, which special-cased it.)
 		// ENFORCED BY: AirportOps.Model.Bus.FallbackParkStaysTaxiIn, AirportOps.Model.Bus.SameFrameRedirectStaysTaxiIn
-		return Current < EFlightPhase::Turnaround && !bParkedAtStand ? Current : EFlightPhase::Turnaround;
+		return !FlightPhase::HasReachedStand(Current) && !bParkedAtStand ? Current : EFlightPhase::Turnaround;
 
 	case EAgentEvent::PushedBack:
 		return EFlightPhase::TaxiOut;

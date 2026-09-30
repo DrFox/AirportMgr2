@@ -1,5 +1,6 @@
 #include "Model/AirlineRoster.h"
 #include "AirportOpsLog.h"
+#include "Model/ExhaustiveSwitch.h"
 #include "Model/FlightBoard.h"
 #include "Model/OpsEventBus.h"
 
@@ -121,11 +122,29 @@ void UAirlineRoster::OnTurnaroundEnded(const FTurnaroundEndedEvent& Event, const
 		Event.Outcome == EFuelOutcome::PartFuelled ? TEXT("left part-fuelled") : TEXT("left unfuelled"));
 }
 
+// A MISSING REASON IN THE SWITCH BELOW IS A BUILD ERROR (#442) - see ExhaustiveSwitch.h: a new ECancelReason must say what it costs.
+// ENFORCED BY: C4062 as an error, AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
 void UAirlineRoster::OnFlightCancelled(const FFlightCancelledEvent& Event)
 {
-	// ONLY THE PLAYER'S CLOSURE COSTS (user ruling 2026-09-29): losing the last runway is a loophole the user
-	// accepted, and a despawn is the player rescuing a stuck aeroplane, not letting an airline down.
-	if (Event.Reason != ECancelReason::AirportClosed)
+	// ONLY THE PLAYER'S CHOICE COSTS (user ruling 2026-09-29): losing the last runway is a loophole the user
+	// accepted, and a despawn is the player rescuing a stuck aeroplane, not letting an airline down. The player's
+	// CLOSURE costs, and since #442 so does the player's CANCEL of a flight that had not arrived - at the SAME rate, the
+	// closure's per-flight ClosureCancelPenalty: each lost the airline the flight to the player's own hand.
+	const TCHAR* Cause = nullptr;
+	switch (Event.Reason)
+	{
+	case ECancelReason::AirportClosed:
+		Cause = TEXT("cancelled: airport closed");
+		break;
+	case ECancelReason::PlayerCancelled:
+		Cause = TEXT("cancelled by the player");
+		break;
+	case ECancelReason::NoRunway:
+	case ECancelReason::Unstuck:
+		break;
+	}
+	if (Cause == nullptr)
 	{
 		UE_LOG(LogAirportOps, Verbose, TEXT("Airline '%s': flight %d cancelled (%s) - no effect on satisfaction"),
 			*Event.AirlineId.ToString(), Event.FlightId, *UEnum::GetValueAsString(Event.Reason));
@@ -138,8 +157,9 @@ void UAirlineRoster::OnFlightCancelled(const FFlightCancelledEvent& Event)
 			*Event.AirlineId.ToString(), Event.FlightId);
 		return;
 	}
-	Apply(*Row, -Tuning.ClosureCancelPenalty, TEXT("cancelled: airport closed"));
+	Apply(*Row, -Tuning.ClosureCancelPenalty, Cause);
 }
+AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 void UAirlineRoster::OnDayEnded(const FDayEndedEvent& Event)
 {

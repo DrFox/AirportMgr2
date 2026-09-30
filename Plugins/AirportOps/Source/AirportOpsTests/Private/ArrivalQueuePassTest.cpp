@@ -96,7 +96,7 @@ namespace ArrivalQueuePassTest
 			Flight->OfferWindowSeconds = 60.0;
 			Flight->OfferSecondsLeft = 60.0;
 			Flight->LeadTimeSeconds = Lead;
-			Flight->ApproachFocus = Focus;
+			Flight->RunwayPreference = Focus;
 			Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Flight);
 			return Runtime->GetFlightBoard()->Accept(*Model, *Net, *Runtime->GetClock(), *Flight) ? Flight : nullptr;
 		}
@@ -165,14 +165,14 @@ bool FArrivalQueueInboundTest::RunTest(const FString&)
 	Flight->Airframe = Airframe;
 	Flight->AirlineId = TEXT("Cumbria");
 	Flight->LeadTimeSeconds = 10.0;
-	Flight->ApproachFocus = Field.Threshold;
+	Flight->RunwayPreference = Field.Threshold;
 	Board->AddOffer(*Clock, Flight);
 	if (!TestTrue(TEXT("accepted"), Board->Accept(*Traffic, *Field.Net, *Clock, *Flight))) { return false; }
 	Bus.Drain();
 	TestEqual(TEXT("an accept is not an arrival"), Seen.Num(), 0);
 	Clock->Advance(11.0);
 	Bus.Drain();
-	TestEqual(TEXT("it is holding"), Flight->Phase, EFlightPhase::Inbound);
+	TestEqual(TEXT("it is holding"), Flight->GetPhase(), EFlightPhase::Inbound);
 	if (TestEqual(TEXT("and its ETA published FlightInbound once"), Seen.Num(), 1))
 	{
 		TestEqual(TEXT("naming the flight"), Seen[0].FlightId, Flight->Id);
@@ -289,7 +289,7 @@ bool FArrivalQueueCrossingTest::RunTest(const FString&)
 	if (!TestNotNull(TEXT("a flight accepted onto the stand"), Flight)) { return false; }
 	for (int32 Tick = 0; Tick < 3 && Held(); ++Tick) { Step(); }
 	if (!TestTrue(TEXT("the crossing still holds the strip"), Held())) { return false; }
-	TestEqual(TEXT("so the flight holds"), Flight->Phase, EFlightPhase::Inbound);
+	TestEqual(TEXT("so the flight holds"), Flight->GetPhase(), EFlightPhase::Inbound);
 
 	int32 ReleasedAt = INDEX_NONE;
 	int32 ClearedAt = INDEX_NONE;
@@ -301,14 +301,14 @@ bool FArrivalQueueCrossingTest::RunTest(const FString&)
 			ReleasedAt = Tick;
 		}
 		Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
-		if (Flight->Phase != EFlightPhase::Inbound)
+		if (Flight->GetPhase() != EFlightPhase::Inbound)
 		{
 			ClearedAt = Tick;
 		}
 	}
 	if (!TestTrue(TEXT("the crossing cleared"), ReleasedAt != INDEX_NONE)) { return false; }
 	if (!TestTrue(TEXT("and the flight was cleared to land"), ClearedAt != INDEX_NONE)) { return false; }
-	TestEqual(TEXT("landing"), Flight->Phase, EFlightPhase::Landing);
+	TestEqual(TEXT("landing"), Flight->GetPhase(), EFlightPhase::Landing);
 	// WITHIN ONE FRAME: here the model advances before the runtime ticks, so the same frame; in the other order
 	// the drain that hears the event is the next frame's.
 	TestTrue(FString::Printf(TEXT("cleared within a frame of the crossing clearing (released %d, cleared %d)"), ReleasedAt, ClearedAt),
@@ -331,13 +331,13 @@ bool FArrivalQueueSafetyNetTest::RunTest(const FString&)
 	UFlight* Flight = Rig.Accept(Field.Threshold);
 	if (!TestNotNull(TEXT("accepted"), Flight)) { return false; }
 	for (int32 Tick = 0; Tick < 10; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
-	TestEqual(TEXT("the runway is held: the flight holds"), Flight->Phase, EFlightPhase::Inbound);
+	TestEqual(TEXT("the runway is held: the flight holds"), Flight->GetPhase(), EFlightPhase::Inbound);
 	TestTrue(TEXT("and the net is armed while it does"), Rig.Runtime->IsSafetyNetArmedForTest());
 
 	Rig.Model->OccupancyForTest().ReleaseAll(99);
 	int32 Frames = 0;
-	for (; Frames < 30 * 45 && Flight->Phase == EFlightPhase::Inbound; ++Frames) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
-	TestEqual(TEXT("the net landed it"), Flight->Phase, EFlightPhase::Landing);
+	for (; Frames < 30 * 45 && Flight->GetPhase() == EFlightPhase::Inbound; ++Frames) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
+	TestEqual(TEXT("the net landed it"), Flight->GetPhase(), EFlightPhase::Landing);
 	TestTrue(FString::Printf(TEXT("within one net interval (%d frames)"), Frames),
 		Frames <= FMath::CeilToInt(UOpsRuntime::SafetyNetSeconds / ArrivalQueuePassTest::Frame) + 2);
 	if (TestEqual(TEXT("and said so, once"), Spy.Lines.Num(), 1))
@@ -368,9 +368,9 @@ bool FArrivalQueueTwoRunwaysTest::RunTest(const FString&)
 	TArray<int32> ClearedAt;
 	for (int32 Tick = 0; Tick < 30 && ClearedAt.Num() < 2; ++Tick)
 	{
-		const int32 Before = (First->Phase == EFlightPhase::Landing) + (Second->Phase == EFlightPhase::Landing);
+		const int32 Before = (First->GetPhase() == EFlightPhase::Landing) + (Second->GetPhase() == EFlightPhase::Landing);
 		Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
-		const int32 After = (First->Phase == EFlightPhase::Landing) + (Second->Phase == EFlightPhase::Landing);
+		const int32 After = (First->GetPhase() == EFlightPhase::Landing) + (Second->GetPhase() == EFlightPhase::Landing);
 		for (int32 Each = Before; Each < After; ++Each) { ClearedAt.Add(Tick); }
 	}
 	if (!TestEqual(TEXT("both cleared"), ClearedAt.Num(), 2)) { return false; }
@@ -435,11 +435,11 @@ bool FArrivalQueueRetireTest::RunTest(const FString&)
 	UFlight* Flight = Rig.Accept(Field.Threshold);
 	if (!TestNotNull(TEXT("a flight accepted onto the other stand"), Flight)) { return false; }
 	for (int32 Tick = 0; Tick < 10; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
-	if (!TestEqual(TEXT("the runway is held: it holds"), Flight->Phase, EFlightPhase::Inbound)) { return false; }
+	if (!TestEqual(TEXT("the runway is held: it holds"), Flight->GetPhase(), EFlightPhase::Inbound)) { return false; }
 
 	Rig.Model->RetireAgent(Blocker);
-	for (int32 Tick = 0; Tick < 30 * 45 && Flight->Phase == EFlightPhase::Inbound; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
-	TestEqual(TEXT("cleared to land"), Flight->Phase, EFlightPhase::Landing);
+	for (int32 Tick = 0; Tick < 30 * 45 && Flight->GetPhase() == EFlightPhase::Inbound; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
+	TestEqual(TEXT("cleared to land"), Flight->GetPhase(), EFlightPhase::Landing);
 	TestEqual(TEXT("by the retire's own event: no safety Warning"), Spy.Lines.Num(), 0);
 	return true;
 }
@@ -478,8 +478,8 @@ bool FArrivalQueueRetryCoveredTest::RunTest(const FString&)
 	};
 	Rig.Model->OccupancyForTest().ReleaseAll(99);
 	Rig.Runtime->GetBus().Publish(FRunwayFreedEvent{});   // the event that covers it
-	for (int32 Tick = 0; Tick < 30 * 45 && Flight->Phase == EFlightPhase::Inbound; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
-	TestEqual(TEXT("landed once the race cleared"), Flight->Phase, EFlightPhase::Landing);
+	for (int32 Tick = 0; Tick < 30 * 45 && Flight->GetPhase() == EFlightPhase::Inbound; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
+	TestEqual(TEXT("landed once the race cleared"), Flight->GetPhase(), EFlightPhase::Landing);
 	TestEqual(TEXT("a retry of a covered run is covered: no safety Warning"), Spy.Lines.Num(), 0);
 	return true;
 }
@@ -547,8 +547,8 @@ bool FArrivalQueueClosedTest::RunTest(const FString&)
 
 	UFlight* Holding = NewObject<UFlight>(GetTransientPackage());
 	Holding->Airframe = Rig.Airframe;
-	Holding->ApproachFocus = Field.Threshold;
-	Holding->Phase = EFlightPhase::Inbound;
+	Holding->RunwayPreference = Field.Threshold;
+	Holding->SetPhaseForTest(EFlightPhase::Inbound);
 	Holding->HoldingSince = Rig.Runtime->GetClock()->Now();
 	Rig.Runtime->GetFlightBoard()->AddOffer(*Rig.Runtime->GetClock(), Holding);
 	// PAUSED AS WELL AS CLOSED (whole-stack re-review m6): a closed airport paused is still closed, and must not arm a
@@ -567,13 +567,13 @@ bool FArrivalQueueClosedTest::RunTest(const FString&)
 		Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
 	}
 	TestTrue(TEXT("the pass ran - it was asked"), Rig.QueueRuns() > RunsBefore);
-	TestEqual(TEXT("closed: the holding flight is not cleared to land"), Holding->Phase, EFlightPhase::Inbound);
+	TestEqual(TEXT("closed: the holding flight is not cleared to land"), Holding->GetPhase(), EFlightPhase::Inbound);
 	TestEqual(TEXT("and no aircraft was dispatched"), Rig.Model->GetAgentCount(), 0);
 	TestFalse(TEXT("and no safety net ticks for a queue that cannot move"), Rig.Runtime->IsSafetyNetArmedForTest());
 
 	Rig.Runtime->SetAirportClosed(false);
-	for (int32 Tick = 0; Tick < 10 && Holding->Phase == EFlightPhase::Inbound; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
-	TestEqual(TEXT("opened: it lands"), Holding->Phase, EFlightPhase::Landing);
+	for (int32 Tick = 0; Tick < 10 && Holding->GetPhase() == EFlightPhase::Inbound; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
+	TestEqual(TEXT("opened: it lands"), Holding->GetPhase(), EFlightPhase::Landing);
 	return true;
 }
 

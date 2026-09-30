@@ -788,7 +788,7 @@ bool FInspectorHoldAndDeadlockTest::RunTest(const FString& Parameters)
 		Flight->AgentId = AgentId;
 		Flight->Callsign = Callsign;
 		Flight->AirlineName = FText::FromString(TEXT("Flying Club"));
-		Flight->Phase = EFlightPhase::TaxiIn;
+		Flight->SetPhaseForTest(EFlightPhase::TaxiIn);
 		Board->AddOffer(*Clock, Flight);
 	};
 	Fly(One, TEXT("G-SVBT"));
@@ -1270,7 +1270,7 @@ bool FInspectorWaitingOnRefreshesTest::RunTest(const FString& Parameters)
 		UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 		Flight->AgentId = AgentId;
 		Flight->Callsign = Callsign;
-		Flight->Phase = EFlightPhase::TaxiIn;
+		Flight->SetPhaseForTest(EFlightPhase::TaxiIn);
 		Board->AddOffer(*Clock, Flight);
 	};
 	Fly(One, TEXT("G-SVBT"));

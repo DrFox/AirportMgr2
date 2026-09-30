@@ -323,4 +323,19 @@ namespace ArrivalPlanner
 	 * 0 falls back to the letter-free sentence.
 	 */
 	AIRSIDE_API FString DescribeRefusal(EArrivalRefusal Why, double AircraftWingspan = 0.0);
+
+	/**
+	 * Does this refusal need the PLAYER TO BUILD OR CHANGE SOMETHING before it can clear - false for one that clears on its
+	 * own (a runway empties, an aeroplane leaves a stand, a node is let go) and for None. BESIDE EArrivalRefusal, where a
+	 * new reason has to be classified, since #442: it lived in UOfferGenerator, and the question it answers is asked twice
+	 * - at the offer ("could this field EVER take this aeroplane", so no airline is offered an A380 until an F stand
+	 * exists) and of a flight already holding ("can it ever land", so the player is told and can cancel it). Two askers,
+	 * and only one of them used to know the rule.
+	 *
+	 * EVERY REASON BY NAME, NO default, inside AIRSIDE_EXHAUSTIVE_SWITCH: before, `default: return true` made a reason added
+	 * to the enum permanent without anyone deciding so - an offer filtered out for ever, a holding flight told it could
+	 * never land. A new reason is a build error at this switch.
+	 * ENFORCED BY: C4062 as an error around the body (AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN), AirportOps.Model.OfferGenerator.ATransientRefusalStillGetsOffered (names every EArrivalRefusal and its class)
+	 */
+	AIRSIDE_API bool IsPermanentRefusal(EArrivalRefusal Why);
 }

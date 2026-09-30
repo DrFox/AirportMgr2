@@ -113,17 +113,17 @@ bool FFlightDueWhileClosedTest::RunTest(const FString& Parameters)
 	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 	Flight->Airframe.Wingspan = 3400.0;
 	Flight->ArrivesAt = 10.0;
-	Flight->Phase = EFlightPhase::Accepted;
+	Flight->SetPhaseForTest(EFlightPhase::Accepted);
 	Board->AddOffer(*Clock, Flight);
 
 	Clock->Advance(1.0);   // 72 game seconds: the ETA is already behind us
 	TestEqual(TEXT("nothing has been dispatched, because nothing was armed"), Calls, 0);
 
 	Board->RearmSchedules(*Traffic, *Net, *Clock);
-	TestEqual(TEXT("a flight already due joins the queue at once, not dropped"), Flight->Phase, EFlightPhase::Inbound);
+	TestEqual(TEXT("a flight already due joins the queue at once, not dropped"), Flight->GetPhase(), EFlightPhase::Inbound);
 	Board->TickQueue(*Traffic, *Net, *Clock);
 	TestEqual(TEXT("and the queue clears it - nothing holds the runway"), Calls, 1);
-	TestEqual(TEXT("so it is landing, not still waiting"), Flight->Phase, EFlightPhase::Landing);
+	TestEqual(TEXT("so it is landing, not still waiting"), Flight->GetPhase(), EFlightPhase::Landing);
 	return true;
 }
 
@@ -175,7 +175,7 @@ bool FFlightOfferCountdownSurvivesSaveTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and drains at the real rate at x4 too"), Restored->OfferSecondsLeft, 30.0, 1e-9);
 
 	RestoredBoard->TickOffers(*Traffic, *RestoredNet, *RestoredClock, 31.0);
-	TestEqual(TEXT("then lapses when it runs out"), Restored->Phase, EFlightPhase::Expired);
+	TestEqual(TEXT("then lapses when it runs out"), Restored->GetPhase(), EFlightPhase::Expired);
 	return true;
 }
 
@@ -238,7 +238,7 @@ bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
 	// A: LANDED FOR REAL, charged, and taxiing in when the game is saved.
 	UFlight* Taxiing = NewObject<UFlight>(GetTransientPackage());
 	Taxiing->Airframe = Airframe;
-	Taxiing->ApproachFocus = Field.Threshold;
+	Taxiing->RunwayPreference = Field.Threshold;
 	Taxiing->LandingFee = 1200.0;
 	Board->AddOffer(*Clock, Taxiing);
 	if (!TestTrue(TEXT("accepted"), Board->Accept(*Traffic, *Net, *Clock, *Taxiing))) { return false; }
@@ -246,13 +246,13 @@ bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
 	Board->TickQueue(*Traffic, *Net, *Clock);
 	Bus.Drain();
 	const int32 OldAgent = Taxiing->AgentId;
-	if (!TestEqual(TEXT("dispatched"), Taxiing->Phase, EFlightPhase::Landing)) { return false; }
-	for (int32 Step = 0; Step < 20 * 600 && Taxiing->Phase != EFlightPhase::TaxiIn; ++Step)
+	if (!TestEqual(TEXT("dispatched"), Taxiing->GetPhase(), EFlightPhase::Landing)) { return false; }
+	for (int32 Step = 0; Step < 20 * 600 && Taxiing->GetPhase() != EFlightPhase::TaxiIn; ++Step)
 	{
 		Traffic->Advance(0.05, Net);
 		Bus.Drain();
 	}
-	if (!TestEqual(TEXT("taxiing in when saved"), Taxiing->Phase, EFlightPhase::TaxiIn)) { return false; }
+	if (!TestEqual(TEXT("taxiing in when saved"), Taxiing->GetPhase(), EFlightPhase::TaxiIn)) { return false; }
 	if (!TestEqual(TEXT("its landing fee charged once already"), LandingFees(), 1)) { return false; }
 	if (!TestTrue(TEXT("with the stand it was accepted onto"), Taxiing->Stand.IsSet())) { return false; }
 
@@ -261,7 +261,7 @@ bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
 	OnStand->Airframe = Airframe;
 	OnStand->AirlineId = TEXT("SaveTestAirline");
 	OnStand->AgentId = 4242;
-	OnStand->Phase = EFlightPhase::Turnaround;
+	OnStand->SetPhaseForTest(EFlightPhase::Turnaround);
 	Board->AddOffer(*Clock, OnStand);
 
 	UJobBoard* Fuel = NewObject<UJobBoard>(GetTransientPackage());
@@ -290,13 +290,13 @@ bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
 	UFlight* Again = Restored->FindByIdForTest(Taxiing->Id);
 	UFlight* Retired = Restored->FindByIdForTest(OnStand->Id);
 	if (!TestNotNull(TEXT("the taxiing flight came back"), Again) || !TestNotNull(TEXT("and the one on its stand"), Retired)) { return false; }
-	TestEqual(TEXT("taxiing in when saved: it goes round again - Inbound"), Again->Phase, EFlightPhase::Inbound);
+	TestEqual(TEXT("taxiing in when saved: it goes round again - Inbound"), Again->GetPhase(), EFlightPhase::Inbound);
 	TestTrue(TEXT("and is the one flight in the queue"), Restored->Queue().Num() == 1 && Restored->Queue()[0] == Again);
 	TestEqual(TEXT("with no agent - its aeroplane was not saved"), Again->AgentId, static_cast<int32>(INDEX_NONE));
 	TestNull(TEXT("and nothing found by the dead agent id"), Restored->FlightForAgent(OldAgent));
 	TestEqual(TEXT("joining the queue now, at the loaded time"), Again->HoldingSince, SavedAt, 1e-9);
 	TestTrue(TEXT("its landing fee still marked paid"), Again->bLandingFeePaid);
-	TestEqual(TEXT("on its stand when saved: retired as departed"), Retired->Phase, EFlightPhase::Departed);
+	TestEqual(TEXT("on its stand when saved: retired as departed"), Retired->GetPhase(), EFlightPhase::Departed);
 	TestEqual(TEXT("with no agent"), Retired->AgentId, static_cast<int32>(INDEX_NONE));
 	TestFalse(TEXT("out of the live list"), Restored->Live().Contains(Retired));
 	TestNull(TEXT("and nothing found by its dead agent id"), Restored->FlightForAgent(4242));
@@ -308,11 +308,11 @@ bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
 	const FEntityInstance* Stand = Net->GetEntity(Again->Stand);
 	TestTrue(TEXT("its stand is held again, under its own holder id"), Stand != nullptr
 		&& Traffic->IsStandHeld(Stand->PoseNode, 0) && !Traffic->IsStandHeld(Stand->PoseNode, Again->HolderId()));
-	TestEqual(TEXT("re-arming leaves it holding"), Again->Phase, EFlightPhase::Inbound);
+	TestEqual(TEXT("re-arming leaves it holding"), Again->GetPhase(), EFlightPhase::Inbound);
 	TestEqual(TEXT("at the time it joined"), Again->HoldingSince, SavedAt, 1e-9);
 	RestoredClock->Advance(1.0);
 	Restored->TickQueue(*Traffic, *Net, *RestoredClock);
-	TestEqual(TEXT("and it is cleared to land again"), Again->Phase, EFlightPhase::Landing);
+	TestEqual(TEXT("and it is cleared to land again"), Again->GetPhase(), EFlightPhase::Landing);
 	TestTrue(TEXT("as a new aeroplane"), Again->AgentId != INDEX_NONE && Traffic->FindAgent(Again->AgentId) != nullptr);
 	Bus.Drain();
 	TestEqual(TEXT("its second landing charges nothing - the fee was charged once"), LandingFees(), 1);
@@ -337,14 +337,14 @@ bool FFlightRestoreWithoutTrafficTest::RunTest(const FString& Parameters)
 	UFlight* OnStand = NewObject<UFlight>(GetTransientPackage());
 	Board->AddOffer(*Clock, OnStand);
 	OnStand->AgentId = 4242;
-	OnStand->Phase = EFlightPhase::Turnaround;
+	OnStand->SetPhaseForTest(EFlightPhase::Turnaround);
 	UFlight* Accepted = NewObject<UFlight>(GetTransientPackage());
 	Board->AddOffer(*Clock, Accepted);
-	Accepted->Phase = EFlightPhase::Accepted;
+	Accepted->SetPhaseForTest(EFlightPhase::Accepted);
 
 	Board->RestoreAfterLoad(nullptr, *NewObject<URoadNetwork>(GetTransientPackage()), *Clock, /*bAirportAdmits*/ false);
-	TestEqual(TEXT("step 1 ran with no model: the flight on its stand retired as departed"), OnStand->Phase, EFlightPhase::Departed);
-	TestEqual(TEXT("step 2 ran with no model: the accepted flight at a closed airport was cancelled"), Accepted->Phase,
+	TestEqual(TEXT("step 1 ran with no model: the flight on its stand retired as departed"), OnStand->GetPhase(), EFlightPhase::Departed);
+	TestEqual(TEXT("step 2 ran with no model: the accepted flight at a closed airport was cancelled"), Accepted->GetPhase(),
 		EFlightPhase::Cancelled);
 	return true;
 }
@@ -376,9 +376,9 @@ namespace
 		{
 			UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 			Flight->Airframe = Airframe;
-			Flight->ApproachFocus = Field.Threshold;
+			Flight->RunwayPreference = Field.Threshold;
 			Flight->AgentId = DeadAgent;
-			Flight->Phase = Phase;
+			Flight->SetPhaseForTest(Phase);
 			Flight->Stand = Stand;
 			Board->AddOffer(*Clock, Flight);
 			return Flight;
@@ -410,7 +410,7 @@ bool FFlightRequeueKeepsAcceptedStandTest::RunTest(const FString& Parameters)
 	UFlight* Requeue = Rig.Restored(EFlightPhase::TaxiIn, 77, FEntityInstanceId());
 	UFlight* Promised = NewObject<UFlight>(GetTransientPackage());
 	Promised->Airframe = Rig.Airframe;
-	Promised->ApproachFocus = Rig.Field.Threshold;
+	Promised->RunwayPreference = Rig.Field.Threshold;
 	Promised->LeadTimeSeconds = 1.0e7;
 	Rig.Board->AddOffer(*Rig.Clock, Promised);
 	if (!TestTrue(TEXT("the other flight is accepted onto a stand"), Rig.Board->Accept(*Rig.Traffic, *Rig.Field.Net, *Rig.Clock, *Promised))) { return false; }
@@ -480,7 +480,7 @@ bool FFlightUnchargedLandingTest::RunTest(const FString& Parameters)
 	Rig.Board->OnGraphRebuilt(*Traffic, *Net, Requeued);
 	Rig.Clock->Advance(1.0);
 	Rig.Board->TickQueue(*Traffic, *Net, *Rig.Clock);
-	if (!TestEqual(TEXT("it lands again"), Flight->Phase, EFlightPhase::Landing)) { return false; }
+	if (!TestEqual(TEXT("it lands again"), Flight->GetPhase(), EFlightPhase::Landing)) { return false; }
 	// THE ARRIVING THE BUS WOULD DELIVER, twice: the second is the "more than one phase maps to Landing" case.
 	Rig.Board->OnAgentPhase(*Net, *Rig.Clock, OpsTestTransition(Flight->AgentId, EAgentPhase::Gone, EAgentPhase::Arriving, EAgentEvent::Dispatched));
 	Rig.Board->OnAgentPhase(*Net, *Rig.Clock, OpsTestTransition(Flight->AgentId, EAgentPhase::Gone, EAgentPhase::Arriving, EAgentEvent::Dispatched));
@@ -609,7 +609,7 @@ bool FFlightSaveRestoresByValueTest::RunTest(const FString& Parameters)
 	UFlight* Declined = Board->FindByIdForTest(DeclinedLaterId);
 	if (TestNotNull(TEXT("the offer declined after the save is back"), Declined))
 	{
-		TestEqual(TEXT("as the save had it - Offered, not the later Decline"), Declined->Phase, EFlightPhase::Offered);
+		TestEqual(TEXT("as the save had it - Offered, not the later Decline"), Declined->GetPhase(), EFlightPhase::Offered);
 		TestEqual(TEXT("with its callsign"), Declined->Callsign, FString(TEXT("PIN 1")));
 		TestEqual(TEXT("and its fee"), Declined->LandingFee, 1234.0, 1e-9);
 		TestTrue(TEXT("a distinct object, not the saving session's"), TWeakObjectPtr<UFlight>(Declined) != OriginalDeclinedLater);
@@ -624,7 +624,7 @@ bool FFlightSaveRestoresByValueTest::RunTest(const FString& Parameters)
 	UFlight* Retired = Board->FindByIdForTest(DeclinedBeforeId);
 	if (TestNotNull(TEXT("the flight in History at the save is back"), Retired))
 	{
-		TestEqual(TEXT("still Declined"), Retired->Phase, EFlightPhase::Declined);
+		TestEqual(TEXT("still Declined"), Retired->GetPhase(), EFlightPhase::Declined);
 		TestEqual(TEXT("and in History, not the live list"), Board->GetHistoryCountForTest(), 1);
 	}
 
@@ -671,7 +671,7 @@ bool FFlightSaveRestoreRetiresReplacedFlightsTest::RunTest(const FString& Parame
 	UFlight* Restored = Board->FindByIdForTest(Id);
 	if (!TestNotNull(TEXT("the board finds the flight by id"), Restored)) { return false; }
 	TestTrue(TEXT("and it is the restored object, not the pre-load one"), Restored != PreLoad);
-	TestEqual(TEXT("carrying the saved phase"), Restored->Phase, EFlightPhase::Offered);
+	TestEqual(TEXT("carrying the saved phase"), Restored->GetPhase(), EFlightPhase::Offered);
 	TestTrue(TEXT("the inbox lists the restored object"), Board->Offers().Num() == 1 && Board->Offers()[0] == Restored);
 	TestFalse(TEXT("a reader still holding the pre-load flight reads null, not the pre-load state"), Reader.IsValid());
 	TestNotEqual(TEXT("the revision moved, so every viewmodel keyed on it re-reads the board"), Board->Revision(), RevisionBefore);

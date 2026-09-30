@@ -1,11 +1,19 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Model/AirlineDefinition.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/JobBoard.h"
+#include "Model/GroundTraffic.h"
 #include "Model/Ledger.h"
+#include "Model/OfferGenerator.h"
 #include "Model/Pricing.h"
 #include "Model/RoadEntity.h"
+#include "Model/RoadNetwork.h"
+#include "Model/SimClock.h"
+#include "Model/StandAllocator.h"
+#include "OpsTransitionTestHelpers.h"
+#include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -76,6 +84,9 @@ bool FFlightPaysToParkTest::RunTest(const FString& Parameters)
 
 	UFlight* Flight = CodeCFlight();
 	Flight->ParkedAt = 1000.0;
+	// THE RATE THE OFFER FIXED (#442) - 120 an hour is a code C's at the lever's start; UOfferGenerator::MakeOffer writes it and
+	// PostParkingFee reads it, so a hand-made flight carries it by hand, as FFlightPaysToLandTest sets LandingFee.
+	Flight->ParkingRatePerHour = 120.0;
 
 	// Two game hours on the stand, at a code C rate of 120 an hour.
 	Board->PostParkingFee(1000.0 + 7200.0, *Flight);
@@ -169,6 +180,178 @@ bool FFuelServiceEarnsItsFeeTest::RunTest(const FString& Parameters)
 		Ledger->Balance(), AfterOneFuelling, 1e-9);
 	TestEqual(TEXT("and writes no row: a forfeit is not a fine, and there is nothing in this "
 		"build a flight can be late against"), Ledger->Entries().Num(), Rows);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FParkingAtTheOffersRateTest,
+	"AirportOps.Model.FlightFees.ParkingIsBilledAtTheOffersRate",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FParkingAtTheOffersRateTest::RunTest(const FString& Parameters)
+{
+	// #442's PIN, THE WHOLE CHAIN: an offer made by the generator, accepted by the board, the fee lever stepped, the aeroplane
+	// pushed off and taxiing out - parking is billed at the rate the OFFER was made at, not at the lever as it stands at departure.
+	// It asked UPricing::ParkingFeePerHour then, which applies the CURRENT landing-fee multiplier: the trade the landing fee rules out
+	// ("a fee computed on landing would let them accept cheaply and put the price up afterwards").
+	FAirframe Airframe;
+	Airframe.Wingspan = 3400.0;   // 34 m: Code C, 120 an hour at the lever's start
+	Airframe.TurnaroundSeconds = 1800.0;
+	const FTestAirport Field = FTestAirport::Build(Airframe);
+
+	UPricing* Pricing = NewObject<UPricing>(GetTransientPackage());
+	UOfferGenerator* Generator = NewObject<UOfferGenerator>(GetTransientPackage());
+	Generator->Stream.Initialize(7);
+	Generator->Pricing = Pricing;
+	Generator->MaxPendingOffers = 1000;
+	UAirlineDefinition* Airline = NewObject<UAirlineDefinition>(GetTransientPackage(),
+		MakeUniqueObjectName(GetTransientPackage(), UAirlineDefinition::StaticClass(), TEXT("FeesTestAirline")));
+	Airline->DisplayName = FText::FromString(TEXT("Test Air"));
+	Airline->PeakOffersPerHour = 600.0;
+	FAirlineOffers Offering;
+	Offering.Airline = Airline;
+	FOfferCandidate Candidate;
+	Candidate.Airframe = Airframe;
+	Candidate.AirlineName = FText::FromString(TEXT("Test Air"));
+	Candidate.TypeName = FText::FromString(TEXT("A320"));
+	Offering.Fleet.Add(Candidate);
+
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	Clock->SetUniformDay(USimClock::SecondsPerDay);
+	Clock->StartAtHour(9.0);
+	TArray<UFlight*> Made;
+	int32 NextId = 1;
+	for (int32 Minute = 0; Minute < 30 && Made.IsEmpty(); ++Minute)
+	{
+		Made = Generator->TickMinute(*Field.Net, Field.Threshold, MakeArrayView(&Offering, 1), *Clock, 0,
+			[&NextId]() { return NextId++; });
+		Clock->Advance(UOfferGenerator::TickSeconds);
+	}
+	if (!TestTrue(TEXT("the generator made an offer"), !Made.IsEmpty())) { return false; }
+	UFlight* Flight = Made[0];
+	TestEqual(TEXT("the offer carries the parking rate of the lever it was made at - a tenth of a Code C's 1200 landing fee"),
+		Flight->ParkingRatePerHour, 120.0, 1e-6);
+
+	// ACCEPTED, through the board, with an aeroplane already its own (the fixture route FFlightBoardFollowsTheAgentTest uses).
+	ULedger* Ledger = NewObject<ULedger>(GetTransientPackage());
+	Ledger->Open(0.0);
+	UFlightBoard* Board = NewObject<UFlightBoard>(GetTransientPackage());
+	Board->Ledger = Ledger;
+	// THE BOARD HAS THE LEVER WIRED, as UOpsRuntime's constructor wires it: what the old PostParkingFee asked at departure.
+	Board->Pricing = Pricing;
+	Board->Allocator = NewObject<UStandAllocator>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	Flight->AgentId = 5;
+	Board->AddOffer(*Clock, Flight);
+	if (!TestTrue(TEXT("accepted"), Board->Accept(*Traffic, *Field.Net, *Clock, *Flight))) { return false; }
+
+	// THE PLAYER PUTS THE PRICE UP before the aeroplane leaves - five steps, +50%.
+	for (int32 Step = 0; Step < 5; ++Step) { Pricing->StepLandingFee(+1); }
+	TestTrue(TEXT("CONTROL: the lever moved the LIVE rate - asking UPricing at departure would now bill more"),
+		Pricing->ParkingFeePerHour(Airframe) > 150.0);
+
+	// DEPARTS: two game hours on the stand, then the push ends and the taxi out begins - the TaxiOut row is where parking posts.
+	Flight->SetPhaseForTest(EFlightPhase::Manoeuvring);
+	Flight->ParkedAt = 1000.0;
+	Clock->StartAtHour((1000.0 + 7200.0) / 3600.0);
+	Board->OnAgentPhase(*Field.Net, *Clock, OpsTestTransition(5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing, EAgentEvent::PushedBack));
+	if (!TestEqual(TEXT("taxiing out"), Flight->GetPhase(), EFlightPhase::TaxiOut)) { return false; }
+	TestEqual(TEXT("parking is billed at the OFFER's rate: 2 h at 120, not at the lever's 180"), Ledger->Balance(), 240.0, 1e-3);
+	TestEqual(TEXT("and recorded on the flight"), Flight->ParkingFee, 240.0, 1e-3);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FParkingBilledOncePerFlightTest,
+	"AirportOps.Model.FlightFees.ParkingIsBilledOncePerFlight",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FParkingBilledOncePerFlightTest::RunTest(const FString& Parameters)
+{
+	// AN AEROPLANE THAT PARKS AGAIN after its taxi out began enters TaxiOut a second time (#442 review): the once-per-entry guard lets that
+	// through, and PostParkingFee billed the overlapping hours again from the original ParkedAt. One flight, one parking fee - the landing
+	// fee's rule, and its bLandingFeePaid.
+	ULedger* Ledger = NewObject<ULedger>(GetTransientPackage());
+	Ledger->Open(0.0);
+	UFlightBoard* Board = NewObject<UFlightBoard>(GetTransientPackage());
+	Board->Ledger = Ledger;
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+
+	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+	Flight->Id = 1;
+	Flight->AirlineName = FText::FromString(TEXT("Test Air"));
+	Flight->ParkingRatePerHour = 120.0;
+	Flight->AgentId = 5;
+	Flight->SetPhaseForTest(EFlightPhase::Manoeuvring);
+	Flight->ParkedAt = 1000.0;
+	Board->AddOffer(*Clock, Flight);
+
+	Clock->StartAtHour((1000.0 + 7200.0) / 3600.0);
+	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing, EAgentEvent::PushedBack));
+	if (!TestEqual(TEXT("taxiing out"), Flight->GetPhase(), EFlightPhase::TaxiOut)) { return false; }
+	if (!TestEqual(TEXT("parking posted on entering TaxiOut: 2 h at 120"), Ledger->Balance(), 240.0, 1e-3)) { return false; }
+	TestTrue(TEXT("and the flight knows it was billed"), Flight->bParkingFeePaid);
+
+	// IT PARKS AGAIN (a Parked event reaches Turnaround from any phase that has reached the stand), an hour later, and pushes back out.
+	Clock->StartAtHour((1000.0 + 10800.0) / 3600.0);
+	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked));
+	if (!TestEqual(TEXT("PRECONDITION: back on the stand"), Flight->GetPhase(), EFlightPhase::Turnaround)) { return false; }
+	Clock->StartAtHour((1000.0 + 14400.0) / 3600.0);
+	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Parked, EAgentPhase::Taxiing, EAgentEvent::DepartOrdered));
+	if (!TestEqual(TEXT("PRECONDITION: taxiing out again - a second ENTRY"), Flight->GetPhase(), EFlightPhase::TaxiOut)) { return false; }
+	TestEqual(TEXT("and the flight is billed ONCE: the balance is unchanged"), Ledger->Balance(), 240.0, 1e-3);
+	int32 ParkingRows = 0;
+	for (const FLedgerEntry& Row : Ledger->Entries())
+	{
+		ParkingRows += Row.Category == ELedgerCategory::ParkingFee ? 1 : 0;
+	}
+	TestEqual(TEXT("one parking row in the ledger"), ParkingRows, 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FParkingBilledOnceAcrossARedirectTest,
+	"AirportOps.Model.FlightFees.ParkingIsBilledOnceAcrossARedirect",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FParkingBilledOnceAcrossARedirectTest::RunTest(const FString& Parameters)
+{
+	// THE PARKING FEE WAS POSTED AT "TaxiOut" ON EVERY AGENT EVENT THE FLIGHT HEARD WHILE IN IT, not on entering it (found while
+	// diffing each writer's effects against its row, #442): a redirect of an aeroplane already taxiing out - an edit re-routed it,
+	// a stranding was rescued - left the flight in TaxiOut and posted the fee AGAIN, for the longer stay, as a second ledger row.
+	ULedger* Ledger = NewObject<ULedger>(GetTransientPackage());
+	Ledger->Open(0.0);
+	UFlightBoard* Board = NewObject<UFlightBoard>(GetTransientPackage());
+	Board->Ledger = Ledger;
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+
+	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+	Flight->Id = 1;
+	Flight->AirlineName = FText::FromString(TEXT("Test Air"));
+	Flight->ParkingRatePerHour = 120.0;
+	Flight->AgentId = 5;
+	Flight->SetPhaseForTest(EFlightPhase::Manoeuvring);
+	Flight->ParkedAt = 1000.0;
+	Board->AddOffer(*Clock, Flight);
+
+	Clock->StartAtHour((1000.0 + 7200.0) / 3600.0);
+	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing, EAgentEvent::PushedBack));
+	if (!TestEqual(TEXT("taxiing out"), Flight->GetPhase(), EFlightPhase::TaxiOut)) { return false; }
+	if (!TestEqual(TEXT("parking posted on entering TaxiOut: 2 h at 120"), Ledger->Balance(), 240.0, 1e-3)) { return false; }
+
+	// A REDIRECT WHILE TAXIING OUT, an hour later: the flight stays TaxiOut, and nothing more is owed.
+	Clock->StartAtHour((1000.0 + 10800.0) / 3600.0);
+	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Taxiing, EAgentEvent::Redirected));
+	TestEqual(TEXT("still taxiing out"), Flight->GetPhase(), EFlightPhase::TaxiOut);
+	TestEqual(TEXT("and the parking fee was not posted a second time"), Ledger->Balance(), 240.0, 1e-3);
+	int32 ParkingRows = 0;
+	for (const FLedgerEntry& Row : Ledger->Entries())
+	{
+		ParkingRows += Row.Category == ELedgerCategory::ParkingFee ? 1 : 0;
+	}
+	TestEqual(TEXT("one parking row in the ledger"), ParkingRows, 1);
 	return true;
 }
 

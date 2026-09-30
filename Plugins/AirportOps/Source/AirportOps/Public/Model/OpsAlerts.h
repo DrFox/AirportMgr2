@@ -26,7 +26,15 @@ enum class EAlertKind : uint8
 	Deadlock,
 	Overdrawn,
 	/** The airport has no runway, so no offers (spec 2026-09-29-ops-batch3 §3). No focus: nothing to go to. */
-	NoRunway
+	NoRunway,
+	/**
+	 * A holding flight can never land as things stand (#442): its cached clearance is a refusal only the player can clear -
+	 * the exit deleted, the runway set to departures only, a bigger stand to build - and it keeps its stand and its place in
+	 * the queue for ever. Id is the flight's id. The player's way out is to fix the airport or cancel the flight
+	 * (UFlightBoard::CancelByPlayer, offered by the alerts panel). Appended LAST: the kind is saved nowhere, but the order is
+	 * the panel's.
+	 */
+	FlightCannotLand
 };
 
 /** What "Go" moves the camera to. None for a problem with no place in the world. */

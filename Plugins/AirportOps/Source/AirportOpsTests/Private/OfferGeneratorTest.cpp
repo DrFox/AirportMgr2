@@ -116,27 +116,64 @@ bool FOfferGeneratorTransientRefusalTest::RunTest(const FString& Parameters)
 	// stand row clears on its own, and the offer is answered minutes before it lands - so
 	// filtering those out would empty the inbox of perfectly good flights at every rush.
 	TestTrue(TEXT("a busy runway is not a permanent refusal"),
-		UOfferGenerator::IsPermanentRefusal(EArrivalRefusal::RunwayOccupied) == false);
+		ArrivalPlanner::IsPermanentRefusal(EArrivalRefusal::RunwayOccupied) == false);
 	TestTrue(TEXT("nor is every stand being taken"),
-		UOfferGenerator::IsPermanentRefusal(EArrivalRefusal::NoFreeStand) == false);
+		ArrivalPlanner::IsPermanentRefusal(EArrivalRefusal::NoFreeStand) == false);
 
 	TestTrue(TEXT("a runway too short IS permanent - the player must build"),
-		UOfferGenerator::IsPermanentRefusal(EArrivalRefusal::RunwayTooShort));
+		ArrivalPlanner::IsPermanentRefusal(EArrivalRefusal::RunwayTooShort));
 	TestTrue(TEXT("so is a wingspan the pavement will not admit"),
-		UOfferGenerator::IsPermanentRefusal(EArrivalRefusal::NotAdmitted));
+		ArrivalPlanner::IsPermanentRefusal(EArrivalRefusal::NotAdmitted));
 	TestTrue(TEXT("so is no route to a stand"),
-		UOfferGenerator::IsPermanentRefusal(EArrivalRefusal::NoRouteToStand));
+		ArrivalPlanner::IsPermanentRefusal(EArrivalRefusal::NoRouteToStand));
 	TestFalse(TEXT("and None is not a refusal at all"),
-		UOfferGenerator::IsPermanentRefusal(EArrivalRefusal::None));
+		ArrivalPlanner::IsPermanentRefusal(EArrivalRefusal::None));
 	// A SERVICE THE AIRPORT CANNOT GIVE IS SOFT (spec 2026-09-28 ruling 5): the offer is made,
 	// the row says what is missing, and C scores it - the player's decision, not a filter's.
 	TestFalse(TEXT("a stand whose service cannot work is not a permanent refusal"),
-		UOfferGenerator::IsPermanentRefusal(EArrivalRefusal::NoStandServiceable));
+		ArrivalPlanner::IsPermanentRefusal(EArrivalRefusal::NoStandServiceable));
 	// A STAND IN A TAXIWAY'S CLEARANCE STRIP needs redrawing - building, not waiting - so no
 	// airline is offered a flight it would refuse (strip spec 2026-09-28). It reaches the
 	// generator's default branch; this pins that it stays there.
 	TestTrue(TEXT("every fitting stand inside a strip is a permanent refusal"),
-		UOfferGenerator::IsPermanentRefusal(EArrivalRefusal::NoStandClearOfStrip));
+		ArrivalPlanner::IsPermanentRefusal(EArrivalRefusal::NoStandClearOfStrip));
+
+	// EVERY REASON THE ENUM HAS, NAMED (#442): the question moved beside the enum and lost its `default: return true`, so a
+	// reason added to EArrivalRefusal is a build error at the switch AND a count mismatch here - classified by a person, not
+	// by falling into a default. The table is the rule: what needs the player to build or change something is permanent.
+	struct FClass
+	{
+		EArrivalRefusal Why;
+		bool bPermanent;
+	};
+	const FClass Classes[] = {
+		{ EArrivalRefusal::None, false },
+		{ EArrivalRefusal::NoRunway, true },
+		{ EArrivalRefusal::RunwayTooShort, true },
+		{ EArrivalRefusal::NoExit, true },
+		{ EArrivalRefusal::NoRouteToStand, true },
+		{ EArrivalRefusal::RunwayOccupied, false },
+		{ EArrivalRefusal::NotAdmitted, true },
+		{ EArrivalRefusal::NoFreeStand, false },
+		{ EArrivalRefusal::NoStandBigEnough, true },
+		{ EArrivalRefusal::NoStandPavedEnough, true },
+		{ EArrivalRefusal::NoStandServiceable, false },
+		{ EArrivalRefusal::GraphBeingEdited, false },
+		{ EArrivalRefusal::NoStandClearOfStrip, true },
+		{ EArrivalRefusal::TaxiwayTooNarrow, true },
+		{ EArrivalRefusal::NoArrivalRunway, true },
+	};
+	const UEnum* Enum = StaticEnum<EArrivalRefusal>();
+	if (TestNotNull(TEXT("the refusal enum reflects"), Enum))
+	{
+		TestEqual(TEXT("every refusal is classified above - a new one must be placed"),
+			Enum->NumEnums() - 1 /* the _MAX entry */, static_cast<int32>(UE_ARRAY_COUNT(Classes)));
+	}
+	for (const FClass& Each : Classes)
+	{
+		TestEqual(*FString::Printf(TEXT("%s: is it one only the player can clear"), *UEnum::GetValueAsString(Each.Why)),
+			ArrivalPlanner::IsPermanentRefusal(Each.Why), Each.bPermanent);
+	}
 	return true;
 }
 
@@ -446,7 +483,7 @@ bool FOfferContractTest::RunTest(const FString& Parameters)
 	Airline->OfferWindowSeconds = 45.0;
 	UFlight* Offer = Generator->MakeOffer(FVector2D::ZeroVector, *Airline, Candidate(3000.0), 1000.0, 3);
 	if (!TestNotNull(TEXT("a candidate makes an offer"), Offer)) { return false; }
-	TestEqual(TEXT("it is Offered"), Offer->Phase, EFlightPhase::Offered);
+	TestEqual(TEXT("it is Offered"), Offer->GetPhase(), EFlightPhase::Offered);
 	TestEqual(TEXT("its id is the one it was given"), Offer->Id, 3);
 	TestEqual(TEXT("the contract is the airline's, whatever the airframe"), Offer->ContractSeconds, 7200.0, 1e-9);
 	TestEqual(TEXT("the window is the airline's, in real seconds"), Offer->OfferSecondsLeft, 45.0, 1e-9);

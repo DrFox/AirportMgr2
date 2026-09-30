@@ -138,8 +138,9 @@ public:
 
 	/**
 	 * A flight was cancelled: -Tuning.ClosureCancelPenalty when the player's closure did it ("cancelled: airport
-	 * closed"), nothing for NoRunway or Unstuck (spec 2026-09-29-ops-batch3 §3) - heard for the log either way.
-	 * ENFORCED BY: AirportOps.Model.Airlines.ClosureCancelScoresOnlyAirportClosed
+	 * closed") or when the player cancelled a flight that had not arrived ("cancelled by the player", #442 - the same penalty),
+	 * nothing for NoRunway or Unstuck (spec 2026-09-29-ops-batch3 §3) - heard for the log either way.
+	 * ENFORCED BY: AirportOps.Model.Airlines.ClosureCancelScoresOnlyAirportClosed, AirportOps.Model.Airlines.PlayerCancelCostsTheClosurePenalty
 	 */
 	void OnFlightCancelled(const FFlightCancelledEvent& Event);
 

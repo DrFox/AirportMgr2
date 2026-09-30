@@ -290,14 +290,14 @@ bool FOpsBusLandingFeeTest::RunTest(const FString&)
 
 	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 	Flight->Airframe = Airframe;
-	Flight->ApproachFocus = Airport.Threshold;
+	Flight->RunwayPreference = Airport.Threshold;
 	Flight->LandingFee = 1200.0;
 	Flight->LeadTimeSeconds = 0.0;
 	Board->AddOffer(*Clock, Flight);
 	if (!TestTrue(TEXT("the flight is accepted"), Board->Accept(*Traffic, *Net, *Clock, *Flight))) { return false; }
 	Clock->Advance(1.0);
 	Board->TickQueue(*Traffic, *Net, *Clock);
-	if (!TestEqual(TEXT("and dispatched"), Flight->Phase, EFlightPhase::Landing)) { return false; }
+	if (!TestEqual(TEXT("and dispatched"), Flight->GetPhase(), EFlightPhase::Landing)) { return false; }
 	Bus.Drain();
 
 	const bool bCharged = Ledger->Entries().ContainsByPredicate([](const FLedgerEntry& Entry)
@@ -590,7 +590,7 @@ bool FOpsRuntimeTurnaroundShortfallTest::RunTest(const FString&)
 	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 	Flight->AirlineId = Airline;
 	Flight->AgentId = 7;
-	Flight->Phase = EFlightPhase::TaxiOut;
+	Flight->SetPhaseForTest(EFlightPhase::TaxiOut);
 	Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Flight);
 	const double Before = Runtime->GetAirlines()->Find(Airline)->Satisfaction;
 	// A ZERO PENALTY WOULD MAKE THE ASSERTION BELOW TRUE WITH NOTHING WIRED (review M4).
@@ -713,7 +713,7 @@ bool FOpsRuntimeUnfuelledDepartureTest::RunTest(const FString&)
 	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 	Flight->AirlineId = Airline;
 	Flight->AgentId = Aircraft;
-	Flight->Phase = EFlightPhase::TaxiIn;
+	Flight->SetPhaseForTest(EFlightPhase::TaxiIn);
 	Flight->FuelLitres = 2000.0;
 	Flight->Airframe = Airframe;
 	Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Flight);
@@ -802,7 +802,7 @@ namespace
 
 			Flight = NewObject<UFlight>(GetTransientPackage());
 			Flight->Airframe = Airframe;
-			Flight->ApproachFocus = Field.Threshold;
+			Flight->RunwayPreference = Field.Threshold;
 			Flight->AirlineId = TEXT("FallbackTestAirline");
 			Board->AddOffer(*Clock, Flight);
 		}
@@ -818,15 +818,15 @@ namespace
 			Board->TickQueue(*Traffic, *Field.Net, *Clock);
 			Agent = Flight->AgentId;
 			Drain();
-			return Flight->Phase == EFlightPhase::Landing && Agent != INDEX_NONE;
+			return Flight->GetPhase() == EFlightPhase::Landing && Agent != INDEX_NONE;
 		}
 
 		void Drain()
 		{
 			Bus.Drain();
-			if (Seen.Num() == 0 || Seen.Last() != Flight->Phase)
+			if (Seen.Num() == 0 || Seen.Last() != Flight->GetPhase())
 			{
-				Seen.Add(Flight->Phase);
+				Seen.Add(Flight->GetPhase());
 			}
 		}
 
@@ -885,7 +885,7 @@ bool FFallbackParkStaysTaxiInTest::RunTest(const FString&)
 	FFallbackParkRig Rig;
 	if (!TestTrue(TEXT("the flight lands"), Rig.Land())) { return false; }
 	if (!TestTrue(TEXT("and parks on the fallback junction, both stands gone"), Rig.ParkOnFallback())) { return false; }
-	TestEqual(TEXT("parked on the fallback junction it is still taxiing in"), Rig.Flight->Phase, EFlightPhase::TaxiIn);
+	TestEqual(TEXT("parked on the fallback junction it is still taxiing in"), Rig.Flight->GetPhase(), EFlightPhase::TaxiIn);
 	TestNull(TEXT("no turnaround opens at a junction"), Rig.Jobs->TurnaroundFor(Rig.Agent));
 	TestEqual(TEXT("and its parking clock has not started"), Rig.Flight->ParkedAt, 0.0);
 
@@ -897,7 +897,7 @@ bool FFallbackParkStaysTaxiInTest::RunTest(const FString&)
 	Rig.Traffic->Advance(0.05, Rig.Field.Net);   // the re-offer runs at the end of a tick
 	Rig.Drain();
 	if (!TestEqual(TEXT("redirected: taxiing again"), Rig.Aircraft()->Phase, EAgentPhase::Taxiing)) { return false; }
-	TestEqual(TEXT("the redirect reads TaxiIn - on its way in, not out"), Rig.Flight->Phase, EFlightPhase::TaxiIn);
+	TestEqual(TEXT("the redirect reads TaxiIn - on its way in, not out"), Rig.Flight->GetPhase(), EFlightPhase::TaxiIn);
 	TestEqual(TEXT("and no TurnaroundEnded was published for the junction"), Rig.Ended.Num(), 0);
 
 	if (!TestTrue(TEXT("it parks at the new stand"), Rig.RunUntil(600.0, [&Rig, NewStand]()
@@ -905,7 +905,7 @@ bool FFallbackParkStaysTaxiInTest::RunTest(const FString&)
 	{
 		return false;
 	}
-	TestEqual(TEXT("AT A STAND it is the turnaround"), Rig.Flight->Phase, EFlightPhase::Turnaround);
+	TestEqual(TEXT("AT A STAND it is the turnaround"), Rig.Flight->GetPhase(), EFlightPhase::Turnaround);
 	TestTrue(TEXT("and its parking clock starts there"), Rig.Flight->ParkedAt > 0.0);
 	TestTrue(TEXT("on the stand it actually reached"), Rig.Flight->Stand == NewStand);
 	TestNotNull(TEXT("and the job board opened its turnaround there"), Rig.Jobs->TurnaroundFor(Rig.Agent));
@@ -945,13 +945,13 @@ bool FDepartFromFallbackTest::RunTest(const FString&)
 	Rig.Drain();
 	// READ STRAIGHT AFTER THE MOVE, not only from Seen: Seen records CHANGES, and a flight left reading TaxiIn
 	// (the phase it waited in) would add nothing to it.
-	TestEqual(TEXT("the taxi away from the junction reads TaxiOut"), Rig.Flight->Phase, EFlightPhase::TaxiOut);
-	Rig.RunUntil(600.0, [&Rig]() { return Rig.Flight->Phase == EFlightPhase::Departing; });
+	TestEqual(TEXT("the taxi away from the junction reads TaxiOut"), Rig.Flight->GetPhase(), EFlightPhase::TaxiOut);
+	Rig.RunUntil(600.0, [&Rig]() { return Rig.Flight->GetPhase() == EFlightPhase::Departing; });
 	const TArray<EFlightPhase> After(Rig.Seen.GetData() + Before, Rig.Seen.Num() - Before);
 	AddInfo(FString::Printf(TEXT("phases after the depart: %s"),
 		*FString::JoinBy(After, TEXT(", "), [](EFlightPhase P) { return UEnum::GetValueAsString(P); })));
 	TestFalse(TEXT("departing from the junction never reads TaxiIn"), After.Contains(EFlightPhase::TaxiIn));
-	TestEqual(TEXT("and it goes"), Rig.Flight->Phase, EFlightPhase::Departing);
+	TestEqual(TEXT("and it goes"), Rig.Flight->GetPhase(), EFlightPhase::Departing);
 
 	// NEVER TURNED AROUND, SO NEVER FUELLED (whole-stack review M4, ruling 2026-09-30): it leaves Unfuelled, owed what
 	// its flight was offered at (LitresOwedFor, wired above), and its airline scores the shortfall - once, as a real
@@ -992,7 +992,7 @@ bool FSameFrameRedirectTest::RunTest(const FString&)
 	if (!TestEqual(TEXT("redirected before the Parked is heard"), Rig.Aircraft()->Phase, EAgentPhase::Taxiing)) { return false; }
 	if (!TestTrue(TEXT("its goal is the new stand - what a stale Parked would read"), StandAtGoalForTest(*Rig.Field.Net, *Rig.Aircraft()).IsSet())) { return false; }
 	Rig.Drain();
-	TestEqual(TEXT("a stale Parked moves no flight into Turnaround"), Rig.Flight->Phase, EFlightPhase::TaxiIn);
+	TestEqual(TEXT("a stale Parked moves no flight into Turnaround"), Rig.Flight->GetPhase(), EFlightPhase::TaxiIn);
 	TestFalse(TEXT("Turnaround was never shown"), Rig.Seen.Contains(EFlightPhase::Turnaround));
 	TestNull(TEXT("and no turnaround opened"), Rig.Jobs->TurnaroundFor(Rig.Agent));
 	return true;
@@ -1021,7 +1021,7 @@ bool FRedirectStandGoesTest::RunTest(const FString&)
 	if (!TestFalse(TEXT("its goal is no stand when the event is heard, or this proves nothing"), StandAtGoalForTest(*Rig.Field.Net, *Rig.Aircraft()).IsSet())) { return false; }
 	TestFalse(TEXT("and it is not armed for a departure"), Rig.Aircraft()->bDepartureArmed);
 	Rig.Drain();
-	TestEqual(TEXT("a redirect whose stand went is still the taxi in"), Rig.Flight->Phase, EFlightPhase::TaxiIn);
+	TestEqual(TEXT("a redirect whose stand went is still the taxi in"), Rig.Flight->GetPhase(), EFlightPhase::TaxiIn);
 	TestFalse(TEXT("TaxiOut was never shown"), Rig.Seen.Contains(EFlightPhase::TaxiOut));
 	return true;
 }

@@ -116,6 +116,14 @@ public:
 	FUnstickVerdict CanUnstick(int32 AgentId, EUnstickAction Action) const;
 	FUnstickVerdict Unstick(int32 AgentId, EUnstickAction Action);
 
+	/**
+	 * The FlightCannotLand alert's Cancel (#442): UFlightBoard::CancelByPlayer with this runtime's traffic and clock - the two
+	 * the driver does not hold - and the passes a cancel can change dirtied (the stand it freed may let a holding flight
+	 * land). False when unattached, or the flight is not one still to arrive. A FORWARDER: the rule is the board's.
+	 * ENFORCED BY: AirportOps.Present.Alerts.CancelFlightForwardsToTheBoard
+	 */
+	bool CancelFlight(int32 FlightId);
+
 	/** How every airline feels about this airport. See UAirlineRoster - a Reaction on the bus. */
 	UAirlineRoster* GetAirlines() const { return Airlines; }
 
@@ -218,8 +226,9 @@ public:
 	bool HasOfferScheduledForTest() const { return OfferHandle != INDEX_NONE; }
 
 	/**
-	 * Cancel and re-book the two repeaters - the generator's minute tick and the daily upkeep -
-	 * from the clock's CURRENT Now.
+	 * Cancel and re-book the two repeaters - the generator's minute tick, from the clock's CURRENT Now, and the daily
+	 * upkeep, whose first firing is the next MIDNIGHT after it (#442: it was a day from Now, so a load at 05:59 postponed the
+	 * 06:00 upkeep by a day).
 	 *
 	 * AFTER A LOAD, and not optional (review I1, 2026-09-28): USimClock does not save its queue
 	 * and books absolute due times, so repeaters armed at Attach still pointed at the pre-load

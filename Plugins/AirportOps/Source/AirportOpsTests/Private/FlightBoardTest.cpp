@@ -5,11 +5,13 @@
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
+#include "Model/OpsEventBus.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
+#include "Model/TrafficOccupancy.h"
 #include "Profiles/RoadProfile.h"
 #include "Testing/AirsideTestGraph.h"
 #include "OpsTransitionTestHelpers.h"
@@ -86,13 +88,13 @@ bool FFlightBoardAcceptReservesTest::RunTest(const FString& Parameters)
 	Board->AddOffer(*Clock, Second);
 
 	TestTrue(TEXT("the first offer is accepted"), Board->Accept(*Traffic, *Net, *Clock, *First));
-	TestEqual(TEXT("and becomes Accepted"), First->Phase, EFlightPhase::Accepted);
+	TestEqual(TEXT("and becomes Accepted"), First->GetPhase(), EFlightPhase::Accepted);
 	TestTrue(TEXT("holding a named stand"), First->Stand.IsSet());
 
 	TestFalse(TEXT("the second is REFUSED rather than given the same stand"),
 		Board->Accept(*Traffic, *Net, *Clock, *Second));
 	TestEqual(TEXT("and is left in the inbox for the player to see"),
-		Second->Phase, EFlightPhase::Offered);
+		Second->GetPhase(), EFlightPhase::Offered);
 	TestEqual(TEXT("so one offer still stands"), Board->PendingOfferCount(), 1);
 	return true;
 }
@@ -133,7 +135,7 @@ bool FFlightBoardAcceptHoldsTheReachableStandTest::RunTest(const FString& Parame
 	UFlightBoard* Board = MakeBoard();
 	UFlight* Flight = BoardFlightNeeding(Small.Wingspan);
 	Flight->LeadTimeSeconds = 100.0;
-	Flight->ApproachFocus = Field.Threshold;
+	Flight->RunwayPreference = Field.Threshold;
 	Board->AddOffer(*Clock, Flight);
 
 	const FArrivalQuote Quote = Board->TryAccept(*Traffic, *Field.Net, *Clock, *Flight);
@@ -186,7 +188,7 @@ bool FFlightBoardDispatchesAtTheEtaTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("the dispatcher ran exactly once, at the ETA"), Calls, 1);
 	TestFalse(TEXT("the stand hold was released BEFORE the dispatch"), bHeldAtDispatch);
-	TestEqual(TEXT("and the flight is landing"), Flight->Phase, EFlightPhase::Landing);
+	TestEqual(TEXT("and the flight is landing"), Flight->GetPhase(), EFlightPhase::Landing);
 
 	Clock->Advance(10.0);
 	TestEqual(TEXT("and it is not dispatched twice"), Calls, 1);
@@ -207,17 +209,17 @@ bool FFlightBoardFollowsTheAgentTest::RunTest(const FString& Parameters)
 
 	UFlight* Flight = BoardFlightNeeding(3400.0);
 	Flight->AgentId = 5;
-	Flight->Phase = EFlightPhase::Landing;
+	Flight->SetPhaseForTest(EFlightPhase::Landing);
 	Board->AddOffer(*Clock, Flight);
 
 	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Arriving, EAgentPhase::Taxiing, EAgentEvent::Vacated));
-	TestEqual(TEXT("taxiing before the stand is TaxiIn"), Flight->Phase, EFlightPhase::TaxiIn);
+	TestEqual(TEXT("taxiing before the stand is TaxiIn"), Flight->GetPhase(), EFlightPhase::TaxiIn);
 
 	// PARKED IS THE TURNAROUND ONLY AT A STAND (#405, spec 2026-09-29-ops-batch3 §4) - and this Parked names no node
 	// (GoalAtEvent unset, #436), so it is at no stand. Parked at a real one is AirportOps.Model.Bus.FallbackParkStaysTaxiIn's
 	// last step; this fixture has no aeroplane to put there.
 	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked));
-	TestEqual(TEXT("parked at no stand is still the taxi in"), Flight->Phase, EFlightPhase::TaxiIn);
+	TestEqual(TEXT("parked at no stand is still the taxi in"), Flight->GetPhase(), EFlightPhase::TaxiIn);
 
 	// THE REAL SEQUENCE NOW GOES THROUGH THE MANOEUVRE. An aeroplane is pushed off its stand
 	// before it taxis out, so the board has to show that rather than jumping from Turnaround
@@ -226,24 +228,24 @@ bool FFlightBoardFollowsTheAgentTest::RunTest(const FString& Parameters)
 	// as OUT.
 	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Parked, EAgentPhase::Manoeuvring, EAgentEvent::DepartOrdered));
 	TestEqual(TEXT("coming off the stand is the manoeuvre"),
-		Flight->Phase, EFlightPhase::Manoeuvring);
+		Flight->GetPhase(), EFlightPhase::Manoeuvring);
 
 	// THE POINT OF THE TEST: the same agent phase, the other answer. Taxiing is the agent's
 	// phase both into the stand and out of it, and only the flight's own progress tells them
 	// apart - which is why EFlightPhase's declaration order is load-bearing.
 	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing, EAgentEvent::PushedBack));
-	TestEqual(TEXT("taxiing after the turnaround is TaxiOut"), Flight->Phase, EFlightPhase::TaxiOut);
+	TestEqual(TEXT("taxiing after the turnaround is TaxiOut"), Flight->GetPhase(), EFlightPhase::TaxiOut);
 
 	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Departing, EAgentEvent::LinedUp));
-	TestEqual(TEXT("departing"), Flight->Phase, EFlightPhase::Departing);
+	TestEqual(TEXT("departing"), Flight->GetPhase(), EFlightPhase::Departing);
 
 	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Departing, EAgentPhase::Gone, EAgentEvent::Gone));
-	TestEqual(TEXT("gone is departed"), Flight->Phase, EFlightPhase::Departed);
+	TestEqual(TEXT("gone is departed"), Flight->GetPhase(), EFlightPhase::Departed);
 	TestEqual(TEXT("and the agent handle is given back"), Flight->AgentId, INDEX_NONE);
 
 	// An agent nobody owns - a fuel truck - must move no flight at all.
 	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(99, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked));
-	TestEqual(TEXT("a truck's phase change moves no flight"), Flight->Phase, EFlightPhase::Departed);
+	TestEqual(TEXT("a truck's phase change moves no flight"), Flight->GetPhase(), EFlightPhase::Departed);
 	return true;
 }
 
@@ -267,7 +269,7 @@ bool FFlightBoardExpiresOffersTest::RunTest(const FString& Parameters)
 	// REAL seconds now (spec 2026-09-28) - TickOffers, not Clock.Advance, drains the window.
 	Board->TickOffers(*Traffic, *Net, *Clock, 51.0);
 
-	TestEqual(TEXT("an ignored offer lapses"), Offer->Phase, EFlightPhase::Expired);
+	TestEqual(TEXT("an ignored offer lapses"), Offer->GetPhase(), EFlightPhase::Expired);
 	TestEqual(TEXT("and leaves the inbox"), Board->PendingOfferCount(), 0);
 	return true;
 }
@@ -294,11 +296,11 @@ bool FFlightBoardDeclineCancelsExpiryTest::RunTest(const FString& Parameters)
 	Board->AddOffer(*Clock, Offer);
 
 	Board->Decline(*Clock, *Offer);
-	TestEqual(TEXT("declining sets the phase at once"), Offer->Phase, EFlightPhase::Declined);
+	TestEqual(TEXT("declining sets the phase at once"), Offer->GetPhase(), EFlightPhase::Declined);
 
 	Board->TickOffers(*Traffic, *Net, *Clock, 100.0);
 	TestEqual(TEXT("a declined offer stays Declined - nothing counts it down any more"),
-		Offer->Phase, EFlightPhase::Declined);
+		Offer->GetPhase(), EFlightPhase::Declined);
 	TestEqual(TEXT("and it never records a lapse"), Offer->LapseReason, ELapseReason::None);
 	return true;
 }
@@ -314,12 +316,12 @@ bool FFlightBoardAcceptImmediateTest::RunTest(const FString& Parameters)
 	// make the flight, aim IT (not the board) at this call's focus, add it, accept it, and
 	// say why not if it could not be.
 	//
-	// THE POINT OF THE TEST: a RECORDING DISPATCHER, not just reading Flight->ApproachFocus
+	// THE POINT OF THE TEST: a RECORDING DISPATCHER, not just reading Flight->RunwayPreference
 	// back. Asserting the flight's own property proves AcceptImmediate SET it; it does not
 	// prove DispatchNow or WhyNotAcceptable ever READ it rather than the board's - the exact
 	// "last writer wins" bug issue #96 fixes. Only watching what actually gets dispatched
 	// catches a regression back to the board field. Revert FlightBoard.cpp's DispatchNow/
-	// WhyNotAcceptable to read the board's ApproachFocus again and this test goes red.
+	// WhyNotAcceptable to read the board's RunwayPreference again and this test goes red.
 	URoadNetwork* Net = BoardField(3400.0);
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
 	USimClock* Clock = NewObject<USimClock>();
@@ -341,21 +343,21 @@ bool FFlightBoardAcceptImmediateTest::RunTest(const FString& Parameters)
 	const EArrivalRefusal Why = Board->AcceptImmediate(*Traffic, *Net, *Clock, Airframe, Focus, Airline);
 	TestEqual(TEXT("the only stand admits it"), Why, EArrivalRefusal::None);
 	TestEqual(TEXT("the board's own field is never written by AcceptImmediate"),
-		Board->ApproachFocus, FVector2D::ZeroVector);
+		Board->RunwayPreference, FVector2D::ZeroVector);
 
 	const TArray<UFlight*> Live = Board->Live();
 	TestEqual(TEXT("one flight is now live"), Live.Num(), 1);
 	if (Live.Num() != 1) { return false; }
 
 	UFlight* Flight = Live[0];
-	TestEqual(TEXT("it is Accepted, holding the stand"), Flight->Phase, EFlightPhase::Accepted);
+	TestEqual(TEXT("it is Accepted, holding the stand"), Flight->GetPhase(), EFlightPhase::Accepted);
 	TestTrue(TEXT("the airline travelled onto the flight"), Flight->AirlineName.EqualTo(Airline));
 	TestEqual(TEXT("the type name comes off the airframe's own code"),
 		Flight->TypeName.ToString(), Airframe.TypeCode.ToString());
 
 	// A second call, aimed elsewhere, once the one stand is gone. THE POINT OF THE TEST: its
 	// focus must not disturb the first flight's - the "last writer wins" bug this seam
-	// replaces, see UFlight::ApproachFocus. The second flight is refused, so it never gets
+	// replaces, see UFlight::RunwayPreference. The second flight is refused, so it never gets
 	// scheduled and never appears in DispatchedNear below.
 	const FVector2D SecondFocus(-900.0, 100.0);
 	const EArrivalRefusal SecondWhy =
@@ -363,7 +365,7 @@ bool FFlightBoardAcceptImmediateTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the second is refused: the one stand is already held"),
 		SecondWhy != EArrivalRefusal::None);
 	TestEqual(TEXT("the board's own field is STILL untouched, even by the refused call"),
-		Board->ApproachFocus, FVector2D::ZeroVector);
+		Board->RunwayPreference, FVector2D::ZeroVector);
 
 	// ArrivesAt == Clock->Now() at the accept (no lead time) - see AcceptImmediate's own
 	// header on why - so the tiniest advance crosses the ETA and fires the dispatcher.
@@ -383,17 +385,17 @@ bool FFlightBoardAcceptImmediateTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FFlightBoardDefaultApproachFocusTest,
-	"AirportOps.Model.FlightBoard.DefaultApproachFocusIsTheLongestRunway",
+	FFlightBoardDefaultRunwayPreferenceTest,
+	"AirportOps.Model.FlightBoard.DefaultRunwayPreferenceIsTheLongestRunway",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FFlightBoardDefaultApproachFocusTest::RunTest(const FString& Parameters)
+bool FFlightBoardDefaultRunwayPreferenceTest::RunTest(const FString& Parameters)
 {
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	FVector2D Focus = FVector2D(999.0, 999.0);
 
 	TestFalse(TEXT("an airport with no runway has no default focus"),
-		UFlightBoard::DefaultApproachFocus(*Net, Focus));
+		UFlightBoard::DefaultRunwayPreference(*Net, Focus));
 	TestEqual(TEXT("and OutFocus is left untouched on refusal"), Focus, FVector2D(999.0, 999.0));
 
 	URoadProfile* Runway = TestProfiles::Runway();
@@ -403,7 +405,7 @@ bool FFlightBoardDefaultApproachFocusTest::RunTest(const FString& Parameters)
 	const FRoadNodeId A1 = Net->AddNode(FVector2D(30000.0, 0.0));
 	Net->AddStraightSegment(A0, A1, Runway);
 
-	TestTrue(TEXT("one runway is the default"), UFlightBoard::DefaultApproachFocus(*Net, Focus));
+	TestTrue(TEXT("one runway is the default"), UFlightBoard::DefaultRunwayPreference(*Net, Focus));
 	TestEqual(TEXT("its own threshold"), Focus, FVector2D(0.0, 0.0));
 
 	// A LONGER, separate runway - THE POINT OF THE TEST: the longest wins, not the first
@@ -413,7 +415,7 @@ bool FFlightBoardDefaultApproachFocusTest::RunTest(const FString& Parameters)
 	Net->AddStraightSegment(B0, B1, Runway);
 
 	TestTrue(TEXT("the longer runway is still a default"),
-		UFlightBoard::DefaultApproachFocus(*Net, Focus));
+		UFlightBoard::DefaultRunwayPreference(*Net, Focus));
 	TestEqual(TEXT("its threshold, not the shorter runway's"), Focus, FVector2D(0.0, 100000.0));
 	return true;
 }
@@ -444,7 +446,7 @@ bool FFlightBoardAcceptedNeverExpiresTest::RunTest(const FString& Parameters)
 	// Well past the window: TickOffers only counts down what is still Offered.
 	Board->TickOffers(*Traffic, *Net, *Clock, 100.0);
 	TestEqual(TEXT("an accepted flight is not expired by its old offer deadline"),
-		Flight->Phase, EFlightPhase::Accepted);
+		Flight->GetPhase(), EFlightPhase::Accepted);
 	return true;
 }
 
@@ -539,7 +541,7 @@ bool FFlightBoardIndexMatchesTheLinearScanTest::RunTest(const FString& Parameter
 			// shape (AgentId set before AddOffer, not through DispatchNow), exercised at
 			// volume instead of once.
 			Flight->AgentId = NextTestAgentId++;
-			Flight->Phase = EFlightPhase::Landing;
+			Flight->SetPhaseForTest(EFlightPhase::Landing);
 			Board->AddOffer(*Clock, Flight);
 			break;
 		default:
@@ -547,7 +549,7 @@ bool FFlightBoardIndexMatchesTheLinearScanTest::RunTest(const FString& Parameter
 				// DEPARTED - held a real agent id, then gave it back and moved to History.
 				const int32 AgentId = NextTestAgentId++;
 				Flight->AgentId = AgentId;
-				Flight->Phase = EFlightPhase::Departing;
+				Flight->SetPhaseForTest(EFlightPhase::Departing);
 				Board->AddOffer(*Clock, Flight);
 				Board->OnAgentPhase(*Net, *Clock,
 					OpsTestTransition(AgentId, EAgentPhase::Departing, EAgentPhase::Gone, EAgentEvent::Gone));
@@ -595,5 +597,485 @@ bool FFlightBoardIndexMatchesTheLinearScanTest::RunTest(const FString& Parameter
 		"for every id this fixture ever handed out, and a couple past the end"), bAllIdsAgree);
 	return true;
 }
+
+// ============================================================================================================================
+// THE ONE WRITER OF A FLIGHT'S PHASE (#442): UFlightBoard::TransitionTo and its rows, each measured through the door that reaches
+// it. A row that is unwired - an effect the row owns but its door stopped getting - fails the test named for it.
+// ============================================================================================================================
+// THE TEST DOOR onto UFlightBoard::TransitionTo (FlightBoard.h's friend by name): the one thing no production door can reach is a
+// Play-source Cancelled with no reason - every door names one - and a pin that cannot be reached is no pin. Global scope, where the
+// friend declaration put the name.
+struct FFlightBoardTestAccess
+{
+	static void Transition(UFlightBoard& Board, UFlight& Flight, EFlightPhase To, const FTransitionCause& Cause)
+	{
+		Board.TransitionTo(Flight, To, Cause);
+	}
+};
+
+namespace
+{
+	FAirframe TransitionAirframe()
+	{
+		FAirframe Out;
+		Out.Wingspan = 1200.0;
+		Out.TurnaroundSeconds = 1800.0;
+		return Out;
+	}
+
+	/**
+	 * A board on a field an arrival can use, with a bus the board publishes onto and a recorder for every event a row publishes.
+	 * 1 game s per real s, so a lead time is a clock Advance. Named and prefixed for the unity build: a second "FQueueRig" from
+	 * another test file would collide with ArrivalQueueTest's.
+	 */
+	struct FTransitionRig
+	{
+		FTestAirport Airport;
+		UGroundTraffic* Traffic = nullptr;
+		USimClock* Clock = nullptr;
+		UFlightBoard* Board = nullptr;
+		FOpsEventBus Bus;
+		int32 Dispatched = 0;
+		TArray<FOfferAcceptedEvent> Accepted;
+		TArray<FFlightInboundEvent> Inbound;
+		TArray<FOfferDeclinedEvent> Declined;
+		TArray<FOfferExpiredEvent> Expired;
+		TArray<FFlightCancelledEvent> Cancelled;
+		TArray<FFlightAirborneEvent> Airborne;
+
+		explicit FTransitionRig(int32 Stands = 4)
+		{
+			FTestAirportOptions Options;
+			Options.StandCount = Stands;
+			Airport = FTestAirport::Build(TransitionAirframe(), Options);
+			Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+			Clock = NewObject<USimClock>(GetTransientPackage());
+			Clock->SetUniformDay(USimClock::SecondsPerDay);
+			Board = NewObject<UFlightBoard>(GetTransientPackage());
+			Board->Allocator = NewObject<UStandAllocator>(GetTransientPackage());
+			Board->Dispatcher = [this](const FVector2D&, const FAirframe&) { ++Dispatched; return true; };
+			Board->Bus = &Bus;
+			Bus.BeginWiring();
+			Bus.Subscribe<FOfferAcceptedEvent>(EOpsTier::Sim, TEXT("test"), [this](const FOfferAcceptedEvent& E) { Accepted.Add(E); });
+			Bus.Subscribe<FFlightInboundEvent>(EOpsTier::Sim, TEXT("test"), [this](const FFlightInboundEvent& E) { Inbound.Add(E); });
+			Bus.Subscribe<FOfferDeclinedEvent>(EOpsTier::Sim, TEXT("test"), [this](const FOfferDeclinedEvent& E) { Declined.Add(E); });
+			Bus.Subscribe<FOfferExpiredEvent>(EOpsTier::Sim, TEXT("test"), [this](const FOfferExpiredEvent& E) { Expired.Add(E); });
+			Bus.Subscribe<FFlightCancelledEvent>(EOpsTier::Sim, TEXT("test"), [this](const FFlightCancelledEvent& E) { Cancelled.Add(E); });
+			Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Sim, TEXT("test"), [this](const FFlightAirborneEvent& E) { Airborne.Add(E); });
+			Bus.EndWiring();
+		}
+
+		UFlight* Offer(double Lead = 10.0)
+		{
+			UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+			Flight->Airframe = TransitionAirframe();
+			Flight->AirlineId = TEXT("Cumbria");
+			Flight->Callsign = TEXT("CU 204");
+			Flight->OfferWindowSeconds = 60.0;
+			Flight->OfferSecondsLeft = 60.0;
+			Flight->LeadTimeSeconds = Lead;
+			Flight->RunwayPreference = Airport.Threshold;
+			Board->AddOffer(*Clock, Flight);
+			return Flight;
+		}
+
+		UFlight* Accept(double Lead = 10.0)
+		{
+			UFlight* Flight = Offer(Lead);
+			return Board->Accept(*Traffic, *Airport.Net, *Clock, *Flight) ? Flight : nullptr;
+		}
+
+		/** An accepted flight whose ETA has come and whose runway is held, so it waits in the queue with its stand. */
+		UFlight* Holding()
+		{
+			HoldRunway();
+			UFlight* Flight = Accept(1.0);
+			Clock->Advance(2.0);
+			return Flight;
+		}
+
+		void HoldRunway()
+		{
+			for (const FTrafficResource& Surface : Airport.Net->RunwaySurfaces(Airport.ThresholdSegment))
+			{
+				FTrafficClaim Claim;
+				Claim.AgentId = 99;
+				Claim.Resource = Surface;
+				Claim.bOccupied = true;
+				FTrafficClaim Blocker;
+				Traffic->OccupancyForTest().TryClaim(Claim, Blocker);
+			}
+		}
+
+		void FreeRunway() { Traffic->OccupancyForTest().ReleaseAll(99); }
+
+		bool StandHeldFor(const UFlight& Flight) const
+		{
+			const FEntityInstance* Stand = Airport.Net->GetEntity(Flight.Stand);
+			return Stand != nullptr && Traffic->IsStandHeld(Stand->PoseNode, 0);
+		}
+
+		void Tick() { Board->TickQueue(*Traffic, *Airport.Net, *Clock); }
+		void Drain() { Bus.Drain(); }
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardTransitionTableTest,
+	"AirportOps.Model.FlightBoard.TransitionTable",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardTransitionTableTest::RunTest(const FString& Parameters)
+{
+	// EVERY ROW WHOSE PHASE IS ENTERED THROUGH A DOOR ON THE BOARD, in the order a flight meets them. Each asserts what the row
+	// owns - the pending-offer count, the publish, History, the aeroplane's hook, the revision - through the public door, so an
+	// effect dropped from TransitionTo (or a door that stopped reaching it) reads red here rather than in a PIE session.
+	FTransitionRig R;
+	R.Clock->Advance(5.0);   // a clock that is not at zero, so a TerminatedAt stamp is a measurement and not the default
+
+	// -- Declined: the count, FOfferDeclinedEvent, History, the revision.
+	UFlight* Declined = R.Offer();
+	if (!TestEqual(TEXT("an offer is pending"), R.Board->PendingOfferCount(), 1)) { return false; }
+	const uint32 RevisionBeforeDecline = R.Board->Revision();
+	R.Board->Decline(*R.Clock, *Declined);
+	R.Drain();
+	TestEqual(TEXT("Declined: the phase"), Declined->GetPhase(), EFlightPhase::Declined);
+	TestEqual(TEXT("Declined: no longer pending"), R.Board->PendingOfferCount(), 0);
+	TestEqual(TEXT("Declined: published once"), R.Declined.Num(), 1);
+	TestTrue(TEXT("Declined: not an offer, not live, still found by id"),
+		!R.Board->Offers().Contains(Declined) && !R.Board->Live().Contains(Declined) && R.Board->FindByIdForTest(Declined->Id) == Declined);
+	TestEqual(TEXT("Declined: filed in History"), R.Board->GetHistoryCountForTest(), 1);
+	TestEqual(TEXT("Declined: stamped terminal at the clock"), Declined->TerminatedAt, R.Clock->Now(), 1e-9);
+	TestTrue(TEXT("Declined: the revision moved"), R.Board->Revision() != RevisionBeforeDecline);
+
+	// -- Expired: the count, FOfferExpiredEvent carrying the lapse reason, History.
+	UFlight* Lapsing = R.Offer();
+	Lapsing->OfferSecondsLeft = 1.0;
+	R.Board->TickOffers(*R.Traffic, *R.Airport.Net, *R.Clock, 2.0);
+	R.Drain();
+	TestEqual(TEXT("Expired: the phase"), Lapsing->GetPhase(), EFlightPhase::Expired);
+	TestEqual(TEXT("Expired: no longer pending"), R.Board->PendingOfferCount(), 0);
+	if (!TestEqual(TEXT("Expired: published once"), R.Expired.Num(), 1)) { return false; }
+	TestEqual(TEXT("Expired: with the reason the flight carries"), R.Expired[0].Reason, Lapsing->LapseReason);
+	TestTrue(TEXT("Expired: not live, still found by id"), !R.Board->Live().Contains(Lapsing) && R.Board->FindByIdForTest(Lapsing->Id) == Lapsing);
+	TestEqual(TEXT("Expired: filed in History"), R.Board->GetHistoryCountForTest(), 2);
+
+	// -- Withdrawn: the count and History, and NOTHING published (no OfferExpired - no Ignored penalty; not a cancellation either).
+	UFlight* Withdrawn = R.Offer();
+	R.Board->CancelUnarrived(*R.Traffic, *R.Clock, ECancelReason::NoRunway);
+	R.Drain();
+	TestEqual(TEXT("Withdrawn: the phase"), Withdrawn->GetPhase(), EFlightPhase::Withdrawn);
+	TestEqual(TEXT("Withdrawn: no longer pending"), R.Board->PendingOfferCount(), 0);
+	TestTrue(TEXT("Withdrawn: published nothing - not an expiry, not a cancellation"), R.Expired.Num() == 1 && R.Cancelled.Num() == 0);
+	TestEqual(TEXT("Withdrawn: filed in History"), R.Board->GetHistoryCountForTest(), 3);
+
+	// -- Accepted: the count, the arrival armed, FOfferAcceptedEvent.
+	UFlight* Flight = R.Offer(/*Lead=*/50.0);
+	TestEqual(TEXT("a fresh offer is pending"), R.Board->PendingOfferCount(), 1);
+	R.HoldRunway();   // so the queue pass below does not dispatch it the moment it joins
+	if (!TestTrue(TEXT("accepted"), R.Board->Accept(*R.Traffic, *R.Airport.Net, *R.Clock, *Flight))) { return false; }
+	R.Drain();
+	TestEqual(TEXT("Accepted: the phase"), Flight->GetPhase(), EFlightPhase::Accepted);
+	TestEqual(TEXT("Accepted: no longer pending"), R.Board->PendingOfferCount(), 0);
+	if (!TestEqual(TEXT("Accepted: published once"), R.Accepted.Num(), 1)) { return false; }
+	TestTrue(TEXT("Accepted: naming the stand it holds"), R.Accepted[0].Stand == Flight->Stand && R.StandHeldFor(*Flight));
+	TestEqual(TEXT("Accepted: still to arrive"), R.Board->UnarrivedCount(), 1);
+	TestEqual(TEXT("Accepted: the arrival is armed on the clock - one entry waiting"), R.Clock->PendingForTest(), 1);
+
+	// -- Inbound: the ETA callback's row - HoldingSince is the ETA, FFlightInboundEvent, the stand KEPT.
+	R.Clock->Advance(60.0);
+	R.Drain();
+	TestEqual(TEXT("Inbound: the ETA armed by the Accepted row put it in the queue"), Flight->GetPhase(), EFlightPhase::Inbound);
+	TestEqual(TEXT("Inbound: HoldingSince is the ETA, not the moment the callback ran"), Flight->HoldingSince, Flight->ArrivesAt, 1e-9);
+	TestEqual(TEXT("Inbound: published once"), R.Inbound.Num(), 1);
+	TestEqual(TEXT("Inbound: the arrival fired, so nothing is waiting on the clock"), R.Clock->PendingForTest(), 0);
+	TestTrue(TEXT("Inbound: and the stand is still held"), R.StandHeldFor(*Flight));
+
+	// -- Landing: the aeroplane hooked under the flight, the stand released BEFORE the dispatch.
+	R.FreeRunway();
+	R.Tick();
+	TestEqual(TEXT("Landing: dispatched once"), R.Dispatched, 1);
+	TestEqual(TEXT("Landing: the phase"), Flight->GetPhase(), EFlightPhase::Landing);
+	TestTrue(TEXT("Landing: the aeroplane is hooked - the board finds the flight by its agent"),
+		Flight->AgentId != INDEX_NONE && R.Board->FlightForAgent(Flight->AgentId) == Flight);
+	TestFalse(TEXT("Landing: the stand hold was released for the planner"), R.StandHeldFor(*Flight));
+	const int32 Agent = Flight->AgentId;
+
+	// -- The ground rows follow the agent (OnAgentPhase decides which, TransitionTo applies): Departing stamps and publishes once.
+	R.Board->OnAgentPhase(*R.Airport.Net, *R.Clock, OpsTestTransition(Agent, EAgentPhase::Arriving, EAgentPhase::Taxiing, EAgentEvent::Vacated));
+	TestEqual(TEXT("TaxiIn"), Flight->GetPhase(), EFlightPhase::TaxiIn);
+	R.Board->OnAgentPhase(*R.Airport.Net, *R.Clock, OpsTestTransition(Agent, EAgentPhase::Parked, EAgentPhase::Manoeuvring, EAgentEvent::DepartOrdered));
+	R.Board->OnAgentPhase(*R.Airport.Net, *R.Clock, OpsTestTransition(Agent, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing, EAgentEvent::PushedBack));
+	TestEqual(TEXT("TaxiOut"), Flight->GetPhase(), EFlightPhase::TaxiOut);
+	TestEqual(TEXT("nothing is airborne yet"), Flight->AirborneAt, 0.0, 1e-9);
+	R.Board->OnAgentPhase(*R.Airport.Net, *R.Clock, OpsTestTransition(Agent, EAgentPhase::Taxiing, EAgentPhase::Departing, EAgentEvent::LinedUp));
+	R.Drain();
+	TestEqual(TEXT("Departing: the phase"), Flight->GetPhase(), EFlightPhase::Departing);
+	TestEqual(TEXT("Departing: AirborneAt is the clock"), Flight->AirborneAt, R.Clock->Now(), 1e-9);
+	TestEqual(TEXT("Departing: published once"), R.Airborne.Num(), 1);
+
+	// -- Departed: History, and the aeroplane let go of. Nothing published for the departure itself.
+	R.Board->OnAgentPhase(*R.Airport.Net, *R.Clock, OpsTestTransition(Agent, EAgentPhase::Departing, EAgentPhase::Gone, EAgentEvent::Gone));
+	R.Drain();
+	TestEqual(TEXT("Departed: the phase"), Flight->GetPhase(), EFlightPhase::Departed);
+	TestTrue(TEXT("Departed: not live, still found by id"), !R.Board->Live().Contains(Flight) && R.Board->FindByIdForTest(Flight->Id) == Flight);
+	TestEqual(TEXT("Departed: filed in History"), R.Board->GetHistoryCountForTest(), 4);
+	TestTrue(TEXT("Departed: the aeroplane is let go of - no agent, and the board finds no flight by it"),
+		Flight->AgentId == INDEX_NONE && R.Board->FlightForAgent(Agent) == nullptr);
+	TestEqual(TEXT("Departed: and no second FlightAirborne"), R.Airborne.Num(), 1);
+
+	// -- Moving a flight to the phase it is in is not a transition: a terminal flight is not filed twice, nothing publishes again.
+	R.Board->OnAgentPhase(*R.Airport.Net, *R.Clock, OpsTestTransition(Agent, EAgentPhase::Departing, EAgentPhase::Gone, EAgentEvent::Gone));
+	TestEqual(TEXT("an event for a finished flight moves nothing"), Flight->GetPhase(), EFlightPhase::Departed);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardCancelledRowTest,
+	"AirportOps.Model.FlightBoard.CancelledRowIsOneRowForEveryDoor",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardCancelledRowTest::RunTest(const FString& Parameters)
+{
+	// THE THREE "CANCELLED" WRITERS DID THREE DIFFERENT THINGS (the issue): CancelUnarrived disarmed, released and published;
+	// CancelByAgent unhooked and published; the load's cancel did neither, correct only for where LoadFromSlot calls it. Now it is
+	// ONE ROW, and each door differs from the others in exactly what it should: the closure and the player publish with their own
+	// reason, the agent's despawn publishes Unstuck and unhooks, the load publishes NOTHING. What every door shares is asserted
+	// for every door: History, the stand released, the arrival disarmed.
+	enum class EDoor { Closure, Player, Load };
+	enum class EFrom { Accepted, Inbound };
+	struct FCase
+	{
+		const TCHAR* Name;
+		EDoor Door;
+		EFrom From;
+	};
+	const FCase Cases[] = {
+		{ TEXT("closure of an accepted flight"),  EDoor::Closure, EFrom::Accepted },
+		{ TEXT("closure of a holding flight"),    EDoor::Closure, EFrom::Inbound },
+		{ TEXT("player cancel of an accepted flight"), EDoor::Player, EFrom::Accepted },
+		{ TEXT("player cancel of a holding flight"),   EDoor::Player, EFrom::Inbound },
+		{ TEXT("load of an accepted flight"),     EDoor::Load, EFrom::Accepted },
+		{ TEXT("load of a holding flight"),       EDoor::Load, EFrom::Inbound },
+	};
+	for (const FCase& Case : Cases)
+	{
+		const FString Label = Case.Name;
+		FTransitionRig R;
+		UFlight* Flight = Case.From == EFrom::Inbound ? R.Holding() : R.Accept(/*Lead=*/1000.0);
+		if (!TestNotNull(*(Label + TEXT(": a flight to cancel")), Flight)) { return false; }
+		if (!TestEqual(*(Label + TEXT(": in the phase the case starts from")), Flight->GetPhase(),
+			Case.From == EFrom::Inbound ? EFlightPhase::Inbound : EFlightPhase::Accepted)) { return false; }
+		if (!TestTrue(*(Label + TEXT(": holding a stand")), R.StandHeldFor(*Flight))) { return false; }
+		R.Drain();
+		R.Cancelled.Reset();
+		// AN ACCEPTED FLIGHT HAS ITS ARRIVAL ARMED, a holding one has none left (it fired): the cancel must take the one there is.
+		const int32 PendingBefore = R.Clock->PendingForTest();
+		if (!TestEqual(*(Label + TEXT(": the arrival is armed exactly when it has not fired")), PendingBefore,
+			Case.From == EFrom::Accepted ? 1 : 0)) { return false; }
+
+		switch (Case.Door)
+		{
+		case EDoor::Closure:
+			TestEqual(*(Label + TEXT(": the closure cancels it")), R.Board->CancelUnarrived(*R.Traffic, *R.Clock, ECancelReason::AirportClosed), 1);
+			break;
+		case EDoor::Player:
+			TestTrue(*(Label + TEXT(": the player's cancel is taken")), R.Board->CancelByPlayer(*R.Traffic, *R.Clock, Flight->Id));
+			break;
+		case EDoor::Load:
+			TestEqual(*(Label + TEXT(": the load's cancel takes it")),
+				R.Board->CancelUnarrivedAtLoad(R.Clock->Now(), R.Traffic, R.Clock), 1);
+			break;
+		}
+		R.Drain();
+
+		TestEqual(*(Label + TEXT(": the phase")), Flight->GetPhase(), EFlightPhase::Cancelled);
+		TestTrue(*(Label + TEXT(": not live, still found by id")), !R.Board->Live().Contains(Flight) && R.Board->FindByIdForTest(Flight->Id) == Flight);
+		TestEqual(*(Label + TEXT(": filed in History")), R.Board->GetHistoryCountForTest(), 1);
+		TestFalse(*(Label + TEXT(": its stand is released")), R.StandHeldFor(*Flight));
+		TestEqual(*(Label + TEXT(": and nothing is waiting on the queue")), R.Board->Queue().Num(), 0);
+		TestEqual(*(Label + TEXT(": its arrival is DISARMED - the clock holds nothing for it")), R.Clock->PendingForTest(), 0);
+
+		// THE ARRIVAL DISARMED: its ETA passes and it is STILL Cancelled, not put back in the queue.
+		R.Clock->Advance(2000.0);
+		R.Drain();
+		TestEqual(*(Label + TEXT(": still cancelled after its ETA")), Flight->GetPhase(), EFlightPhase::Cancelled);
+		TestEqual(*(Label + TEXT(": and never queued")), R.Inbound.Num(), Case.From == EFrom::Inbound ? 1 : 0);
+
+		// WHAT DIFFERS BETWEEN THE DOORS: the publish.
+		switch (Case.Door)
+		{
+		case EDoor::Closure:
+			if (TestEqual(*(Label + TEXT(": published once")), R.Cancelled.Num(), 1))
+			{
+				TestEqual(*(Label + TEXT(": with the closure's reason")), R.Cancelled[0].Reason, ECancelReason::AirportClosed);
+			}
+			break;
+		case EDoor::Player:
+			if (TestEqual(*(Label + TEXT(": published once")), R.Cancelled.Num(), 1))
+			{
+				TestEqual(*(Label + TEXT(": with the player's reason")), R.Cancelled[0].Reason, ECancelReason::PlayerCancelled);
+			}
+			break;
+		case EDoor::Load:
+			TestEqual(*(Label + TEXT(": a load's cancel is unscored, so NOTHING is published")), R.Cancelled.Num(), 0);
+			break;
+		}
+	}
+
+	// THE AGENT'S DOOR, from the ground: CancelByAgent unhooks the aeroplane and publishes Unstuck, and holds no stand to release.
+	{
+		FTransitionRig R;
+		UFlight* Flight = R.Accept(/*Lead=*/1.0);
+		R.Clock->Advance(2.0);
+		R.Tick();
+		if (!TestEqual(TEXT("by agent: the flight is landing"), Flight->GetPhase(), EFlightPhase::Landing)) { return false; }
+		const int32 Agent = Flight->AgentId;
+		R.Drain();
+		R.Cancelled.Reset();
+		TestTrue(TEXT("by agent: the despawn cancels the flight"), R.Board->CancelByAgent(Agent, R.Clock->Now()));
+		R.Drain();
+		TestEqual(TEXT("by agent: the phase"), Flight->GetPhase(), EFlightPhase::Cancelled);
+		TestTrue(TEXT("by agent: the aeroplane is let go of"), Flight->AgentId == INDEX_NONE && R.Board->FlightForAgent(Agent) == nullptr);
+		if (TestEqual(TEXT("by agent: published once"), R.Cancelled.Num(), 1))
+		{
+			TestEqual(TEXT("by agent: as Unstuck"), R.Cancelled[0].Reason, ECancelReason::Unstuck);
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardCancelWithNoReasonTest,
+	"AirportOps.Model.FlightBoard.CancelWithNoReasonIsLoudNotFree",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardCancelWithNoReasonTest::RunTest(const FString& Parameters)
+{
+	// A PLAY-SOURCE CANCEL THAT FORGOT WHY used to default to Unstuck - the one reason the airline roster does not charge - so a door that
+	// dropped its reason cost nobody anything, with no trace (#442 review). Now the Cancelled row logs an Error and publishes nothing;
+	// the flight is still filed, its stand still released. (An ensure would fail the run; AddExpectedError is how a test pins a log.)
+	FTransitionRig R;
+	UFlight* Flight = R.Accept(/*Lead=*/1000.0);
+	if (!TestNotNull(TEXT("an accepted flight"), Flight)) { return false; }
+	if (!TestTrue(TEXT("holding a stand"), R.StandHeldFor(*Flight))) { return false; }
+	R.Drain();
+	R.Cancelled.Reset();
+
+	AddExpectedError(TEXT("cancelled from Accepted with no reason given"), EAutomationExpectedErrorFlags::Contains, 1);
+	FFlightBoardTestAccess::Transition(*R.Board, *Flight, EFlightPhase::Cancelled,
+		FTransitionCause::Played(R.Clock->Now()).WithWorld(R.Clock, R.Traffic));
+	R.Drain();
+
+	TestEqual(TEXT("the flight is cancelled and filed all the same"), Flight->GetPhase(), EFlightPhase::Cancelled);
+	TestEqual(TEXT("in History"), R.Board->GetHistoryCountForTest(), 1);
+	TestFalse(TEXT("its stand is released"), R.StandHeldFor(*Flight));
+	TestEqual(TEXT("and NOTHING is published - an event with an invented reason is a lie, and the free one would hide the fault"), R.Cancelled.Num(), 0);
+
+	// CONTROL: the same cancel WITH a reason publishes it, so the silence above is the missing reason and nothing else.
+	UFlight* Second = R.Accept(/*Lead=*/1000.0);
+	if (!TestNotNull(TEXT("a second accepted flight"), Second)) { return false; }
+	FFlightBoardTestAccess::Transition(*R.Board, *Second, EFlightPhase::Cancelled,
+		FTransitionCause::Played(R.Clock->Now()).WithWorld(R.Clock, R.Traffic).Cancelling(ECancelReason::PlayerCancelled));
+	R.Drain();
+	if (TestEqual(TEXT("CONTROL: with a reason it is published once"), R.Cancelled.Num(), 1))
+	{
+		TestEqual(TEXT("CONTROL: as itself"), R.Cancelled[0].Reason, ECancelReason::PlayerCancelled);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardLoadDisarmsTheReplacedSessionTest,
+	"AirportOps.Model.FlightSave.LoadDisarmsTheReplacedSessionsArrivals",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardLoadDisarmsTheReplacedSessionTest::RunTest(const FString& Parameters)
+{
+	// THE BOARD'S ARRIVAL HANDLES ARE NOT SAVED, so a load found the REPLACED session's still in the map (#442 review) - keyed by ids a
+	// restored flight may carry. RestoreAfterLoad cancels them on the clock first (step 0). Measured with a load that has NO TRAFFIC
+	// MODEL: it returns before step 4's re-arm, which used to be the only thing that ever cancelled them, so the old session's arrival
+	// stayed on the clock for a flight that no longer exists.
+	FTransitionRig R;
+	UFlight* Flight = R.Accept(/*Lead=*/1000.0);
+	if (!TestNotNull(TEXT("an accepted flight, its arrival armed"), Flight)) { return false; }
+	if (!TestEqual(TEXT("PRECONDITION: one entry waiting on the clock"), R.Clock->PendingForTest(), 1)) { return false; }
+
+	// THE LOAD REPLACES EVERY FLIGHT (an empty snapshot's), and then runs its flight half with no traffic model.
+	R.Board->OnBeforeRestore();
+	R.Board->RestoreAfterLoad(nullptr, *R.Airport.Net, *R.Clock, /*bAirportAdmits=*/true);
+	TestEqual(TEXT("the replaced session's arrival is gone from the clock"), R.Clock->PendingForTest(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardPlayerCancelRefusalsTest,
+	"AirportOps.Model.FlightBoard.PlayerCancelRefusesWhatHasNotToCancel",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardPlayerCancelRefusalsTest::RunTest(const FString& Parameters)
+{
+	// THE PLAYER'S CANCEL IS FOR A FLIGHT STILL TO ARRIVE (#442): an offer is declined, not cancelled; a flight on the runway or the
+	// ground is committed and is the aircraft card's; History is over. Each refusal changes nothing and publishes nothing.
+	FTransitionRig R;
+	R.Drain();
+	UFlight* Offered = R.Offer();
+	UFlight* Landing = R.Accept(1.0);
+	R.Clock->Advance(2.0);
+	R.Tick();
+	UFlight* Declined = R.Offer();
+	R.Board->Decline(*R.Clock, *Declined);
+	if (!TestEqual(TEXT("a flight is landing"), Landing->GetPhase(), EFlightPhase::Landing)) { return false; }
+	R.Drain();
+	R.Cancelled.Reset();
+	const uint32 Revision = R.Board->Revision();
+
+	TestFalse(TEXT("an open offer is declined, not cancelled"), R.Board->CancelByPlayer(*R.Traffic, *R.Clock, Offered->Id));
+	TestFalse(TEXT("a landing flight is committed to the runway"), R.Board->CancelByPlayer(*R.Traffic, *R.Clock, Landing->Id));
+	TestFalse(TEXT("a flight already in History is over"), R.Board->CancelByPlayer(*R.Traffic, *R.Clock, Declined->Id));
+	TestFalse(TEXT("an id nothing has"), R.Board->CancelByPlayer(*R.Traffic, *R.Clock, 9999));
+	R.Drain();
+	TestEqual(TEXT("the offer is still an offer"), Offered->GetPhase(), EFlightPhase::Offered);
+	TestEqual(TEXT("the landing flight is still landing"), Landing->GetPhase(), EFlightPhase::Landing);
+	TestEqual(TEXT("nothing was published"), R.Cancelled.Num(), 0);
+	TestEqual(TEXT("and the board did not move"), R.Board->Revision(), Revision);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardLoadCancelPositionTest,
+	"AirportOps.Model.FlightSave.LoadCancelDoesNotDependOnItsPosition",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardLoadCancelPositionTest::RunTest(const FString& Parameters)
+{
+	// THE LOAD'S CANCEL WAS "CORRECT ONLY BECAUSE OF WHERE IT SITS IN LoadFromSlot" (the issue): it skipped the release and the
+	// disarm because, called first, there was nothing yet to release or disarm. Called AFTER the holds were re-made and the
+	// arrivals re-armed - the order a refactor of the load could put it in - it left a stand held and an arrival armed for a
+	// flight that can never land. It goes through the Cancelled row now, which does both when it is handed the means.
+	FTransitionRig R;
+	UFlight* Accepted = R.Accept(/*Lead=*/1000.0);
+	if (!TestNotNull(TEXT("an accepted flight"), Accepted)) { return false; }
+
+	// THE WRONG ORDER ON PURPOSE: holds re-made (OnGraphRebuilt), arrivals re-armed (RearmSchedules), THEN the cancel.
+	R.Board->OnGraphRebuilt(*R.Traffic, *R.Airport.Net);
+	R.Board->RearmSchedules(*R.Traffic, *R.Airport.Net, *R.Clock);
+	if (!TestTrue(TEXT("PRECONDITION: its stand is held, as the load's third step leaves it"), R.StandHeldFor(*Accepted))) { return false; }
+	if (!TestEqual(TEXT("PRECONDITION: and its arrival is re-armed, as the load's fourth step leaves it"), R.Clock->PendingForTest(), 1)) { return false; }
+	R.Drain();
+	R.Cancelled.Reset();
+
+	TestEqual(TEXT("the cancel takes it"), R.Board->CancelUnarrivedAtLoad(R.Clock->Now(), R.Traffic, R.Clock), 1);
+	R.Drain();
+	TestEqual(TEXT("cancelled"), Accepted->GetPhase(), EFlightPhase::Cancelled);
+	TestFalse(TEXT("its stand is released even though the holds were already made"), R.StandHeldFor(*Accepted));
+	TestEqual(TEXT("and its RE-ARMED arrival is disarmed - the clock holds nothing for it"), R.Clock->PendingForTest(), 0);
+	R.Clock->Advance(2000.0);
+	R.Drain();
+	TestEqual(TEXT("and its re-armed arrival was disarmed: still cancelled after its ETA"), Accepted->GetPhase(), EFlightPhase::Cancelled);
+	TestEqual(TEXT("unscored: nothing published"), R.Cancelled.Num(), 0);
+	return true;
+}
+
 
 #endif

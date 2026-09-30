@@ -19,7 +19,7 @@ namespace
 		UFlight* Out = NewObject<UFlight>(GetTransientPackage());
 		Out->Callsign = Callsign;
 		Out->TypeName = FText::FromString(TEXT("Saab 340B"));
-		Out->Phase = Phase;
+		Out->SetPhaseForTest(Phase);
 		return Out;
 	}
 }
@@ -65,9 +65,23 @@ bool FArrivalsStatusTest::RunTest(const FString& Parameters)
 		{ EFlightPhase::Departing, TEXT("DEPARTING") } };
 	for (const TPair<EFlightPhase, const TCHAR*>& Case : Cases)
 	{
-		F->Phase = Case.Key;
+		F->SetPhaseForTest(Case.Key);
 		TestEqual(*FString::Printf(TEXT("status %s"), Case.Value),
 			UArrivalRowViewModel::DescribeStatus(*F, 0.0).ToString(), FString(Case.Value));
+	}
+
+	// EVERY PHASE THE ENUM HAS (#442 review): DescribeStatus is an exhaustive switch now, so a phase added to EFlightPhase is a build
+	// error there; this is the runtime half - a live phase says something, and a phase a live row never shows (an offer, anything
+	// finished) is empty, not a stale word from the case above.
+	const UEnum* Enum = StaticEnum<EFlightPhase>();
+	if (!TestNotNull(TEXT("the enum reflects"), Enum)) { return false; }
+	for (int32 Index = 0; Index < Enum->NumEnums() - 1; ++Index)
+	{
+		const EFlightPhase Phase = static_cast<EFlightPhase>(Enum->GetValueByIndex(Index));
+		F->SetPhaseForTest(Phase);
+		const FString Text = UArrivalRowViewModel::DescribeStatus(*F, 0.0).ToString();
+		TestEqual(*FString::Printf(TEXT("%s: a live phase has a status, any other is empty"), *Enum->GetNameStringByIndex(Index)),
+			!Text.IsEmpty(), FlightPhase::IsLive(Phase));
 	}
 	return true;
 }
@@ -85,7 +99,7 @@ bool FArrivalsDetailTest::RunTest(const FString& Parameters)
 		UArrivalRowViewModel::DescribeDetail(*F, 780.0, bLate).ToString(), FString(TEXT("waited 3 min · 47 min left")));
 	TestFalse(TEXT("not late"), bLate);
 
-	F->Phase = EFlightPhase::Turnaround;
+	F->SetPhaseForTest(EFlightPhase::Turnaround);
 	TestEqual(TEXT("on the ground: what is left"),
 		UArrivalRowViewModel::DescribeDetail(*F, 780.0, bLate).ToString(), FString(TEXT("47 min left")));
 

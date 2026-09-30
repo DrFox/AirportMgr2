@@ -152,6 +152,26 @@ FUnstickVerdict UOpsRuntime::Unstick(int32 AgentId, EUnstickAction Action)
 	return Verdict;
 }
 
+bool UOpsRuntime::CancelFlight(int32 FlightId)
+{
+	UGroundTraffic* Model = LiveModel();
+	if (Model == nullptr)
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("CancelFlight %d refused: no airport attached"), FlightId);
+		return false;
+	}
+	// THE RULE IS THE BOARD'S. What this adds is the wake-up: a cancel is a command, not an event, and what it frees - a stand a
+	// holding flight was waiting for, a queue place, the alert that offered it - is read by passes that run on events. The
+	// FFlightCancelled it publishes dirties the alerts pass (WireBus); the queue is told here, through the door every other
+	// dirtier uses.
+	const bool bCancelled = FlightBoard->CancelByPlayer(*Model, *Clock, FlightId);
+	if (bCancelled)
+	{
+		DirtyArrivalQueue();
+	}
+	return bCancelled;
+}
+
 FFacilityQuote UOpsRuntime::QuoteFacility(FEntityInstanceId Entity) const
 {
 	return Target != nullptr && Target->Network != nullptr ? FacilityPurchases->Quote(*Target->Network, Entity) : FFacilityQuote();
@@ -268,17 +288,17 @@ void UOpsRuntime::OfferTick()
 		return;
 	}
 
-	// FORWARDED: choosing a runway is UFlightBoard's decision now, not this class's - see
-	// UFlightBoard::DefaultApproachFocus (issue #98). Left untouched when the airport has no
-	// runway yet, same as before.
+	// FORWARDED: choosing the point the runways are ordered from is UFlightBoard's decision now, not this class's - see
+	// UFlightBoard::DefaultRunwayPreference (issue #98; named DefaultApproachFocus until #442). Left untouched when the
+	// airport has no runway yet, same as before.
 	FVector2D Focus;
-	if (UFlightBoard::DefaultApproachFocus(*Target->Network, Focus))
+	if (UFlightBoard::DefaultRunwayPreference(*Target->Network, Focus))
 	{
-		FlightBoard->ApproachFocus = Focus;
+		FlightBoard->RunwayPreference = Focus;
 	}
 
 	const TArray<UFlight*> Made = OfferGenerator->TickMinute(*Target->Network,
-		FlightBoard->ApproachFocus, AirlineOffers, *Clock, FlightBoard->PendingOfferCount(),
+		FlightBoard->RunwayPreference, AirlineOffers, *Clock, FlightBoard->PendingOfferCount(),
 		[this]() { return FlightBoard->TakeNextId(); });
 	for (UFlight* Offer : Made)
 	{
@@ -569,6 +589,13 @@ void UOpsRuntime::WireBus()
 	Bus.Subscribe<FOfferExpiredEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FOfferExpiredEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 	Bus.Subscribe<FOfferDeclinedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FOfferDeclinedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 	Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FFlightAirborneEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
+	// A FLIGHT JOINS THE QUEUE, OR LEAVES IT BY A CANCEL (#442): FlightCannotLand reads the clearance the ArrivalQueue pass
+	// computes for a holding flight, and it runs before this pass in the same round - so the alert is raised the round the flight
+	// is judged, not at the next offer minute; and a cancel clears it the round it happens. A closure's cancel is covered by
+	// its own AirportStatusChanged below, which these do not replace.
+	// ENFORCED BY: AirportOps.Model.Alerts.UnlandableHoldingFlightRaisesAnAlert, AirportOps.Present.Alerts.CancelFlightForwardsToTheBoard
+	Bus.Subscribe<FFlightInboundEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FFlightInboundEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
+	Bus.Subscribe<FFlightCancelledEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FFlightCancelledEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 	// OVERDRAWN, as soon as money moves - no longer waiting for the offer minute (stage 3). Every post, not
 	// only a sign change: the pass is coalesced, and only Overdrawn reads the balance.
 	Bus.Subscribe<FMoneyPostedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FMoneyPostedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
@@ -1075,7 +1102,12 @@ void UOpsRuntime::RearmRepeatingSchedules()
 
 	// ONE ENTRY A DAY, not one per object: a hundred-stand airport would otherwise write a
 	// hundred rows a day into a saved array, and RollUp would spend its life folding them.
-	UpkeepHandle = Clock->Every(USimClock::SecondsPerDay, [this]() { PostDailyUpkeep(); });
+	// FIRST DUE AT THE NEXT MIDNIGHT, then a day apart (#442): Every books its first firing a day after NOW, and Now is the last
+	// attach or load - so a load at 05:59 pushed the upkeep and FDayEndedEvent to 05:59 the next day, every load moved them
+	// again, and a player who reloaded often enough never paid upkeep at all. The day is USimClock::SecondsPerDay game seconds
+	// whatever the scenario's real-time day length (ApplyScenarioFigures sets that, and NextDayStart does not read it).
+	// ENFORCED BY: AirportOps.Present.Upkeep.PostsAtMidnightAfterALoad, AirportOps.Present.Upkeep.AttachPostsAtTheFirstMidnight
+	UpkeepHandle = Clock->EveryFrom(Clock->NextDayStart(), USimClock::SecondsPerDay, [this]() { PostDailyUpkeep(); });
 
 	// ONE GENERATOR MINUTE, every game minute - see Attach for why this replaced a single
 	// fixed-interval timer.

@@ -402,7 +402,7 @@ namespace InspectorCacheTest
 			Runtime = NewObject<UOpsRuntime>(GetTransientPackage());
 			Flight = NewObject<UFlight>(GetTransientPackage());
 			Flight->AgentId = Id;
-			Flight->Phase = EFlightPhase::TaxiIn;
+			Flight->SetPhaseForTest(EFlightPhase::TaxiIn);
 			Flight->AcceptedAt = 0.0;
 			Flight->ContractSeconds = 3.0 * 3600.0;
 			Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Flight);

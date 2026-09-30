@@ -33,7 +33,7 @@ namespace
 			UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 			Flight->AirlineId = TEXT("A");
 			Flight->AgentId = 7;
-			Flight->Phase = EFlightPhase::TaxiOut;
+			Flight->SetPhaseForTest(EFlightPhase::TaxiOut);
 			Flights->AddOffer(*NewObject<USimClock>(GetTransientPackage()), Flight);
 			Bus.BeginWiring();
 			Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Reaction, TEXT("Airlines"), [this](const FFlightAirborneEvent& E) { Roster->OnFlightAirborne(E); });
@@ -348,6 +348,27 @@ bool FAirlinesClosureCancelTest::RunTest(const FString&)
 	F.Bus.Publish(FFlightCancelledEvent{ 4, TEXT("NoSuchAirline"), ECancelReason::AirportClosed });
 	F.Bus.Drain();
 	TestEqual(TEXT("an airline the roster was never seeded with grows no row"), F.Roster->Find(TEXT("NoSuchAirline")) == nullptr, true);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlinesPlayerCancelTest, "AirportOps.Model.Airlines.PlayerCancelCostsTheClosurePenalty",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirlinesPlayerCancelTest::RunTest(const FString&)
+{
+	// THE PLAYER'S CANCEL OF A FLIGHT THAT HAD NOT ARRIVED (#442) costs the SAME per-flight penalty the player's closure does - the
+	// owner's open question is whether it should cost at all (see UFlightBoard::CancelByPlayer), and until that is ruled the two
+	// exits out of an unlandable holding flight cost alike.
+	FRosterFixture F;
+	if (!TestTrue(TEXT("the penalty is a real cost"), F.Roster->Tuning.ClosureCancelPenalty > 0.0)) { return false; }
+	F.Bus.Publish(FFlightCancelledEvent{ 1, TEXT("A"), ECancelReason::PlayerCancelled });
+	F.Bus.Drain();
+	TestEqual(TEXT("a flight the player cancelled costs the closure penalty"), F.Sat(), 0.5 - F.Roster->Tuning.ClosureCancelPenalty, 1e-9);
+	if (!TestEqual(TEXT("announced once"), F.Changes.Num(), 1)) { return false; }
+	TestEqual(TEXT("with its own cause"), F.Changes[0].Cause, FString(TEXT("cancelled by the player")));
+
+	F.Bus.Publish(FFlightCancelledEvent{ 2, TEXT("A"), ECancelReason::AirportClosed });
+	F.Bus.Drain();
+	TestEqual(TEXT("and the closure still costs exactly the same, on top"), F.Sat(), 0.5 - 2.0 * F.Roster->Tuning.ClosureCancelPenalty, 1e-9);
 	return true;
 }
 

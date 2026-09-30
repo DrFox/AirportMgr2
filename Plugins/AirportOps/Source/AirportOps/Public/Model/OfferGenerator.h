@@ -165,9 +165,6 @@ public:
 	static bool CouldEverAdmit(const URoadNetwork& Network, const FVector2D& Focus,
 		const FAirframe& Airframe, EArrivalRefusal& OutWhy, FString& OutSentence);
 
-	/** True for a refusal no amount of waiting will clear. See CouldEverAdmit. */
-	static bool IsPermanentRefusal(EArrivalRefusal Why);
-
 	/**
 	 * One airline's offer rate, offers per GAME hour, at this time of day:
 	 * Peak x CurveAt x DemandFactor, never below the airline's floor in daylight.

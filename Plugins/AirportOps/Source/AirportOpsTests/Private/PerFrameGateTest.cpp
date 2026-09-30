@@ -49,7 +49,7 @@ bool FEmptyBoardCopiesNothingTest::RunTest(const FString&)
 	TestEqual(TEXT("with an offer, each frame walks the list"), Board->OfferSnapshotCountForTest(), 1);
 	TestEqual(TEXT("and drains its countdown"), Offer->OfferSecondsLeft, 50.0, 1e-9);
 	Board->TickOffers(*Traffic, *Net, *Clock, 60.0);
-	TestEqual(TEXT("it lapses"), Offer->Phase, EFlightPhase::Expired);
+	TestEqual(TEXT("it lapses"), Offer->GetPhase(), EFlightPhase::Expired);
 	Board->TickOffers(*Traffic, *Net, *Clock, 1.0);
 	TestEqual(TEXT("and the board is empty again: no copy"), Board->OfferSnapshotCountForTest(), 2);
 	return true;
@@ -283,7 +283,7 @@ bool FArrivalRequeuesOnlyAcceptedTest::RunTest(const FString&)
 	auto Plant = [&]()
 	{
 		UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
-		Flight->Phase = EFlightPhase::Accepted;
+		Flight->SetPhaseForTest(EFlightPhase::Accepted);
 		Flight->ArrivesAt = Clock->Now() + 10.0;
 		Board->AddOffer(*Clock, Flight);
 		return Flight;
@@ -291,11 +291,11 @@ bool FArrivalRequeuesOnlyAcceptedTest::RunTest(const FString&)
 	UFlight* Kept = Plant();
 	UFlight* Cancelled = Plant();
 	Board->RearmSchedules(*Traffic, *Net, *Clock);
-	Cancelled->Phase = EFlightPhase::Cancelled;   // a cancel that left its arrival armed
+	Cancelled->SetPhaseForTest(EFlightPhase::Cancelled);   // a cancel that left its arrival armed
 	const double Until = Kept->ArrivesAt + 1.0;
 	for (int32 Step = 0; Step < 100000 && Clock->Now() < Until; ++Step) { Clock->Advance(0.5 / FMath::Max(Clock->TimeScale(), 1e-6)); }
-	TestEqual(TEXT("an Accepted flight joins the queue at its ETA - the arrival was armed"), Kept->Phase, EFlightPhase::Inbound);
-	TestEqual(TEXT("a cancelled one stays cancelled"), Cancelled->Phase, EFlightPhase::Cancelled);
+	TestEqual(TEXT("an Accepted flight joins the queue at its ETA - the arrival was armed"), Kept->GetPhase(), EFlightPhase::Inbound);
+	TestEqual(TEXT("a cancelled one stays cancelled"), Cancelled->GetPhase(), EFlightPhase::Cancelled);
 	return true;
 }
 

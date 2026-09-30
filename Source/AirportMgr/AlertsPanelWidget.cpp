@@ -30,6 +30,17 @@ void UAlertRowEntry::HandleClick()
 	}
 }
 
+void UAlertRowEntry::HandleCancelClick()
+{
+	// THROUGH THE PANEL, which asks its own runtime (OpsRuntime(), the resolver's answer) - not a controller verb, whose public surface
+	// is a closed list, and not a UOpsRuntimeSubsystem::Get of this widget's own. The flight is the row's own key.
+	// ENFORCED BY: Check-Architecture rule 55 (the subsystem is called from the resolver alone), rule 54 (the controller's closed list)
+	if (UAlertsPanelWidget* Panel = Owner.Get())
+	{
+		Panel->OnCancelClicked(Key);
+	}
+}
+
 void UAlertsPanelWidget::BuildOnce(const UUIStyle& Style)
 {
 	if (UVerticalBox* Column = Cast<UVerticalBox>(EnsureContentRoot(TEXT("AlertsCard"))))
@@ -165,6 +176,56 @@ bool UAlertsPanelWidget::GoTo(const FOpsAlertKey& Key, ARoadBuildController& Con
 	return Controller.SelectAndFocus(Alert.Focus);
 }
 
+bool UAlertsPanelWidget::OnCancelClicked(const FOpsAlertKey& Key)
+{
+	UOpsRuntime* Runtime = OpsRuntime();
+	if (Runtime == nullptr)
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("Alerts: Cancel flight clicked on %s %d with no ops runtime - nothing cancelled"),
+			*UEnum::GetValueAsString(Key.Kind), Key.Id);
+		return false;
+	}
+	return CancelFlightOf(Key, *Runtime);
+}
+
+bool UAlertsPanelWidget::IsCancelBoundForTest(const FOpsAlertKey& Key) const
+{
+	for (const TObjectPtr<UAlertRowEntry>& Entry : Entries)
+	{
+		if (Entry != nullptr && Entry->Key == Key)
+		{
+			return Entry->CancelButton != nullptr
+				&& Entry->CancelButton->OnClicked.Contains(Entry.Get(), GET_FUNCTION_NAME_CHECKED(UAlertRowEntry, HandleCancelClick));
+		}
+	}
+	return false;
+}
+
+bool UAlertsPanelWidget::ClickCancelForTest(const FOpsAlertKey& Key)
+{
+	for (const TObjectPtr<UAlertRowEntry>& Entry : Entries)
+	{
+		if (Entry != nullptr && Entry->Key == Key && Entry->CancelButton != nullptr)
+		{
+			Entry->CancelButton->OnClicked.Broadcast();
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UAlertsPanelWidget::CancelFlightOf(const FOpsAlertKey& Key, UOpsRuntime& Runtime)
+{
+	const FOpsAlert* Found = Alerts.FindByPredicate([&Key](const FOpsAlert& A) { return A.Key == Key; });
+	if (Found == nullptr || Found->Key.Kind != EAlertKind::FlightCannotLand)
+	{
+		UE_LOG(LogRoadBuild, Log, TEXT("Alerts: cancel of %s %d refused: %s"), *UEnum::GetValueAsString(Key.Kind), Key.Id,
+			Found == nullptr ? TEXT("that alert has cleared") : TEXT("only a flight that cannot land offers one"));
+		return false;
+	}
+	return Runtime.CancelFlight(Found->Key.Id);
+}
+
 void UAlertsPanelWidget::PaintRows()
 {
 	bRowsDirty = false;
@@ -220,6 +281,21 @@ void UAlertsPanelWidget::PaintRows()
 		GoButton->OnClicked.AddDynamic(Entry, &UAlertRowEntry::HandleClick);
 		Entries.Add(Entry);
 		Line->AddChildToHorizontalBox(GoButton);
+
+		// A FLIGHT THAT CAN NEVER LAND has no aeroplane for the card's Unstick to act on, so its way out is here (#442): the
+		// fix is the player's airport, or this. Secondary, like Go - a cancel costs the airline's goodwill, and the button
+		// that does is not the row's primary action.
+		if (Alert.Key.Kind == EAlertKind::FlightCannotLand)
+		{
+			UUiButton* CancelButton = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass());
+			CancelButton->SetLabel(LOCTEXT("CancelFlight", "Cancel flight"));
+			CancelButton->Build(Style, EUiButtonKind::Secondary);
+			CancelButton->SetState(true, false);
+			CancelButton->OnClicked.AddDynamic(Entry, &UAlertRowEntry::HandleCancelClick);
+			Entry->CancelButton = CancelButton;
+			UHorizontalBoxSlot* CancelSlot = Line->AddChildToHorizontalBox(CancelButton);
+			CancelSlot->SetPadding(FMargin(6.0f, 0.0f, 0.0f, 0.0f));
+		}
 
 		UUiRow* Row = WidgetTree->ConstructWidget<UUiRow>(UUiRow::StaticClass());
 		Row->Build(Style, FMargin(8.0f, 4.0f));

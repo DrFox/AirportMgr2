@@ -17,9 +17,11 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
+#include "Profiles/RoadProfile.h"
 #include "Model/RouteSearch.h"
 #include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
+#include "Model/TrafficOccupancy.h"
 #include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -90,7 +92,7 @@ namespace
 			Flight->Airframe = Airframe;
 			Flight->Callsign = TEXT("CU 204");
 			Flight->AgentId = Plane;
-			Flight->Phase = EFlightPhase::TaxiIn;
+			Flight->SetPhaseForTest(EFlightPhase::TaxiIn);
 			Board->AddOffer(*Clock, Flight);
 			// PUBLISHED INTO THE BUS, heard when Recompute drains it - what UOpsRuntime does (#436). This relay used to
 			// call the board inside the traffic's broadcast, an ordering production never has.
@@ -226,7 +228,7 @@ bool FOpsAlertsStandLostTest::RunTest(const FString&)
 	if (!TestTrue(TEXT("a field"), F.Build())) { return false; }
 	UFlight* Coming = NewObject<UFlight>(GetTransientPackage());
 	Coming->Callsign = TEXT("CU 900");
-	Coming->Phase = EFlightPhase::Accepted;
+	Coming->SetPhaseForTest(EFlightPhase::Accepted);
 	Coming->Stand = F.Airport.Stands[1];
 	F.Board->AddOffer(*F.Clock, Coming);
 	F.Recompute();
@@ -239,6 +241,134 @@ bool FOpsAlertsStandLostTest::RunTest(const FString&)
 	Coming->Stand = FEntityInstanceId();
 	F.Recompute();
 	TestEqual(TEXT("holding nothing any more, the alert clears"), F.ClearedOf(EAlertKind::HeldStandLost), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsAlertsUnlandableTest, "AirportOps.Model.Alerts.UnlandableHoldingFlightRaisesAnAlert",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsAlertsUnlandableTest::RunTest(const FString&)
+{
+	// #442's PIN: A FLIGHT ACCEPTED WHEN THE AIRPORT COULD TAKE IT, THEN THE ONLY EXIT DELETED. The plan's refusal is permanent (only the
+	// player can clear it), the flight holds its stand for ever, and there was no alert and no way out but closing the airport.
+	FAlertsField F;
+	if (!TestTrue(TEXT("a field"), F.Build())) { return false; }
+	UFlight* Coming = NewObject<UFlight>(GetTransientPackage());
+	Coming->Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	Coming->Callsign = TEXT("CU 900");
+	Coming->OfferWindowSeconds = 60.0;
+	Coming->OfferSecondsLeft = 60.0;
+	Coming->LeadTimeSeconds = 1.0;
+	Coming->RunwayPreference = F.Airport.Threshold;
+	F.Board->AddOffer(*F.Clock, Coming);
+	// A DISPATCHER THAT REFUSES, so the queue judges the flight and keeps it: a flight cleared to land would be Landing, not holding.
+	F.Board->Dispatcher = [](const FVector2D&, const FAirframe&) { return false; };
+	if (!TestTrue(TEXT("accepted while the airport could take it"), F.Board->Accept(*F.Traffic, *F.Airport.Net, *F.Clock, *Coming))) { return false; }
+	const FEntityInstanceId Held = Coming->Stand;
+
+	F.Clock->Advance(1.0);   // its ETA: the clock's callback puts it in the queue
+	F.Board->TickQueue(*F.Traffic, *F.Airport.Net, *F.Clock);
+	if (!TestEqual(TEXT("PRECONDITION: it is holding"), Coming->GetPhase(), EFlightPhase::Inbound)) { return false; }
+	F.Recompute();
+	TestEqual(TEXT("CONTROL: a holding flight that CAN land raises no such alert"), F.RaisedOf(EAlertKind::FlightCannotLand), 0);
+
+	// THE ONLY EXIT DELETED - the taxiway that leaves the runway - and the guideline graph re-derived. The queue judges it afresh.
+	for (int32 Index = F.Airport.Net->GetSegments().Num() - 1; Index >= 0; --Index)
+	{
+		const FRoadSegment& Segment = F.Airport.Net->GetSegments()[Index];
+		if (Segment.Profile != nullptr && !Segment.Profile->bContinuousThroughJunctions)
+		{
+			F.Airport.Net->RemoveSegment(F.Airport.Net->SegmentIdAt(Index));
+		}
+	}
+	TestGraph::Derive(*F.Airport.Net);
+	F.Board->TickQueue(*F.Traffic, *F.Airport.Net, *F.Clock);
+	TestTrue(TEXT("PRECONDITION: the planner now refuses it for a reason only the player can clear"),
+		ArrivalPlanner::IsPermanentRefusal(F.Board->UnlandableWhy(*Coming, *F.Airport.Net)));
+	TestEqual(TEXT("and it is still holding"), Coming->GetPhase(), EFlightPhase::Inbound);
+
+	F.Recompute();
+	if (!TestEqual(TEXT("an alert names the holding flight that can never land"), F.RaisedOf(EAlertKind::FlightCannotLand), 1)) { return false; }
+	const FOpsAlert* Alert = F.Alerts->GetAlerts().FindByPredicate([](const FOpsAlert& A) { return A.Key.Kind == EAlertKind::FlightCannotLand; });
+	if (!TestNotNull(TEXT("it is held"), Alert)) { return false; }
+	TestEqual(TEXT("keyed by the flight"), Alert->Key.Id, Coming->Id);
+	TestTrue(TEXT("naming it by its callsign"), Alert->Text.ToString().Contains(TEXT("CU 900")));
+	TestTrue(TEXT("and saying what to do"), Alert->Text.ToString().Contains(TEXT("cancel")));
+	TestEqual(TEXT("with somewhere for Go to take the camera"), Alert->Focus.Kind, EAlertFocusKind::Point);
+
+	// CANCELLED: the stand it held is free again and the alert clears - by itself, because its condition stopped being true.
+	const FEntityInstanceId StillHeld = Coming->Stand;
+	if (!TestTrue(TEXT("the player cancels it"), F.Board->CancelByPlayer(*F.Traffic, *F.Clock, Coming->Id))) { return false; }
+	const FEntityInstance* Stand = F.Airport.Net->GetEntity(StillHeld);
+	TestTrue(TEXT("the stand it held is released"), Stand != nullptr && !F.Traffic->IsStandHeld(Stand->PoseNode, 0));
+	F.Recompute();
+	TestEqual(TEXT("and the alert clears"), F.ClearedOf(EAlertKind::FlightCannotLand), 1);
+	TestEqual(TEXT("leaving none"), F.Alerts->GetAlerts().FilterByPredicate([](const FOpsAlert& A) { return A.Key.Kind == EAlertKind::FlightCannotLand; }).Num(), 0);
+	(void)Held;
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsAlertsFixedAirportTest, "AirportOps.Model.Alerts.FixedAirportClearsTheAlertBehindABusyRunway",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsAlertsFixedAirportTest::RunTest(const FString&)
+{
+	// THE ALERT MUST NOT OUTLIVE THE FIX (#442 review): ClearanceFor is asked only once the runway is found free, so a holding flight behind
+	// a BUSY runway keeps the "no exit" it was judged with after the player rebuilds the exit - and the alert, read from that cache, stayed
+	// up until the runway freed. A judgement older than the guideline graph is None.
+	FAlertsField F;
+	if (!TestTrue(TEXT("a field"), F.Build())) { return false; }
+	UFlight* Coming = NewObject<UFlight>(GetTransientPackage());
+	Coming->Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	Coming->Callsign = TEXT("CU 900");
+	Coming->OfferWindowSeconds = 60.0;
+	Coming->OfferSecondsLeft = 60.0;
+	Coming->LeadTimeSeconds = 1.0;
+	Coming->RunwayPreference = F.Airport.Threshold;
+	F.Board->AddOffer(*F.Clock, Coming);
+	F.Board->Dispatcher = [](const FVector2D&, const FAirframe&) { return false; };
+	if (!TestTrue(TEXT("accepted while the airport could take it"), F.Board->Accept(*F.Traffic, *F.Airport.Net, *F.Clock, *Coming))) { return false; }
+	F.Clock->Advance(1.0);
+
+	// THE TAXIWAY OUT DELETED - its ends and profile kept, so the same road can be laid again - and the graph re-derived.
+	FRoadNodeId TaxiA, TaxiB;
+	URoadProfile* TaxiProfile = nullptr;
+	for (int32 Index = F.Airport.Net->GetSegments().Num() - 1; Index >= 0; --Index)
+	{
+		const FRoadSegment& Segment = F.Airport.Net->GetSegments()[Index];
+		if (Segment.Profile != nullptr && !Segment.Profile->bContinuousThroughJunctions)
+		{
+			TaxiA = Segment.A;
+			TaxiB = Segment.B;
+			TaxiProfile = Segment.Profile;
+			F.Airport.Net->RemoveSegment(F.Airport.Net->SegmentIdAt(Index));
+			break;
+		}
+	}
+	if (!TestNotNull(TEXT("the taxiway was found and removed"), TaxiProfile)) { return false; }
+	TestGraph::Derive(*F.Airport.Net);
+	F.Board->TickQueue(*F.Traffic, *F.Airport.Net, *F.Clock);
+	F.Recompute();
+	if (!TestEqual(TEXT("PRECONDITION: the flight that cannot land has an alert"), F.RaisedOf(EAlertKind::FlightCannotLand), 1)) { return false; }
+
+	// THE RUNWAY IS BUSY, then the player REBUILDS THE EXIT. The queue does not re-judge a flight whose runway is held, so its cached
+	// "no exit" is the only thing the alert pass can read - and it is older than the graph.
+	for (const FTrafficResource& Surface : F.Airport.Net->RunwaySurfaces(F.Airport.ThresholdSegment))
+	{
+		FTrafficClaim Claim;
+		Claim.AgentId = 99;
+		Claim.Resource = Surface;
+		Claim.bOccupied = true;
+		FTrafficClaim Blocker;
+		F.Traffic->OccupancyForTest().TryClaim(Claim, Blocker);
+	}
+	TestGraph::Lay(*F.Airport.Net, TaxiA, TaxiB, TaxiProfile);
+	TestGraph::Derive(*F.Airport.Net);
+	F.Board->TickQueue(*F.Traffic, *F.Airport.Net, *F.Clock);
+	if (!TestEqual(TEXT("PRECONDITION: the flight is still holding - the busy runway kept the queue from re-judging it"), Coming->GetPhase(), EFlightPhase::Inbound)) { return false; }
+
+	TestEqual(TEXT("a judgement older than the graph says nothing"), F.Board->UnlandableWhy(*Coming, *F.Airport.Net), EArrivalRefusal::None);
+	F.Recompute();
+	TestEqual(TEXT("so the alert clears the recompute after the fix, without waiting for the runway"), F.ClearedOf(EAlertKind::FlightCannotLand), 1);
+	TestEqual(TEXT("and none is held"), F.Alerts->GetAlerts().FilterByPredicate([](const FOpsAlert& A) { return A.Key.Kind == EAlertKind::FlightCannotLand; }).Num(), 0);
 	return true;
 }
 

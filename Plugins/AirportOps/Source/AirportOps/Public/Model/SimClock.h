@@ -155,8 +155,28 @@ public:
 	/** Fire every Interval game seconds, first at Now()+Interval. INDEX_NONE if Interval <= 0. */
 	int32 Every(double Interval, TFunction<void()> Callback);
 
+	/**
+	 * Fire every Interval game seconds, FIRST at FirstDue - for a beat that belongs to a moment and not to the moment it was
+	 * booked (#442): the day's upkeep is due at MIDNIGHT, and Every books it a day after the last attach or load, so a load
+	 * at 05:59 pushed the 06:00 upkeep to the next day and repeated loads avoided it altogether. A past FirstDue fires on the
+	 * next Advance, as At does. INDEX_NONE if Interval <= 0.
+	 */
+	int32 EveryFrom(double FirstDue, double Interval, TFunction<void()> Callback);
+
+	/**
+	 * The game time of the next midnight - the start of the day after this one, strictly later than Now() (a clock exactly at
+	 * 00:00 is at the START of a day whose boundary already fired). SecondsPerDay is the day's definition, not the real-time
+	 * length the scenario sets, so this does not move when the day's real length does (USimClock::SetUniformDay).
+	 * ENFORCED BY: AirportOps.Present.Upkeep.PostsAtMidnightAfterALoad
+	 */
+	double NextDayStart() const;
+
 	/** True if the handle named a pending entry. */
 	bool Cancel(int32 Handle);
+
+	/** How many entries are waiting to fire - for the tests that prove an arrival was DISARMED (#442): a cancelled flight's
+	 *  callback is guarded by its phase, so "still cancelled after its ETA" passes whether or not the entry was cancelled. */
+	int32 PendingForTest() const { return Entries.Num(); }
 
 private:
 	struct FEntry

@@ -212,6 +212,21 @@ int32 USimClock::Every(double Interval, TFunction<void()> Callback)
 	return Add(GameSeconds + Interval, Interval, MoveTemp(Callback));
 }
 
+int32 USimClock::EveryFrom(double FirstDue, double Interval, TFunction<void()> Callback)
+{
+	if (Interval <= 0.0)
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("SimClock::EveryFrom refused: interval %.3f is not positive"), Interval);
+		return INDEX_NONE;
+	}
+	return Add(FirstDue, Interval, MoveTemp(Callback));
+}
+
+double USimClock::NextDayStart() const
+{
+	return (Day() + 1) * SecondsPerDay;
+}
+
 bool USimClock::Cancel(int32 Handle)
 {
 	const int32 Removed = Entries.RemoveAll([Handle](const FEntry& E) { return E.Handle == Handle; });

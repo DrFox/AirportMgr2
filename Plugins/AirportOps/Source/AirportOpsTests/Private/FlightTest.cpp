@@ -101,25 +101,23 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FFlightDefaultsTest::RunTest(const FString& Parameters)
 {
 	UFlight* Flight = NewObject<UFlight>();
-	TestEqual(TEXT("a new flight is an offer"), Flight->Phase, EFlightPhase::Offered);
+	TestEqual(TEXT("a new flight is an offer"), Flight->GetPhase(), EFlightPhase::Offered);
 	TestEqual(TEXT("with no agent, so nothing maps a phase onto it"), Flight->AgentId, INDEX_NONE);
 	TestFalse(TEXT("and no stand held"), Flight->Stand.IsSet());
-	// THE DECLARATION ORDER IS LOAD-BEARING and this is what pins it. FlightPhaseFromTransition
-	// decides taxi-in from taxi-out by asking whether the flight has reached Turnaround, so
-	// Manoeuvring must sit AFTER Turnaround - inserting it before would read every taxi OUT as
-	// a taxi in, with no compiler complaint at all.
-	TestTrue(TEXT("Turnaround comes before Manoeuvring"),
-		EFlightPhase::Turnaround < EFlightPhase::Manoeuvring);
-	TestTrue(TEXT("and Manoeuvring before TaxiOut"),
-		EFlightPhase::Manoeuvring < EFlightPhase::TaxiOut);
+	// THE DECLARATION ORDER IS NOT LOAD-BEARING ANY MORE (#442): FlightPhaseFromTransition decides taxi-in from taxi-out by asking
+	// FlightPhase::HasReachedStand, which is a switch on the phase and not a comparison of two. What pins it is that Manoeuvring -
+	// the push, which the taxi out follows - and TaxiOut both count as reaching the stand, with no reading of where they sit.
+	TestTrue(TEXT("a flight coming off its stand has reached it"), FlightPhase::HasReachedStand(EFlightPhase::Manoeuvring));
+	TestTrue(TEXT("and so has the taxi out"), FlightPhase::HasReachedStand(EFlightPhase::TaxiOut));
+	TestFalse(TEXT("the taxi in has not"), FlightPhase::HasReachedStand(EFlightPhase::TaxiIn));
 
 	TestEqual(TEXT("a push off the stand is a manoeuvring flight"),
 		FlightPhaseFromTransition(FlightTest::Made(EAgentEvent::DepartOrdered, EAgentPhase::Parked, EAgentPhase::Manoeuvring),
 			EFlightPhase::Turnaround, true),
 		EFlightPhase::Manoeuvring);
 
-	// AND A TAXI THAT GOES ON AFTER IT IS STILL A TAXI OUT - which is what the ordering above buys, and
-	// what would break silently if Manoeuvring were declared in the wrong place.
+	// AND A TAXI THAT GOES ON AFTER IT IS STILL A TAXI OUT - which is what HasReachedStand above buys, and
+	// what would break if Manoeuvring stopped counting as having reached the stand.
 	TestEqual(TEXT("a rescue of a stranded push is the taxi out"),
 		FlightPhaseFromTransition(FlightTest::Made(EAgentEvent::Rescued, EAgentPhase::Stranded, EAgentPhase::Taxiing),
 			EFlightPhase::Manoeuvring, false),
@@ -129,6 +127,62 @@ bool FFlightDefaultsTest::RunTest(const FString& Parameters)
 			EFlightPhase::Manoeuvring, false),
 		EFlightPhase::TaxiOut);
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightEveryPhaseHasOneStageTest,
+	"AirportOps.Model.Flight.EveryPhaseHasOneStage",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightEveryPhaseHasOneStageTest::RunTest(const FString& Parameters)
+{
+	// THE PREDICATES ARE ONE TABLE, stated by name here so a phase added to the enum fails THIS test as well as the build at
+	// StageOf: each phase lands in exactly one stage, and every predicate is that stage and nothing else. The three the issue
+	// named (IsUnarrived, IsOnGround, IsTerminal) and the two derived from them.
+	struct FExpectation
+	{
+		EFlightPhase Phase;
+		EFlightStage Stage;
+	};
+	const FExpectation Expected[] = {
+		{ EFlightPhase::Offered,     EFlightStage::Offer },
+		{ EFlightPhase::Accepted,    EFlightStage::Unarrived },
+		{ EFlightPhase::Inbound,     EFlightStage::Unarrived },
+		{ EFlightPhase::Landing,     EFlightStage::OnTheWayIn },
+		{ EFlightPhase::TaxiIn,      EFlightStage::OnTheWayIn },
+		{ EFlightPhase::Turnaround,  EFlightStage::AtStandOrLeaving },
+		{ EFlightPhase::Manoeuvring, EFlightStage::AtStandOrLeaving },
+		{ EFlightPhase::TaxiOut,     EFlightStage::AtStandOrLeaving },
+		{ EFlightPhase::Departing,   EFlightStage::AtStandOrLeaving },
+		{ EFlightPhase::Departed,    EFlightStage::Terminal },
+		{ EFlightPhase::Declined,    EFlightStage::Terminal },
+		{ EFlightPhase::Expired,     EFlightStage::Terminal },
+		{ EFlightPhase::Cancelled,   EFlightStage::Terminal },
+		{ EFlightPhase::Withdrawn,   EFlightStage::Terminal },
+	};
+
+	// EVERY ENUMERATOR THE ENUM HAS, asked of reflection: a phase nobody added a row for is a count mismatch here.
+	const UEnum* Enum = StaticEnum<EFlightPhase>();
+	if (!TestNotNull(TEXT("the enum reflects"), Enum)) { return false; }
+	TestEqual(TEXT("every phase has an expectation - a new phase must be placed in a stage"),
+		Enum->NumEnums() - 1 /* the _MAX entry */, static_cast<int32>(UE_ARRAY_COUNT(Expected)));
+
+	for (const FExpectation& Each : Expected)
+	{
+		const FString Name = Enum->GetNameStringByValue(static_cast<int64>(Each.Phase));
+		TestTrue(*(Name + TEXT(" is a phase the enum names")), Enum->IsValidEnumValue(static_cast<int64>(Each.Phase)));
+		TestTrue(*(Name + TEXT(": its stage")), FlightPhase::StageOf(Each.Phase) == Each.Stage);
+		const bool bUnarrived = Each.Stage == EFlightStage::Unarrived;
+		const bool bOnGround = Each.Stage == EFlightStage::OnTheWayIn || Each.Stage == EFlightStage::AtStandOrLeaving;
+		const bool bTerminal = Each.Stage == EFlightStage::Terminal;
+		TestEqual(*(Name + TEXT(": IsUnarrived")), FlightPhase::IsUnarrived(Each.Phase), bUnarrived);
+		TestEqual(*(Name + TEXT(": IsOnGround")), FlightPhase::IsOnGround(Each.Phase), bOnGround);
+		TestEqual(*(Name + TEXT(": IsTerminal")), FlightPhase::IsTerminal(Each.Phase), bTerminal);
+		TestEqual(*(Name + TEXT(": IsLive is unarrived or on the ground")), FlightPhase::IsLive(Each.Phase), bUnarrived || bOnGround);
+		TestEqual(*(Name + TEXT(": HasReachedStand")), FlightPhase::HasReachedStand(Each.Phase), Each.Stage == EFlightStage::AtStandOrLeaving);
+		TestEqual(*(Name + TEXT(": IsArriving")), FlightPhase::IsArriving(Each.Phase), Each.Stage == EFlightStage::OnTheWayIn);
+	}
 	return true;
 }
 

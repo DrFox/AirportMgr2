@@ -8,11 +8,13 @@
 class ARoadBuildController;
 class UAlertsPanelWidget;
 class UOpsEvents;
+class UOpsRuntime;
 class UUiButton;
 class UUIStyle;
 class UVerticalBox;
 
-/** One row's "Go": a UObject because UButton::OnClicked binds to a UFUNCTION (ULandRowEntry's shape). */
+/** One row's "Go" and - for a flight that can never land - "Cancel flight": a UObject because UButton::OnClicked binds to a UFUNCTION
+ *  (ULandRowEntry's shape); both buttons of a row share it, and so its key. */
 UCLASS()
 class UAlertRowEntry : public UObject
 {
@@ -23,7 +25,13 @@ public:
 	/** BY KEY, not row index: a clear between a paint and a click shifts the indices (stage 2 review). */
 	FOpsAlertKey Key;
 
+	/** The row's Cancel flight button, kept so a test can click the real delegate and check it is bound (#442 review). Only a
+	 *  FlightCannotLand row has one. */
+	UPROPERTY() TObjectPtr<UUiButton> CancelButton;
+
 	UFUNCTION() void HandleClick();
+	/** The row's Cancel flight - UAlertsPanelWidget::OnCancelClicked, which asks the panel's own ops runtime (#442). */
+	UFUNCTION() void HandleCancelClick();
 };
 
 /**
@@ -62,6 +70,36 @@ public:
 
 	/** Go by the alert's key - what a row's button calls. False when that alert has cleared since. */
 	bool GoTo(const FOpsAlertKey& Key, ARoadBuildController& Controller);
+
+	/**
+	 * THE CANCEL BESIDE A FlightCannotLand ROW (#442): UOpsRuntime::CancelFlight for the row's flight - its stand released, the
+	 * airline charged the closure's per-flight penalty (an open owner question: see UFlightBoard::CancelByPlayer). BY KEY, like GoTo:
+	 * a clear between a paint and a click shifts the rows. False when that alert has cleared since, is not a FlightCannotLand (no
+	 * other kind offers a cancel), or the runtime refuses.
+	 *
+	 * HUNG HERE, ON THE ALERT, and not on the aircraft card: the flight is holding off the map and has no aeroplane to select, so
+	 * the card the Unstick lives on cannot open for it, and the arrivals panel's rows carry no actions at all.
+	 * ENFORCED BY: AirportMgr.UI.Alerts.CancelFlightCancelsOnlyAFlightCannotLandRow
+	 */
+	bool CancelFlightOf(const FOpsAlertKey& Key, UOpsRuntime& Runtime);
+
+	/**
+	 * THE CLICK ITSELF (what a row's Cancel flight button calls): CancelFlightOf against this panel's own ops runtime - the world's
+	 * resolver's, which a test overrides for a headless world - and LOGGED, not silent, when there is none: a button that does nothing
+	 * with no trace is the shape this project keeps paying for.
+	 */
+	bool OnCancelClicked(const FOpsAlertKey& Key);
+
+	/** Paint the rows now, instead of on the next tick while shown - for a test that clicks one. */
+	void PaintRowsForTest() { PaintRows(); }
+
+	/** Row Key's Cancel flight button is bound to its own entry's HandleCancelClick - the hop ClickCancelForTest skips when it
+	 *  calls the method. Checked by name on the delegate, so an unbound button fails it. False for a row with no such button. */
+	bool IsCancelBoundForTest(const FOpsAlertKey& Key) const;
+
+	/** Click row Key's Cancel flight button - its real OnClicked, so the binding is part of what is measured. False when the row
+	 *  has none. */
+	bool ClickCancelForTest(const FOpsAlertKey& Key);
 
 	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
 	virtual void OnWindowClosedByPlayer() override;

@@ -9,36 +9,9 @@
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 
-bool UOfferGenerator::IsPermanentRefusal(EArrivalRefusal Why)
-{
-	switch (Why)
-	{
-	case EArrivalRefusal::None:
-		return false;
-
-	// These clear on their own: the runway empties, an aeroplane leaves a stand. An offer
-	// refused for one of them is still worth making - the player answers it minutes before
-	// it lands, and the row shows the live reason meanwhile.
-	case EArrivalRefusal::RunwayOccupied:
-	case EArrivalRefusal::NoFreeStand:
-	case EArrivalRefusal::GraphBeingEdited:  // clears when the player lets go of the node
-		return false;
-
-	// A SERVICE THE AIRPORT CANNOT GIVE is the player's to accept badly (spec 2026-09-28
-	// ruling 5): the offer is made, the row says what is missing, and C scores the flight
-	// down. Filtering it out hid WHY an airline was not offering.
-	case EArrivalRefusal::NoStandServiceable:
-		return false;
-
-	// These need the player to BUILD something. NoRunway, RunwayTooShort, NotAdmitted,
-	// NoExit, NoRouteToStand, NoStandBigEnough (a bigger stand - so no airline is offered an
-	// A380 until an F stand exists, which is the drawn-stands spec's own promise),
-	// and NoStandPavedEnough (pave a stand) - one of shared-pavement Task 9's two new
-	// refusals; its sibling NoStandServiceable is soft since 2026-09-28, above.
-	default:
-		return true;
-	}
-}
+// IsPermanentRefusal MOVED BESIDE EArrivalRefusal (ArrivalPlanner::IsPermanentRefusal, #442): the same question is now asked of
+// a holding flight (UFlightBoard::UnlandableWhy), and its reasons - what clears on its own, what the player must build -
+// travelled with it.
 
 bool UOfferGenerator::CouldEverAdmit(const URoadNetwork& Network, const FVector2D& Focus,
 	const FAirframe& Airframe, EArrivalRefusal& OutWhy)
@@ -54,7 +27,7 @@ bool UOfferGenerator::CouldEverAdmit(const URoadNetwork& Network, const FVector2
 	const FArrivalPlan Plan = ArrivalPlanner::Plan(Network, Focus, Airframe, nullptr);
 	OutWhy = Plan.Why;
 	OutSentence = Plan.Why == EArrivalRefusal::None ? FString() : ArrivalPlanner::DescribeRefusal(Plan);
-	return !IsPermanentRefusal(Plan.Why);
+	return !ArrivalPlanner::IsPermanentRefusal(Plan.Why);
 }
 
 double UOfferGenerator::RateAt(const UAirlineDefinition& Airline, double TimeOfDaySeconds,
@@ -238,7 +211,6 @@ UFlight* UOfferGenerator::MakeOffer(const FVector2D& Focus, const UAirlineDefini
 	Offer->AirlineId = Airline.GetFName();
 	Offer->TypeName = Chosen.TypeName;
 	Offer->Callsign = MakeCallsign(Airline.CallsignPrefix, Stream);
-	Offer->Phase = EFlightPhase::Offered;
 	Offer->bFloorAirline = Airline.bIsFloor;
 
 	// REAL SECONDS, drained by UFlightBoard::TickOffers - see UAirlineDefinition::OfferWindowSeconds.
@@ -257,16 +229,20 @@ UFlight* UOfferGenerator::MakeOffer(const FVector2D& Focus, const UAirlineDefini
 		? FMath::RoundToDouble(Tank * Stream.FRandRange(OpsDesignDefaults::FuelLoadDrawMin, OpsDesignDefaults::FuelLoadDrawMax)) : 0.0;
 
 	// CARRIED WITH THE FLIGHT, not left for the board's own field to answer later - see
-	// UFlight::ApproachFocus.
-	Offer->ApproachFocus = Focus;
+	// UFlight::RunwayPreference. (NO PHASE WRITTEN HERE: a flight is born Offered, UFlight::Phase's default, and this line
+	// used to write the value the field already held - the thirteenth writer of #442, and a no-op.)
+	Offer->RunwayPreference = Focus;
 
 	// PRICED AT THE OFFER, not at touchdown, so the inbox row shows what accepting it is worth
 	// and the player's fee lever moves NEW offers only. A fee computed on landing would let
 	// them accept cheaply and put the price up afterwards, and the number they decided on
-	// would have been a lie. ParkingFee stays zero: nobody knows how long it will stay.
+	// would have been a lie. ParkingFee stays zero: nobody knows how long it will stay - but the RATE it will be billed at
+	// is known now, and is fixed here for the same reason (#442): PostParkingFee used to ask for it at departure, through the
+	// lever as it then stood, which is the trade this comment rules out for the landing fee, open for parking.
 	if (Pricing != nullptr)
 	{
 		Offer->LandingFee = Pricing->LandingFee(Offer->Airframe);
+		Offer->ParkingRatePerHour = Pricing->ParkingFeePerHour(Offer->Airframe);
 	}
 	return Offer;
 }

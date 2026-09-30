@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/Airframe.h"
+#include "Model/ExhaustiveSwitch.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadHandles.h"
 #include "UObject/Object.h"
@@ -9,7 +10,9 @@
 #include "Flight.generated.h"
 
 enum class EAgentPhase : uint8;
+class UGroundTraffic;
 class URoadNetwork;
+class USimClock;
 struct FRoadAgent;
 struct FAgentTransition;
 
@@ -19,9 +22,16 @@ struct FAgentTransition;
  * AN ENUM, NEVER A SET OF BOOLS: "offered" and "inbound" can never both be true, and the
  * states are visited in one order - the same rule EAgentPhase and EFuelDemandState follow.
  *
- * THE DECLARATION ORDER IS LOAD-BEARING. FlightPhaseFromTransition decides which way an aeroplane
- * is taxiing by asking whether the flight has reached Turnaround yet, so Turnaround must stay
- * between TaxiIn and TaxiOut. Reordering these breaks that with no compiler complaint.
+ * THE DECLARATION ORDER CARRIES NO MEANING ANY MORE (#442). It used to be load-bearing - "unarrived" was Accepted||Inbound
+ * at five sites, "on the ground" was Landing..Departing by range at four, FlightPhaseFromTransition asked whether the
+ * flight had reached Turnaround by `>=` - and a new phase needed about twelve edits, none of them a compile error. Every
+ * grouping is now one of the FlightPhase:: predicates below, each derived from StageOf's ONE exhaustive switch, so a new
+ * phase (Diverted) is a BUILD ERROR at StageOf, at UFlightBoard::TransitionTo's row switch and at every other per-phase
+ * mapping in the ops and game modules - each inside AIRSIDE_EXHAUSTIVE_SWITCH with no default - and nowhere has to be
+ * found by reading. Tests are the exception: they may group phases, and a table of them names every phase by count.
+ * ENFORCED BY: Check-Architecture rule 58 (no ordinal, cast or OR-grouped EFlightPhase test, and no switch on one without
+ * AIRSIDE_EXHAUSTIVE_SWITCH or with a default, outside this file), C4062 as an error around StageOf
+ * (AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN)
  *
  * Manoeuvring is the aeroplane coming off the stand - the PHASE, and it exists because an
  * aeroplane can now be watched doing it. The SERVICE that performs it for one that cannot
@@ -29,9 +39,10 @@ struct FAgentTransition;
  * reverses under its own power and is not being pushed by anything, so the two are not the
  * same word. Diverted is still deliberately ABSENT: the sequencer owns it and it does not
  * exist either. A phase nothing can enter is a lie. Cancelled is here since 2026-09-29 because
- * two things enter it now: the player despawning the aeroplane (UFlightBoard::CancelByAgent), and
- * the airport ceasing to be open before an accepted flight arrived (UFlightBoard::CancelUnarrived,
- * ops batch 3); the sequencer's cancellations will share it when it exists. Withdrawn, appended
+ * three things enter it now: the player despawning the aeroplane (UFlightBoard::CancelByAgent), the
+ * airport ceasing to be open before an accepted flight arrived (UFlightBoard::CancelUnarrived,
+ * ops batch 3), and the player cancelling one that could never land (UFlightBoard::CancelByPlayer, #442);
+ * the sequencer's cancellations will share it when it exists. Withdrawn, appended
  * last, is an OFFER the same closure took back - never accepted, so neither Cancelled nor Expired.
  */
 UENUM()
@@ -72,14 +83,101 @@ enum class EFlightPhase : uint8
 	 * (spec 2026-09-29-ops-batch3 §3). Not Expired: nobody let it lapse, so no OfferExpired and no Ignored
 	 * penalty; not Cancelled: it was never the airline's flight here.
 	 * ENFORCED BY: AirportOps.Model.FlightBoard.CancelUnarrivedCancelsAndWithdraws
-	 * APPENDED LAST because the order above is load-bearing (FlightPhaseFromTransition, UFlightBoard::Live).
+	 * APPENDED LAST so the saved values of every phase above keep their numbers - no longer because the order is
+	 * load-bearing (see the enum's comment: it is not since #442).
 	 */
 	Withdrawn
 };
 
 /**
+ * THE ONE PLACE EFlightPhase IS GROUPED (#442). Where a flight is in its life, coarser than its phase: a grouping every
+ * reader used to re-spell by ordinal range or by an OR of names, each copy a place a new phase would be silently left
+ * out of. A plain enum: nothing saves or reflects it, it only answers "which of these is it".
+ */
+enum class EFlightStage : uint8
+{
+	/** An offer in the inbox, undecided. */
+	Offer,
+	/** Accepted or holding: a stand is held and the aeroplane is not on the field yet. */
+	Unarrived,
+	/** On the field and not yet at a stand: landing or taxiing in. */
+	OnTheWayIn,
+	/** At its stand or on its way off it: the turnaround, the push, the taxi out, the line-up. */
+	AtStandOrLeaving,
+	/** Nothing will move it again: departed, declined, expired, cancelled or withdrawn. */
+	Terminal
+};
+
+/**
+ * The predicates every reader asks instead of comparing phases. StageOf is the ONE switch: EVERY phase by name, no default,
+ * inside AIRSIDE_EXHAUSTIVE_SWITCH (see ExhaustiveSwitch.h - C4062 is off in this toolchain unless a function opts in), so a
+ * phase added to EFlightPhase is a build error HERE, at the one place that has to say which stage it belongs to.
+ * ENFORCED BY: C4062 as an error around StageOf (checked 2026-09-30 by a stray enumerator: the build failed here),
+ * AirportOps.Model.Flight.EveryPhaseHasOneStage (every phase lands in exactly one predicate's set)
+ */
+namespace FlightPhase
+{
+	AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+	inline EFlightStage StageOf(EFlightPhase Phase)
+	{
+		switch (Phase)
+		{
+		case EFlightPhase::Offered:
+			return EFlightStage::Offer;
+		case EFlightPhase::Accepted:
+		case EFlightPhase::Inbound:
+			return EFlightStage::Unarrived;
+		case EFlightPhase::Landing:
+		case EFlightPhase::TaxiIn:
+			return EFlightStage::OnTheWayIn;
+		case EFlightPhase::Turnaround:
+		case EFlightPhase::Manoeuvring:
+		case EFlightPhase::TaxiOut:
+		case EFlightPhase::Departing:
+			return EFlightStage::AtStandOrLeaving;
+		case EFlightPhase::Departed:
+		case EFlightPhase::Declined:
+		case EFlightPhase::Expired:
+		case EFlightPhase::Cancelled:
+		case EFlightPhase::Withdrawn:
+			return EFlightStage::Terminal;
+		}
+		// A BYTE NO ENUMERATOR NAMES (a corrupt save): finished, the one stage nothing acts on.
+		return EFlightStage::Terminal;
+	}
+	AIRSIDE_EXHAUSTIVE_SWITCH_END
+
+	/** Accepted or Inbound: still to arrive - what a closure cancels, what holds a stand without an aeroplane. */
+	inline bool IsUnarrived(EFlightPhase Phase) { return StageOf(Phase) == EFlightStage::Unarrived; }
+
+	/** Landing through Departing: an aeroplane on the field - what a closure leaves to finish. */
+	inline bool IsOnGround(EFlightPhase Phase)
+	{
+		const EFlightStage Stage = StageOf(Phase);
+		return Stage == EFlightStage::OnTheWayIn || Stage == EFlightStage::AtStandOrLeaving;
+	}
+
+	/** Nothing will move it again: it is in History, not in the live list. */
+	inline bool IsTerminal(EFlightPhase Phase) { return StageOf(Phase) == EFlightStage::Terminal; }
+
+	/** Accepted through Departing: not an offer and not finished - what UFlightBoard::Live lists. */
+	inline bool IsLive(EFlightPhase Phase) { return IsUnarrived(Phase) || IsOnGround(Phase); }
+
+	/**
+	 * Has it reached its stand, or gone on from it: the turnaround, the push, the taxi out, the line-up. The test that
+	 * says which way a taxi is going (FlightPhaseFromTransition) and which mid-flight flights a load retires rather
+	 * than re-queues (UFlightBoard::DemoteRestoredMidFlight). A TERMINAL phase is not "at its stand": it asks nothing of a
+	 * finished flight, which no agent transition reaches.
+	 */
+	inline bool HasReachedStand(EFlightPhase Phase) { return StageOf(Phase) == EFlightStage::AtStandOrLeaving; }
+
+	/** Landing or taxiing in: on the field, not yet at a stand. A load re-queues these (their aeroplane was not saved). */
+	inline bool IsArriving(EFlightPhase Phase) { return StageOf(Phase) == EFlightStage::OnTheWayIn; }
+}
+
+/**
  * Why a flight was cancelled - FFlightCancelledEvent's reason, and what the airline roster scores it by.
- * AN ENUM: the three are mutually exclusive, and only AirportClosed is the player's choice to pay for.
+ * AN ENUM: the four are mutually exclusive, and only AirportClosed and PlayerCancelled are the player's choice to pay for.
  */
 UENUM()
 enum class ECancelReason : uint8
@@ -89,7 +187,13 @@ enum class ECancelReason : uint8
 	/** The last runway went. Free - the user accepted that loophole (spec 2026-09-29-ops-batch3 §0). */
 	NoRunway,
 	/** The player despawned the aeroplane (UFlightBoard::CancelByAgent). Free. */
-	Unstuck
+	Unstuck,
+	/**
+	 * The player cancelled a flight that had not arrived (UFlightBoard::CancelByPlayer) - what an unlandable holding flight's
+	 * alert offers (#442). Costs ClosureCancelPenalty, the same per-flight penalty the closure charges: the airline lost the
+	 * flight to the player's choice either way. APPENDED LAST so the saved values keep their meaning.
+	 */
+	PlayerCancelled
 };
 
 /**
@@ -106,6 +210,82 @@ enum class ELapseReason : uint8
 	Ignored,
 	/** No stand was free for it the whole time it stood. */
 	NeverAcceptable
+};
+
+/**
+ * Whether a phase change is live play or a load putting a saved flight where the game left it (#442). The ONE deliberate
+ * difference between two writers of the same (from, to): a flight cancelled by a closure is SCORED and announced, and the
+ * same flight cancelled by the load that restores the closed airport is not - what closed the airport happened before the
+ * save, and its own cancellations were scored then (PR C ruling I2). An enum and not a bool: there will be a third
+ * source the day something else moves a flight (the sequencer's diversions), and a bool would then be wrong.
+ */
+enum class EFlightChangeSource : uint8
+{
+	/** The game running: every row announces what it announces and scores what it scores. */
+	Play,
+	/** A load: nothing is published that the roster or the UI would read as news. */
+	Load
+};
+
+/**
+ * WHAT A PHASE CHANGE NEEDS IN HAND BESIDE ITS TWO PHASES (#442) - UFlightBoard::TransitionTo's third argument. Plain
+ * C++: an argument, never saved.
+ *
+ * THE FIELDS ARE WHAT A ROW NEEDS THAT ITS CALLER HAS AND THE BOARD DOES NOT; only Source is a deliberate difference between
+ * two doors onto the same row. THE CLOCK AND THE TRAFFIC MODEL, for the rows that disarm an arrival and release a stand: null where the caller
+ * has neither (the ETA callback is the clock firing - there is nothing left to cancel; a load with no traffic model has
+ * no claims to release), and a row that NEEDED one and was not given it says so in the log rather than leaving the
+ * arrival armed in silence. THE REASON, for the Cancelled row's FFlightCancelledEvent. THE AGENT, for the row that puts
+ * an aeroplane under a flight. AT, the game time the change is dated - TerminatedAt, and HoldingSince for a flight joining
+ * the queue (which is its ETA, not the moment the callback ran).
+ *
+ * FLUENT SETTERS, each returning *this, so a call site names only what its door supplies:
+ * TransitionTo(F, Cancelled, FTransitionCause::Played(Now).WithWorld(Clock, Traffic).Cancelling(Reason)).
+ */
+struct FTransitionCause
+{
+	EFlightChangeSource Source = EFlightChangeSource::Play;
+	double At = 0.0;
+	USimClock* Clock = nullptr;
+	UGroundTraffic* Traffic = nullptr;
+	/**
+	 * WHY, for the Cancelled row - UNSET until Cancelling names it. Not defaulted to a reason: a cancel that forgot to say why
+	 * was silently the FREE one (Unstuck, which the roster does not charge), so a door that dropped its reason cost the airline
+	 * nothing with no trace. The row logs an Error and publishes nothing for a Play-source cancel with none.
+	 * ENFORCED BY: AirportOps.Model.FlightBoard.CancelWithNoReasonIsLoudNotFree
+	 */
+	TOptional<ECancelReason> CancelReason;
+	int32 AgentId = INDEX_NONE;
+
+	static FTransitionCause Played(double InAt)
+	{
+		FTransitionCause Cause;
+		Cause.At = InAt;
+		return Cause;
+	}
+	static FTransitionCause Loaded(double InAt)
+	{
+		FTransitionCause Cause;
+		Cause.Source = EFlightChangeSource::Load;
+		Cause.At = InAt;
+		return Cause;
+	}
+	FTransitionCause& WithWorld(USimClock* InClock, UGroundTraffic* InTraffic)
+	{
+		Clock = InClock;
+		Traffic = InTraffic;
+		return *this;
+	}
+	FTransitionCause& Cancelling(ECancelReason InReason)
+	{
+		CancelReason = InReason;
+		return *this;
+	}
+	FTransitionCause& WithAgent(int32 InAgentId)
+	{
+		AgentId = InAgentId;
+		return *this;
+	}
 };
 
 /**
@@ -154,8 +334,6 @@ public:
 
 	/** What the row prints: "CU 204", or a tail number for the club. See UOfferGenerator::MakeCallsign. */
 	UPROPERTY() FString Callsign;
-
-	UPROPERTY() EFlightPhase Phase = EFlightPhase::Offered;
 
 	/**
 	 * REAL seconds this offer has left in the inbox, and the window it started with.
@@ -230,15 +408,21 @@ public:
 	double AirborneBy() const { return AcceptedAt + ContractSeconds; }
 
 	/**
-	 * Where THIS flight is aimed. ArrivalPlanner chooses the runway by nearest threshold to
-	 * this point.
+	 * THE POINT RUNWAYS ARE ORDERED FROM, nearest first - not a runway, and not a place the aeroplane goes (#442; this was
+	 * ApproachFocus, "where THIS flight is aimed", and the aim stopped choosing the runway in #412).
 	 *
-	 * PER-FLIGHT, not read off UFlightBoard::ApproachFocus at accept time: that board-level
-	 * field is a scratch value the generator and the debug key both write, and whichever
-	 * wrote it LAST decided every later offer's WhyNotAcceptable and DispatchNow - one
-	 * flight's aim leaking into another's. Set once, at the offer, and carried from there.
+	 * ArrivalPlanner::Plan now plans EVERY runway that takes arrivals and keeps the best (free, then dedicated, then the
+	 * shortest taxi), so this no longer picks one. What it still decides: which runway's refusal is REPORTED when none will
+	 * do, and ties between runways that rank alike - and the debug land key's aim, which sets it to the cursor.
+	 *
+	 * PER-FLIGHT, not read off UFlightBoard::DefaultRunwayPreference at accept time: that board-level field is a scratch
+	 * value the generator and the debug key both write, and whichever wrote it LAST decided every later offer's
+	 * WhyNotAcceptable and DispatchNow - one flight's preference leaking into another's (issue #96). Set once, at the offer,
+	 * and carried from there. SAVED by the tagged pass like the rest; a save from before the rename restores it as the
+	 * origin, which costs only a different refusal being reported (no player saves exist yet).
+	 * ENFORCED BY: AirportOps.Model.FlightBoard.AcceptImmediate (the dispatcher is handed the flight's own preference, never the board's)
 	 */
-	UPROPERTY() FVector2D ApproachFocus = FVector2D::ZeroVector;
+	UPROPERTY() FVector2D RunwayPreference = FVector2D::ZeroVector;
 
 	/**
 	 * The stand HELD from the accept, and then the stand actually parked on.
@@ -279,6 +463,17 @@ public:
 	UPROPERTY() double ParkingFee = 0.0;
 
 	/**
+	 * The parking rate per game hour, FIXED AT THE OFFER beside LandingFee (#442). PostParkingFee bills Hours x this; it
+	 * used to ask UPricing for the rate AT DEPARTURE, which applies the fee lever as it stands then - the trade
+	 * UOfferGenerator::MakeOffer rules out for the landing fee ("a fee computed on landing would let them accept cheaply
+	 * and put the price up afterwards"), open for parking. ZERO MEANS NEVER PRICED, like LandingFee's: the debug land key's
+	 * flight (AcceptImmediate) is never offered, so it pays neither fee - the landing fee already said so, and parking used
+	 * to be the odd one out. SAVED, so a flight accepted before a save is still billed at the rate it was offered at.
+	 * ENFORCED BY: AirportOps.Model.FlightFees.ParkingIsBilledAtTheOffersRate
+	 */
+	UPROPERTY() double ParkingRatePerHour = 0.0;
+
+	/**
 	 * Whether the landing fee has been banked, so it cannot be banked twice.
 	 *
 	 * SAVED, not transient: a reload that forgot this would re-bank every live flight's landing
@@ -286,6 +481,14 @@ public:
 	 * aeroplanes that landed an hour ago.
 	 */
 	UPROPERTY() bool bLandingFeePaid = false;
+
+	/**
+	 * Whether the parking fee has been banked, so one flight is billed once (#442 review). PostParkingFee runs when the flight
+	 * ENTERS TaxiOut; an aeroplane that parks again (Parked -> Turnaround -> TaxiOut) enters it a second time, and without this
+	 * was billed the overlapping hours again from the original ParkedAt. SAVED, for bLandingFeePaid's reason.
+	 * ENFORCED BY: AirportOps.Model.FlightFees.ParkingIsBilledOncePerFlight
+	 */
+	UPROPERTY() bool bParkingFeePaid = false;
 
 	/**
 	 * USimClock::Now at which this flight reached a terminal phase (Declined, Expired,
@@ -306,6 +509,42 @@ public:
 	 * what keeps the two id spaces disjoint without a registry to keep in step.
 	 */
 	int32 HolderId() const { return -Id; }
+
+	/**
+	 * WHERE THE FLIGHT IS IN ITS LIFE - READ-ONLY EVERYWHERE BUT UFlightBoard::TransitionTo (#442). It was a public field
+	 * thirteen places wrote, each choosing its own subset of the phase change's side effects (the stand release, the clock
+	 * handle, the agent hooks, the bus publish, the move to History, the pending-offer count, the revision), and the three
+	 * writers that cancelled a flight did three different things. Private means the compiler holds that line; TransitionTo
+	 * is the one body that changes it, and owns the effects per (from, to) row.
+	 * ENFORCED BY: the compiler (private, friend UFlightBoard only), Check-Architecture rule 57 (nothing in the ops or game
+	 * modules writes `->Phase = EFlightPhase::` outside TransitionTo, and TransitionTo does)
+	 */
+	EFlightPhase GetPhase() const { return Phase; }
+
+	/** Accepted or Inbound - still to arrive. See FlightPhase::IsUnarrived. */
+	bool IsUnarrived() const { return FlightPhase::IsUnarrived(Phase); }
+	/** Landing through Departing - an aeroplane on the field. See FlightPhase::IsOnGround. */
+	bool IsOnGround() const { return FlightPhase::IsOnGround(Phase); }
+	/** In History: nothing will move it again. See FlightPhase::IsTerminal. */
+	bool IsTerminal() const { return FlightPhase::IsTerminal(Phase); }
+	/** Accepted through Departing - what UFlightBoard::Live lists. See FlightPhase::IsLive. */
+	bool IsLive() const { return FlightPhase::IsLive(Phase); }
+
+	/**
+	 * A TEST FIXTURE'S WAY TO STAGE A PHASE: writes it with none of TransitionTo's effects - no count, no hook, no stand,
+	 * no publish, no History. That is the point: a test sets a flight where no transition reaches (a flight mid-taxi on a
+	 * board that never dispatched it) and then watches what the board does FROM there, the way
+	 * FServiceVehicleLifecycle::SeedStateForTest stages a vehicle. A production call is a seventh way to write a phase.
+	 * ENFORCED BY: Check-Architecture rule 57 (SetPhaseForTest is called only under a Test file)
+	 */
+	void SetPhaseForTest(EFlightPhase NewPhase) { Phase = NewPhase; }
+
+private:
+	friend class UFlightBoard;
+
+	/** See GetPhase. The default is the flight's BIRTH: every flight is made an offer, and UOfferGenerator::MakeOffer
+	 *  writes nothing to say so (it used to, a write of the value this already holds). */
+	UPROPERTY() EFlightPhase Phase = EFlightPhase::Offered;
 };
 
 /**
@@ -318,8 +557,8 @@ public:
  * and a DepartOrdered is the taxi OUT wherever it left from, while a ReOffered stays the taxi in (review M1, M4).
  *
  * STILL TAKES THE CURRENT PHASE for the causes that continue a taxi (a redirect, a rescue, the reverse leg's end):
- * the taxi goes on in whichever direction it was going, and only the flight knows which that was. The comparison
- * reads EFlightPhase's declaration order, which its own comment pins.
+ * the taxi goes on in whichever direction it was going, and only the flight knows which that was. Asked through
+ * FlightPhase::HasReachedStand, not by comparing phases (#442).
  * ENFORCED BY: AirportOps.Model.Flight.PhaseFromTransition, AirportOps.Model.Bus.SameFrameRedirectStaysTaxiIn
  */
 AIRPORTOPS_API EFlightPhase FlightPhaseFromTransition(const FAgentTransition& Transition, EFlightPhase Current,

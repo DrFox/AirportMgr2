@@ -17,7 +17,7 @@ EAirportStatus UAirport::Derive(bool bInClosedByPlayer, bool bHasRunway)
 
 bool UAirport::HasRunway(const URoadNetwork& Network)
 {
-	// THE WALK DefaultApproachFocus AND THE BAR'S HasRunway ALREADY MAKE (AirsideCapability), so "a runway"
+	// THE WALK DefaultRunwayPreference AND THE BAR'S HasRunway ALREADY MAKE (AirsideCapability), so "a runway"
 	// means one thing. Asked on a network change or a command, not per frame.
 	return AirsideCapability::SummariseRunways(Network).Num() > 0;
 }

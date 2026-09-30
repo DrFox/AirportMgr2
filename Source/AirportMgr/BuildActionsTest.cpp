@@ -1037,7 +1037,7 @@ bool FAirportCloseConfirmsTest::RunTest(const FString& Parameters)
 	Menu->HandleOpenChanged(false);
 	Runtime->Tick(0.0);
 	TestEqual(TEXT("dismissed: still open"), Runtime->GetAirport()->Status(), EAirportStatus::Open);
-	TestEqual(TEXT("dismissed: the flight is still coming"), Flight->Phase, EFlightPhase::Accepted);
+	TestEqual(TEXT("dismissed: the flight is still coming"), Flight->GetPhase(), EFlightPhase::Accepted);
 
 	// ARMED, THEN CONFIRMED.
 	Menu->BuildMenu();
@@ -1047,7 +1047,7 @@ bool FAirportCloseConfirmsTest::RunTest(const FString& Parameters)
 	ChooseIfChosen(Chosen);
 	Runtime->Tick(0.0);
 	TestEqual(TEXT("confirmed: closed"), Runtime->GetAirport()->Status(), EAirportStatus::ClosedByPlayer);
-	TestEqual(TEXT("confirmed: the flight is cancelled"), Flight->Phase, EFlightPhase::Cancelled);
+	TestEqual(TEXT("confirmed: the flight is cancelled"), Flight->GetPhase(), EFlightPhase::Cancelled);
 
 	// REOPENING IS NOT CONFIRMED: nothing is lost by it.
 	const TArray<FUiMenuItem> ClosedLines = Action->MenuItems(Ctx);
@@ -1088,7 +1088,7 @@ bool FAirportStatusCaptionTest::RunTest(const FString& Parameters)
 	// tool, and lighting it for one would teach the player that accent means two things. The caption is the signal.
 	TestFalse(TEXT("closed: NOT lit - the caption says it"), Action->IsActive(Ctx));
 	UFlight* Ground = NewObject<UFlight>(GetTransientPackage());
-	Ground->Phase = EFlightPhase::TaxiIn;
+	Ground->SetPhaseForTest(EFlightPhase::TaxiIn);
 	Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Ground);
 	TestEqual(TEXT("closed with an aircraft still on the ground"), Action->DynamicLabel(Ctx).ToString(), FString(TEXT("Closed (draining: 1)")));
 
