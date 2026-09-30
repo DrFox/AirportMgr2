@@ -4108,8 +4108,8 @@ bool FTrafficReversingTruckAndVanMeetingAtTheSpanEndTest::RunTest(const FString&
 		const FRoadAgent* V = Traffic->FindAgent(Van);
 		const FRoadAgent* T = Traffic->FindAgent(Truck);
 		if (V == nullptr || T == nullptr) { return true; }
-		bVanWaitedOnTruck |= V->GetWaitingOn() == Truck;
-		bTruckWaitedOnVan |= T->GetWaitingOn() == Van;
+		bVanWaitedOnTruck |= T->Phase == EAgentPhase::Reversing && V->GetWaitingOn() == Truck;
+		bTruckWaitedOnVan |= T->Phase == EAgentPhase::Reversing && T->GetWaitingOn() == Van;
 		return T->Phase != EAgentPhase::Reversing && V->Phase == EAgentPhase::Parked;
 	});
 
@@ -4119,6 +4119,10 @@ bool FTrafficReversingTruckAndVanMeetingAtTheSpanEndTest::RunTest(const FString&
 	AddInfo(FString::Printf(TEXT("van waited on truck: %d, truck waited on van: %d; truck phase %d at reverse travelled %.0f, van phase %d, %d cycle(s) seen, %d yield(s)"),
 		bVanWaitedOnTruck ? 1 : 0, bTruckWaitedOnVan ? 1 : 0, static_cast<int32>(T->Phase), T->Reverse.Travelled, static_cast<int32>(V->Phase),
 		Traffic->GetCyclesDetectedForTest(), Traffic->GetYieldsForTest()));
+	// THE TWO MET, or the outcome below proves nothing: each was refused by the other while the truck
+	// was still backing. A van that arrives after the truck has gone would pass these vacuously.
+	TestTrue(TEXT("the van was refused by the reversing truck"), bVanWaitedOnTruck);
+	TestTrue(TEXT("and the truck by the van"), bTruckWaitedOnVan);
 	TestTrue(TEXT("the truck finished backing out (it is not held for good by the van)"), T->Phase != EAgentPhase::Reversing);
 	TestTrue(TEXT("and the van drove through to the exit (it is not held for good by the truck)"), V->Phase == EAgentPhase::Parked);
 	TestTrue(TEXT("both, inside 60 s of game time"), bBothDone);
