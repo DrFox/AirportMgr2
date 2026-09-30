@@ -90,6 +90,11 @@ void ULandAircraftPanelWidget::Toggle()
 
 void ULandAircraftPanelWidget::Refresh()
 {
+	RefreshFor(Controller());
+}
+
+void ULandAircraftPanelWidget::RefreshFor(const ARoadBuildController* C)
+{
 	// READ ONCE, on first open. Types are content: they do not appear mid-session, and a
 	// registry walk per tick would be the one expensive thing on this panel.
 	if (Types.Num() == 0)
@@ -100,10 +105,19 @@ void ULandAircraftPanelWidget::Refresh()
 		}
 	}
 
-	const ARoadBuildController* C = Controller();
 	const ARoadNetworkActor* Target = C != nullptr ? C->GetTarget() : nullptr;
 	const URoadNetwork* Network = Target != nullptr ? Target->Network.Get() : nullptr;
 	const FVector2D Focus = C != nullptr ? C->GetViewFocus() : FVector2D::ZeroVector;
+
+	// JUDGED ONLY WHEN WHAT BUILD READS HAS MOVED (ops batch 3 PR E) - see JudgedKey and FLandChoicesKey. One
+	// NearestRunwayThreshold a frame instead of a CheckArrival per type.
+	const FLandChoicesKey Key = LandChoices::KeyFor(Network, Focus);
+	if (bJudged && Key == JudgedKey)
+	{
+		return;
+	}
+	JudgedKey = Key;
+	bJudged = true;
 
 	TArray<UAircraftType*> Raw;
 	Raw.Reserve(Types.Num());
@@ -111,6 +125,7 @@ void ULandAircraftPanelWidget::Refresh()
 	{
 		Raw.Add(Type.Get());
 	}
+	++BuildCalls;
 	const TArray<FLandChoice> Choices = LandChoices::Build(Network, Focus, Raw);
 
 	// THE GATE - see PaintedRefusals.

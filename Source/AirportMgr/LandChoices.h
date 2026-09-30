@@ -5,6 +5,36 @@
 class UAircraftType;
 class URoadNetwork;
 
+/**
+ * Everything LandChoices::Build reads, bar the types (read once, fixed for the session) - so the Land panel builds
+ * its rows only when this moves (ops batch 3 PR E; it planned every type every frame while open). Checked against
+ * Build, 2026-09-30:
+ *  - the runway a landing from Near would use: URoadNetwork::NearestRunwayThreshold, asked here - the one input that
+ *    moves with the camera - reduced to its SEED, since CheckArrival asks only of the seed. A pan along one runway
+ *    changes nothing; a pan onto another does.
+ *  - that runway's length (segments and nodes: EditRevision, a drag included) and facts (surface, approach, use:
+ *    through the facade, whose Topology notify rebuilds the guideline graph - GuidelineRevision).
+ *  - the network object: a clear or a load is a new one, counting from zero.
+ * NOT the occupancy, and not RunwayFreedCount, which the spec named: Build asks what the runway ADMITS, never whether
+ * it is busy. NOT the airport status (PR B): the status greys aircraft.land's button, not these rows.
+ * ENFORCED BY: AirportMgr.UI.LandPanelBuildsOnlyOnChange (one step per input)
+ */
+struct FLandChoicesKey
+{
+	const URoadNetwork* Network = nullptr;
+	uint32 EditRevision = 0;
+	uint32 GuidelineRevision = 0;
+	bool bHasRunway = false;
+	int32 Seed = INDEX_NONE;
+
+	bool operator==(const FLandChoicesKey& Other) const
+	{
+		return Network == Other.Network && EditRevision == Other.EditRevision && GuidelineRevision == Other.GuidelineRevision
+			&& bHasRunway == Other.bHasRunway && Seed == Other.Seed;
+	}
+	bool operator!=(const FLandChoicesKey& Other) const { return !(*this == Other); }
+};
+
 /** One row of the Land panel: an aircraft type, and whether the airport can take it now. */
 struct FLandChoice
 {
@@ -54,4 +84,7 @@ namespace LandChoices
 	 */
 	AIRPORTMGR_API TArray<FLandChoice> Build(const URoadNetwork* Network, const FVector2D& Near,
 		const TArray<UAircraftType*>& Types);
+
+	/** What Build(Network, Near, ...) would read, now - see FLandChoicesKey. One NearestRunwayThreshold. */
+	AIRPORTMGR_API FLandChoicesKey KeyFor(const URoadNetwork* Network, const FVector2D& Near);
 }

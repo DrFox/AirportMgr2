@@ -9,6 +9,11 @@
 #include "Profiles/RoadProfile.h"
 #include "RoadBuildController.h"
 #include "Testing/AirsideTestWorld.h"
+#include "Testing/AirsideTestGraph.h"
+#include "Model/OpsAlerts.h"
+#include "Model/RunwayFacts.h"
+#include "Content/AirsideSettings.h"
+#include "Present/RoadNetworkActor.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -232,6 +237,67 @@ bool FLandPanelIsKeySevenTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("and the bar button lights while it is open"), Land->IsActive(Ctx));
 	Land->Execute(Ctx);
 	TestFalse(TEXT("pressing it again closes it"), C->IsLandPanelShowing());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandPanelBuildsOnlyOnChangeTest,
+	"AirportMgr.UI.LandPanelBuildsOnlyOnChange",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandPanelBuildsOnlyOnChangeTest::RunTest(const FString& Parameters)
+{
+	// OPS BATCH 3 PR E: the rows are judged again only when something LandChoices::Build reads moves - one step per
+	// input of FLandChoicesKey, each alone. It judged every type every frame while open.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-300000.0, -300000.0));
+	const FTestTwoRunways Field = FTestTwoRunways::Build(UAirsideSettings::ResolveDefaultAirframe(), Actor->Network);
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(Actor);
+	ULandAircraftPanelWidget* Panel =
+		CreateWidget<ULandAircraftPanelWidget>(TestWorld.World, ULandAircraftPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+
+	auto FocusAt = [C](const FVector2D& At)
+	{
+		FAlertFocus Focus;
+		Focus.Kind = EAlertFocusKind::Point;
+		Focus.Point = At;
+		C->SelectAndFocus(Focus);
+	};
+	auto Builds = [&](int32 Frames)
+	{
+		const int32 Before = Panel->BuildCountForTest();
+		for (int32 Frame = 0; Frame < Frames; ++Frame) { Panel->RefreshFor(C); }
+		return Panel->BuildCountForTest() - Before;
+	};
+
+	FocusAt(FVector2D(1000.0, 0.0));
+	TestEqual(TEXT("opened on runway A: judged once over 30 frames"), Builds(30), 1);
+	FocusAt(FVector2D(1100.0, 50.0));
+	TestEqual(TEXT("the camera moves along A: nothing Build reads moved"), Builds(5), 0);
+	FocusAt(FVector2D(1000.0, -40000.0));
+	TestEqual(TEXT("the camera onto runway B: judged again, once"), Builds(5), 1);
+
+	const FRoadSegment* Piece = Actor->Network->GetSegment(Field.B);
+	if (!TestNotNull(TEXT("runway B"), Piece)) { return false; }
+	const uint32 Guideline = Actor->Network->GetGuidelineRevision();
+	Actor->Network->SetNodePosition(Piece->A, Actor->Network->GetNode(Piece->A)->Position - FVector2D(20000.0, 0.0));
+	TestEqual(TEXT("(a drag moves no guideline revision)"), Actor->Network->GetGuidelineRevision(), Guideline);
+	TestEqual(TEXT("B dragged longer (EditRevision): judged again, once"), Builds(5), 1);
+
+	const uint32 Edit = Actor->Network->GetEditRevision();
+	FRunwayFacts Facts = Actor->Network->RunwayFactsFor(Field.B);
+	Facts.Surface = EPavement::Grass;
+	if (!TestTrue(TEXT("the facade takes B's facts"), Actor->SetRunwayFacts(Field.B.Index, Facts))) { return false; }
+	TestEqual(TEXT("(facts move no edit revision)"), Actor->Network->GetEditRevision(), Edit);
+	TestEqual(TEXT("B turned to grass (GuidelineRevision): judged again, once"), Builds(5), 1);
+
+	Actor->ClearNetwork();
+	TestEqual(TEXT("a new network: judged again, once"), Builds(5), 1);
 	return true;
 }
 

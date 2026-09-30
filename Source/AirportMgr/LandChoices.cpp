@@ -105,4 +105,21 @@ TArray<FLandChoice> LandChoices::Build(const URoadNetwork* Network, const FVecto
 	return Out;
 }
 
+FLandChoicesKey LandChoices::KeyFor(const URoadNetwork* Network, const FVector2D& Near)
+{
+	FLandChoicesKey Key;
+	Key.Network = Network;
+	if (Network == nullptr)
+	{
+		return Key;
+	}
+	Key.EditRevision = Network->GetEditRevision();
+	Key.GuidelineRevision = Network->GetGuidelineRevision();
+	// THE SAME CALL Build makes first, so the key names the runway Build would judge against.
+	FRunwayEnd End;
+	Key.bHasRunway = Network->NearestRunwayThreshold(Near, End);
+	Key.Seed = Key.bHasRunway ? End.Seed.Index : INDEX_NONE;
+	return Key;
+}
+
 #undef LOCTEXT_NAMESPACE

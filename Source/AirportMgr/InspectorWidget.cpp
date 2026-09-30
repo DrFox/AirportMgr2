@@ -34,6 +34,17 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogInspector, Log, All);
 
+namespace
+{
+	/** The game time the current game minute began at - what the depot card describes at and keys on (see
+	 *  FInspectorCardKey). Prefixed against the unity build. */
+	double InspectorMinuteStart(const UOpsRuntime& Runtime)
+	{
+		const double Now = Runtime.GetClock() != nullptr ? Runtime.GetClock()->Now() : 0.0;
+		return FMath::FloorToDouble(Now / 60.0) * 60.0;
+	}
+}
+
 void UInspectorWidget::BuildOnce(const UUIStyle& Style)
 {
 	// PanelStyle is the BASE class's now (issue #187) - UAirportMgrPanelWidget::Initialize
@@ -313,6 +324,15 @@ FString UInspectorWidget::FollowCaptionForTest() const
 void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection& Selection,
 	const FAgentFacts* PrecomputedAgentFacts)
 {
+	// THE OPS RUNTIME, found here and handed down - see RefreshWith. OpsRuntime(), the controller's (the
+	// runtime its verbs act on) else the subsystem's: ONE runtime for every line of the card, the depot's
+	// purchase rows and the aircraft's fuel line alike.
+	RefreshWith(OpsRuntime(), Target, Selection, PrecomputedAgentFacts);
+}
+
+void UInspectorWidget::RefreshWith(const UOpsRuntime* Runtime, const ARoadNetworkActor* Target,
+	const FSelection& Selection, const FAgentFacts* PrecomputedAgentFacts)
+{
 	// ONE RESET, before any early return: only the aircraft branch sets it again, so every other
 	// path - no selection, a gone agent, another kind of card - leaves Show with nothing to select.
 	WaitedForId = 0;
@@ -351,10 +371,27 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	static_assert(static_cast<int32>(ESelectionKind::Count) == 5,
 		"a new ESelectionKind needs an inspector card - add its branch below, then update this count");
 
+	// THE NETWORK CARDS' GATE (ops batch 3 PR E): a runway, taxiway, stand or depot card is described again only when
+	// something its Describe reads has moved - see FInspectorCardKey for each card's inputs. Keyed BEFORE the branches
+	// so an unchanged card skips its Describe; the result is stored AFTER them, and only once one has succeeded.
+	const bool bNetworkCard = Selection.Kind == ESelectionKind::Runway || Selection.Kind == ESelectionKind::Taxiway
+		|| Selection.Kind == ESelectionKind::Stand;
+	FInspectorCardKey CardKey;
+	bool bReuseCard = false;
+	if (bNetworkCard)
+	{
+		CardKey = CardKeyFor(Runtime, *Target, Selection);
+		bReuseCard = bCardValid && CardKey == LastCardKey;
+	}
+
 	FString Title, Facts, Status, Deadlock;
 	FText WaitingForCaption;
 	// Default (NotAFacility) for every card but a depot's - which collapses the purchase rows.
 	FFacilityQuote CardQuote;
+	// A DEPOT'S card, and whether it is on a road - set by its branch or restored with a reused card, and
+	// read after both: the purchase quote is asked every tick, outside FInspectorCardKey (see below).
+	bool bDepotCard = false;
+	bool bDepotReachable = false;
 	bool bAircraft = false;
 	bool bRunway = false;
 	FText RunwayCaption;
@@ -388,23 +425,61 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		// must not carry a pointer to a service it is forbidden to know about - see
 		// FAgentFacts::Fuel, the field this fills and DescribeAgent deliberately leaves empty.
 		//
-		// READ EVERY TICK, NOT GATED: this is the fuel service's own cheap lookup (a
-		// FindByPredicate over active trucks), not the cost FInspectorKey targets below - its
-		// RESULT is one of the key's fields, so it has to run before the key can be compared.
-		if (const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld()))
+		// BEFORE FInspectorKey, NOT GATED BY IT: the RESULT is one of the key's fields, so it has
+		// to be in hand before the key can be compared. It was read every tick for that reason (a
+		// FindByPredicate over active trucks, the cheap kind); since ops batch 3 PR E it has a key
+		// of its own - the job board's Revision, and the clock only while it says it is live. See
+		// FuelLineBoard's comment for the three lookups and what each reads.
+		//
+		// THE FLIGHT FIRST, outside the runtime test: the title's registration reads it too, and a test's
+		// board (UseFlightBoardForTest) comes with no runtime. One keyed lookup serves the contract and the
+		// names - a second FlightForAgent for the title would be the per-tick walk PR E removed.
+		const UFlightBoard* FlightBoard = Flights(Runtime);
+		if (FlightBoard != nullptr && (FlightLookupBoard.Get() != FlightBoard || FlightLookupRevision != FlightBoard->Revision()
+			|| FlightLookupAgent != F.Id))
 		{
+			++FlightLookups;
+			FlightLookup = FlightBoard->FlightForAgent(F.Id);
+			FlightLookupBoard = FlightBoard;
+			FlightLookupRevision = FlightBoard->Revision();
+			FlightLookupAgent = F.Id;
+		}
+		const UFlight* OwnFlight = FlightBoard != nullptr ? FlightLookup.Get() : nullptr;
+		if (Runtime != nullptr)
+		{
+			const double Now = Runtime->GetClock() != nullptr ? Runtime->GetClock()->Now() : 0.0;
 			if (const UJobBoard* Fuel = Runtime->GetJobBoard())
 			{
-				F.Fuel = Fuel->DescribeAgent(F.Id, Runtime->GetClock() != nullptr ? Runtime->GetClock()->Now() : 0.0);
+				if (bFuelLineLive || FuelLineBoard.Get() != Fuel || FuelLineRevision != Fuel->Revision() || FuelLineAgent != F.Id)
+				{
+					++FuelLookups;
+					FuelLine = Fuel->DescribeAgent(F.Id, Now, bFuelLineLive);
+					FuelLineBoard = Fuel;
+					FuelLineRevision = Fuel->Revision();
+					FuelLineAgent = F.Id;
+				}
+				F.Fuel = FuelLine;
 			}
 			// THE CONTRACT, from the flight that owns this aircraft - its minute resolution keeps
 			// the gate below from recomposing more than once a game minute.
-			if (const UFlightBoard* Board = Flights())
+			if (const UFlight* Flight = OwnFlight; Flight != nullptr && Runtime->GetClock() != nullptr)
 			{
-				if (const UFlight* Flight = Board->FlightForAgent(F.Id); Flight != nullptr && Runtime->GetClock() != nullptr)
+				// WHAT THE SENTENCE PRINTS, computed for two subtractions: the contract, and the whole
+				// minutes left or late - DescribeDuration's own rounding of AirborneBy() - Now.
+				const double Left = Flight->AirborneBy() - Now;
+				const bool bLate = Left < 0.0;
+				const int32 Minutes = FMath::RoundToInt(FMath::Abs(Left) / 60.0);
+				if (TurnaroundFlight.Get() != Flight || TurnaroundContract != Flight->ContractSeconds
+					|| bTurnaroundLate != bLate || TurnaroundMinutes != Minutes)
 				{
-					F.Turnaround = UArrivalRowViewModel::DescribeTurnaround(*Flight, Runtime->GetClock()->Now()).ToString();
+					++TurnaroundComposes;
+					TurnaroundLine = UArrivalRowViewModel::DescribeTurnaround(*Flight, Now).ToString();
+					TurnaroundFlight = Flight;
+					TurnaroundContract = Flight->ContractSeconds;
+					bTurnaroundLate = bLate;
+					TurnaroundMinutes = Minutes;
 				}
+				F.Turnaround = TurnaroundLine;
 			}
 		}
 
@@ -413,26 +488,28 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		// up here, before the gate, for Fuel's reason: they are the key's inputs. Airside hands ids
 		// (FAgentFacts::Hold, DeadlockedWith) because it knows no registrations.
 		FString Registration, Airline;
-		if (const UFlightBoard* Board = Flights())
+		if (OwnFlight != nullptr)
 		{
-			if (const UFlight* Flight = Board->FlightForAgent(F.Id))
-			{
-				Registration = Flight->Callsign;
-				Airline = Flight->AirlineName.ToString();
-			}
+			Registration = OwnFlight->Callsign;
+			Airline = OwnFlight->AirlineName.ToString();
 		}
-		const FString Blocker = F.Hold.IsSet() ? NameOfAgent(Traffic, F.Hold.WaitingOn) : FString();
+		// UNCACHED, and on purpose: whom it waits for and the ring re-derive from this tick's facts
+		// (F.Hold, F.DeadlockedWith - InspectFacts::DescribeAgent, every tick), and they are FInspectorKey
+		// fields, so a changed blocker or ring recomposes the card with no flight or job board revision
+		// moving. Asked only while held or deadlocked - a quiet card asks nothing.
+		// ENFORCED BY: AirportMgr.Inspector.Cache.WaitingOnRefreshesTheCard
+		const FString Blocker = F.Hold.IsSet() ? NameOfAgent(Runtime, Traffic, F.Hold.WaitingOn) : FString();
 		TArray<FString> PartnerNames;
 		for (const int32 Partner : F.DeadlockedWith)
 		{
-			PartnerNames.Add(NameOfAgent(Traffic, Partner));
+			PartnerNames.Add(NameOfAgent(Runtime, Traffic, Partner));
 		}
 		const FString Partners = FString::Join(PartnerNames, TEXT(", "));
 		// HOW LONG, IN GAME TIME and the turnaround line's words (ruled 2026-09-30): the stall clock
 		// is movement time, which the day's compression leaves ~72x behind the clock the rest of the
 		// card counts in. No clock, no figure - never movement seconds dressed as game minutes.
 		FString Waited;
-		if (const USimClock* Clock = GameClock(); Clock != nullptr && F.Hold.IsSet())
+		if (const USimClock* Clock = GameClock(Runtime); Clock != nullptr && F.Hold.IsSet())
 		{
 			Waited = UOfferViewModel::DescribeDuration(GameSecondsOfStall(F.Hold.StalledSeconds, *Clock)).ToString();
 		}
@@ -544,18 +621,34 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			WaitingForCaption = FText::Format(NSLOCTEXT("AirportMgr", "InspectorShowBlockerNamed", "Show {0}"), FText::FromString(Blocker));
 		}
 	}
+	else if (bReuseCard)
+	{
+		// NOTHING IT READS HAS MOVED: what the last Describe said, handed to the SetText gate below, which then sets
+		// nothing - the same text, one step earlier than that gate.
+		Title = CardTitle;
+		Facts = CardFacts;
+		Status = CardStatus;
+		bRunway = bCardRunway;
+		RunwayCaption = CardRunwayCaption;
+		RunwayUseCaption = CardRunwayUseCaption;
+		bDepotCard = bCardDepot;
+		bDepotReachable = bCardDepotReachable;
+		bDepartEnabled = false;
+	}
 	else if (Selection.Kind == ESelectionKind::Runway)
 	{
 		FRunwayCardFacts R;
+		++CardDescribeCalls;
 		if (Target->GetNetwork() == nullptr || !InspectFacts::DescribeRunway(*Target->GetNetwork(), Selection.Id, R))
 		{
 			SetShown(false);
 			bDepartEnabled = false;
 			return;
 		}
-		// THE RUNWAY IN USE CARD (spec 2026-09-28-runway-in-use). Composed every tick without
-		// FInspectorKey's gate: nothing on it moves, and the SetText gate below already makes
-		// an unchanged sentence free.
+		// THE RUNWAY IN USE CARD (spec 2026-09-28-runway-in-use). Not FInspectorKey's gate - that
+		// one is the aircraft's. It was composed every tick, the SetText gate below making an
+		// unchanged sentence free; since ops batch 3 PR E it is composed only when
+		// FInspectorCardKey moves (bReuseCard above), since nothing on it moves otherwise.
 		bRunway = true;
 		const FString InUse = FString::Printf(TEXT("%02d"), R.InUse);
 		const FString Other = FString::Printf(TEXT("%02d"), R.Other);
@@ -576,6 +669,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	else if (Selection.Kind == ESelectionKind::Taxiway)
 	{
 		FTaxiwayCardFacts T;
+		++CardDescribeCalls;
 		if (Target->GetNetwork() == nullptr || !InspectFacts::DescribeTaxiway(*Target->GetNetwork(), Selection.Id, T))
 		{
 			SetShown(false);
@@ -584,8 +678,9 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		}
 		// THE TAXIWAY CARD (strip stage 6): its letter, strip and the widest span it admits -
 		// every taxiway limits wingspan to its letter (user 2026-09-29) - and, restricted, what
-		// restricts it (spec: "max span 65 m - restricted by building at ..."). Composed every
-		// tick like the runway card; the SetText gate below makes an unchanged one free.
+		// restricts it (spec: "max span 65 m - restricted by building at ..."). Composed like the
+		// runway card: when FInspectorCardKey moves, and the SetText gate below still makes an
+		// unchanged one free.
 		Title = FString::Format(*NSLOCTEXT("AirportMgr", "InspectorTaxiwayTitle", "Taxiway {0}").ToString(), { T.Index });
 		Facts = FString::Format(
 			*NSLOCTEXT("AirportMgr", "InspectorTaxiwayFacts", "Code {0}, {1} m wide, {2}\nStrip {3} m each side\nMax span {4} m").ToString(),
@@ -605,6 +700,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	else if (Selection.Kind == ESelectionKind::Stand)
 	{
 		FStandFacts S;
+		++CardDescribeCalls;
 		if (Target->GetNetwork() == nullptr || !InspectFacts::DescribeStand(Target->GetGroundTraffic(), *Target->GetNetwork(), Selection.Id, S))
 		{
 			SetShown(false);
@@ -674,12 +770,15 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			// keeps "Cannot dispatch", which names the fix; its backlog is empty anyway.
 			// THE ONE selection->depot WALK (ruling C4) - the controller's verbs ask the same function.
 			const FEntityInstanceId DepotId = ARoadBuildController::DepotForSelection(Target, Selection);
-			if (const UOpsRuntime* Runtime = OpsRuntime(); Runtime != nullptr && S.bReachable)
+			if (Runtime != nullptr && S.bReachable)
 			{
 				if (const UJobBoard* Board = Runtime->GetJobBoard())
 				{
-					const FDepotBacklog Backlog = Board->DescribeDepot(DepotId,
-						Runtime->GetClock() != nullptr ? Runtime->GetClock()->Now() : 0.0);
+					// AT THE MINUTE, not at Now: the card's key holds the game minute (FInspectorCardKey), so what it
+					// shows must be a function of the minute - DescribeDepot's own rounding from Now would move a
+					// figure mid-minute that the key could not see.
+					++DepotDescribeCalls;
+					const FDepotBacklog Backlog = Board->DescribeDepot(DepotId, InspectorMinuteStart(*Runtime));
 					Status = Backlog.Summary;
 					if (!Backlog.Detail.IsEmpty())
 					{
@@ -687,12 +786,9 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 					}
 				}
 			}
-			// THE PURCHASE ROWS AND "NO VEHICLES", from the one quote (facility-upgrades spec §4).
-			if (const UOpsRuntime* Runtime = OpsRuntime(); Runtime != nullptr && DepotId.IsSet())
-			{
-				CardQuote = Runtime->QuoteFacility(DepotId);
-			}
-			Status = DepotStatus(CardQuote, S.bReachable, Status);
+			// THE PURCHASE ROWS AND "NO VEHICLES" are laid on after the card, every tick - see the quote below.
+			bDepotCard = true;
+			bDepotReachable = S.bReachable;
 		}
 		bDepartEnabled = false;
 	}
@@ -711,6 +807,36 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		SetShown(false);
 		bDepartEnabled = false;
 		return;
+	}
+
+	// A NETWORK CARD DESCRIBED THIS TICK - kept, with what it was described from (see bReuseCard above).
+	if (bNetworkCard && !bReuseCard)
+	{
+		LastCardKey = CardKey;
+		bCardValid = true;
+		CardTitle = Title;
+		CardFacts = Facts;
+		CardStatus = Status;
+		bCardRunway = bRunway;
+		CardRunwayCaption = RunwayCaption;
+		CardRunwayUseCaption = RunwayUseCaption;
+		bCardDepot = bDepotCard;
+		bCardDepotReachable = bDepotReachable;
+	}
+
+	// THE PURCHASE ROWS AND "NO VEHICLES", from the one quote (facility-upgrades spec §4) - asked EVERY TICK, outside
+	// FInspectorCardKey, as before that key existed: the quote reads the balance (a Buy greys when it is unaffordable),
+	// the fleet, the sheds and the bays, and the card key holds none of the balance. A quote kept with a reused card
+	// would leave Buy lit after the money ran out. The Status the key keeps is the backlog's; "No vehicles" is laid
+	// over it here, from this tick's quote, so the two cannot disagree.
+	if (bDepotCard)
+	{
+		const FEntityInstanceId DepotId = ARoadBuildController::DepotForSelection(Target, Selection);
+		if (Runtime != nullptr && DepotId.IsSet())
+		{
+			CardQuote = Runtime->QuoteFacility(DepotId);
+		}
+		Status = DepotStatus(CardQuote, bDepotReachable, Status);
 	}
 
 	// THE GATE. Compared against the COMPOSED text rather than a (selection id, phase) key -
@@ -811,6 +937,44 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	SetShown(true);
 }
 
+FInspectorCardKey UInspectorWidget::CardKeyFor(const UOpsRuntime* Runtime, const ARoadNetworkActor& Target,
+	const FSelection& Selection) const
+{
+	FInspectorCardKey Key;
+	Key.Kind = Selection.Kind;
+	Key.Id = Selection.Id;
+	const URoadNetwork* Network = Target.GetNetwork();
+	Key.Network = Network;
+	if (Network == nullptr)
+	{
+		return Key;
+	}
+	Key.EditRevision = Network->GetEditRevision();
+	Key.GuidelineRevision = Network->GetGuidelineRevision();
+	if (Selection.Kind != ESelectionKind::Stand || !Network->GetEntities().IsValidIndex(Selection.Id))
+	{
+		return Key;
+	}
+	// A STAND OR A DEPOT - the same selection kind, told apart the way the Stand branch tells them (PoseRole), and
+	// each keyed on what ITS half of that branch reads.
+	if (Network->GetEntities()[Selection.Id].PoseRole == EServiceRole::Aircraft)
+	{
+		if (const UGroundTraffic* Traffic = Target.GetGroundTraffic())
+		{
+			Key.Traffic = Traffic;
+			Key.OccupancyRevision = Traffic->OccupancyRevision();
+			Key.StandHolds = Traffic->StandHoldChangeCount();
+		}
+	}
+	else if (Runtime != nullptr && Runtime->GetJobBoard() != nullptr)
+	{
+		Key.JobBoard = Runtime->GetJobBoard();
+		Key.JobRevision = Runtime->GetJobBoard()->Revision();
+		Key.Minute = FMath::FloorToInt64(InspectorMinuteStart(*Runtime) / 60.0);
+	}
+	return Key;
+}
+
 void UInspectorWidget::RunAction(int32 ActionIndex)
 {
 	ARoadBuildController* C = Controller();
@@ -904,13 +1068,12 @@ void UInspectorWidget::UseFlightBoardForTest(const UFlightBoard* Board) { Flight
 
 void UInspectorWidget::UseClockForTest(const USimClock* Clock) { ClockForTest = Clock; }
 
-const USimClock* UInspectorWidget::GameClock() const
+const USimClock* UInspectorWidget::GameClock(const UOpsRuntime* Runtime) const
 {
 	if (const USimClock* Clock = ClockForTest.Get())
 	{
 		return Clock;
 	}
-	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
 	return Runtime != nullptr ? Runtime->GetClock() : nullptr;
 }
 
@@ -923,19 +1086,18 @@ double UInspectorWidget::GameSecondsOfStall(double StalledSeconds, const USimClo
 	return StalledSeconds * Clock.GameSecondsPerRealSecond(Clock.TimeOfDay());
 }
 
-const UFlightBoard* UInspectorWidget::Flights() const
+const UFlightBoard* UInspectorWidget::Flights(const UOpsRuntime* Runtime) const
 {
 	if (const UFlightBoard* Board = FlightBoardForTest.Get())
 	{
 		return Board;
 	}
-	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
 	return Runtime != nullptr ? Runtime->GetFlightBoard() : nullptr;
 }
 
-FString UInspectorWidget::NameOfAgent(const UGroundTraffic* Traffic, int32 AgentId) const
+FString UInspectorWidget::NameOfAgent(const UOpsRuntime* Runtime, const UGroundTraffic* Traffic, int32 AgentId) const
 {
-	if (const UFlightBoard* Board = Flights())
+	if (const UFlightBoard* Board = Flights(Runtime))
 	{
 		if (const UFlight* Flight = Board->FlightForAgent(AgentId); Flight != nullptr && !Flight->Callsign.IsEmpty())
 		{
