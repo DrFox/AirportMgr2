@@ -10,9 +10,15 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+// A LEAF NAME, not the bare "Airside.Tool.BuildSession" this used to be: UE 5.8's automation tree turns a bare name
+// into a GROUP node the moment a dotted child registers and silently drops its own RunTest. The bare name never ran
+// after SelectFromCode (#413, 2026-09-29) registered under it, and three of its checks (registry keys unique,
+// per-index display names, RecordPlaneHit) are covered by nothing else - the tool sources, BuildVerbRegistryTest and
+// FreeStartGuideTest cite this test by name as their pin. Check-Architecture rule 42 (test-name-prefix) now fails
+// on the shape; see memory unreal-automation-test-tree-drops-bare-parent.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FBuildSessionTest,
-	"Airside.Tool.BuildSession",
+	"Airside.Tool.BuildSession.RegistryAndSession",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FBuildSessionTest::RunTest(const FString& Parameters)

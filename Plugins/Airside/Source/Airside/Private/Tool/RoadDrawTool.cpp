@@ -302,7 +302,7 @@ FRoadDrawTool::FRoadDrawTool(ERoadKind InKind)
 FText FRoadDrawTool::GetDisplayName() const
 {
 	// TWO NAMES FOR ONE TOOL, and they must match the registry's own Name for each entry -
-	// Airside.Tool.BuildSession asserts the two cannot drift, which is exactly the class of
+	// Airside.Tool.BuildSession.RegistryAndSession asserts the two cannot drift, which is exactly the class of
 	// bug the registry exists to make impossible elsewhere.
 	//
 	// "Road" was once refused here on the grounds that a key labelled Road promised a

@@ -9,7 +9,7 @@
  * module could reach Remove/Insert/Edit at all, though BuildActions.cpp had carried them as bar
  * rows since the mode was unified onto FBuildSession. BuildVerbRegistry() is the ONE table both
  * BuildActions.cpp and FRoadBuildEdModeCommands::RegisterCommands now read - this test pins the
- * registry's own behaviour, independent of either driver, the same way Airside.Tool.BuildSession
+ * registry's own behaviour, independent of either driver, the same way Airside.Tool.BuildSession.RegistryAndSession
  * pins ToolRegistry() before either driver touches it.
  *
  * IN AirsideTests, not AirsideEditor: this table lives in Airside, which AirsideTests already
@@ -38,7 +38,7 @@ bool FBuildVerbRegistryTest::RunTest(const FString& Parameters)
 			Expected.Contains(Verb.Id));
 	}
 
-	// 2. No two verbs share a key - the same failure Airside.Tool.BuildSession pins for
+	// 2. No two verbs share a key - the same failure Airside.Tool.BuildSession.RegistryAndSession pins for
 	// ToolRegistry(), applied here. EKeys::Invalid entries (Remove/Insert, which rely on a HELD
 	// Ctrl/Shift rather than a chord) are exempt, the same way tool-less bar rows are elsewhere.
 	for (int32 Outer = 0; Outer < Registry.Num(); ++Outer)

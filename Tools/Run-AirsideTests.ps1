@@ -64,7 +64,11 @@ $lintLogPath = Join-Path $projectDir 'Saved\Logs\CheckArchitecture.log'
 # A checkout the editor has never opened (a fresh worktree, say) has no Saved\Logs\ yet -
 # Tee-Object does not create parent directories and would fail before the lint even ran.
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $lintLogPath) | Out-Null
-& $lintScript -Root $projectDir *>&1 | Tee-Object -FilePath $lintLogPath
+# Rule 42 (test-name-prefix) is the ONE parser of the IMPLEMENT_*_AUTOMATION_TEST macros and hands its list of
+# registered names over in a file, so the registered-against-ran check below has no second parser to disagree with it.
+$registeredTestsPath = Join-Path $projectDir 'Saved\Logs\RegisteredTests.txt'
+if (Test-Path $registeredTestsPath) { Remove-Item $registeredTestsPath -Force }
+& $lintScript -Root $projectDir -TestNamesOut $registeredTestsPath *>&1 | Tee-Object -FilePath $lintLogPath
 $lintExitCode = $LASTEXITCODE
 $lintOutput = if (Test-Path $lintLogPath) { Get-Content -Path $lintLogPath } else { @() }
 $lintVerdict = $lintOutput | Where-Object { $_ -match '^Check-Architecture: (PASS|\d+ failure)' }
@@ -130,7 +134,8 @@ if (-not (Test-Path $logPath)) {
     exit 1
 }
 
-$completed = Select-String -Path $logPath -Pattern 'Test Completed\. Result=\{(\w+)\}\s+Name=\{([^}]*)\}'
+# Group 3 is the FULL dotted path (Name= is only the leaf); the registered-against-ran check below needs it.
+$completed = Select-String -Path $logPath -Pattern 'Test Completed\. Result=\{(\w+)\}\s+Name=\{([^}]*)\}(?:\s+Path=\{([^}]*)\})?'
 
 if ($completed.Count -eq 0) {
     Write-Host "FAIL: no tests matched filter '$Filter'. A suite that runs nothing is not a suite that passes." -ForegroundColor Red
@@ -177,11 +182,53 @@ if ($crashed.Count -gt 0) {
     exit 1
 }
 
+# REGISTERED AGAINST RAN (2026-09-30). The started-against-completed diff above sees a test that CRASHES; it cannot see
+# one that was never queued, and two were never queued for days: UE's automation tree turns a bare name into a group the
+# moment a dotted child registers and silently drops the bare test (Airside.Solve.IcaoCode, Airside.Tool.BuildSession -
+# 24 assertions dark; only a run count one short showed it, and nobody diffs a count). Check-Architecture rule 42 lints
+# the shape at commit time; this is the runtime half, and it is EXACT rather than a count: every registered SIMPLE name
+# must appear as a completed Path, and the COMPLEX one (which expands to Name.<case> at run time, so a bare-count
+# comparison is meaningless) must have at least one completed Path beneath it. Only names the -Filter selects are
+# expected (a term is a prefix of the dotted path, the way the runner reads Airside+AirportOps+AirportMgr). Skipped, with
+# a line saying so, when the lint's list or the log's Path= field is missing - a check that cannot run must say so.
+$neverRan = @()
+$ranPaths = @($completed | ForEach-Object { $_.Matches[0].Groups[3].Value } | Where-Object { $_ })
+$registeredLines = @(if (Test-Path $registeredTestsPath) { Get-Content -LiteralPath $registeredTestsPath } else { @() })
+if ($registeredLines.Count -eq 0 -or $ranPaths.Count -eq 0) {
+    Write-Host "Registered-vs-ran check SKIPPED: $($registeredLines.Count) registered name(s) from the lint, $($ranPaths.Count) Path= field(s) in the log." -ForegroundColor Yellow
+}
+else {
+    $filterTerms = @($Filter -split '\+' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $ranSet = New-Object 'System.Collections.Generic.HashSet[string]' (,[string[]]$ranPaths)
+    $expected = 0
+    foreach ($entry in $registeredLines) {
+        $kind, $regName = $entry -split '\|', 2
+        $selected = $false
+        foreach ($term in $filterTerms) { if ($regName.StartsWith($term, [System.StringComparison]::Ordinal)) { $selected = $true; break } }
+        if (-not $selected) { continue }
+        $expected++
+        $ran = if ($kind -eq 'C') { [bool]($ranPaths | Where-Object { $_.StartsWith($regName + '.', [System.StringComparison]::Ordinal) } | Select-Object -First 1) } else { $ranSet.Contains($regName) }
+        if (-not $ran) { $neverRan += $regName }
+    }
+    Write-Host "Registered automation tests matching the filter: $expected; completed paths: $($ranPaths.Count) (a complex test expands to several); registered but never ran: $($neverRan.Count)." -ForegroundColor Cyan
+}
+
 if ($failed.Count -gt 0) {
     Write-Host ''
     Write-Host 'Failure detail:' -ForegroundColor Red
     Select-String -Path $logPath -Pattern 'LogAutomationController: Error:' |
         ForEach-Object { Write-Host "  $($_.Line.Trim())" }
+    Write-Host ''
+    Write-Host "Log: $logPath"
+    exit 1
+}
+
+# After the failure block, so a red run still reports its failures first; before the teardown check, because a test that
+# never ran is a verdict whatever the log's last lines say.
+if ($neverRan.Count -gt 0) {
+    Write-Host ''
+    Write-Host "FAIL: $($neverRan.Count) registered test(s) never ran. UE's automation tree silently drops a bare-named test that has a dotted child (Check-Architecture rule 42), and a macro inside a disabled #if never registers at all:" -ForegroundColor Red
+    $neverRan | Select-Object -First 30 | ForEach-Object { Write-Host "  NEVER RAN  $_" -ForegroundColor Red }
     Write-Host ''
     Write-Host "Log: $logPath"
     exit 1

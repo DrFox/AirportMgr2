@@ -140,6 +140,8 @@
       32. A facade commit's affordability refusal is announced (AffordOrRefuse) - see the rule.
       38. A service vehicle's State, AgentId and CurrentJob are written only by FServiceVehicleLifecycle
           (issue #428) - see the rule.
+      42. No registered automation test name is a dotted prefix of another (2026-09-30): UE's automation tree
+          drops the bare name's own RunTest silently - see the rule.
 
     Rule 4 above is now a data table (issue #255) rather than one hard-coded Piper check,
     so "the only caller of X is Y" claims live as ROWS an author can add to, instead of prose
@@ -168,7 +170,12 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $Root = (Split-Path -Parent $PSScriptRoot)
+    [string] $Root = (Split-Path -Parent $PSScriptRoot),
+    # Rule 42's registered-test list, one `S|<name>` (simple) or `C|<name>` (complex) per line, for
+    # Run-AirsideTests.ps1 to diff against what the runner actually ran. Written by the ONE parser of the
+    # IMPLEMENT_*_AUTOMATION_TEST macros (this script) so the run script does not grow a second one that can
+    # disagree with it. Empty = do not write.
+    [string] $TestNamesOut = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -2075,6 +2082,84 @@ foreach ($owner in $revisionOwners.Keys) {
     }
 }
 $ranRules.Add('persistent-revision-bumps-on-load')
+
+# --- 42. NO REGISTERED AUTOMATION TEST NAME IS A DOTTED PREFIX OF ANOTHER ---------------------
+# 2026-09-30 test-suite review: Airside.Solve.IcaoCode (14 assertions) and Airside.Tool.BuildSession (10) had NEVER run
+# since a dotted sibling registered under each (#351, 2026-09-26; #413, 2026-09-29). UE 5.8's automation tree turns a
+# bare name into a GROUP node once `Name.Child` exists and drops the bare test's own RunTest - no error, no "not found",
+# only a run count one short (memory unreal-automation-test-tree-drops-bare-parent, first met 2026-09-06). The
+# count line is the only other thing that sees it, and nobody diffs it. So: collect every registered name and fail when
+# one is `A` and another starts with `A.`. Names are read from IMPLEMENT_*_AUTOMATION_TEST( Class, "Name", ... ) with
+# comments STRIPPED first and newlines kept (InspectFactsTest.cpp has a whole comment between the two arguments; a
+# per-line regex reads that macro as nameless). A COMPLEX test's own name is a parent by design - UE expands it to
+# `Name.<case>` at run time from GetTests - and is checked like any other: only a REGISTERED sibling can shadow it.
+# It cannot pass by parsing nothing: zero names fail, and so does any AUTOMATION_TEST macro token it could not read a
+# name from (a shape it does not understand is a test it is not checking). Scans Plugins\*\Source and Source\AirportMgr
+# recursively, i.e. both test modules, AirsideEditor's tests and the game module's, wherever a test lives.
+# Mutation check (2026-09-30): on origin/main it FAILs naming IcaoCode and BuildSession; a scratch copy with a bare
+# `Airside.Foo` and a `Airside.Foo.Bar` registered in two files fails too, and one with the second macro's name
+# commented out passes (the comment is not a registration).
+$testNamePattern = '\bIMPLEMENT_(SIMPLE|COMPLEX)_AUTOMATION_TEST\s*\(\s*\w+\s*,\s*"([^"\r\n]+)"'
+$testMacroPattern = '\bIMPLEMENT_\w*AUTOMATION_TEST\w*\b'
+# Strings kept (the names are in them), comments dropped; a block comment leaves its newlines behind so line numbers
+# stay true. The char-literal arm is one char or one escape - never `'000'` of a digit separator, which would otherwise
+# swallow up to the next apostrophe and any `//` on the way.
+$commentStripper = [regex]'"(?:[^"\\r\n]|\.)*"|''(?:\[^\r\n]|[^''\\r\n])''|//[^\r\n]*|/\*[\s\S]*?\*/'
+$commentEvaluator = [System.Text.RegularExpressions.MatchEvaluator]{
+    param($m)
+    $v = $m.Value
+    if ($v.StartsWith('"') -or $v.StartsWith("'")) { return $v }
+    if ($v.StartsWith('//')) { return '' }
+    return ([regex]::Replace($v, '[^\r\n]', ''))
+}
+$testRoots = @(Get-ChildItem -Path (Join-Path $Root 'Plugins') -Directory | ForEach-Object { Join-Path $_.FullName 'Source' })
+$testRoots += (Join-Path $Root 'Source\AirportMgr')
+$registeredTests = @{}   # name -> "File.cpp:line" of its first registration
+$registeredKinds = @{}   # name -> 'S' (IMPLEMENT_SIMPLE_) or 'C' (IMPLEMENT_COMPLEX_)
+$testMacroTokens = 0
+$namedRegistrations = 0
+foreach ($testRoot in $testRoots) {
+    foreach ($file in Get-Sources $testRoot @('.cpp', '.h')) {
+        $raw = [System.IO.File]::ReadAllText($file.FullName)
+        if ($raw.IndexOf('AUTOMATION_TEST', [System.StringComparison]::Ordinal) -lt 0) { continue }
+        $stripped = $commentStripper.Replace($raw, $commentEvaluator)
+        $testMacroTokens += ([regex]::Matches($stripped, $testMacroPattern)).Count
+        foreach ($m in [regex]::Matches($stripped, $testNamePattern)) {
+            $name = $m.Groups[2].Value
+            $namedRegistrations++
+            $line = ($stripped.Substring(0, $m.Index) -split "`n").Count
+            $where = "$($file.Name):$line"
+            if ($registeredTests.ContainsKey($name)) {
+                $failures.Add("test-name-prefix: '$name' is registered twice ($($registeredTests[$name]) and $where) - the automation tree keeps one and the other never runs")
+            } else {
+                $registeredTests[$name] = $where
+                $registeredKinds[$name] = if ($m.Groups[1].Value -eq 'COMPLEX') { 'C' } else { 'S' }
+            }
+        }
+    }
+}
+if ($registeredTests.Count -eq 0) {
+    $failures.Add("test-name-prefix: parsed no automation test names under Plugins\*\Source and Source\AirportMgr - the macro shape or the folders moved; update rule 42, do not let it check nothing")
+}
+if ($testMacroTokens -ne $namedRegistrations) {
+    # A macro with no readable "Name" (a concatenated or macro-built name, a different argument order) is a
+    # registration this rule cannot see, so it must not pass silently.
+    $failures.Add("test-name-prefix: found $testMacroTokens IMPLEMENT_*AUTOMATION_TEST tokens but read a name from $namedRegistrations - a macro whose name this rule cannot read is a test it is not checking; widen `$testNamePattern")
+}
+foreach ($parent in ($registeredTests.Keys | Sort-Object)) {
+    $children = @($registeredTests.Keys | Where-Object { $_.StartsWith($parent + '.', [System.StringComparison]::Ordinal) } | Sort-Object)
+    if ($children.Count -gt 0) {
+        $childList = ($children | ForEach-Object { "$_ ($($registeredTests[$_]))" }) -join ', '
+        $failures.Add("test-name-prefix: '$parent' ($($registeredTests[$parent])) is a dotted prefix of $($children.Count) registered test(s): $childList - UE's automation tree makes the bare name a group and its own RunTest NEVER RUNS, silently. Rename it to a leaf (e.g. '$parent.<WhatItPins>'); see memory unreal-automation-test-tree-drops-bare-parent")
+    }
+}
+$ranRules.Add('test-name-prefix')
+$complexTestCount = @($registeredKinds.Values | Where-Object { $_ -eq 'C' }).Count
+Write-Host "Check-Architecture: rule 42 read $($registeredTests.Count) registered automation test name(s) ($($registeredTests.Count - $complexTestCount) simple, $complexTestCount complex; a complex one expands to several at run time)." -ForegroundColor Yellow
+if ($TestNamesOut -ne '') {
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $TestNamesOut) | Out-Null
+    ($registeredTests.Keys | Sort-Object | ForEach-Object { "$($registeredKinds[$_])|$_" }) | Set-Content -LiteralPath $TestNamesOut -Encoding UTF8
+}
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
