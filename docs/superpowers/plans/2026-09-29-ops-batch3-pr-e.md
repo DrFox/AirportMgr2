@@ -170,7 +170,7 @@ Mutations (restored by copy + touch, rebuilt, full suite green after):
 | Land gate off | LandPanelBuildsOnlyOnChange (1, got 30) |
 | card reuse off | QuietCardsDescribeOnce (1, got 30 per card) |
 | flight lookup gate off | AircraftLookupsOnce (1, got 30) |
-| card key without EditRevision / GuidelineRevision / OccupancyRevision / StandHolds / JobRevision / Minute | RunwaySeesAMove; StandSeesALine + RunwaySeesItsFacts; StandSeesAHold; StandSeesChurn; DepotSeesTheBoard; DepotDescribedOncePerMinute (0, got... "the next minute: one describe" 1, got 0) |
+| card key without EditRevision / GuidelineRevision / OccupancyRevision / StandHolds / JobRevision / Minute | RunwaySeesAMove; StandSeesALine + RunwaySeesItsFacts; StandSeesAHold; StandSeesChurn; DepotSeesTheBoard; DepotDescribedOncePerMinute ("the next minute: one describe" 1, got 0) |
 | flight lookup without the board revision; fuel line without the job revision; without the live flag; turnaround without its minutes | AircraftLookupsOnce ("looked up again" 2, got 1; "asked again" 2, got 1); FuelLineLiveWhilePumping; TurnaroundTicksByTheMinute ("3 h left" unchanged) |
 | Land key without Seed / EditRevision / GuidelineRevision | LandPanelBuildsOnlyOnChange ("onto runway B", "dragged longer", "turned to grass": 1, got 0) |
 | `SetSimTimeScale` back in Tick | rule 34 `scale-on-change` FAIL |
