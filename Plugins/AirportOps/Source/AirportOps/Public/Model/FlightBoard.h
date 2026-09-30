@@ -124,12 +124,12 @@ public:
 	virtual UObject& AsPersistentObject() override { return *this; }
 
 	/**
-	 * Recreate every flight's own ApproachFocus from this board's one field, for a snapshot
-	 * older than FOpsSnapshot::Version 3.
+	 * Rebuild the lookups a restore does not carry. It migrated old snapshots too - the v2 ApproachFocus copy and
+	 * #188's sweep of terminal flights out of Flights - until the owner ruling of 2026-09-30: since #452 (v6) a pre-v6
+	 * blob restores no flights, so neither could reach a real save.
 	 *
-	 * MOVED HERE FROM OpsSave::Restore so that Restore could become a plain loop over every
-	 * persistent object rather than naming this class as a parameter and calling it in one
-	 * particular position - see IOpsPersistent::OnAfterRestore.
+	 * AN IOpsPersistent HOOK so that OpsSave::Restore stays a plain loop over every persistent object rather than
+	 * naming this class as a parameter and calling it in one particular position.
 	 */
 	virtual void OnAfterRestore(int32 SnapshotVersion) override;
 
@@ -590,16 +590,6 @@ public:
 
 	/** How many times TickOffers has copied Flights to walk them - its early-out's counter. */
 	int32 OfferSnapshotCountForTest() const { return OfferSnapshots; }
-
-	/**
-	 * Copies this board's own ApproachFocus onto every flight it holds.
-	 *
-	 * A LOAD-ONLY MIGRATION for a snapshot older than FOpsSnapshot::Version 3 - see
-	 * OpsSave::Restore, which is the one caller. Before UFlight::ApproachFocus existed
-	 * (issue #96) every flight shared this one board-wide field, so recreating it per-flight
-	 * is the only way an old load lands where it was actually aimed rather than the origin.
-	 */
-	void AimUnaimedFlightsAtBoardFocus();
 
 private:
 	/**

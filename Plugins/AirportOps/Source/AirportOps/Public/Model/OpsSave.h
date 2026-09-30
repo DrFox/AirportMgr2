@@ -113,10 +113,9 @@ struct AIRPORTOPS_API FOpsSnapshot
 	 * key before the generic restore pass runs. A v4 Capture never writes to them.
 	 *
 	 * 3 since UFlight::ApproachFocus (issue #96, and where the version last bumped - #113).
-	 * Before it, every flight shared the board's one ApproachFocus; a v1 or v2 blob's flights
-	 * therefore have no per-flight focus at all, and OpsSave::Restore recreates one via
-	 * UFlightBoard::AimUnaimedFlightsAtBoardFocus rather than leave every restored flight
-	 * aimed at the world origin.
+	 * Before it, every flight shared the board's one ApproachFocus. A v1 or v2 blob's flights
+	 * were re-aimed from it on load until the owner ruling of 2026-09-30: since #452 (v6) a
+	 * pre-v6 blob restores no flights at all, so there is nothing left to re-aim.
 	 *
 	 * 2 since flights. A v1 snapshot is a game from before the flight board and loads with
 	 * an empty inbox rather than being refused - an old save must still open.

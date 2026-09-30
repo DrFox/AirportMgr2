@@ -558,7 +558,7 @@ bool FFlightBoardIndexMatchesTheLinearScanTest::RunTest(const FString& Parameter
 
 	// A BATCH OF LAPSING OFFERS, resolved in one TickOffers rather than one at a time: the
 	// production path that lapses offers walks a snapshot of Flights and moves some of it to
-	// History - the same shape as issue #188's own migration sweep in OnAfterRestore.
+	// History - the shape issue #188's load sweep had too, before it went (2026-09-30).
 	for (int32 I = 0; I < 10; ++I)
 	{
 		UFlight* Flight = BoardFlightNeeding(3400.0);

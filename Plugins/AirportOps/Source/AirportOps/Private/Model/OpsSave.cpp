@@ -142,9 +142,10 @@ bool OpsSave::Restore(const FOpsSnapshot& In, TArrayView<IOpsPersistent* const> 
 	}
 
 	// ONE UNIFORM PASS. Anything a particular system must do about an OLD snapshot is that
-	// system's own OnAfterRestore - see IOpsPersistent, and UFlightBoard's override for the
-	// pre-v3 ApproachFocus migration that used to be special-cased here, wrapped around the
-	// board's blob specifically and forcing Restore to name the board as a parameter.
+	// system's own OnAfterRestore - see IOpsPersistent. The board's pre-v3 ApproachFocus
+	// migration used to be special-cased here, wrapped around the board's blob specifically
+	// and forcing Restore to name the board as a parameter; it moved into the board's
+	// override, and went altogether on 2026-09-30 (a pre-v6 blob restores no flights).
 	for (IOpsPersistent* Persistent : Persistents)
 	{
 		if (Persistent != nullptr)

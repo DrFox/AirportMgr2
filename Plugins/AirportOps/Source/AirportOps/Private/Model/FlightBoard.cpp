@@ -892,45 +892,15 @@ void UFlightBoard::RestoreAfterLoad(UGroundTraffic* Traffic, const URoadNetwork&
 		Requeued.Num(), Cancelled, Flights.Num());
 }
 
-void UFlightBoard::OnAfterRestore(int32 SnapshotVersion)
+void UFlightBoard::OnAfterRestore(int32 /*SnapshotVersion*/)
 {
-	// Flights.Num() replaces the bHadFlights flag OpsSave::Restore used to keep around this
-	// call: a board with no flights has nothing to migrate either way, so asking its own state
-	// answers the same question without Restore having to remember which blobs it saw - which
-	// is what let Restore become a plain loop over every persistent object.
-	if (SnapshotVersion < 3 && Flights.Num() > 0)
-	{
-		AimUnaimedFlightsAtBoardFocus();
-	}
-
-	// SWEEP UNCONDITIONALLY, NOT GATED ON SnapshotVersion < 4 (issue #188): every save before
-	// History existed put every flight ever created in Flights, terminal or not, because there
-	// was nowhere else for one to go - and an unconditional sweep is self-healing if a future
-	// change ever finds a second way a terminal flight ends up back in Flights, rather than
-	// growing a second version check to remember here.
-	//
-	// SNAPSHOT FIRST: MoveToHistory mutates Flights, and this loop is walking it.
-	const TArray<TObjectPtr<UFlight>> Loaded = Flights;
-	for (const TObjectPtr<UFlight>& Each : Loaded)
-	{
-		if (Each == nullptr)
-		{
-			continue;
-		}
-		if (Each->Phase == EFlightPhase::Declined || Each->Phase == EFlightPhase::Expired
-			|| Each->Phase == EFlightPhase::Departed || Each->Phase == EFlightPhase::Cancelled
-			|| Each->Phase == EFlightPhase::Withdrawn)
-		{
-			// TerminatedAt DID NOT EXIST before this change, so a flight loaded from a save
-			// that predates it has none - ArrivesAt is the closest recorded moment to when it
-			// actually finished, and is only ever a fallback for THIS one-time migration: a
-			// flight retired after this change always carries the real TerminatedAt its own
-			// call site set - see Decline, TickOffers, and OnAgentPhase below. (ExpiresAt, the
-			// closer figure for a lapsed offer, went with snapshot v5.)
-			MoveToHistory(*Each, Each->ArrivesAt);
-		}
-	}
-
+	// NO MIGRATION LEFT (owner ruling 2026-09-30): since #452 (snapshot v6) a pre-v6 blob restores no flights - the
+	// board's Serialize warns "no flights by value" - so the v2 ApproachFocus migration and #188's sweep of terminal
+	// flights out of Flights could reach nothing from any real save, and went. A v6 save's Flights holds live flights
+	// only: each terminal transition calls MoveToHistory where it happens - eight sites in this file on 2026-09-30
+	// (TickOffers' lapse, Decline, CancelByAgent, CancelUnarrived's withdrawal and cancel, DemoteRestoredMidFlight,
+	// CancelUnarrivedAtLoad, OnAgentPhase's Departed), Decline's pinned, the rest by inspection.
+	// ENFORCED BY: AirportOps.Model.FlightSave.PreV6BlobRestoresNoFlights (the load half), AirportOps.Model.FlightBoard.HistoryStaysBoundedAcrossManySimulatedDays (Decline)
 	RebuildIndices();
 }
 
@@ -1062,23 +1032,6 @@ void UFlightBoard::RebuildIndices()
 		if (Each != nullptr)
 		{
 			ById.Add(Each->Id, Each);
-		}
-	}
-}
-
-void UFlightBoard::AimUnaimedFlightsAtBoardFocus()
-{
-	// A LOAD-ONLY MIGRATION for a snapshot older than FOpsSnapshot::Version 3 - see
-	// OnAfterRestore, the one caller. Before UFlight::ApproachFocus existed (issue #96) every flight
-	// shared this one board-wide field, so a v1/v2 blob's flights have no per-flight focus
-	// at all; tagged-property load leaves the new field at FVector2D::ZeroVector, which
-	// would aim every restored flight at the world origin rather than wherever it was
-	// actually saved aimed.
-	for (const TObjectPtr<UFlight>& Each : Flights)
-	{
-		if (Each != nullptr)
-		{
-			Each->ApproachFocus = ApproachFocus;
 		}
 	}
 }
