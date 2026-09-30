@@ -12,6 +12,7 @@
 #include "Present/PlotPresenter.h"
 #include "Present/RoadNetworkActor.h"
 #include "Build/DepotKit.h"
+#include "Model/DepotCapability.h"
 #include "Build/PlotLayoutStrategy.h"
 #include "Content/AirsideSettings.h"
 #include "Solve/PlotFit.h"
@@ -1042,6 +1043,83 @@ bool FPlotPresenterRevealTest::RunTest(const FString& Parameters)
 	TestWorld.Buildings->ShowPlotGhosts(/*bVisible=*/false, FEntityInstanceId());
 	TestFalse(TEXT("with nothing revealed, outside edit mode, the ghosts are hidden"), Plots->AreGhostsVisible());
 	TestEqual(TEXT("and every yard is instanced again, ready for edit mode to show"), Plots->GetGhostInstanceCountForTest(), Every);
+	return true;
+}
+
+/**
+ * THE SEATED MODULES ARE EXACTLY WHAT THE PRESENTER DRAWS (#443, ruled 2026-09-30): FDepotCapability::Seat against the plot
+ * solve's ceilings is the presenter's lit count - so a module the presenter dropped grants no bay and no pump, and one it
+ * stood is one the board and the shop count. Fifty pumps on a plot that seats a handful, with sheds and a tank beside them.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPresenterDrawsTheSeatedModulesTest,
+	"Airside.Present.PlotPresenterDrawsExactlyTheSeatedModules",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPresenterDrawsTheSeatedModulesTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	if (!TestNotNull(TEXT("a plot presenter"), TestWorld.Buildings->GetPlotPresenter())) { return false; }
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	Actor->ClearNetwork();
+
+	TArray<EDepotModule> Modules;
+	for (int32 I = 0; I < 50; ++I) { Modules.Add(EDepotModule::Pump); }
+	for (int32 I = 0; I < 6; ++I) { Modules.Add(EDepotModule::Shed); }
+	Modules.Add(EDepotModule::Tank);
+
+	FEntityPlacement Placement;
+	Placement.Definition = Depot;
+	Placement.Anchors = Depot->Anchors;
+	Placement.Position = FVector2D(1000.0, 0.0);
+	Placement.Heading = UE_DOUBLE_HALF_PI;
+	Placement.PoseRole = EServiceRole::Fuel;
+	Placement.Outline = DeepPlotAt(0.0);
+	Placement.Modules = Modules;
+	const FEntityInstanceId Id = Actor->Network->PlaceEntity(Placement);
+	Actor->RebuildMesh();
+
+	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
+	const FEntityInstance* Placed = Actor->Network->GetEntity(Id);
+	if (!TestNotNull(TEXT("the depot is placed"), Placed)) { return false; }
+	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(UAirsideSettings::GetContent());
+	const TOptional<PlotYard::FReservation> Reserved = DepotKit::ReservationOf(*Placed, Specs);
+	if (!TestTrue(TEXT("the plot solves"), Reserved.IsSet())) { return false; }
+	const FDepotCapability Capability = FDepotCapability::Seat(*Placed,
+		[&Reserved](EDepotModule Module) { return Reserved->CeilingFor(static_cast<int32>(Module)); });
+
+	int32 SeatedTotal = 0;
+	for (int32 Kind = 0; Kind < FDepotCapability::KindCount; ++Kind) { SeatedTotal += Capability.Seated[Kind]; }
+	if (!TestTrue(TEXT("the plot cannot seat everything: the premise, or this proves nothing"), SeatedTotal < Modules.Num())) { return false; }
+	TestEqual(TEXT("the modules the presenter stood are exactly the seated ones"), Plots->GetModuleCount(), SeatedTotal);
+	TestEqual(TEXT("and the ones it dropped are exactly the unseated ones"), Plots->GetDroppedCount(), Modules.Num() - SeatedTotal);
+
+	// PER KIND, NOT ONLY IN TOTAL (#461 review): totals could agree while the kinds traded places - a Seat that seated pumps
+	// where the presenter stood sheds. The presenter reports no per-kind count, so each kind gets a depot of its own: fifty of
+	// ONE kind on the same plot, whose module and drop counts are that kind's seated and unseated.
+	for (int32 Kind = 0; Kind < FDepotCapability::KindCount; ++Kind)
+	{
+		Actor->ClearNetwork();
+		TArray<EDepotModule> OneKind;
+		for (int32 I = 0; I < 50; ++I) { OneKind.Add(static_cast<EDepotModule>(Kind)); }
+		Placement.Modules = OneKind;
+		const FEntityInstanceId KindId = Actor->Network->PlaceEntity(Placement);
+		Actor->RebuildMesh();
+		const FEntityInstance* KindPlaced = Actor->Network->GetEntity(KindId);
+		if (!TestNotNull(TEXT("the single-kind depot is placed"), KindPlaced)) { return false; }
+		const TOptional<PlotYard::FReservation> KindReserved = DepotKit::ReservationOf(*KindPlaced, Specs);
+		if (!TestTrue(TEXT("its plot solves"), KindReserved.IsSet())) { return false; }
+		const FDepotCapability KindCapability = FDepotCapability::Seat(*KindPlaced,
+			[&KindReserved](EDepotModule Module) { return KindReserved->CeilingFor(static_cast<int32>(Module)); });
+		const FString Name = UEnum::GetValueAsString(static_cast<EDepotModule>(Kind));
+		TestEqual(*FString::Printf(TEXT("fifty %s: the presenter stands exactly the seated ones"), *Name),
+			Plots->GetModuleCount(), KindCapability.Seated[Kind]);
+		TestEqual(*FString::Printf(TEXT("fifty %s: and drops the rest"), *Name),
+			Plots->GetDroppedCount(), 50 - KindCapability.Seated[Kind]);
+	}
 	return true;
 }
 

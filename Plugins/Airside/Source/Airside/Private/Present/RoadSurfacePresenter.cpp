@@ -727,7 +727,7 @@ void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfac
 		// Topology census the anchor links above are part of, and for the same reason: it must
 		// say so again after every edit, not just once at placement (DepotKit::ReportIncomplete's
 		// own header comment).
-		DepotKit::ReportIncomplete(Network);
+		DepotKit::ReportIncomplete(Network, Settings.DepotKits);
 	}
 
 	// THROUGH THE RESOLVED SETTING, never a raw property: an unset MaterialSet means "single

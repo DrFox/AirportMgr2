@@ -115,6 +115,14 @@ namespace
 		/** A depot whose plot holds a shed and a tank and NO PUMP. Set before Build. */
 		bool bDepotWithoutPump = false;
 
+		/**
+		 * A depot placed MODULAR with these modules (empty leaves it plotless, or - with bDepotWithoutPump - a shed and a
+		 * tank), and, when DepotOutline is set, on that plot: a depot with an outline is PLOTTED, which is what makes
+		 * UJobBoard::ModuleCeilingOf seat its modules (FDepotCapability::Of). Set before Build.
+		 */
+		TArray<EDepotModule> DepotModules;
+		TArray<FVector2D> DepotOutline;
+
 		/** A depot placed with NO starter vehicles - the player's new depot (facility spec R3). Set before Build. */
 		bool bEmptyDepot = false;
 
@@ -456,7 +464,7 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 
 		// North of the road, facing +Y, so its pose ray leaves toward -Y and meets the road.
 		// Well east of the stand so the two lead-ins never fight over the same stretch.
-		if (bDepotWithoutPump)
+		if (bDepotWithoutPump || DepotModules.Num() > 0)
 		{
 			// A MODULAR depot whose plot holds a shed and a tank and no pump. Placed through
 			// FEntityPlacement because that is the only path that carries modules at all -
@@ -468,7 +476,8 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 			Placement.Position = FVector2D(12000.0, RoadY + 4000.0);
 			Placement.Heading = UE_DOUBLE_PI * 0.5;
 			Placement.PoseRole = DepotDef->PoseRole;
-			Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank };
+			Placement.Modules = DepotModules.Num() > 0 ? DepotModules : TArray<EDepotModule>{ EDepotModule::Shed, EDepotModule::Tank };
+			Placement.Outline = DepotOutline;
 			// ITS STARTER TRUCK, STATED: sheds no longer imply vehicles (facility spec §6), and this case
 			// is about the missing PUMP, so the depot must still have something to send.
 			Placement.Trucks = DepotDef->Trucks;
@@ -2113,6 +2122,9 @@ bool FFuelCouldServeTest::RunTest(const FString& Parameters)
 	{
 		FFuelFixture Fixture;
 		Fixture.Build(/*bWithRoad=*/true);
+		// THE STEP SEEDS THE STARTER FLEET CouldServe READS (#443): it answers for the vehicles the board has, and asked
+		// before its first Step a starter depot has none - see AirportOps.Fuel.CouldServe.StarterDepotVerdictAgreesWithItsFirstBid.
+		Fixture.Service->Step(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
 		TestTrue(TEXT("with a joined depot on a road to the stand it can"),
 			Fixture.Service->CouldServe(*Fixture.Net, Airframe));
 	}
@@ -2133,9 +2145,11 @@ bool FFuelCouldServeSoldOutTest::RunTest(const FString& Parameters)
 	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
 	FFuelFixture Fixture;
 	Fixture.Build(/*bWithRoad=*/true);
-	TestTrue(TEXT("setup: before the first tick the starter fleet it will have can serve"),
+	// CouldServe READS REAL VEHICLES ONLY (#443): before the first Step nothing is seeded, so it predicts nothing.
+	TestFalse(TEXT("setup: before the first tick no vehicle exists, and CouldServe does not invent the starter fleet"),
 		Fixture.Service->CouldServe(*Fixture.Net, Airframe));
 	Fixture.Service->Step(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
+	TestTrue(TEXT("setup: the Step seeded it, and the starter fleet serves"), Fixture.Service->CouldServe(*Fixture.Net, Airframe));
 	TArray<int32> Ids;
 	for (const FServiceVehicle& Vehicle : Fixture.Service->GetVehicles())
 	{
@@ -2144,10 +2158,56 @@ bool FFuelCouldServeSoldOutTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("setup: the depot was seeded"), Ids.Num() > 0)) { return false; }
 	for (const int32 Id : Ids)
 	{
-		TestTrue(TEXT("setup: each idle starter vehicle sells"), Fixture.Service->RemoveVehicle(Id));
+		TestTrue(TEXT("setup: each idle starter vehicle sells"), Fixture.Service->Fleet().Withdraw(Id, EFleetReason::Sold, 0.0));
 	}
 	TestFalse(TEXT("sold out, the depot cannot fuel it - the row agrees with the board's NoVehicles"),
 		Fixture.Service->CouldServe(*Fixture.Net, Airframe));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelCouldServeAgreesWithBidTest, "AirportOps.Fuel.CouldServe.StarterDepotVerdictAgreesWithItsFirstBid",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelCouldServeAgreesWithBidTest::RunTest(const FString& Parameters)
+{
+	// #443: THE STARTER FLEET WAS PREDICTED IN CouldServe BESIDE THE SEEDING IT HAD TO MIRROR, and the two had already
+	// drifted once (a sold-out depot said "fuel OK" on the offer while the board refused NoVehicles). CouldServe now reads
+	// the board's real vehicles, so its verdict and the bid are made from the SAME ones and agree on the same frame.
+	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	{
+		FFuelFixture Fixture;
+		Fixture.Build(/*bWithRoad=*/true);
+		TestFalse(TEXT("before the board's first Step the starter depot has no vehicle - and CouldServe says so, it predicts none"),
+			Fixture.Service->CouldServe(*Fixture.Net, Airframe));
+		Fixture.Service->Step(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
+		if (!TestTrue(TEXT("setup: the Step seeded the starter fleet"), Fixture.Service->GetVehicles().Num() > 0)) { return false; }
+		TestTrue(TEXT("seeded, the same question says yes - off real vehicles"), Fixture.Service->CouldServe(*Fixture.Net, Airframe));
+		const int32 Aircraft = Fixture.ParkAircraft();
+		if (!TestTrue(TEXT("setup: an aircraft parks and asks for fuel"), Aircraft != 0)) { return false; }
+		const FServiceJob* Job = Fixture.Service->JobForAircraft(Aircraft);
+		if (!TestNotNull(TEXT("its job is on the board"), Job)) { return false; }
+		TestTrue(TEXT("and the first bid found a vehicle for it - the verdict was not optimistic"),
+			Job->State != EServiceJobState::Unserviceable);
+	}
+	{
+		FFuelFixture Fixture;
+		Fixture.Build(/*bWithRoad=*/true);
+		Fixture.Service->Step(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
+		TArray<int32> Ids;
+		for (const FServiceVehicle& Vehicle : Fixture.Service->GetVehicles()) { Ids.Add(Vehicle.Id); }
+		for (const int32 Id : Ids)
+		{
+			TestTrue(TEXT("setup: each idle starter vehicle sells"), Fixture.Service->Fleet().Withdraw(Id, EFleetReason::Sold, 0.0));
+		}
+		TestFalse(TEXT("sold out, the verdict says no"), Fixture.Service->CouldServe(*Fixture.Net, Airframe));
+		const int32 Aircraft = Fixture.ParkAircraft();
+		if (!TestTrue(TEXT("setup: an aircraft parks and asks for fuel"), Aircraft != 0)) { return false; }
+		const FServiceJob* Job = Fixture.Service->JobForAircraft(Aircraft);
+		if (!TestNotNull(TEXT("its job is on the board"), Job)) { return false; }
+		TestEqual(TEXT("and the board refuses it for want of a vehicle - the two agree"),
+			static_cast<int32>(Job->Why), static_cast<int32>(EServiceRefusal::NoVehicles));
+	}
 	return true;
 }
 
@@ -3202,7 +3262,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FFuelQuietNoVehiclesTest::RunTest(const FString& Parameters)
 {
 	// #417's NoVehicles REFUSAL, beside the three parts above: a demand at a depot with nothing in it is refused
-	// terminally (Unserviceable) and waits for the purchase that re-opens it (AddPurchasedVehicle, woken by the bus's
+	// terminally (Unserviceable) and waits for the purchase that re-opens it (FServiceFleet::Add, woken by the bus's
 	// FleetChanged) - it must not keep the JobBoard pass re-dirtying itself every frame until the player buys.
 	FFuelFixture Fixture;
 	Fixture.bEmptyDepot = true;
@@ -3401,6 +3461,149 @@ bool FFuelLifecycleLostAgentNetTest::RunTest(const FString& Parameters)
 		const FServiceJob* Job = Rig.Job(JobId);
 		TestTrue(FString::Printf(TEXT("job %d was released and bid again - the vehicle holds it"), JobId),
 			Job != nullptr && Job->VehicleId == Rig.VehicleId);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelLifecycleLateGoneEventTest, "AirportOps.Fuel.Lifecycle.LostAgentGoneEventAfterThePollFindsNothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelLifecycleLateGoneEventTest::RunTest(const FString& Parameters)
+{
+	// THE OTHER ORDER (carried from #454's review): the two tests above stage the event FIRST and the poll first-and-alone.
+	// Production delivers the Gone event a drain LATER (#436), so a lost agent can be found by SyncFleet's net before its own
+	// event arrives. That late event names an agent the vehicle has already let go of - and the vehicle has since set off on
+	// a NEW one - so it must find no vehicle, release nothing and warn of nothing a second time.
+	FuelServiceTest::FWarningSpy Spy;
+	FuelServiceTest::FQueuedBowser Rig;
+	if (!Rig.Build(*this)) { return false; }
+	const int32 OldAgent = Rig.Vehicle()->AgentId;
+
+	Rig.Fixture.Traffic->OnAgentPhaseChanged.Clear();
+	Rig.Fixture.Traffic->RetireAgent(OldAgent);
+	Rig.Fixture.Advance(1.0 / 30.0);
+	const FServiceVehicle* Vehicle = Rig.Vehicle();
+	if (!TestTrue(TEXT("the poll found the loss and the vehicle set off on a new agent"),
+		Vehicle != nullptr && Vehicle->AgentId != 0 && Vehicle->AgentId != OldAgent)) { return false; }
+	const int32 NewAgent = Vehicle->AgentId;
+	const int32 NetLines = Spy.CountContaining(TEXT("with no Gone heard"));
+	TestEqual(TEXT("the net spoke once"), NetLines, 1);
+
+	// THE LATE EVENT, delivered now.
+	Rig.Fixture.Service->OnAgentPhase(*Rig.Fixture.Traffic, *Rig.Fixture.Net, *Rig.Fixture.Clock, OldAgent,
+		EAgentPhase::Parked, EAgentPhase::Gone);
+	Vehicle = Rig.Vehicle();
+	if (!TestNotNull(TEXT("the vehicle is still on the board"), Vehicle)) { return false; }
+	TestEqual(TEXT("it keeps the agent it set off on - the stale event named another"), Vehicle->AgentId, NewAgent);
+	for (const int32 JobId : { Rig.FirstJob, Rig.SecondJob })
+	{
+		const FServiceJob* Job = Rig.Job(JobId);
+		TestTrue(FString::Printf(TEXT("job %d is still the vehicle's - the late event released nothing"), JobId),
+			Job != nullptr && Job->VehicleId == Rig.VehicleId);
+	}
+	TestEqual(TEXT("and no second warning of a lost agent, from the event or the net"),
+		Spy.CountContaining(TEXT("lost its agent")), NetLines);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelUnseatedPumpTest, "AirportOps.Fuel.UnseatedPumpGrantsNoFuelling",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelUnseatedPumpTest::RunTest(const FString& Parameters)
+{
+	// #443, RULED 2026-09-30 (#266): only the modules the plot SEATS count. A depot whose owned pump the plot could not seat
+	// has no working pump, and the aircraft it would have fuelled is refused NoPump - "depot has no pump", the fix the player
+	// can make - where it used to be served by a pump nobody could see standing.
+	// THE DEPOT IS PLACED MODULAR AND PLOTTED (the fixture's default depot is plotless, which fuels by the legacy exemption), and
+	// the ceiling is the hook UOpsRuntime::Attach sets from its plot solve.
+	auto Run = [this](int32 PumpCeiling, EServiceRefusal& OutWhy, EServiceJobState& OutState) -> bool
+	{
+		FFuelFixture Fixture;
+		Fixture.DepotModules = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
+		Fixture.DepotOutline = { FVector2D(11000.0, -1000.0), FVector2D(13000.0, -1000.0), FVector2D(13000.0, 1000.0), FVector2D(11000.0, 1000.0) };
+		Fixture.Build(/*bWithRoad=*/true);
+		Fixture.Service->ModuleCeilingOf = [PumpCeiling](FEntityInstanceId, const FEntityInstance&, EDepotModule Module)
+		{
+			return Module == EDepotModule::Pump ? PumpCeiling : 1;
+		};
+		if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
+		Fixture.Advance(0.2);
+		if (!TestEqual(TEXT("one job"), Fixture.Service->GetJobs().Num(), 1)) { return false; }
+		OutWhy = Fixture.Service->GetJobs()[0].Why;
+		OutState = Fixture.Service->GetJobs()[0].State;
+		return true;
+	};
+	EServiceRefusal Why = EServiceRefusal::None;
+	EServiceJobState State = EServiceJobState::Open;
+	if (!Run(/*PumpCeiling=*/0, Why, State)) { return false; }
+	TestEqual(TEXT("a pump the plot cannot seat: the depot cannot fuel"), static_cast<int32>(Why), static_cast<int32>(EServiceRefusal::NoPump));
+	TestEqual(TEXT("and the job is refused"), static_cast<int32>(State), static_cast<int32>(EServiceJobState::Unserviceable));
+	// THE CONTROL: the same airport with the pump seated is served, so the refusal above is the ceiling's doing and nothing else.
+	if (!Run(/*PumpCeiling=*/1, Why, State)) { return false; }
+	TestNotEqual(TEXT("control: with the pump seated the same depot is not refused for it"), static_cast<int32>(Why), static_cast<int32>(EServiceRefusal::NoPump));
+	TestNotEqual(TEXT("control: and the job is not refused at all"), static_cast<int32>(State), static_cast<int32>(EServiceJobState::Unserviceable));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelRevisionPointsOfChangeTest, "AirportOps.Fuel.RevisionMovesAtEachPointOfChange",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelRevisionPointsOfChangeTest::RunTest(const FString& Parameters)
+{
+	// #443 moved UJobBoard::Revision from "bumped on entry to every call" to "bumped where a change happens". These are the
+	// points that need a world - each read off RevisionCountForTest (the changes that move no vehicle) on its own, so that
+	// deleting the leaf's ++RevisionCount turns exactly its line red even though the vehicle transitions beside it still move
+	// Revision() (the bare points, and the counter's shape, are AirportOps.Fuel.RevisionMovesOnEveryChange).
+	{
+		// A TURNAROUND OPENS, then DROPS. The phase events are withheld from the board and delivered by hand, one at a time.
+		FFuelFixture Fixture;
+		Fixture.Build(/*bWithRoad=*/true);
+		Fixture.Service->Step(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
+		Fixture.Traffic->OnAgentPhaseChanged.Clear();
+		const int32 Aircraft = Fixture.ParkAircraft();
+		if (!TestTrue(TEXT("an aircraft parked, unheard by the board"), Aircraft != 0)) { return false; }
+		TestNull(TEXT("premise: the board has no turnaround for it"), Fixture.Service->TurnaroundFor(Aircraft));
+		const uint32 BeforeOpen = Fixture.Service->RevisionCountForTest();
+		Fixture.Service->OnAgentPhase(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock, Aircraft, EAgentPhase::Manoeuvring, EAgentPhase::Parked);
+		TestNotNull(TEXT("premise: it opened a turnaround"), Fixture.Service->TurnaroundFor(Aircraft));
+		TestTrue(TEXT("a turnaround opening moves the change count on its own"), Fixture.Service->RevisionCountForTest() != BeforeOpen);
+		const uint32 BeforeDrop = Fixture.Service->RevisionCountForTest();
+		Fixture.Service->OnAgentPhase(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock, Aircraft, EAgentPhase::Parked, EAgentPhase::Taxiing);
+		TestNull(TEXT("premise: the turnaround went"), Fixture.Service->TurnaroundFor(Aircraft));
+		TestTrue(TEXT("a turnaround and its jobs dropped moves the change count on its own"), Fixture.Service->RevisionCountForTest() != BeforeDrop);
+	}
+	{
+		// AN ASSIGNMENT (Assign): an open job with a vehicle to win it. The first Step seeded and ran the rebid, so the re-bid
+		// stamps are current and this Step's only change to the count is the assignment.
+		FFuelFixture Fixture;
+		Fixture.Build(/*bWithRoad=*/true);
+		Fixture.Service->Step(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
+		FServiceJob& Job = Fixture.Service->AddJobForTest(901, EServiceJobState::Open, EServiceRefusal::None, 0);
+		Job.Stand = Fixture.Stand;
+		Job.QuantityOwed = 300.0;
+		const int32 JobId = Job.Id;
+		const uint32 Before = Fixture.Service->RevisionCountForTest();
+		Fixture.Service->Step(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
+		const FServiceJob* After = Fixture.Service->GetJobs().FindByPredicate([JobId](const FServiceJob& Each) { return Each.Id == JobId; });
+		if (!TestNotNull(TEXT("the job is on the board"), After)) { return false; }
+		TestTrue(TEXT("premise: a vehicle won it"), After->State != EServiceJobState::Unserviceable && After->State != EServiceJobState::Open);
+		TestTrue(TEXT("an assignment moves the change count on its own"), Fixture.Service->RevisionCountForTest() != Before);
+	}
+	{
+		// A REBID THAT RAN with a job queued (RebidQueued): the graph moved under a job waiting behind the serving bowser, so its
+		// promise is refreshed - the depot card's "clears in" - though no vehicle changed state.
+		FuelServiceTest::FQueuedBowser Rig;
+		if (!Rig.Build(*this)) { return false; }
+		const uint32 GraphBefore = Rig.Fixture.Net->GetGuidelineRevision();
+		Rig.Fixture.Net->AddGuidelineNode(FVector2D(-30000.0, -30000.0));
+		if (!TestTrue(TEXT("premise: the graph moved"), Rig.Fixture.Net->GetGuidelineRevision() != GraphBefore)) { return false; }
+		const uint32 Before = Rig.Fixture.Service->RevisionCountForTest();
+		Rig.Fixture.Service->Step(*Rig.Fixture.Traffic, *Rig.Fixture.Net, *Rig.Fixture.Clock);
+		TestEqual(TEXT("premise: the second job is still queued"), Rig.Job(Rig.SecondJob)->State, EServiceJobState::Queued);
+		TestTrue(TEXT("a re-bid that ran over a queued job moves the change count on its own"), Rig.Fixture.Service->RevisionCountForTest() != Before);
 	}
 	return true;
 }

@@ -115,8 +115,15 @@ FString FFacilityUpgradedEvent::Describe() const
 
 FString FFleetChangedEvent::Describe() const
 {
-	return FString::Printf(TEXT("depot %d, vehicle %d %s, %s for %.0f"), Depot, VehicleId, *TypeCode.ToString(),
-		Change == EFleetChange::Bought ? TEXT("bought") : TEXT("sold"), Amount);
+	const TCHAR* Verb = TEXT("?");
+	switch (Change)
+	{
+	case EFleetChange::Bought:    Verb = TEXT("bought"); break;
+	case EFleetChange::Sold:      Verb = TEXT("sold"); break;
+	case EFleetChange::Seeded:    Verb = TEXT("seeded"); break;
+	case EFleetChange::Withdrawn: Verb = TEXT("withdrawn"); break;
+	}
+	return FString::Printf(TEXT("depot %d, vehicle %d %s, %s for %.0f"), Depot, VehicleId, *TypeCode.ToString(), Verb, Amount);
 }
 
 FString FOfferAcceptedEvent::Describe() const

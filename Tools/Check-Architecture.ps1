@@ -2161,6 +2161,136 @@ if ($TestNamesOut -ne '') {
     ($registeredTests.Keys | Sort-Object | ForEach-Object { "$($registeredKinds[$_])|$_" }) | Set-Content -LiteralPath $TestNamesOut -Encoding UTF8
 }
 
+# --- 43. FLEET MEMBERSHIP HAS ONE DOOR, AND FLEET MONEY IS POSTED FROM ITS FILE ------------------
+# Issue #443: a vehicle joined or left the fleet through four doors with different side effects - the player's purchase
+# (ledger + FleetChanged), the starter seeding (neither), the player's sale (ledger + FleetChanged) and the depot removal,
+# where the JOB BOARD posted fleet money itself with its own wording and published nothing, so a FleetChanged subscriber
+# missed half the changes. FServiceFleet (Private/Model/ServiceFleet.cpp) is now the one owner of Add and Withdraw and of
+# the three things every change owes: its Fleet ledger line, its FFleetChangedEvent, and (on an add) the re-opening of the
+# jobs a missing vehicle had refused. TWO SHAPES, each a hit outside that file (comments and string literals stripped,
+# rule 34's helper), in production code (AirportOps and the game module; tests stage fleets by hand on purpose):
+#   a. A write of the fleet's containers - Vehicles / SeededDepots / NextVehicleId - by ANY member call. A board function
+#      that adds or removes a vehicle without the door skips the ledger, the event and the re-open, which is the disease.
+#   b. `ELedgerCategory::Fleet` in anything but a `case` label (a reader naming its column, LedgerViewModels' label). The
+#      category is posted only from the door, so a second poster with its own wording cannot come back.
+#   c. In a .cpp, a vehicle row's Price or ResaleValue read directly (`Spec->Price`, `Spec.Price`, `.ResaleValue(`): the price
+#      the card quotes, the purchase judges and charges and the ledger posts is FServiceFleet::PriceOf/ResaleOf, read once,
+#      so the three cannot drift (#461 review found three direct reads beside "THE ONE READ").
+# The rule fails, rather than checking nothing, when ServiceFleet.cpp is gone or no longer matches either shape.
+$fleetDoorFile = Join-Path $ops 'Private\Model\ServiceFleet.cpp'
+$fleetContainerWrite = '\b(?:Vehicles|SeededDepots)\s*(?:\.|->)\s*(?:Add|AddUnique|AddDefaulted|Emplace|Insert|Append|Remove|RemoveAt|RemoveAll|RemoveSwap|Reset|Empty)\w*\s*\(|(?:\+\+\s*NextVehicleId\b|\bNextVehicleId\s*(?:\+\+|\+=))'
+$fleetMoneyPost      = '\bELedgerCategory::Fleet\b'
+$fleetPriceRead      = '\bSpec(?:\.|->)Price\b|(?:\.|->)ResaleValue\s*\('
+$fleetDoorContainerWrites = 0
+$fleetDoorMoneyPosts = 0
+if (-not (Test-Path $fleetDoorFile)) {
+    $failures.Add("fleet-one-door: $fleetDoorFile not found - update rule 43, do not let it check nothing")
+} else {
+    $doorInBlock = $false
+    foreach ($line in (Get-Content -LiteralPath $fleetDoorFile)) {
+        $code = Strip-ArchCode $line ([ref]$doorInBlock)
+        if ($code -match $fleetContainerWrite) { $fleetDoorContainerWrites++ }
+        if ($code -match $fleetMoneyPost) { $fleetDoorMoneyPosts++ }
+    }
+    if ($fleetDoorContainerWrites -eq 0 -or $fleetDoorMoneyPosts -eq 0) {
+        $failures.Add("fleet-one-door: $fleetDoorFile shows $fleetDoorContainerWrites container write(s) and $fleetDoorMoneyPosts Fleet posting(s) - the rule's patterns no longer match the door; update rule 43")
+    }
+}
+foreach ($fleetTree in @($ops, (Join-Path $Root 'Source\AirportMgr'))) {
+    foreach ($file in Get-Sources $fleetTree @('.cpp', '.h')) {
+        if ($file.Name -like '*Test.cpp' -or $file.Name -like '*Test.h' -or $file.Name -eq 'ServiceFleet.cpp') { continue }
+        if ($file.FullName -match '[\\/]Testing[\\/]') { continue }
+        $lines = Get-Content -LiteralPath $file.FullName
+        $inBlock = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            if ($code.Trim() -eq '') { continue }
+            if ($code -match $fleetContainerWrite) {
+                $failures.Add("fleet-one-door: $($file.Name):$($i + 1) writes the fleet's containers by hand - go through FServiceFleet (UJobBoard::Fleet), whose Add/Withdraw own the ledger line, the FFleetChangedEvent and the re-open: $($code.Trim())")
+            }
+            if ($file.Extension -eq '.cpp' -and $code -match $fleetPriceRead) {
+                $failures.Add("fleet-one-door: $($file.Name):$($i + 1) reads a vehicle row's Price or ResaleValue directly - ask FServiceFleet::PriceOf/ResaleOf, the one read the quote, the judgement, the charge and the ledger line share: $($code.Trim())")
+            }
+            if ($code -match $fleetMoneyPost -and $code -notmatch '^\s*case\s+ELedgerCategory::Fleet\s*:') {
+                $failures.Add("fleet-one-door: $($file.Name):$($i + 1) names ELedgerCategory::Fleet outside ServiceFleet.cpp - fleet money is posted only by FServiceFleet::Add/Withdraw: $($code.Trim())")
+            }
+        }
+    }
+}
+$ranRules.Add('fleet-one-door')
+
+# --- 44. THE FUELLED TOLERANCE IS THE POLICY'S, TYPED ONCE ----------------------------------------
+# Issue #443: the half-litre "fuelled" slack was typed five times in three files (a constant on the board, a literal twice
+# in ServiceRolePolicy.cpp, a literal twice in ServiceBid.cpp). Changing one made the bid price a different number of trips
+# than the truck makes, because the two files disagreed about when a job is done. It is IServiceRolePolicy::DoneWithin()
+# now (FFuelRolePolicy::FuelledWithinLitres, the one number), and the two files that used to type it read it.
+# A hit is a bare `0.5` number in either file, comments and string literals stripped. It cannot see 0.50, .5 or 1/2 - a
+# GAP, said; the number that was typed was 0.5, and the policy header carries the reason it is one number.
+# The rule fails, rather than checking nothing, when either file is gone.
+foreach ($toleranceName in @('ServiceBid.cpp', 'ServiceRolePolicy.cpp')) {
+    $toleranceFile = Join-Path $ops "Private\Model\$toleranceName"
+    if (-not (Test-Path $toleranceFile)) {
+        $failures.Add("fuelled-tolerance-once: $toleranceFile not found - update rule 44, do not let it check nothing")
+        continue
+    }
+    $lines = Get-Content -LiteralPath $toleranceFile
+    $inBlock = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        if ($code -match '(?<![\w.])0\.5(?!\d)') {
+            $failures.Add("fuelled-tolerance-once: ${toleranceName}:$($i + 1) types the half-litre tolerance - read IServiceRolePolicy::DoneWithin(), the one figure the bid and the vehicle both use: $($code.Trim())")
+        }
+    }
+}
+$ranRules.Add('fuelled-tolerance-once')
+
+# --- 45. WHAT A DEPOT'S MODULES GIVE IT IS READ THROUGH FDepotCapability ---------------------------
+# Issue #443, ruled 2026-09-30 (#266): "the modules that count are only the ones that are placed". FEntityInstance::Modules
+# is the OWNED list; the plot seats only min(owned, ceiling) of each kind, and the presenter DROPS the rest. What a depot's
+# modules give it was decided in three places over the owned list with three rules - pumps and the plotless exemption in
+# UJobBoard, bays in UFacilityPurchases with no exemption, the census in DepotKit - so a module the presenter could not
+# seat still granted a bay and a pump the player could not see. Model/DepotCapability.h is the one view (Seat/Of); the job
+# board and the purchase rules ask it, and this is what keeps them from walking the owned list for capability again.
+# A HIT is a walk of a depot's module list (`Depot|Facility|Entity|Home|Instance ... .Modules`, comments and string literals
+# stripped) in the board's files or the purchase service, outside the two places that mean OWNED on purpose:
+# UFacilityPurchases::OwnedOf (the purchase ceiling compares owned to reserved) and ::DailyUpkeep (a module is paid for
+# by owning it). A GAP, SAID: a reader that names its variable something else (`D.Modules`) is invisible to a regex.
+# The rule fails, rather than checking nothing, when the view is no longer named in JobBoard.h and FacilityPurchases.cpp.
+$capabilityDir = Join-Path $ops 'Private\Model'
+$capabilityFiles = @('JobBoard.cpp', 'JobBoardBid.cpp', 'JobBoardDrive.cpp', 'ServiceFleet.cpp', 'FacilityPurchases.cpp')
+# THE CENSUS TOO (#461 review): DepotKit::ReportIncomplete reads owned counts and the legacy test through the view, and
+# is scanned with no allowance. The plot presenter is NOT: it still counts the owned list itself, to light the bays it
+# draws - its own use of the owned list (moving it onto Seat is #266's).
+$capabilityPaths = @($capabilityFiles | ForEach-Object { Join-Path $capabilityDir $_ }) + @(Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Build\DepotKit.cpp')
+$capabilityOwnedReaders = @('UFacilityPurchases::OwnedOf', 'UFacilityPurchases::DailyUpkeep')
+$capabilityModulesRead = '\b(?:Depot|Facility|Entity|Home|Instance)\w*(?:\[[^\]]*\])?(?:\.|->)Modules\b'
+foreach ($capabilityPath in $capabilityPaths) {
+    $capabilityName = Split-Path -Leaf $capabilityPath
+    if (-not (Test-Path $capabilityPath)) {
+        $failures.Add("capability-from-the-view: $capabilityPath not found - update rule 45, do not let it check nothing")
+        continue
+    }
+    $lines = Get-Content -LiteralPath $capabilityPath
+    $inBlock = $false
+    $current = ''
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        if ($code.Trim() -eq '') { continue }
+        $definition = Get-ArchDefinition $code
+        if ($null -ne $definition) { $current = $definition }
+        if ($code -match $capabilityModulesRead -and ($capabilityOwnedReaders -notcontains $current)) {
+            $failures.Add("capability-from-the-view: ${capabilityName}:$($i + 1) walks a depot's OWNED module list (in '$current') - what its modules give it (bays, pumps) is FDepotCapability's, seated against the plot: $($code.Trim())")
+        }
+    }
+}
+foreach ($viewReader in @(@((Join-Path $ops 'Public\Model\JobBoard.h'), 'JobBoard.h'), @((Join-Path $ops 'Private\Model\FacilityPurchases.cpp'), 'FacilityPurchases.cpp'), @((Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Build\DepotKit.cpp'), 'DepotKit.cpp'))) {
+    $viewPath = $viewReader[0]
+    if ((Test-Path $viewPath) -and $null -eq (Select-String -Path $viewPath -Pattern 'FDepotCapability' -Quiet)) {
+        $failures.Add("capability-from-the-view: $($viewReader[1]) no longer names FDepotCapability - it reads what a depot's modules give it some other way; update rule 45 or restore the view")
+    }
+}
+$ranRules.Add('capability-from-the-view')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

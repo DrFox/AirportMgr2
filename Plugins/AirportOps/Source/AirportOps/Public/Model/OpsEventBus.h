@@ -157,14 +157,31 @@ struct AIRPORTOPS_API FFacilityUpgradedEvent
 	FString Describe() const;
 };
 
-/** Bought or sold. A plain enum - this header has no .generated.h for a UENUM (memory: UHT cannot see it). */
+/**
+ * How a vehicle joined or left a depot's fleet - one value per way in and out, so a subscriber sees EVERY change and not
+ * only the ones the player paid for (#443: seeding and a depot's removal published nothing, so "Bowser #3 credited, depot
+ * removed" could never reach the feed). A plain enum - this header has no .generated.h for a UENUM (memory: UHT cannot
+ * see it). Bought and Seeded come in; Sold and Withdrawn go out. FServiceFleet::Add/Withdraw take the origin and reason
+ * that map to these.
+ */
 enum class EFleetChange : uint8
 {
+	/** The player bought it: Amount is what was charged. */
 	Bought,
-	Sold
+	/** The player sold it: Amount is what was credited. */
+	Sold,
+	/** The starter fleet a placed depot begins with (Trucks > 0): free, so Amount is 0. */
+	Seeded,
+	/** Its depot was removed (a bulldoze, an undo of the placement): Amount is what was credited. */
+	Withdrawn
 };
 
-/** A vehicle joined or left a depot's fleet. Published by UFacilityPurchases on success only. */
+/**
+ * A vehicle joined or left a depot's fleet. Published by FServiceFleet - the fleet's one door - on every change, whoever
+ * asked for it: a purchase, a sale, the starter seeding, a depot's removal.
+ * ENFORCED BY: AirportOps.Model.Fleet.DepotRemovalPublishesFleetChanged, AirportOps.Model.Fleet.SeedingPublishesFleetChanged;
+ * Check-Architecture rule 43 (fleet-one-door)
+ */
 struct AIRPORTOPS_API FFleetChangedEvent
 {
 	int32 Depot = INDEX_NONE;

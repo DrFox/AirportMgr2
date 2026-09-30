@@ -252,20 +252,31 @@ const FOfferVerdict& UFlightBoard::VerdictFor(const UGroundTraffic& Traffic,
 	const uint32 BoardNow = Revision();
 	const uint32 GuidelineNow = Network.GetGuidelineRevision();
 	const uint32 OccupancyNow = Traffic.OccupancyRevision();
-	const uint32 FleetNow = Fuel != nullptr ? Fuel->GetFleetRevision() : 0;
-	if (!Verdict.bValid || Verdict.BoardAt != BoardNow || Verdict.GuidelineAt != GuidelineNow
-		|| Verdict.OccupancyAt != OccupancyNow || Verdict.FleetAt != FleetNow)
+	// THE FLEET'S COMPOSITION, not its transitions (#443): CouldServe reads which vehicles exist, of what kind and where,
+	// and never a vehicle's state, so a truck arriving or finishing a refill must not re-plan the offer.
+	const uint32 FleetNow = Fuel != nullptr ? Fuel->GetFleetCompositionRevision() : 0;
+	// BOTH DECIDED BEFORE EITHER IS REDONE: the guideline stamp is shared, and the first recompute would write it.
+	const bool bPlanStale = !Verdict.bValid || Verdict.BoardAt != BoardNow || Verdict.GuidelineAt != GuidelineNow
+		|| Verdict.OccupancyAt != OccupancyNow;
+	// bFuelServable is CouldServe(Network, Flight.Airframe): the airport's shape (the guideline graph - depots, roads,
+	// stands, modules) and the fleet's composition. Not the board (the airframe is the flight's own, fixed) and not
+	// occupancy (it judges no traffic).
+	const bool bFuelStale = !Verdict.bValid || Verdict.GuidelineAt != GuidelineNow || Verdict.FleetAt != FleetNow;
+	if (bPlanStale)
 	{
 		// THE REAL PLAN, with the live occupancy. The greyed-out reason is the sentence the
 		// arrival itself would print, because it is the same refusal.
 		Verdict.Why = WhyNotAcceptable(Traffic, Network, Flight);
-		Verdict.bFuelServable = Fuel == nullptr || Fuel->CouldServe(Network, Flight.Airframe);
 		Verdict.BoardAt = BoardNow;
-		Verdict.GuidelineAt = GuidelineNow;
 		Verdict.OccupancyAt = OccupancyNow;
-		Verdict.FleetAt = FleetNow;
-		Verdict.bValid = true;
 	}
+	if (bFuelStale)
+	{
+		Verdict.bFuelServable = Fuel == nullptr || Fuel->CouldServe(Network, Flight.Airframe);
+		Verdict.FleetAt = FleetNow;
+	}
+	Verdict.GuidelineAt = GuidelineNow;
+	Verdict.bValid = true;
 	return Verdict;
 }
 

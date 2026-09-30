@@ -176,6 +176,7 @@ void ARoadNetworkActor::RefreshResolvedContentCacheIfDirty()
 	ResolvedRubberMaterialCache = ResolveRubberMaterial();
 	ResolvedGhostMaterialCache = ResolveGhostMaterial();
 	ResolvedTierDesignVehiclesCache = UAirsideSettings::ResolveTierDesignVehicles();
+	ResolvedDepotKitsCache = ResolveDepotKits();
 
 	ResolvedRunwayMaterialsCache.SetNum(PavementMaterialSlotCount);
 	ResolvedRunwayMaterialsCache[Pavement::MaterialSlot(EPavement::Grass)] = ResolveRunwayMaterial(EPavement::Grass);
@@ -215,6 +216,7 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeSurfaceSettings()
 	// THE TIERS' DESIGN VEHICLES, from the cache: ResolveTierDesignVehicles reads the content
 	// set (a LoadSynchronous of the Wide profile), which is the expensive half this cache holds.
 	Settings.DesignVehicles.PerProfile = ResolvedTierDesignVehiclesCache;
+	Settings.DepotKits = ResolvedDepotKitsCache;
 	Settings.SurfaceMaterial = ResolvedSurfaceMaterialCache;
 	Settings.ApronMaterial = ResolvedApronMaterialCache;
 	Settings.RubberMaterial = ResolvedRubberMaterialCache;

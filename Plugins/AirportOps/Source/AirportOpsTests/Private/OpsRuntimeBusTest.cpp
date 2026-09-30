@@ -1039,4 +1039,38 @@ bool FRuntimeLoadRunsEveryRepairTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeFleetToastsTest, "AirportOps.Present.Fleet.EveryFleetChangeIsToastedExceptTheSeeding",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeFleetToastsTest::RunTest(const FString&)
+{
+	// THE FEED'S HALF OF #443: FleetChanged now carries four ways (Bought, Sold, Seeded, Withdrawn), and the runtime's
+	// Presentation subscriber toasts them through the one notification face. A seeded vehicle is not news - nobody did or
+	// paid anything - and a withdrawn one must say where its credit came from ("Bowser credited, depot removed"), which the
+	// feed could never say while a removed depot's vehicles left silently.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
+	Runtime->GetEvents()->OnNotification.AddDynamic(Listener, &UOpsEventsTestListener::OnNote);
+	Runtime->Tick(0.0);
+	const int32 Before = Listener->CountOf(TEXT("note:"));
+
+	Runtime->GetBus().Publish(FFleetChangedEvent{ 1, 7, TEXT("FUEL"), EFleetChange::Seeded, 0.0 });
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("a seeded vehicle raises no toast"), Listener->CountOf(TEXT("note:")), Before);
+
+	Runtime->GetBus().Publish(FFleetChangedEvent{ 1, 8, TEXT("FUEL"), EFleetChange::Withdrawn, 45000.0 });
+	Runtime->Tick(0.0);
+	if (!TestEqual(TEXT("a withdrawn one raises exactly one"), Listener->CountOf(TEXT("note:")), Before + 1)) { return false; }
+	const FString Withdrawn = Listener->Seen.Last();
+	TestTrue(FString::Printf(TEXT("that says the depot went ('%s')"), *Withdrawn), Withdrawn.Contains(TEXT("Depot removed")));
+	TestTrue(TEXT("and that the vehicle was credited"), Withdrawn.Contains(TEXT("credited")));
+
+	Runtime->GetBus().Publish(FFleetChangedEvent{ 1, 9, TEXT("FUEL"), EFleetChange::Bought, 90000.0 });
+	Runtime->GetBus().Publish(FFleetChangedEvent{ 1, 9, TEXT("FUEL"), EFleetChange::Sold, 45000.0 });
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("and a purchase and a sale still toast, as before"), Listener->CountOf(TEXT("note:")), Before + 3);
+	return true;
+}
+
 #endif

@@ -90,8 +90,16 @@ namespace DepotKit
 	 * and later reduced would otherwise have been warned about once, at a moment the player
 	 * was not looking at it - see URoadSurfacePresenter::RebuildInternal's Topology branch,
 	 * which calls it after every rebuild, for where "again" means.
+	 *
+	 * SEATED, NOT OWNED (#443, ruled 2026-09-30): a shed or a pump counts only when the plot seats it - the same
+	 * FDepotCapability the job board and the purchase rules read - so it warns of a depot whose modules the plot could
+	 * not hold, which the player cannot see standing. Specs is the kit table the presenter solves the plot with
+	 * (ARoadNetworkActor::ResolveDepotKits, through FSurfaceSettings): with none (a test, or a caller with no content)
+	 * there is no plot to seat against and the owned list stands. A depot with no modules at all is the legacy plotless
+	 * depot and is not censused.
+	 * ENFORCED BY: Airside.Build.DepotKitReportIncomplete
 	 */
-	AIRSIDE_API void ReportIncomplete(const URoadNetwork& Network);
+	AIRSIDE_API void ReportIncomplete(const URoadNetwork& Network, TArrayView<const PlotYard::FKitSpec> Specs = {});
 
 	/**
 	 * Which edge of a placed plot is its frontage, recovered from the entity alone. MOVED FROM

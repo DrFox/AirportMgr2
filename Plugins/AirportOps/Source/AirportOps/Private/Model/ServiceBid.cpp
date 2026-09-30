@@ -71,18 +71,20 @@ ServiceBid::FResult ServiceBid::Finish(const FInput& In, int32 MaxTrips)
 	}
 
 	// THE JOB BID FOR, TO COMPLETION ALONE: this vehicle's own facility visits between its trips are
-	// what makes a small tank's bid for a big job honest.
+	// what makes a small tank's bid for a big job honest. "COMPLETE" IS THE POLICY'S DoneWithin, the figure the live
+	// vehicle's NextStep and FinishServe judge by - a bid that priced a trip the vehicle then does not make is a
+	// promise nobody keeps.
 	double Owed = In.Appended.Owed;
-	for (int32 Trip = 0; Trip < MaxTrips && Owed > 0.5; ++Trip)
+	for (int32 Trip = 0; Trip < MaxTrips && Owed > Policy.DoneWithin(); ++Trip)
 	{
 		const double Delivered = OneTrip(In.Appended, Owed);
 		if (Delivered < 0.0)
 		{
 			break;
 		}
-		// A TRIP THAT DELIVERS NOTHING would repeat for ever - a degenerate type the policy's floors
-		// should already have ruled out. Stop at the time reached rather than spin.
-		if (Delivered < 0.5)
+		// A TRIP THAT DELIVERS NOTHING (less than the policy would call a job done within) would repeat for ever - a
+		// degenerate type the policy's floors should already have ruled out. Stop at the time reached rather than spin.
+		if (Delivered < Policy.DoneWithin())
 		{
 			break;
 		}

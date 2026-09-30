@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/ScopeExit.h"
@@ -57,9 +58,6 @@ bool FJobBoardRevisionTest::RunTest(const FString&)
 {
 	// EVERY PUBLIC MUTATOR, since the state is private: the inspector keys the depot card and the fuel line on this
 	// number, and a door that changed the board without it would leave either one stale on screen.
-	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
 	UJobBoard* Board = NewObject<UJobBoard>(GetTransientPackage());
 	uint32 Last = Board->Revision();
 	auto Moved = [&](const TCHAR* What)
@@ -67,31 +65,100 @@ bool FJobBoardRevisionTest::RunTest(const FString&)
 		TestTrue(FString::Printf(TEXT("%s moves the revision"), What), Board->Revision() != Last);
 		Last = Board->Revision();
 	};
-	Board->Step(*Traffic, *Net, *Clock);
-	Moved(TEXT("a step"));
-	Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Gone, EAgentPhase::Taxiing);
-	Moved(TEXT("an agent's phase"));
-	Board->RecallVehicleOfAgent(5, /*bRetire*/ false, *Traffic, *Net, *Clock);
-	Moved(TEXT("a recall"));
+	// A STEP, AN AGENT'S PHASE AND A RECALL ARE NOT HERE: since #443 they move it only when they change something, and a
+	// call that changes nothing is what AirportOps.Fuel.RevisionHoldsStillWhenNothingChanged pins.
 	Board->AddJobForTest(1, EServiceJobState::Queued, EServiceRefusal::None, 0);
 	Moved(TEXT("a job added"));
 	Board->AddVehicleForTest(TEXT("FUEL"), FEntityInstanceId(), EServiceVehicleState::Idle, 1000.0);
 	Moved(TEXT("a vehicle added"));
 	Board->AddTurnaroundForTest(1, 600.0, 1);
 	Moved(TEXT("a turnaround added"));
-	// THE PLAYER'S FLEET DOORS (facility-upgrades, #417 - landed beside this counter, rebased onto it): a vehicle bought
-	// or sold changes the depot card's vehicle list, which the card keys on this number alone within a game minute.
+	// THE PLAYER'S FLEET DOOR (facility-upgrades, #417; FServiceFleet since #443): a vehicle bought or sold changes the depot
+	// card's vehicle list, which the card keys on this number alone within a game minute.
 	FEntityInstanceId Depot;
 	Depot.Index = 3;
-	const int32 Bought = Board->AddPurchasedVehicle(TEXT("FUEL"), Depot);
+	const int32 Bought = Board->Fleet().Add(TEXT("FUEL"), Depot, EFleetOrigin::Bought, 0.0);
 	if (TestTrue(TEXT("a vehicle bought"), Bought != 0))
 	{
 		Moved(TEXT("a vehicle bought"));
-		TestTrue(TEXT("and sold"), Board->RemoveVehicle(Bought));
+		TestTrue(TEXT("and sold"), Board->Fleet().Withdraw(Bought, EFleetReason::Sold, 0.0));
 		Moved(TEXT("a vehicle sold"));
 	}
 	Board->OnBeforeRestore();
 	Moved(TEXT("a restore"));
+
+	// THE POINTS OF CHANGE THAT MOVE NO VEHICLE (#443, "changes, not calls"), each on a FRESH board and each read off
+	// RevisionCountForTest - the vehicle transitions that usually ride beside them move FleetRevision, so Revision() alone
+	// cannot say whether the leaf's own ++RevisionCount is still there. Delete that line and its check goes red.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	UEntityDefinition* Def = UEntityDefinition::MakeFuelDepotTransient();
+	const FEntityInstanceId Home = Net->PlaceEntity(Def, Def->Anchors, FVector2D(0.0, 0.0), 0.0, 0.0, EServiceRole::Fuel, 0);
+	auto PointBumps = [this](UJobBoard& Fresh, const TCHAR* What, TFunctionRef<void()> Do)
+	{
+		const uint32 Before = Fresh.RevisionCountForTest();
+		Do();
+		TestTrue(FString::Printf(TEXT("%s moves the change count on its own"), What), Fresh.RevisionCountForTest() != Before);
+	};
+	{
+		// A QUEUE TRIMMED of a job that is gone (StartNext): an idle vehicle at home whose queue names a job nobody has.
+		UJobBoard* Fresh = NewObject<UJobBoard>(GetTransientPackage());
+		Fresh->AddVehicleForTest(TEXT("FUEL"), Home, EServiceVehicleState::Idle, 1000.0).Queue = { 9999 };
+		PointBumps(*Fresh, TEXT("a queue trimmed of a job that is gone"), [&] { Fresh->Step(*Traffic, *Net, *Clock); });
+	}
+	{
+		// A REFUSED JOB RE-OPENED (ReopenRefusedJob): refused at a graph revision the airport is no longer at.
+		UJobBoard* Fresh = NewObject<UJobBoard>(GetTransientPackage());
+		Fresh->AddJobForTest(1, EServiceJobState::Unserviceable, EServiceRefusal::NoDepot, /*RefusedAtRevision=*/777);
+		PointBumps(*Fresh, TEXT("a refused job asking again"), [&] { Fresh->Step(*Traffic, *Net, *Clock); });
+	}
+	{
+		// A JOB HANDED BACK TO THE BOARD (Reopen, via ReleaseJobsOf): the player's despawn of a vehicle holding a queued job.
+		UJobBoard* Fresh = NewObject<UJobBoard>(GetTransientPackage());
+		FServiceVehicle& Vehicle = Fresh->AddVehicleForTest(TEXT("FUEL"), Home, EServiceVehicleState::ToFacility, 1000.0);
+		Vehicle.AgentId = 5;
+		const int32 VehicleId = Vehicle.Id;
+		FServiceJob& Job = Fresh->AddJobForTest(2, EServiceJobState::Queued, EServiceRefusal::None, 0);
+		Job.VehicleId = VehicleId;
+		const int32 JobId = Job.Id;
+		const_cast<FServiceVehicle*>(Fresh->FindVehicle(VehicleId))->Queue = { JobId };
+		PointBumps(*Fresh, TEXT("a queued job handed back"), [&] { Fresh->RecallVehicleOfAgent(5, /*bRetire*/ true, *Traffic, *Net, *Clock); });
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FJobBoardRevisionStillTest, "AirportOps.Fuel.RevisionHoldsStillWhenNothingChanged",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FJobBoardRevisionStillTest::RunTest(const FString&)
+{
+	// #443: Revision COUNTED CALLS, NOT CHANGES - it moved on entry to every OnAgentPhase for every agent in the airport and
+	// to every Step, so the inspector's depot card and fuel line (keyed on it) were rebuilt for changes that were not there.
+	// A call that changes nothing leaves it where it was; a call that does change something still moves it.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	UJobBoard* Board = NewObject<UJobBoard>(GetTransientPackage());
+	const uint32 Start = Board->Revision();
+	Board->Step(*Traffic, *Net, *Clock);
+	TestEqual(TEXT("a Step with nothing to do changes nothing"), Board->Revision(), Start);
+	Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Gone, EAgentPhase::Taxiing);
+	TestEqual(TEXT("an agent's phase that is none of the board's business changes nothing"), Board->Revision(), Start);
+	TestFalse(TEXT("a recall of an agent that drives no vehicle here reports it"),
+		Board->RecallVehicleOfAgent(5, /*bRetire*/ false, *Traffic, *Net, *Clock));
+	TestEqual(TEXT("and changes nothing"), Board->Revision(), Start);
+
+	// AND A STEP THAT DOES CHANGE SOMETHING STILL MOVES IT: an open job on an airport with no depot is refused NoDepot.
+	Board->AddJobForTest(1, EServiceJobState::Open, EServiceRefusal::None, 0);
+	const uint32 Staged = Board->Revision();
+	Board->Step(*Traffic, *Net, *Clock);
+	TestTrue(TEXT("a Step that refuses a job moves it - the fuel line now says why"), Board->Revision() != Staged);
+	const FServiceJob* Job = Board->JobForAircraft(1);
+	if (!TestNotNull(TEXT("setup: the job is on the board"), Job)) { return false; }
+	TestEqual(TEXT("setup: refused"), static_cast<int32>(Job->State), static_cast<int32>(EServiceJobState::Unserviceable));
+	const uint32 Refused = Board->Revision();
+	Board->Step(*Traffic, *Net, *Clock);
+	TestEqual(TEXT("and the next Step, finding it refused and the airport unchanged, does not"), Board->Revision(), Refused);
 	return true;
 }
 

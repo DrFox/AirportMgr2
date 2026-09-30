@@ -5,6 +5,7 @@
 #include "Content/AirsideContent.h"
 #include "Entities/EntityDefinition.h"
 #include "Entities/PlotModuleKit.h"
+#include "Model/DepotCapability.h"
 #include "Model/RoadNetwork.h"
 
 PlotYard::FFootprint DepotFootprint(EDepotModule Module, const UAirsideContent* Content)
@@ -148,39 +149,60 @@ int32 DepotYardSeed(FVector2D Where)
 	return static_cast<int32>(HashCombine(GetTypeHash(X), GetTypeHash(Y)));
 }
 
-void DepotKit::ReportIncomplete(const URoadNetwork& Network)
+void DepotKit::ReportIncomplete(const URoadNetwork& Network, TArrayView<const PlotYard::FKitSpec> Specs)
 {
-	// MOVED VERBATIM FROM FAnchorLink::Build, 2026-09-26 (#306): a fuel-depot module census had
+	// MOVED FROM FAnchorLink::Build, 2026-09-26 (#306): a fuel-depot module census had
 	// nothing to do with joining lead-ins and was only ever run from inside that function
 	// because it was the last thing Topology touched Network with. See this function's own
 	// header comment for why it is called again from the presenter after every edit.
 	for (const FEntityInstance& Entity : Network.GetEntities())
 	{
-		if (!Entity.bAlive || Entity.Modules.Num() == 0)
+		if (!Entity.bAlive || !Entity.IsDepot())
 		{
 			continue;
 		}
 
-		int32 Sheds = 0;
-		int32 Pumps = 0;
-		for (const EDepotModule Module : Entity.Modules)
+		// THE SEATED MODULES (#443): the plot's own solve, the ceilings the presenter draws from, so this warns of a
+		// depot whose shed or pump the player cannot see standing. A depot with no plot to solve (no Specs, or one drawn
+		// with no outline - a test's) has nothing to be smaller than, and its owned list stands.
+		TOptional<PlotYard::FReservation> Reserved;
+		const bool bSolvable = Specs.Num() > 0 && FDepotCapability::HasPlot(Entity);
+		if (bSolvable)
 		{
-			Sheds += Module == EDepotModule::Shed ? 1 : 0;
-			Pumps += Module == EDepotModule::Pump ? 1 : 0;
+			Reserved = ReservationOf(Entity, Specs);
 		}
+		const FDepotCapability Capability = FDepotCapability::Seat(Entity, [&](EDepotModule Module)
+			{
+				if (!bSolvable)
+				{
+					return MAX_int32;
+				}
+				return Reserved.IsSet() ? Reserved->CeilingFor(static_cast<int32>(Module)) : 0;
+			});
 
-		if (Sheds == 0)
+		// THE LEGACY PLOTLESS DEPOT (no ground, no module list) is not censused: the question does not apply to it. A
+		// plotted depot with an empty kit is - it seats nothing.
+		if (Capability.bLegacyPlotless)
 		{
-			UE_LOG(LogAirside, Warning,
-				TEXT("Fuel depot at (%.0f, %.0f): no shed, so no trucks. Build one in a bay."),
-				Entity.Position.X, Entity.Position.Y);
+			continue;
 		}
-		if (Pumps == 0)
+		const int32 OwnedSheds = Capability.OwnedOf(EDepotModule::Shed);
+		const int32 OwnedPumps = Capability.OwnedOf(EDepotModule::Pump);
+
+		// "NO TRUCKS" WAS UNTRUE for a starter depot, whose vehicles are seeded whatever it holds; what a shed gives is
+		// the BAY a bought vehicle stands in, so that is what the warning says is missing.
+		if (Capability.SeatedOf(EDepotModule::Shed) == 0)
 		{
 			UE_LOG(LogAirside, Warning,
-				TEXT("Fuel depot at (%.0f, %.0f): no pump, so nothing can be fuelled. "
+				TEXT("Fuel depot at (%.0f, %.0f): no shed placed (%d owned), so no bay for a vehicle. Build one in a bay."),
+				Entity.Position.X, Entity.Position.Y, OwnedSheds);
+		}
+		if (Capability.SeatedOf(EDepotModule::Pump) == 0)
+		{
+			UE_LOG(LogAirside, Warning,
+				TEXT("Fuel depot at (%.0f, %.0f): no pump placed (%d owned), so nothing can be fuelled. "
 					 "Build one in a bay."),
-				Entity.Position.X, Entity.Position.Y);
+				Entity.Position.X, Entity.Position.Y, OwnedPumps);
 		}
 	}
 }

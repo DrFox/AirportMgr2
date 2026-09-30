@@ -6,6 +6,7 @@
 #include "Entities/PlotModuleKit.h"
 #include "Logging/LogVerbosity.h"
 #include "Misc/AutomationTest.h"
+#include "Model/DepotCapability.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 
@@ -200,9 +201,9 @@ bool FDepotKitReportIncompleteTest::RunTest(const FString& Parameters)
 		GLog->RemoveOutputDevice(&Spy);
 
 		const bool bSawShed = Spy.Lines.ContainsByPredicate(
-			[](const FString& Line) { return Line.Contains(TEXT("no shed, so no trucks")); });
+			[](const FString& Line) { return Line.Contains(TEXT("no shed placed")); });
 		const bool bSawPump = Spy.Lines.ContainsByPredicate(
-			[](const FString& Line) { return Line.Contains(TEXT("no pump, so nothing can be fuelled")); });
+			[](const FString& Line) { return Line.Contains(TEXT("no pump placed")); });
 		TestTrue(TEXT("a depot with no shed warns about it"), bSawShed);
 		TestTrue(TEXT("and, separately, about its missing pump"), bSawPump);
 	}
@@ -226,6 +227,159 @@ bool FDepotKitReportIncompleteTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("a complete depot warns about nothing"), Spy.Lines.Num(), 0);
 	}
 
+	return true;
+}
+
+/**
+ * FDepotCapability (#443, ruled 2026-09-30 under #266): what a depot's modules GIVE it counts only the SEATED ones -
+ * min(owned, the plot's ceiling) of each kind - with the legacy plotless exemption named. World-free: the ceiling is a
+ * lambda standing for the plot solve.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDepotCapabilitySeatsAgainstTheCeilingTest,
+	"Airside.Model.DepotCapability.SeatsOwnedAgainstTheCeiling",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDepotCapabilitySeatsAgainstTheCeilingTest::RunTest(const FString& Parameters)
+{
+	FEntityInstance Depot;
+	Depot.Modules = { EDepotModule::Shed, EDepotModule::Shed, EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump, EDepotModule::Pump };
+	auto Ceilings = [](int32 Sheds, int32 Tanks, int32 Pumps)
+	{
+		return [Sheds, Tanks, Pumps](EDepotModule Module)
+		{
+			return Module == EDepotModule::Shed ? Sheds : Module == EDepotModule::Tank ? Tanks : Pumps;
+		};
+	};
+
+	{
+		const FDepotCapability Capability = FDepotCapability::Seat(Depot, Ceilings(1, 0, 5));
+		TestEqual(TEXT("three sheds owned, a plot for one: one seated"), Capability.SeatedOf(EDepotModule::Shed), 1);
+		TestEqual(TEXT("a tank owned, a plot for none: none seated"), Capability.SeatedOf(EDepotModule::Tank), 0);
+		TestEqual(TEXT("two pumps owned, room for five: both seated - a ceiling never seats more than is owned"), Capability.SeatedOf(EDepotModule::Pump), 2);
+		TestTrue(TEXT("so it can fuel"), Capability.HasWorkingPump());
+		TestEqual(TEXT("with two pumps"), Capability.Pumps(), 2);
+		TestFalse(TEXT("a depot with modules is not the legacy exemption"), Capability.bLegacyPlotless);
+	}
+	{
+		const FDepotCapability Capability = FDepotCapability::Seat(Depot, Ceilings(3, 1, 0));
+		TestFalse(TEXT("pumps owned but none seated: the depot cannot fuel"), Capability.HasWorkingPump());
+		TestEqual(TEXT("and the refill divisor is floored at one - a floor, not a claim"), Capability.Pumps(), 1);
+	}
+	{
+		const FDepotCapability Capability = FDepotCapability::Seat(Depot, Ceilings(-4, -4, -4));
+		TestEqual(TEXT("a negative ceiling seats nothing rather than a negative count"), Capability.SeatedOf(EDepotModule::Shed), 0);
+	}
+
+	// THE NAMED LEGACY EXEMPTION: no ground drawn and no module list is a depot placed without a plot.
+	FEntityInstance Plotless;
+	{
+		const FDepotCapability Capability = FDepotCapability::Seat(Plotless, Ceilings(0, 0, 0));
+		TestTrue(TEXT("no outline, no modules: the legacy plotless depot"), Capability.bLegacyPlotless);
+		TestTrue(TEXT("which fuels as it always did"), Capability.HasWorkingPump());
+		TestEqual(TEXT("as one pump"), Capability.Pumps(), 1);
+		TestEqual(TEXT("and it has no bays: nothing is seated"), Capability.SeatedOf(EDepotModule::Shed), 0);
+	}
+	// A PLOTTED DEPOT WITH AN EMPTY KIT IS NOT LEGACY: its plot seats nothing, so it has no pump - "only placed modules count".
+	{
+		FEntityInstance EmptyPlot;
+		EmptyPlot.PoseRole = EServiceRole::Fuel;
+		EmptyPlot.Outline = { FVector2D(0.0, 0.0), FVector2D(5000.0, 0.0), FVector2D(5000.0, 2400.0), FVector2D(0.0, 2400.0) };
+		const FDepotCapability Capability = FDepotCapability::Seat(EmptyPlot, Ceilings(3, 1, 1));
+		TestFalse(TEXT("a plotted depot with no modules is not the legacy exemption"), Capability.bLegacyPlotless);
+		TestFalse(TEXT("and cannot fuel"), Capability.HasWorkingPump());
+	}
+	// AN UNPLOTTED DEPOT WITH MODULES is a test's stand-in for a modular one: its list is the truth, no pump in it is no pump.
+	{
+		FEntityInstance Modular;
+		Modular.Modules = { EDepotModule::Shed, EDepotModule::Tank };
+		const FDepotCapability Capability = FDepotCapability::Seat(Modular, Ceilings(9, 9, 9));
+		TestFalse(TEXT("modules and no ground: not legacy"), Capability.bLegacyPlotless);
+		TestFalse(TEXT("and no pump in the list is no pump"), Capability.HasWorkingPump());
+		TestEqual(TEXT("the owned counts are read off the view"), Capability.OwnedOf(EDepotModule::Shed), 1);
+	}
+
+	// A DEPOT WITH NO PLOT has nothing to be seated against - a module list on ground that was never drawn - so the owned list
+	// stands even when a ceiling is asked (the plot solve says 0 for it, which is right for a purchase and wrong for what it
+	// already holds). A PLOTTED depot is seated by the ceiling.
+	{
+		FEntityInstance Unplotted = Depot;
+		Unplotted.PoseRole = EServiceRole::Fuel;
+		const FDepotCapability Owned = FDepotCapability::Of(FEntityInstanceId(), Unplotted,
+			[](FEntityInstanceId, const FEntityInstance&, EDepotModule) { return 0; });
+		TestEqual(TEXT("unplotted: a ceiling of nothing seats nothing away - the owned sheds stand"), Owned.SeatedOf(EDepotModule::Shed), 3);
+		FEntityInstance Plotted = Unplotted;
+		Plotted.Outline = { FVector2D(0.0, 0.0), FVector2D(5000.0, 0.0), FVector2D(5000.0, 2400.0), FVector2D(0.0, 2400.0) };
+		const FDepotCapability Seated = FDepotCapability::Of(FEntityInstanceId(), Plotted,
+			[](FEntityInstanceId, const FEntityInstance&, EDepotModule Module) { return Module == EDepotModule::Shed ? 1 : 0; });
+		TestEqual(TEXT("plotted: the same ceiling seats one shed"), Seated.SeatedOf(EDepotModule::Shed), 1);
+		TestEqual(TEXT("and no pump"), Seated.SeatedOf(EDepotModule::Pump), 0);
+	}
+
+	// NO CEILING TO ASK (a world-free board or shop): the owned list stands - unseating needs a solve, and zero would make every
+	// such depot pumpless and slotless.
+	{
+		const FDepotCapability Capability = FDepotCapability::Of(FEntityInstanceId(), Depot, FModuleCeilingFn());
+		TestEqual(TEXT("with no plot solve every owned shed is seated"), Capability.SeatedOf(EDepotModule::Shed), 3);
+		TestEqual(TEXT("and every owned pump"), Capability.SeatedOf(EDepotModule::Pump), 2);
+	}
+	return true;
+}
+
+/**
+ * THE CENSUS READS THE SEATED MODULES (#443): a depot whose plot cannot hold its shed or its pump warns of both, naming what
+ * is owned - which the player cannot see standing.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDepotKitCensusSeatsTest,
+	"Airside.Build.DepotKitReportIncompleteCountsOnlyWhatIsSeated",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDepotKitCensusSeatsTest::RunTest(const FString& Parameters)
+{
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(nullptr);
+
+	auto Census = [&](const TArray<FVector2D>& Outline, const FVector2D& Frontage, TArrayView<const PlotYard::FKitSpec> WithSpecs)
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		FEntityPlacement Placement;
+		Placement.Definition = Depot;
+		Placement.Anchors = Depot->Anchors;
+		Placement.Position = Frontage;
+		Placement.PoseRole = Depot->PoseRole;
+		Placement.Outline = Outline;
+		Placement.Modules = { EDepotModule::Shed, EDepotModule::Pump };
+		Net->PlaceEntity(Placement);
+		FWarningLogSpy Spy;
+		GLog->AddOutputDevice(&Spy);
+		DepotKit::ReportIncomplete(*Net, WithSpecs);
+		GLog->RemoveOutputDevice(&Spy);
+		return Spy.Lines;
+	};
+	auto Says = [](const TArray<FString>& Lines, const TCHAR* Text)
+	{
+		return Lines.ContainsByPredicate([Text](const FString& Line) { return Line.Contains(Text); });
+	};
+
+	// A PLOT TOO SMALL FOR ANYTHING: a 1 m square. The frontage is the edge whose midpoint is the pose.
+	const TArray<FVector2D> Tiny = { FVector2D(0.0, 0.0), FVector2D(100.0, 0.0), FVector2D(100.0, 100.0), FVector2D(0.0, 100.0) };
+	{
+		const TArray<FString> Lines = Census(Tiny, FVector2D(50.0, 0.0), Specs);
+		TestTrue(TEXT("a plot that cannot seat the shed warns of it, and says one is owned"), Says(Lines, TEXT("no shed placed (1 owned)")));
+		TestTrue(TEXT("and of the pump"), Says(Lines, TEXT("no pump placed (1 owned)")));
+	}
+	// THE CONTROL: the same modules on a plot that holds them warn of nothing.
+	const TArray<FVector2D> Roomy = { FVector2D(0.0, 0.0), FVector2D(5000.0, 0.0), FVector2D(5000.0, 2400.0), FVector2D(0.0, 2400.0) };
+	{
+		const TArray<FString> Lines = Census(Roomy, FVector2D(2500.0, 0.0), Specs);
+		TestEqual(TEXT("control: a plot that seats a shed and a pump warns of nothing"), Lines.Num(), 0);
+	}
+	// AND WITH NO SPECS the owned list stands, as it always did: the tiny plot then warns of nothing.
+	{
+		const TArray<FString> Lines = Census(Tiny, FVector2D(50.0, 0.0), TArrayView<const PlotYard::FKitSpec>());
+		TestEqual(TEXT("with no plot solve to ask, a depot holding a shed and a pump warns of nothing"), Lines.Num(), 0);
+	}
 	return true;
 }
 

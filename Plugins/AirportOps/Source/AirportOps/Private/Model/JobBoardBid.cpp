@@ -130,7 +130,7 @@ TArray<UJobBoard::FCandidate> UJobBoard::Judge(const URoadNetwork& Network, ESer
 		// then have nothing to do, which reads on screen as the service hanging rather than as a depot
 		// the player has not finished building. Only a MODULAR depot can be pumpless - see
 		// HasWorkingPump.
-		if (Policy != nullptr && Policy->NeedsPumpAtHome() && !HasWorkingPump(*Depot))
+		if (Policy != nullptr && Policy->NeedsPumpAtHome() && !HasWorkingPump(Candidate.Depot, *Depot))
 		{
 			Out.bAnyPumpless = true;
 			continue;
@@ -293,7 +293,7 @@ ServiceBid::FResult UJobBoard::BidFor(const FServiceVehicle& Vehicle, const FSer
 	ServiceBid::FInput In;
 	In.Type = &Type;
 	In.Policy = Policy;
-	In.Pumps = PumpsAt(*Home);
+	In.Pumps = PumpsAt(Vehicle.Home, *Home);
 	In.FacilityNode = NodeIndex(Home->PoseNode);
 	In.DriveSeconds = [this, &Nodes, &Network, &Type, GamePerMovement](int32 From, int32 To)
 	{
@@ -399,11 +399,34 @@ ServiceBid::FResult UJobBoard::BidForTest(const UGroundTraffic& Traffic, const U
 
 void UJobBoard::Assign(FServiceVehicle& Vehicle, FServiceJob& Job, double PromisedFinish)
 {
+	++RevisionCount;   // See Revision: a busy vehicle's queue grew, which no lifecycle transition reports.
 	Vehicle.Queue.Add(Job.Id);
 	Job.State = EServiceJobState::Queued;
 	Job.VehicleId = Vehicle.Id;
 	Job.PromisedFinish = PromisedFinish;
 	Job.Why = EServiceRefusal::None;
+}
+
+TArray<UJobBoard::FCandidate> UJobBoard::CandidatesFor(EServiceRole Role, const UGroundTraffic* Traffic, int32 Except) const
+{
+	TArray<FCandidate> Candidates;
+	for (const FServiceVehicle& Vehicle : Vehicles)
+	{
+		if (Vehicle.Role != Role || Vehicle.Id == Except)
+		{
+			continue;
+		}
+		// NOT A STRANDED ONE: it prices itself as "home soon" (ToFacility with no plan left, so no drive remaining), wins,
+		// and holds the job for a trip it will never make - the wedge OnAgentPhase's Stranded branch releases jobs from.
+		// Its jobs are already back on the board (LoseAgent / ReleaseJobsOf), and it bids for nothing until the player
+		// unsticks it.
+		if (Traffic != nullptr && IsStranded(Vehicle, *Traffic))
+		{
+			continue;
+		}
+		Candidates.Add({ Vehicle.Home, Vehicle.TypeCode, Vehicle.Id });
+	}
+	return Candidates;
 }
 
 void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
@@ -416,19 +439,9 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 			continue;
 		}
 
-		TArray<FCandidate> Candidates;
-		for (const FServiceVehicle& Vehicle : Vehicles)
-		{
-			// NOT A STRANDED ONE: it prices itself as "home soon" (ToFacility with no plan left, so no
-			// drive remaining), wins, and holds the job for a trip it will never make - the wedge
-			// OnAgentPhase's Stranded branch just released the job from.
-			if (Vehicle.Role == Job.Role && !IsStranded(Vehicle, Traffic))
-			{
-				Candidates.Add({ Vehicle.Home, Vehicle.TypeCode, Vehicle.Id });
-			}
-		}
+		// NOT A STRANDED ONE (CandidatesFor says why): the wedge OnAgentPhase's Stranded branch just released the job from.
 		FJudgement Judged;
-		const TArray<FCandidate> Eligible = Judge(Network, Job.Role, Job.Stand, Candidates, Judged);
+		const TArray<FCandidate> Eligible = Judge(Network, Job.Role, Job.Stand, CandidatesFor(Job.Role, &Traffic), Judged);
 
 		// THE BIDS: when each would FINISH this job appended to its queue (user's ruling 6). The
 		// runner-up is kept for the log, because "why did the tow go?" is the first question in play.
@@ -466,6 +479,7 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 		{
 			// NOTHING MAY BID. Unserviceable, which is TERMINAL until the graph changes - and there is no
 			// "busy" to fall back on here, because a busy vehicle bids with its queue.
+			++RevisionCount;   // See Revision: the job's state and reason changed, and the fuel line says why.
 			Job.State = EServiceJobState::Unserviceable;
 			Job.Why = RefusalOf(Judged);
 			Job.RefusedAtRevision = Revision;
@@ -530,6 +544,14 @@ void UJobBoard::RebidQueued(UGroundTraffic& Traffic, const URoadNetwork& Network
 			Queued.Add(Job.Id);
 		}
 	}
+	// IT RAN AGAINST QUEUED JOBS, and a run refreshes each one's PromisedFinish (the depot card's "clears in" reads it)
+	// even when nothing moves vehicle - so it is a change for Revision, which a guideline edit alone (no vehicle
+	// transition) would otherwise leave standing. With none queued there is nothing to refresh: the first Step of a
+	// board runs this once regardless (the stamps start at MAX), and that must not read as a change.
+	if (Queued.Num() > 0)
+	{
+		++RevisionCount;
+	}
 
 	for (const int32 JobId : Queued)
 	{
@@ -550,18 +572,11 @@ void UJobBoard::RebidQueued(UGroundTraffic& Traffic, const URoadNetwork& Network
 		// ahead of it left) and a stale promise would compare the alternative against a fiction.
 		const ServiceBid::FResult Current = BidFor(*Holder, *Job, Traffic, Network, Clock, Position);
 
-		TArray<FCandidate> Others;
-		for (const FServiceVehicle& Vehicle : Vehicles)
-		{
-			if (Vehicle.Id != Holder->Id && Vehicle.Role == Job->Role && !IsStranded(Vehicle, Traffic))
-			{
-				Others.Add({ Vehicle.Home, Vehicle.TypeCode, Vehicle.Id });
-			}
-		}
+		// THE ALTERNATIVES: every candidate but the holder itself.
 		FJudgement Judged;
 		FServiceVehicle* Best = nullptr;
 		double BestFinish = TNumericLimits<double>::Max();
-		for (const FCandidate& Candidate : Judge(Network, Job->Role, Job->Stand, Others, Judged))
+		for (const FCandidate& Candidate : Judge(Network, Job->Role, Job->Stand, CandidatesFor(Job->Role, &Traffic, Holder->Id), Judged))
 		{
 			FServiceVehicle* Vehicle = FindVehicleMutable(Candidate.VehicleId);
 			if (Vehicle == nullptr)
@@ -596,42 +611,17 @@ void UJobBoard::RebidQueued(UGroundTraffic& Traffic, const URoadNetwork& Network
 
 bool UJobBoard::CouldServe(const URoadNetwork& Network, const FAirframe& Airframe) const
 {
-	// THE CANDIDATES A DEPOT HAS OR WILL HAVE: its vehicles once SyncFleet has seeded it, else the
-	// STARTER fleet its Trucks would give it - an offer can be asked before the first tick. A depot the
-	// player drew has Trucks 0 and, until a vehicle is bought, no candidate: its offers say "no fuel";
-	// so has a seeded depot whose fleet was sold.
-	TArray<FCandidate> Candidates;
+	// THE CANDIDATES THE BOARD HAS, and only those (#443). This used to add the STARTER fleet a not-yet-seeded depot would
+	// get, so an offer asked before the first tick could say yes - a prediction written beside the seeding it had to mirror
+	// (FServiceFleet::SeedStarterFleets), and one that had already drifted from it once: a starter depot whose fleet the
+	// player sold said "fuel OK" on the offer while the board refused the aircraft NoVehicles (final review 2026-09-30).
+	// The seeding runs in every Step through the fleet's door, so a starter depot has real vehicles before any bid could
+	// use them and there is nothing to predict; a depot the player drew has Trucks 0 and, until a vehicle is bought, no
+	// candidate - its offers say "no fuel", and so does a seeded depot whose fleet was sold. NULL TRAFFIC: an offer is
+	// judged before its aircraft exists, so no agent is stranded and the fleet is asked as it stands.
+	// ENFORCED BY: AirportOps.Fuel.CouldServe.StarterDepotVerdictAgreesWithItsFirstBid, AirportOps.Fuel.CouldServe.SoldOutStarterDepotCannot
+	const TArray<FCandidate> Candidates = CandidatesFor(EServiceRole::Fuel, nullptr);
 	const TArray<FEntityInstance>& Entities = Network.GetEntities();
-	for (int32 Index = 0; Index < Entities.Num(); ++Index)
-	{
-		const FEntityInstance& Depot = Entities[Index];
-		if (!Depot.bAlive || Depot.PoseRole != EServiceRole::Fuel)
-		{
-			continue;
-		}
-		const FEntityInstanceId DepotId = Network.EntityIdAt(Index);
-		bool bHasVehicles = false;
-		for (const FServiceVehicle& Vehicle : Vehicles)
-		{
-			if (Vehicle.Home == DepotId)
-			{
-				bHasVehicles = true;
-				Candidates.Add({ DepotId, Vehicle.TypeCode, Vehicle.Id });
-			}
-		}
-		// SEEDED IS NOT "NOT YET SEEDED": a starter depot whose fleet the player sold has Trucks > 0 and
-		// no vehicles, and inventing its starter fleet here said "fuel OK" on the offer while the board
-		// refused the aircraft NoVehicles (final review 2026-09-30).
-		// ENFORCED BY: AirportOps.Fuel.CouldServe.SoldOutStarterDepotCannot
-		if (!bHasVehicles && Depot.Trucks > 0 && !SeededDepots.Contains(DepotId))
-		{
-			for (const FName TypeCode : FleetTypes())
-			{
-				Candidates.Add({ DepotId, TypeCode, 0 });
-			}
-		}
-	}
-
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)
 	{
 		const FEntityInstance& Stand = Entities[Index];
