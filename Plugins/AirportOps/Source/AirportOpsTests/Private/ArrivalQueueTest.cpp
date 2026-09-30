@@ -60,7 +60,7 @@ namespace
 			Flight->OfferWindowSeconds = 60.0;
 			Flight->OfferSecondsLeft = 60.0;
 			Flight->LeadTimeSeconds = Lead;
-			Flight->ApproachFocus = Airport.Threshold;
+			Flight->RunwayPreference = Airport.Threshold;
 			Board->AddOffer(*Clock, Flight);
 			Board->Accept(*Traffic, *Airport.Net, *Clock, *Flight);
 			return Flight;
@@ -100,7 +100,7 @@ bool FQueueAcceptWhileBusyTest::RunTest(const FString& Parameters)
 	UFlight* Offer = NewObject<UFlight>(GetTransientPackage());
 	Offer->Airframe = QueueAirframe();
 	Offer->OfferSecondsLeft = 60.0;
-	Offer->ApproachFocus = Rig.Airport.Threshold;
+	Offer->RunwayPreference = Rig.Airport.Threshold;
 	Rig.Board->AddOffer(*Rig.Clock, Offer);
 	TestEqual(TEXT("a busy runway is no reason to grey out Accept"),
 		Rig.Board->WhyNotAcceptable(*Rig.Traffic, *Rig.Airport.Net, *Offer), EArrivalRefusal::None);
@@ -118,7 +118,7 @@ bool FQueueDueWhileBusyTest::RunTest(const FString& Parameters)
 	UFlight* Flight = Rig.Accepted(10.0);
 	Rig.HoldRunway();
 	Rig.Clock->Advance(11.0);
-	TestEqual(TEXT("past its ETA it is holding, not lost"), Flight->Phase, EFlightPhase::Inbound);
+	TestEqual(TEXT("past its ETA it is holding, not lost"), Flight->GetPhase(), EFlightPhase::Inbound);
 	TestEqual(TEXT("it joined the queue at its ETA"), Flight->HoldingSince, Flight->ArrivesAt, 1.0);
 	TestTrue(TEXT("its stand is still held for it"), Rig.StandHeldFor(*Flight));
 	Rig.Tick();
@@ -128,7 +128,7 @@ bool FQueueDueWhileBusyTest::RunTest(const FString& Parameters)
 	Rig.FreeRunway();
 	Rig.Tick();
 	TestEqual(TEXT("the frame the runway frees, it is cleared"), Rig.Dispatched, 1);
-	TestEqual(TEXT("and lands"), Flight->Phase, EFlightPhase::Landing);
+	TestEqual(TEXT("and lands"), Flight->GetPhase(), EFlightPhase::Landing);
 	TestEqual(TEXT("leaving the queue"), Rig.Board->Queue().Num(), 0);
 	return true;
 }
@@ -148,10 +148,10 @@ bool FQueueJoinOrderTest::RunTest(const FString& Parameters)
 	Rig.FreeRunway();
 	Rig.Tick();
 	TestEqual(TEXT("one clearance a frame"), Rig.Dispatched, 1);
-	TestEqual(TEXT("the first to join goes first"), First->Phase, EFlightPhase::Landing);
-	TestEqual(TEXT("the second still waits"), Second->Phase, EFlightPhase::Inbound);
+	TestEqual(TEXT("the first to join goes first"), First->GetPhase(), EFlightPhase::Landing);
+	TestEqual(TEXT("the second still waits"), Second->GetPhase(), EFlightPhase::Inbound);
 	Rig.Tick();
-	TestEqual(TEXT("then the second"), Second->Phase, EFlightPhase::Landing);
+	TestEqual(TEXT("then the second"), Second->GetPhase(), EFlightPhase::Landing);
 	return true;
 }
 
@@ -182,11 +182,11 @@ bool FQueueFailedDispatchTest::RunTest(const FString& Parameters)
 	Rig.bDispatcherAccepts = false;
 	Rig.Tick();
 	TestEqual(TEXT("a refused clearance was attempted"), Rig.Dispatched, 1);
-	TestEqual(TEXT("and the flight is still holding"), Flight->Phase, EFlightPhase::Inbound);
+	TestEqual(TEXT("and the flight is still holding"), Flight->GetPhase(), EFlightPhase::Inbound);
 	TestTrue(TEXT("with its stand held again"), Rig.StandHeldFor(*Flight));
 	Rig.bDispatcherAccepts = true;
 	Rig.Tick();
-	TestEqual(TEXT("retried, it lands"), Flight->Phase, EFlightPhase::Landing);
+	TestEqual(TEXT("retried, it lands"), Flight->GetPhase(), EFlightPhase::Landing);
 	return true;
 }
 
@@ -211,7 +211,7 @@ bool FQueueSurvivesSaveTest::RunTest(const FString& Parameters)
 	UFlight* Flight = Rig.Accepted(10.0);
 	Rig.HoldRunway();
 	Rig.Clock->Advance(11.0);
-	if (!TestEqual(TEXT("holding before the save"), Flight->Phase, EFlightPhase::Inbound)) { return false; }
+	if (!TestEqual(TEXT("holding before the save"), Flight->GetPhase(), EFlightPhase::Inbound)) { return false; }
 
 	TArray<uint8> Bytes;
 	OpsSave::SerializeObject(*Rig.Board, Bytes);
@@ -239,13 +239,13 @@ bool FQueueOverdueOnLoadTest::RunTest(const FString& Parameters)
 	FQueueRig Rig;
 	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 	Flight->Airframe = QueueAirframe();
-	Flight->Phase = EFlightPhase::Accepted;
+	Flight->SetPhaseForTest(EFlightPhase::Accepted);
 	Flight->ArrivesAt = -5.0;
-	Flight->ApproachFocus = Rig.Airport.Threshold;
+	Flight->RunwayPreference = Rig.Airport.Threshold;
 	Rig.Board->AddOffer(*Rig.Clock, Flight);
 	Rig.HoldRunway();
 	Rig.Board->RearmSchedules(*Rig.Traffic, *Rig.Airport.Net, *Rig.Clock);
-	TestEqual(TEXT("it is holding"), Flight->Phase, EFlightPhase::Inbound);
+	TestEqual(TEXT("it is holding"), Flight->GetPhase(), EFlightPhase::Inbound);
 	TestEqual(TEXT("and nothing was dispatched onto the busy runway"), Rig.Dispatched, 0);
 	return true;
 }
@@ -258,9 +258,9 @@ namespace
 		UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 		Flight->Airframe = QueueAirframe();
 		Flight->Airframe.Wingspan = Wingspan;
-		Flight->Phase = EFlightPhase::Inbound;
+		Flight->SetPhaseForTest(EFlightPhase::Inbound);
 		Flight->HoldingSince = Since;
-		Flight->ApproachFocus = Rig.Airport.Threshold;
+		Flight->RunwayPreference = Rig.Airport.Threshold;
 		Rig.Board->AddOffer(*Rig.Clock, Flight);
 		return Flight;
 	}
@@ -279,8 +279,8 @@ bool FQueueStuckHeadTest::RunTest(const FString& Parameters)
 	Rig.Clock->Advance(11.0);
 	for (int32 Frame = 0; Frame < 5; ++Frame) { Rig.Tick(); }
 	TestEqual(TEXT("the flight that can land did, once"), Rig.Dispatched, 1);
-	TestEqual(TEXT("it is landing"), Fine->Phase, EFlightPhase::Landing);
-	TestEqual(TEXT("the stuck one is still holding, never thrown at the dispatcher"), Stuck->Phase, EFlightPhase::Inbound);
+	TestEqual(TEXT("it is landing"), Fine->GetPhase(), EFlightPhase::Landing);
+	TestEqual(TEXT("the stuck one is still holding, never thrown at the dispatcher"), Stuck->GetPhase(), EFlightPhase::Inbound);
 	return true;
 }
 
@@ -355,7 +355,7 @@ bool FQueueDeadStandTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("both accepted, one stand each"), Holding != nullptr && Later != nullptr
 		&& Holding->Stand.IsSet() && Later->Stand.IsSet() && Holding->Stand != Later->Stand)) { return false; }
 	Rig.Clock->Advance(2.0);
-	if (!TestEqual(TEXT("the first is holding"), Holding->Phase, EFlightPhase::Inbound)) { return false; }
+	if (!TestEqual(TEXT("the first is holding"), Holding->GetPhase(), EFlightPhase::Inbound)) { return false; }
 
 	const FEntityInstanceId Dead = Holding->Stand;
 	Rig.Airport.Net->RemoveEntity(Dead);

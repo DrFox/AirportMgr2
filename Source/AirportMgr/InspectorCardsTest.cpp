@@ -254,7 +254,7 @@ bool FInspectorAircraftCardTest::RunTest(const FString&)
 		Flight->AgentId = Owned.Key;
 		Flight->Callsign = Owned.Value;
 		Flight->AirlineName = FText::FromString(TEXT("Flying Club"));
-		Flight->Phase = EFlightPhase::TaxiIn;
+		Flight->SetPhaseForTest(EFlightPhase::TaxiIn);
 		Board->AddOffer(*Clock, Flight);
 	}
 	In.Flights = Board;

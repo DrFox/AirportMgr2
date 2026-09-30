@@ -142,6 +142,10 @@
           (issue #428) - see the rule.
       42. No registered automation test name is a dotted prefix of another (2026-09-30): UE's automation tree
           drops the bare name's own RunTest silently - see the rule.
+      57. A flight's phase is written only by UFlightBoard::TransitionTo (#442): thirteen sites wrote it, each choosing
+          its own subset of the change's side effects - see the rule.
+      58. EFlightPhase is grouped only in Flight.h (#442): `Accepted || Inbound`, `>= Turnaround` and their kin were
+          re-spelled at a dozen sites, each a place a new phase would be missed - see the rule.
 
     Rule 4 above is now a data table (issue #255) rather than one hard-coded Piper check,
     so "the only caller of X is Y" claims live as ROWS an author can add to, instead of prose
@@ -3632,6 +3636,107 @@ else {
     }
 }
 $ranRules.Add('shop-asks-stand-admission')
+
+# --- 57. A FLIGHT'S PHASE IS WRITTEN ONLY BY UFlightBoard::TransitionTo ---------------------------
+# Issue #442: UFlight::Phase was a public field thirteen places wrote (FlightBoard.cpp x12, OfferGenerator.cpp), and each site
+# hand-rolled its own subset of {the pending-offer count, the clock handle, the stand release, ByAgent/AgentId, a bus publish,
+# MoveToHistory, the revision}: the three writers that cancelled a flight did three different things, and the load's was right only
+# because of where LoadFromSlot calls it. The field is private now (the compiler holds the line) and TransitionTo owns the effects per
+# (from, to) row; this holds the SHAPE, in the text, so a future friend class or a widened field cannot bring the second writer back:
+#   a. `->Phase = EFlightPhase::X` / `.Phase = EFlightPhase::X` - any object, the enum on the right names the flight.
+#   b. `Flight.Phase = x` / `Flights[i]->Phase = x` - a flight-named variable, ANY right-hand side (`FlightInbound.Phase = To` names no enum).
+#   c. SetPhaseForTest( in a production file. The test seam writes the phase with none of the row's effects; a production caller is a
+#      thirteenth writer under another name. Tests (*Test.cpp/.h) may call it - a fixture stages a flight where no transition reaches.
+#   d. MoveToHistory( called outside TransitionTo's body (its own definition aside): the move into History is a terminal row's effect,
+#      and a caller of its own is the terminal transition that forgot the count, the publish or the unhook (FlightBoard.h says so).
+# All of (a) and (b) are hits OUTSIDE the body of UFlightBoard::TransitionTo, in the production ops and game trees (comments and strings are
+# stripped first - rule 34's helper). WHAT IT SEES NEITHER WAY: a write through a variable named for neither (`auto& F = ...; F.Phase = To;`) -
+# the compiler stops that one (Phase is private, friend UFlightBoard only), and rule 57 is the text-level second line, not the first.
+# The rule FAILS rather than checking nothing when TransitionTo is gone from FlightBoard.cpp or writes no phase.
+# Mutation-checked on 2026-09-30 against the lane's own tree (restored after each): an injected `Each->Phase = EFlightPhase::Cancelled;` in
+# ArrivalViewModels.cpp, `Flight.Phase = To;` in OpsAlerts.cpp and `Flight->SetPhaseForTest(...)` in OpsAlerts.cpp each FAIL, and renaming
+# TransitionTo FAILs (see the PR body for the pasted output).
+$flightBoardFile = Join-Path $ops 'Private\Model\FlightBoard.cpp'
+$phaseWriteEnum  = '(?:\.|->)Phase\s*=(?!=)\s*EFlightPhase::'
+$phaseWriteNamed = '\b\w*[Ff]light\w*(?:\[[^\]]*\])?(?:\.|->)Phase\s*=(?!=)'
+$phaseTestSeam   = '\bSetPhaseForTest\s*\('
+$phaseHistoryCall = '\bMoveToHistory\s*\('
+$phaseRowWrites  = 0
+$phaseRowFound   = $false
+$phaseTrees      = @($ops, (Join-Path $Root 'Source\AirportMgr'))
+if (-not (Test-Path $flightBoardFile)) {
+    $failures.Add("flight-phase-one-writer: $flightBoardFile not found - update rule 57, do not let it check nothing")
+}
+foreach ($phaseTree in $phaseTrees) {
+    foreach ($file in Get-Sources $phaseTree @('.cpp', '.h')) {
+        $isTest = $file.Name -like '*Test.cpp' -or $file.Name -like '*Test.h' -or $file.FullName -match '[\\/]Testing[\\/]'
+        $lines = Get-Content -LiteralPath $file.FullName
+        $inBlock = $false
+        $inRow = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            if ($file.FullName -eq $flightBoardFile) {
+                # THE ROW'S BODY: from its column-0 definition to the first column-0 closing brace.
+                if ($lines[$i] -match '^void\s+UFlightBoard::TransitionTo\s*\(') { $inRow = $true; $phaseRowFound = $true }
+                elseif ($inRow -and $lines[$i] -match '^\}') { $inRow = $false }
+            }
+            if ($code.Trim() -eq '') { continue }
+            if ($code -match $phaseTestSeam -and -not $isTest -and $file.Name -ne 'Flight.h') {
+                $failures.Add("flight-phase-one-writer: $($file.FullName):$($i + 1) calls SetPhaseForTest in production code - it is the test seam (no count, hook, release or publish); go through UFlightBoard::TransitionTo: $($code.Trim())")
+            }
+            if ($isTest) { continue }
+            if ($code -match $phaseHistoryCall -and -not $inRow -and $code -notmatch '^\s*void\s+UFlightBoard::MoveToHistory\s*\(' -and $code -notmatch '^\s*void\s+MoveToHistory\s*\(') {
+                $failures.Add("flight-phase-one-writer: $($file.FullName):$($i + 1) calls MoveToHistory outside UFlightBoard::TransitionTo - a terminal transition is the row's, with its count, publish and unhook (#442): $($code.Trim())")
+            }
+            if ($code -match $phaseWriteEnum -or $code -match $phaseWriteNamed) {
+                if ($inRow) { $phaseRowWrites++; continue }
+                $failures.Add("flight-phase-one-writer: $($file.FullName):$($i + 1) writes a flight's phase outside UFlightBoard::TransitionTo - the row owns the side effects (#442): $($code.Trim())")
+            }
+        }
+    }
+}
+if ((Test-Path $flightBoardFile) -and -not $phaseRowFound) {
+    $failures.Add("flight-phase-one-writer: FlightBoard.cpp no longer defines UFlightBoard::TransitionTo - rule 57 is stale or the one writer moved (#442)")
+}
+elseif ((Test-Path $flightBoardFile) -and $phaseRowWrites -eq 0) {
+    $failures.Add("flight-phase-one-writer: TransitionTo writes no phase the rule can see - its pattern no longer matches the body; update rule 57, do not let it check nothing")
+}
+$ranRules.Add('flight-phase-one-writer')
+
+# --- 58. EFlightPhase IS GROUPED ONLY IN Flight.h -------------------------------------------------
+# Issue #442: "unarrived" was Accepted||Inbound at five sites, "on the ground" was Landing..Departing by ordinal range at four, and the
+# taxi's direction was `Current >= Turnaround` - the declaration order load-bearing, a comment the only thing saying so, and a new phase
+# (Diverted) about twelve edits none of which was a compile error. The groupings are FlightPhase::IsUnarrived / IsOnGround / IsTerminal /
+# IsLive / HasReachedStand / IsArriving now, each read off StageOf's ONE exhaustive switch in Flight.h. Two shapes, in any production ops or
+# game file but Flight.h (comments and strings stripped):
+#   a. A relational operator against an enumerator: `Phase >= EFlightPhase::Landing`, `EFlightPhase::Turnaround < EFlightPhase::TaxiOut`.
+#   b. Two EFlightPhase:: enumerators joined by || or && in one statement: `Phase == EFlightPhase::Accepted || Phase == EFlightPhase::Inbound`.
+# NOT BANNED: one comparison of a phase with one enumerator (`== EFlightPhase::Inbound`), a switch listing phases, and ANYTHING in a test file -
+# a test may assert "it went round again or landed". WHAT NO REGEX SEES: a grouping spelled over two statements (`bool A = ...; bool B = ...;
+# A || B`) or through a variable holding an enumerator. Mutation-checked on 2026-09-30 (restored after each): an injected
+# `Flight->GetPhase() >= EFlightPhase::Landing` and an injected `F.GetPhase() == EFlightPhase::Accepted || F.GetPhase() == EFlightPhase::Inbound`
+# in OpsAlerts.cpp each FAIL. The rule fails when Flight.h no longer defines StageOf, so a renamed table cannot switch it off.
+$flightHeader  = Join-Path $ops 'Public\Model\Flight.h'
+$phaseRelation = '(?<!-)(?:<=|>=|<|>)\s*EFlightPhase::|EFlightPhase::\w+\s*(?:<=|>=|<(?!<)|>(?!>))'
+$phaseGrouping = 'EFlightPhase::\w+[^;{}]*?(?:\|\||&&)[^;{}]*?EFlightPhase::\w+'
+if (-not (Test-Path $flightHeader) -or $null -eq (Select-String -Path $flightHeader -Pattern 'inline\s+EFlightStage\s+StageOf\s*\(')) {
+    $failures.Add("flight-phase-groupings: Flight.h no longer defines FlightPhase::StageOf - rule 58 is stale or the one table moved (#442); update it, do not let it check nothing")
+}
+foreach ($phaseTree in $phaseTrees) {
+    foreach ($file in Get-Sources $phaseTree @('.cpp', '.h')) {
+        if ($file.Name -like '*Test.cpp' -or $file.Name -like '*Test.h' -or $file.FullName -match '[\\/]Testing[\\/]' -or $file.Name -eq 'Flight.h') { continue }
+        $lines = Get-Content -LiteralPath $file.FullName
+        $inBlock = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            if ($code.Trim() -eq '' -or $code -notmatch 'EFlightPhase::') { continue }
+            if ($code -match $phaseRelation -or $code -match $phaseGrouping) {
+                $failures.Add("flight-phase-groupings: $($file.FullName):$($i + 1) groups EFlightPhase by comparison or by an OR of names - ask FlightPhase::IsUnarrived / IsOnGround / IsTerminal / IsLive / HasReachedStand / IsArriving (Flight.h) instead (#442): $($code.Trim())")
+            }
+        }
+    }
+}
+$ranRules.Add('flight-phase-groupings')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was

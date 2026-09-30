@@ -69,7 +69,7 @@ namespace
 			Flight = NewObject<UFlight>(GetTransientPackage());
 			Flight->Airframe = Airframe;
 			Flight->AgentId = Plane;
-			Flight->Phase = EFlightPhase::TaxiIn;
+			Flight->SetPhaseForTest(EFlightPhase::TaxiIn);
 			Board->AddOffer(*Clock, Flight);
 
 			// PUBLISHED, THEN DRAINED - what UOpsRuntime does (#436). This relay used to call the board inside the
@@ -125,7 +125,7 @@ bool FAgentRescueAircraftDespawnCancelsFlightTest::RunTest(const FString& Parame
 		Field.Plane, EUnstickAction::Despawn);
 	TestTrue(TEXT("done"), Done.bAllowed);
 	TestNull(TEXT("the aircraft is gone"), Field.Agent());
-	TestEqual(TEXT("its flight is CANCELLED, not Departed"), Field.Flight->Phase, EFlightPhase::Cancelled);
+	TestEqual(TEXT("its flight is CANCELLED, not Departed"), Field.Flight->GetPhase(), EFlightPhase::Cancelled);
 	TestEqual(TEXT("and unhooked from the agent"), Field.Flight->AgentId, INDEX_NONE);
 	TestNull(TEXT("the board no longer finds it by agent"), Field.Board->FindByAgentForTest(Field.Plane));
 	TestEqual(TEXT("it is in history"), Field.Board->GetHistoryCountForTest(), 1);

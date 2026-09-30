@@ -1,6 +1,7 @@
 #include "Model/ArrivalPlanner.h"
 
 #include "AirsideLog.h"
+#include "Model/ExhaustiveSwitch.h"
 #include "Model/LandingRun.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
@@ -744,6 +745,56 @@ namespace ArrivalPlanner
 		}
 		return Transient != nullptr ? *Transient : Tried[0];
 	}
+
+	AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+	bool IsPermanentRefusal(EArrivalRefusal Why)
+	{
+		switch (Why)
+		{
+		case EArrivalRefusal::None:
+			return false;
+
+		// These clear on their own: the runway empties, an aeroplane leaves a stand. An offer
+		// refused for one of them is still worth making - the player answers it minutes before
+		// it lands, and the row shows the live reason meanwhile.
+		case EArrivalRefusal::RunwayOccupied:
+		case EArrivalRefusal::NoFreeStand:
+		case EArrivalRefusal::GraphBeingEdited:  // clears when the player lets go of the node
+			return false;
+
+		// A SERVICE THE AIRPORT CANNOT GIVE is the player's to accept badly (spec 2026-09-28
+		// ruling 5): the offer is made, the row says what is missing, and C scores the flight
+		// down. Filtering it out hid WHY an airline was not offering.
+		case EArrivalRefusal::NoStandServiceable:
+			return false;
+
+		// These need the player to BUILD something. NoRunway, RunwayTooShort, NotAdmitted, NoExit,
+		// NoRouteToStand, NoStandBigEnough (a bigger stand - so no airline is offered an A380 until
+		// an F stand exists, which is the drawn-stands spec's own promise), and NoStandPavedEnough
+		// (pave a stand) - one of shared-pavement Task 9's two new refusals; its sibling
+		// NoStandServiceable is soft since 2026-09-28, above. Named one by one since #442: they were
+		// the old `default`, which also caught whatever the enum grew next.
+		case EArrivalRefusal::NoRunway:
+		case EArrivalRefusal::RunwayTooShort:
+		case EArrivalRefusal::NoExit:
+		case EArrivalRefusal::NoRouteToStand:
+		case EArrivalRefusal::NotAdmitted:
+		case EArrivalRefusal::NoStandBigEnough:
+		case EArrivalRefusal::NoStandPavedEnough:
+			return true;
+
+		// THE THREE THE ENUM GREW LATER, each PERMANENT by its own declaration comment: a stand inside a taxiway's
+		// strip (redraw it), a taxiway too narrow (upgrade it), every runway set to departures only (the runway
+		// card's setting). The player's fix is an edit, not a wait.
+		case EArrivalRefusal::NoStandClearOfStrip:
+		case EArrivalRefusal::TaxiwayTooNarrow:
+		case EArrivalRefusal::NoArrivalRunway:
+			return true;
+		}
+		// A BYTE NO ENUMERATOR NAMES: not a refusal anyone can fix, so not one to tell the player they must.
+		return false;
+	}
+	AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 	FString DescribeRefusal(EArrivalRefusal Why, double AircraftWingspan)
 	{

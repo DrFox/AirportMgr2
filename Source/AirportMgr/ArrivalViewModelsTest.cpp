@@ -19,7 +19,7 @@ namespace
 		UFlight* Out = NewObject<UFlight>(GetTransientPackage());
 		Out->Callsign = Callsign;
 		Out->TypeName = FText::FromString(TEXT("Saab 340B"));
-		Out->Phase = Phase;
+		Out->SetPhaseForTest(Phase);
 		return Out;
 	}
 }
@@ -65,7 +65,7 @@ bool FArrivalsStatusTest::RunTest(const FString& Parameters)
 		{ EFlightPhase::Departing, TEXT("DEPARTING") } };
 	for (const TPair<EFlightPhase, const TCHAR*>& Case : Cases)
 	{
-		F->Phase = Case.Key;
+		F->SetPhaseForTest(Case.Key);
 		TestEqual(*FString::Printf(TEXT("status %s"), Case.Value),
 			UArrivalRowViewModel::DescribeStatus(*F, 0.0).ToString(), FString(Case.Value));
 	}
@@ -85,7 +85,7 @@ bool FArrivalsDetailTest::RunTest(const FString& Parameters)
 		UArrivalRowViewModel::DescribeDetail(*F, 780.0, bLate).ToString(), FString(TEXT("waited 3 min · 47 min left")));
 	TestFalse(TEXT("not late"), bLate);
 
-	F->Phase = EFlightPhase::Turnaround;
+	F->SetPhaseForTest(EFlightPhase::Turnaround);
 	TestEqual(TEXT("on the ground: what is left"),
 		UArrivalRowViewModel::DescribeDetail(*F, 780.0, bLate).ToString(), FString(TEXT("47 min left")));
 

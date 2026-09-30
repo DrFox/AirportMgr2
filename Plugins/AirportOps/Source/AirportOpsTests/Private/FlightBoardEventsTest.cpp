@@ -72,7 +72,7 @@ namespace
 			Flight->Airframe.Wingspan = 3400.0;
 			Flight->AirlineId = TEXT("Cumbria");
 			Flight->AgentId = 5;
-			Flight->Phase = EFlightPhase::Landing;
+			Flight->SetPhaseForTest(EFlightPhase::Landing);
 			Flight->AcceptedAt = AcceptedAt;
 			Flight->ContractSeconds = ContractSeconds;
 			Board->AddOffer(*Clock, Flight);

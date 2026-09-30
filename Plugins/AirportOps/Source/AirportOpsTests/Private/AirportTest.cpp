@@ -173,7 +173,7 @@ namespace
 			Flight->AirlineId = Airline;
 			Flight->OfferWindowSeconds = 60.0;
 			Flight->OfferSecondsLeft = 60.0;
-			Flight->ApproachFocus = Field.Threshold;
+			Flight->RunwayPreference = Field.Threshold;
 			Board->AddOffer(*Clock, Flight);
 			return Flight;
 		}
@@ -196,7 +196,7 @@ bool FAirportCancelUnarrivedTest::RunTest(const FString&)
 	UFlight* Holding = R.Accepted(0.0);
 	if (!TestNotNull(TEXT("the first accept holds a stand"), Holding)) { return false; }
 	R.Clock->Advance(1.0);
-	if (!TestEqual(TEXT("it is holding for the runway"), Holding->Phase, EFlightPhase::Inbound)) { return false; }
+	if (!TestEqual(TEXT("it is holding for the runway"), Holding->GetPhase(), EFlightPhase::Inbound)) { return false; }
 	// ACCEPTED: a long lead, so it is still on the clock when the airport closes.
 	UFlight* Coming = R.Accepted(100000.0);
 	if (!TestNotNull(TEXT("the second accept holds the other stand"), Coming)) { return false; }
@@ -206,16 +206,16 @@ bool FAirportCancelUnarrivedTest::RunTest(const FString&)
 	// LANDING: committed to the runway - an aircraft already in the world.
 	UFlight* Landing = NewObject<UFlight>(GetTransientPackage());
 	Landing->AgentId = 5;
-	Landing->Phase = EFlightPhase::Landing;
+	Landing->SetPhaseForTest(EFlightPhase::Landing);
 	R.Board->AddOffer(*R.Clock, Landing);
 	TestEqual(TEXT("two flights would be cancelled - the confirm's N"), R.Board->UnarrivedCount(), 2);
 	TestEqual(TEXT("one aircraft is committed to the runway - the drain readout"), R.Board->OnGroundCount(), 1);
 
 	TestEqual(TEXT("the close cancels the two unarrived flights"), R.Board->CancelUnarrived(*R.Traffic, *R.Clock, ECancelReason::AirportClosed), 2);
-	TestEqual(TEXT("Inbound -> Cancelled"), Holding->Phase, EFlightPhase::Cancelled);
-	TestEqual(TEXT("Accepted -> Cancelled"), Coming->Phase, EFlightPhase::Cancelled);
-	TestEqual(TEXT("Offered -> Withdrawn, not Expired: nobody let it lapse"), Offered->Phase, EFlightPhase::Withdrawn);
-	TestEqual(TEXT("Landing untouched: it is on the runway and finishes"), Landing->Phase, EFlightPhase::Landing);
+	TestEqual(TEXT("Inbound -> Cancelled"), Holding->GetPhase(), EFlightPhase::Cancelled);
+	TestEqual(TEXT("Accepted -> Cancelled"), Coming->GetPhase(), EFlightPhase::Cancelled);
+	TestEqual(TEXT("Offered -> Withdrawn, not Expired: nobody let it lapse"), Offered->GetPhase(), EFlightPhase::Withdrawn);
+	TestEqual(TEXT("Landing untouched: it is on the runway and finishes"), Landing->GetPhase(), EFlightPhase::Landing);
 	TestEqual(TEXT("the queue is empty"), R.Board->Queue().Num(), 0);
 	TestEqual(TEXT("the inbox is empty"), R.Board->PendingOfferCount(), 0);
 	TestEqual(TEXT("nothing left to cancel"), R.Board->UnarrivedCount(), 0);
@@ -232,7 +232,7 @@ bool FAirportCancelUnarrivedTest::RunTest(const FString&)
 	TestTrue(TEXT("both stands are free again"), R.Board->Accept(*R.Traffic, *R.Field.Net, *R.Clock, *After));
 	// THE ARRIVAL WAS DISARMED: the cancelled flight's ETA passing must not put it back in the queue.
 	R.Clock->Advance(200000.0);
-	TestEqual(TEXT("its clock entry is gone - still Cancelled after its ETA"), Coming->Phase, EFlightPhase::Cancelled);
+	TestEqual(TEXT("its clock entry is gone - still Cancelled after its ETA"), Coming->GetPhase(), EFlightPhase::Cancelled);
 	return true;
 }
 
@@ -245,7 +245,7 @@ bool FAirportCancelByAgentTest::RunTest(const FString&)
 	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 	Flight->AirlineId = TEXT("Cumbria");
 	Flight->AgentId = 9;
-	Flight->Phase = EFlightPhase::TaxiIn;
+	Flight->SetPhaseForTest(EFlightPhase::TaxiIn);
 	R.Board->AddOffer(*R.Clock, Flight);
 	TestTrue(TEXT("agent 9's flight is cancelled"), R.Board->CancelByAgent(9, 0.0));
 	R.Bus.Drain();
@@ -358,10 +358,10 @@ bool FAirportCloseCancelsTest::RunTest(const FString&)
 
 	TestTrue(TEXT("the command closes it"), Runtime->SetAirportClosed(true));
 	TestEqual(TEXT("at once - a command re-derives, it does not wait for an event"), Runtime->GetAirport()->Status(), EAirportStatus::ClosedByPlayer);
-	TestEqual(TEXT("but the cancellation is the change's, on the next drain"), Coming->Phase, EFlightPhase::Accepted);
+	TestEqual(TEXT("but the cancellation is the change's, on the next drain"), Coming->GetPhase(), EFlightPhase::Accepted);
 	Runtime->Tick(0.0);
-	TestEqual(TEXT("the accepted flight is cancelled"), Coming->Phase, EFlightPhase::Cancelled);
-	TestEqual(TEXT("the offer withdrawn"), Offered->Phase, EFlightPhase::Withdrawn);
+	TestEqual(TEXT("the accepted flight is cancelled"), Coming->GetPhase(), EFlightPhase::Cancelled);
+	TestEqual(TEXT("the offer withdrawn"), Offered->GetPhase(), EFlightPhase::Withdrawn);
 	TestEqual(TEXT("and its airline charged the closure penalty, once"), Runtime->GetAirlines()->Find(Airline)->Satisfaction,
 		Before - Runtime->GetAirlines()->Tuning.ClosureCancelPenalty, 1e-9);
 
@@ -473,9 +473,9 @@ namespace
 			Runtime->Tick(0.0);
 			UFlight* Planted = NewObject<UFlight>(GetTransientPackage());
 			Planted->Airframe = Airframe;
-			Planted->ApproachFocus = Field.Threshold;
+			Planted->RunwayPreference = Field.Threshold;
 			Planted->AirlineId = Airline;
-			Planted->Phase = EFlightPhase::Accepted;
+			Planted->SetPhaseForTest(EFlightPhase::Accepted);
 			Planted->ArrivesAt = Runtime->GetClock()->Now() + 5.0;
 			Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Planted);
 			PlantedId = Planted->Id;
@@ -543,11 +543,11 @@ bool FAirportClosedLoadCancelsTest::RunTest(const FString&)
 	TestEqual(TEXT("nothing was dispatched: no aircraft in the air"), Rig.TestWorld.Actor->GetTraffic()->GetAgentCount(), 0);
 	for (const UFlight* Each : Rig.Runtime->GetFlightBoard()->Live())
 	{
-		TestTrue(FString::Printf(TEXT("flight %d is not landing"), Each->Id), Each->Phase != EFlightPhase::Landing);
+		TestTrue(FString::Printf(TEXT("flight %d is not landing"), Each->Id), Each->GetPhase() != EFlightPhase::Landing);
 	}
 	const UFlight* Restored = Rig.Runtime->GetFlightBoard()->FindByIdForTest(Rig.PlantedId);
-	TestTrue(FString::Printf(TEXT("the planted flight is cancelled (%s)"), Restored != nullptr ? *UEnum::GetValueAsString(Restored->Phase) : TEXT("gone")),
-		Restored != nullptr && Restored->Phase == EFlightPhase::Cancelled);
+	TestTrue(FString::Printf(TEXT("the planted flight is cancelled (%s)"), Restored != nullptr ? *UEnum::GetValueAsString(Restored->GetPhase()) : TEXT("gone")),
+		Restored != nullptr && Restored->GetPhase() == EFlightPhase::Cancelled);
 	TestEqual(TEXT("unscored: its airline is where the save left it"),
 		Rig.Runtime->GetAirlines()->Find(Rig.Airline)->Satisfaction, Rig.SatisfactionAtSave, 1e-9);
 	return true;
@@ -625,7 +625,7 @@ bool FAirportDrainsTest::RunTest(const FString&)
 	const int32 Aircraft = Actor->GetTraffic()->GetNewestAgentId();
 	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 	Flight->AgentId = Aircraft;
-	Flight->Phase = EFlightPhase::TaxiIn;
+	Flight->SetPhaseForTest(EFlightPhase::TaxiIn);
 	Flight->Airframe = Airframe;
 	Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Flight);
 
@@ -638,11 +638,11 @@ bool FAirportDrainsTest::RunTest(const FString&)
 	{
 		Actor->Tick(Step);
 		Runtime->Tick(Step);
-		bEverCancelled |= Flight->Phase == EFlightPhase::Cancelled;
+		bEverCancelled |= Flight->GetPhase() == EFlightPhase::Cancelled;
 	}
 	TestFalse(TEXT("a flight on the ground is never cancelled by a closure"), bEverCancelled);
 	TestEqual(TEXT("the closed airport drained: no aircraft left on the ground"), Runtime->GetFlightBoard()->OnGroundCount(), 0);
-	TestEqual(TEXT("the flight left by the runway"), Flight->Phase, EFlightPhase::Departed);
+	TestEqual(TEXT("the flight left by the runway"), Flight->GetPhase(), EFlightPhase::Departed);
 	TestEqual(TEXT("and the airport is still closed"), Runtime->GetAirport()->Status(), EAirportStatus::ClosedByPlayer);
 	return true;
 }
@@ -710,7 +710,7 @@ bool FAirportAcceptRefusedTest::RunTest(const FString&)
 	UFlight* Offer = AirportTestOffer(*Runtime, TEXT("AirportTestAcceptAirline"));
 	UGroundTraffic* Model = TestWorld.Actor->GetTraffic()->GetModel();
 	TestFalse(TEXT("closed: an accept is refused"), Runtime->GetFlightBoard()->Accept(*Model, *Net, *Runtime->GetClock(), *Offer));
-	TestEqual(TEXT("the flight is still only an offer"), Offer->Phase, EFlightPhase::Offered);
+	TestEqual(TEXT("the flight is still only an offer"), Offer->GetPhase(), EFlightPhase::Offered);
 	Runtime->SetAirportClosed(false);
 	TestTrue(TEXT("CONTROL: reopened, the same accept is taken"), Runtime->GetFlightBoard()->Accept(*Model, *Net, *Runtime->GetClock(), *Offer));
 	return true;
@@ -735,7 +735,7 @@ bool FAirportRunwayLossFreeTest::RunTest(const FString&)
 	AirportTestDeleteRunways(*TestWorld.Actor);
 	Runtime->Tick(0.0);
 	TestEqual(TEXT("the last runway gone: NoRunway"), Runtime->GetAirport()->Status(), EAirportStatus::NoRunway);
-	TestEqual(TEXT("the accepted flight is cancelled"), Coming->Phase, EFlightPhase::Cancelled);
+	TestEqual(TEXT("the accepted flight is cancelled"), Coming->GetPhase(), EFlightPhase::Cancelled);
 	TestEqual(TEXT("and its airline minds not at all"), Runtime->GetAirlines()->Find(Airline)->Satisfaction, Before, 1e-9);
 	return true;
 }
@@ -800,7 +800,7 @@ bool FAirportSaveRefreshesTest::RunTest(const FString&)
 	AirportTestDeleteRunways(*TestWorld.Actor);
 	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(TEXT("AirportOpsTest_SaveRefresh")))) { return false; }
 	TestEqual(TEXT("no tick between: the save itself saw the runway go"), Runtime->GetAirport()->Status(), EAirportStatus::NoRunway);
-	TestEqual(TEXT("and its drain cancelled the flight before the snapshot"), Coming->Phase, EFlightPhase::Cancelled);
+	TestEqual(TEXT("and its drain cancelled the flight before the snapshot"), Coming->GetPhase(), EFlightPhase::Cancelled);
 	return true;
 }
 

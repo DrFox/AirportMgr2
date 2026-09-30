@@ -1,6 +1,7 @@
 #include "Model/OpsAlerts.h"
 #include "AirportOpsLog.h"
 #include "Model/AirlineDefinition.h"
+#include "Model/ArrivalPlanner.h"
 #include "Model/Airport.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
@@ -75,16 +76,32 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 
 			// UStandAllocator::HeldStandIsGone - the one test Reapply logs its Warning on ("an aeroplane is
 			// coming for a stand nobody is holding"), for the phases Reapply is given: not yet on the ground.
-			const bool bComing = Flight->Phase == EFlightPhase::Accepted || Flight->Phase == EFlightPhase::Inbound;
-			if (bComing && Sources.Network != nullptr && UStandAllocator::HeldStandIsGone(*Flight, *Sources.Network))
+			if (Flight->IsUnarrived() && Sources.Network != nullptr && UStandAllocator::HeldStandIsGone(*Flight, *Sources.Network))
 			{
 				{
 					FOpsAlert& Alert = Found.Add_GetRef(OpsAlertOf(EAlertKind::HeldStandLost, Flight->Id, NAME_None,
 						FText::Format(NSLOCTEXT("OpsAlerts", "HeldStandLost", "Flight {0}'s stand was removed - it has nowhere to park"),
 							FText::FromString(Flight->Callsign))));
 					Alert.Focus.Kind = EAlertFocusKind::Point;
-					Alert.Focus.Point = Flight->ApproachFocus;
+					Alert.Focus.Point = Flight->RunwayPreference;
 				}
+			}
+
+			// A HOLDING FLIGHT THAT CAN NEVER LAND (#442): its cached clearance is a refusal only the player can clear - the exit
+			// deleted, the runway set to departures only, a bigger stand to build. Derived from the board's own cache (UFlightBoard::
+			// UnlandableWhy, which never plans), so the alert clears by itself the moment the airport is fixed and the queue pass
+			// re-judges it. The sentence is the planner's own, with its figures, and ends with the two things the player can do.
+			// ENFORCED BY: AirportOps.Model.Alerts.UnlandableHoldingFlightRaisesAnAlert
+			const EArrivalRefusal Unlandable = Sources.Flights->UnlandableWhy(*Flight);
+			if (Unlandable != EArrivalRefusal::None)
+			{
+				FOpsAlert& Alert = Found.Add_GetRef(OpsAlertOf(EAlertKind::FlightCannotLand, Flight->Id, NAME_None,
+					FText::Format(NSLOCTEXT("OpsAlerts", "FlightCannotLand", "Flight {0} is holding and cannot land. {1} Fix the airport, or cancel the flight."),
+						FText::FromString(Flight->Callsign),
+						FText::FromString(ArrivalPlanner::DescribeRefusal(Unlandable, Flight->Airframe.Wingspan)))));
+				// NO AEROPLANE TO GO TO: it is off the map. The point the planner orders runways from is the nearest thing to a place.
+				Alert.Focus.Kind = EAlertFocusKind::Point;
+				Alert.Focus.Point = Flight->RunwayPreference;
 			}
 		}
 	}

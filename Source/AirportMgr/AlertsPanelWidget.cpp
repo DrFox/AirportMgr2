@@ -1,5 +1,6 @@
 #include "AlertsPanelWidget.h"
 
+#include "BuildActions.h"
 #include "Blueprint/WidgetTree.h"
 #include "BuildHudLayer.h"
 #include "Components/HorizontalBox.h"
@@ -27,6 +28,23 @@ void UAlertRowEntry::HandleClick()
 	if (Panel != nullptr && Controller != nullptr)
 	{
 		Panel->GoTo(Key, *Controller);
+	}
+}
+
+void UAlertRowEntry::HandleCancelClick()
+{
+	UAlertsPanelWidget* Panel = Owner.Get();
+	ARoadBuildController* Controller = Panel != nullptr ? Cast<ARoadBuildController>(Panel->GetOwningPlayer()) : nullptr;
+	if (Panel == nullptr || Controller == nullptr)
+	{
+		return;
+	}
+	// THE RUNTIME THROUGH THE ACTION CONTEXT, the game module's way to it - not a second UOpsRuntimeSubsystem::Get in a widget, and
+	// not a verb on the controller (whose public surface is a closed list). The flight is the row's own key.
+	FBuildActionContext Context(*Controller);
+	if (Context.Runtime != nullptr)
+	{
+		Panel->CancelFlightOf(Key, *Context.Runtime);
 	}
 }
 
@@ -165,6 +183,18 @@ bool UAlertsPanelWidget::GoTo(const FOpsAlertKey& Key, ARoadBuildController& Con
 	return Controller.SelectAndFocus(Alert.Focus);
 }
 
+bool UAlertsPanelWidget::CancelFlightOf(const FOpsAlertKey& Key, UOpsRuntime& Runtime)
+{
+	const FOpsAlert* Found = Alerts.FindByPredicate([&Key](const FOpsAlert& A) { return A.Key == Key; });
+	if (Found == nullptr || Found->Key.Kind != EAlertKind::FlightCannotLand)
+	{
+		UE_LOG(LogRoadBuild, Log, TEXT("Alerts: cancel of %s %d refused: %s"), *UEnum::GetValueAsString(Key.Kind), Key.Id,
+			Found == nullptr ? TEXT("that alert has cleared") : TEXT("only a flight that cannot land offers one"));
+		return false;
+	}
+	return Runtime.CancelFlight(Found->Key.Id);
+}
+
 void UAlertsPanelWidget::PaintRows()
 {
 	bRowsDirty = false;
@@ -220,6 +250,20 @@ void UAlertsPanelWidget::PaintRows()
 		GoButton->OnClicked.AddDynamic(Entry, &UAlertRowEntry::HandleClick);
 		Entries.Add(Entry);
 		Line->AddChildToHorizontalBox(GoButton);
+
+		// A FLIGHT THAT CAN NEVER LAND has no aeroplane for the card's Unstick to act on, so its way out is here (#442): the
+		// fix is the player's airport, or this. Secondary, like Go - a cancel costs the airline's goodwill, and the button
+		// that does is not the row's primary action.
+		if (Alert.Key.Kind == EAlertKind::FlightCannotLand)
+		{
+			UUiButton* CancelButton = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass());
+			CancelButton->SetLabel(LOCTEXT("CancelFlight", "Cancel flight"));
+			CancelButton->Build(Style, EUiButtonKind::Secondary);
+			CancelButton->SetState(true, false);
+			CancelButton->OnClicked.AddDynamic(Entry, &UAlertRowEntry::HandleCancelClick);
+			UHorizontalBoxSlot* CancelSlot = Line->AddChildToHorizontalBox(CancelButton);
+			CancelSlot->SetPadding(FMargin(6.0f, 0.0f, 0.0f, 0.0f));
+		}
 
 		UUiRow* Row = WidgetTree->ConstructWidget<UUiRow>(UUiRow::StaticClass());
 		Row->Build(Style, FMargin(8.0f, 4.0f));

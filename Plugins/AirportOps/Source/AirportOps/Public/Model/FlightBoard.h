@@ -11,17 +11,19 @@
 class UArrivalSequencer;
 class UFlight;
 class UJobBoard;
+class UPricing;
 class UGroundTraffic;
 class UOfferGenerator;
 class URoadNetwork;
 class UStandAllocator;
 class ULedger;
 class FOpsEventBus;
-class UPricing;
 class USimClock;
 enum class EAgentPhase : uint8;
 struct FAgentTransition;
 enum class ECancelReason : uint8;
+enum class EFlightPhase : uint8;
+struct FTransitionCause;
 
 /**
  * Whether an offer can be accepted right now, and whether the airport can serve it.
@@ -130,7 +132,7 @@ public:
 	virtual UObject& AsPersistentObject() override { return *this; }
 
 	/**
-	 * Rebuild the lookups a restore does not carry. It migrated old snapshots too - the v2 ApproachFocus copy and
+	 * Rebuild the lookups a restore does not carry. It migrated old snapshots too - the v2 focus copy and
 	 * #188's sweep of terminal flights out of Flights - until the owner ruling of 2026-09-30: since #452 (v6) a pre-v6
 	 * blob restores no flights, so neither could reach a real save.
 	 *
@@ -243,6 +245,12 @@ public:
 	 * making them all construct a ledger would be churn for nothing.
 	 */
 	UPROPERTY(Transient) TObjectPtr<ULedger> Ledger = nullptr;
+
+	/**
+	 * What things cost, for the inbox row's fee text (OfferViewModels formats the flight's LandingFee through it). THE BOARD NO
+	 * LONGER PRICES ANYTHING WITH IT since #442: PostParkingFee used to ask it for the rate at departure, and the rate is the
+	 * flight's now (UFlight::ParkingRatePerHour, fixed at the offer).
+	 */
 	UPROPERTY(Transient) TObjectPtr<UPricing> Pricing = nullptr;
 
 	/**
@@ -266,38 +274,40 @@ public:
 	 */
 	void PostLandingFee(double Now, UFlight& Flight);
 
-	/** Bank the parking fee for the hours actually occupied, and record it on the flight. */
+	/** Bank the parking fee for the hours actually occupied, at the rate the flight was OFFERED at (UFlight::
+	 *  ParkingRatePerHour), and record it on the flight. */
 	void PostParkingFee(double Now, UFlight& Flight);
 
 	/**
-	 * The DEFAULT focus for the next generated offer - UOpsRuntime writes it before calling
-	 * UOfferGenerator::TickMinute, which copies it onto every flight it builds.
+	 * The DEFAULT runway preference for the next generated offer (was ApproachFocus, #442) - UOpsRuntime writes it before
+	 * calling UOfferGenerator::TickMinute, which copies it onto every flight it builds.
 	 *
 	 * NOT consulted by Accept, WhyNotAcceptable or DispatchNow: those read UFlight::
-	 * ApproachFocus, which is fixed on the flight at the offer and travels with it. This
+	 * RunwayPreference, which is fixed on the flight at the offer and travels with it. This
 	 * field used to be read there too, and whichever caller wrote it LAST decided every
-	 * later offer's answer - see UFlight::ApproachFocus and issue #96.
+	 * later offer's answer - see UFlight::RunwayPreference and issue #96.
 	 */
-	UPROPERTY() FVector2D ApproachFocus = FVector2D::ZeroVector;
+	UPROPERTY() FVector2D RunwayPreference = FVector2D::ZeroVector;
 
 	/**
-	 * The longest runway's threshold, for the next generated offer to aim at. False, and
+	 * The longest runway's threshold, for the next generated offer to be ordered from. False, and
 	 * OutFocus untouched, when the airport has no runway yet.
 	 *
 	 * MOVED OUT OF UOpsRuntime (issue #98): choosing a runway is a pure function of the
 	 * graph, the same kind of decision ArrivalPlanner::Plan makes, and Present/ may hold no
-	 * logic of its own - see OpsRuntime.h's own header. AIMED AT THE LONGEST RUNWAY, not
-	 * wherever the land key last looked: ArrivalPlanner chooses by nearest threshold to the
-	 * focus, so an offer generated with a stale or default focus would be planned against
-	 * whichever strip happens to sit nearest it and then accepted against a different one.
+	 * logic of its own - see OpsRuntime.h's own header. THE LONGEST RUNWAY, not wherever the
+	 * land key last looked: the planner still ORDERS the runways by distance to this point (#412 made it plan
+	 * them all, so it no longer picks one), and that order decides whose refusal is reported and which of two equal
+	 * runways wins - an offer generated with a stale or default point would report a refusal for whichever strip happens to
+	 * sit nearest it, and then be accepted against a different one. (Named DefaultApproachFocus until #442.)
 	 *
 	 * BOOL AND AN OUT-PARAMETER, not FVector2D::ZeroVector on "none": zero is a valid
 	 * threshold, and a caller that cannot tell "no runway" from "a runway starting at the
-	 * origin" would overwrite a perfectly good ApproachFocus with a false one the moment
+	 * origin" would overwrite a perfectly good RunwayPreference with a false one the moment
 	 * every runway was removed - see CLAUDE.md, "honour the return of anything that fills an
 	 * out-parameter."
 	 */
-	static bool DefaultApproachFocus(const URoadNetwork& Network, FVector2D& OutFocus);
+	static bool DefaultRunwayPreference(const URoadNetwork& Network, FVector2D& OutFocus);
 
 	/**
 	 * Takes ownership of an offer and gives it the next id if it has none. Its countdown is
@@ -407,12 +417,45 @@ public:
 	int32 OnGroundCount() const;
 
 	/**
+	 * THE PLAYER CANCELS ONE FLIGHT THAT HAS NOT ARRIVED (#442): Accepted or Inbound, to Cancelled and History, its stand
+	 * hold released and its arrival disarmed (the Cancelled row of TransitionTo), publishing FFlightCancelledEvent with
+	 * ECancelReason::PlayerCancelled - which the airline roster charges the SAME per-flight ClosureCancelPenalty a closure
+	 * does. A HOLDING FLIGHT THAT CAN NEVER LAND had no way out before but closing the airport, which cancels every flight and
+	 * is penalised per flight - the very loss this takes on alone; the FlightCannotLand alert is where the player is offered it.
+	 *
+	 * OPEN OWNER QUESTION, the penalty: should cancelling an UNLANDABLE flight cost at all? The airline did not lose it to
+	 * the player's choice so much as to the layout the player drew - but a free cancel is a way to shed any accepted flight at
+	 * no cost, and the owner has not ruled. Charged for now, at the closure's rate, so the two exits cost alike.
+	 *
+	 * False, and nothing changed, for an unknown id or a flight that is not still to arrive (Landing and later is committed
+	 * to the runway - a despawn is CancelByAgent's, through the aircraft card). Takes the traffic and the clock because a hold
+	 * and an arrival are released through them - CancelUnarrived's signature.
+	 * ENFORCED BY: AirportOps.Model.FlightBoard.CancelledRowIsOneRowForEveryDoor (stand released, reason published),
+	 * AirportOps.Model.FlightBoard.PlayerCancelRefusesWhatHasNotToCancel, AirportOps.Model.Airlines.PlayerCancelCostsTheClosurePenalty
+	 */
+	bool CancelByPlayer(UGroundTraffic& Traffic, USimClock& Clock, int32 FlightId);
+
+	/**
+	 * WHY A HOLDING FLIGHT CAN NEVER LAND, or None (#442): the refusal its cached clearance (ClearanceFor - the plan minus
+	 * the runway, which TickQueue asks) holds, when that refusal is one the player must build or change something to clear
+	 * (ArrivalPlanner::IsPermanentRefusal). What the FlightCannotLand alert is derived from. None for a flight that is not
+	 * Inbound, that the queue has not judged yet (a busy runway is asked first, so the clearance of a flight waiting behind
+	 * one is computed when the runway frees), or whose refusal will clear on its own.
+	 *
+	 * READS THE CACHE AND NEVER FILLS IT: an alert pass that planned would be a route search per holding flight per
+	 * recompute. The queue pass is what keeps the cache current - dirtied by the same network and occupancy changes that
+	 * can change the answer - and the alerts pass runs after it in the same round.
+	 * ENFORCED BY: AirportOps.Model.Alerts.UnlandableHoldingFlightRaisesAnAlert
+	 */
+	EArrivalRefusal UnlandableWhy(const UFlight& Flight) const;
+
+	/**
 	 * Make a flight from an airframe, aim it at Focus, and accept it on the spot - the debug
 	 * land key's whole job, and previously done by hand at the call site (issue #96).
 	 *
 	 * Its lead time is zero, so ArrivesAt is Clock.Now(): this exists to put an aeroplane on the field
 	 * THIS SECOND, not to queue a normal offer. Focus travels onto the flight itself - see
-	 * UFlight::ApproachFocus - so it never has to touch the board's own field, which the
+	 * UFlight::RunwayPreference - so it never has to touch the board's own field, which the
 	 * generator also writes and would otherwise fight over.
 	 *
 	 * Returns EArrivalRefusal::None on success, or the refusal TryAccept HIT - returned by the gate that refused, not
@@ -498,16 +541,18 @@ public:
 	 *   1. DemoteRestoredMidFlight - agents are never saved, so a flight saved landing goes round and one on the ground
 	 *      retires. FIRST: every later step reads the phases it leaves.
 	 *   2. CancelUnarrivedAtLoad, when !bAirportAdmits - BEFORE the holds and the re-arm, so no stand is held and no
-	 *      arrival armed for a flight that can never land; which is also why it may skip CancelUnarrived's release and
-	 *      disarm - there is nothing yet to release. Unscored and unpublished (rulings I2/I1): see its own comment.
+	 *      arrival armed for a flight that can never land. It goes through the same Cancelled row a closure does (#442), which
+	 *      releases and disarms when given the traffic and the clock - here there is nothing yet to release, but it no longer
+	 *      depends on that. Unscored and unpublished (rulings I2/I1): see its own comment.
 	 *   3. OnGraphRebuilt(re-queued last) - the genuine holds first, then the re-queued flights' (review I1). AFTER the
 	 *      network's rebuild, which took every claim with it - so this is called once the load's AdoptNetwork has run.
 	 *   4. RearmSchedules - the clock's queue was never saved.
 	 *
 	 * NOT THROUGH CancelUnarrived FOR STEP 2, though the issue asked for "the same transitions as live play": the live
 	 * cancel publishes FFlightCancelledEvent, which the airline roster scores, and withdraws offers - both ruled against
-	 * for a load (the closure's own cancellations were scored when it happened). The re-queue of step 1 DOES go through
-	 * Enqueue, the live door into the queue, so it announces itself as any arrival joining the queue does.
+	 * for a load (the closure's own cancellations were scored when it happened). It shares the Cancelled ROW, whose Load
+	 * source is what publishes nothing. The re-queue of step 1 DOES go through Enqueue, the live door into the queue, so it
+	 * announces itself as any arrival joining the queue does.
 	 *
 	 * bAirportAdmits is the airport's status after the load's silent re-derivation (UAirport::Reseat) - a bool, not
 	 * the UAirport, so this board still does not learn the airport (see AdmitsArrivals).
@@ -537,9 +582,14 @@ public:
 	 * Was CancelRequeued, the re-queued flights only (PR C review ruling I2); widened by the whole-stack review (I1),
 	 * which found an Accepted flight saved at a closed airport still due to land after the load. Returns how many.
 	 * Step 2 of RestoreAfterLoad; public for DemoteRestoredMidFlight's reason.
-	 * ENFORCED BY: Check-Architecture rule 4 (allowed callers)
+	 *
+	 * GIVEN THE TRAFFIC AND THE CLOCK WHEN THE LOAD HAS THEM (#442), so it releases a stand and disarms an arrival through
+	 * the same Cancelled row a closure's cancel does, rather than being correct only because of its position in the load:
+	 * called where nothing is held or armed yet they find nothing to do, and called after the holds and the re-arm (a
+	 * reordered load) they still leave none. Unscored and unpublished either way - that is the row's Load source.
+	 * ENFORCED BY: Check-Architecture rule 4 (allowed callers), AirportOps.Model.FlightSave.LoadCancelDoesNotDependOnItsPosition
 	 */
-	int32 CancelUnarrivedAtLoad(double Now);
+	int32 CancelUnarrivedAtLoad(double Now, UGroundTraffic* Traffic = nullptr, USimClock* Clock = nullptr);
 
 	/**
 	 * Re-arm the clock for every Accepted flight's arrival.
@@ -699,8 +749,42 @@ private:
 	/** See OfferSnapshotCountForTest. A session counter, not saved. */
 	int32 OfferSnapshots = 0;
 
-	/** Release the hold and put it on final. False, flight still Inbound and stand re-held, if refused. */
-	bool DispatchNow(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight);
+	/**
+	 * THE ONE WRITER OF UFlight::Phase, AND THE OWNER OF WHAT A PHASE CHANGE DOES (#442). Thirteen sites wrote the phase and
+	 * each chose its own subset of {the pending-offer count, the clock handle, the stand hold, the agent hooks, a bus
+	 * publish, the move to History, the revision}: the three writers that cancelled a flight did three different things
+	 * (CancelUnarrived disarmed, released and published; CancelByAgent unhooked and published; the load's cancel did
+	 * neither, and was right only because of where LoadFromSlot calls it). Now the (from, to) row says it once.
+	 *
+	 * THE ROWS, by the phase entered (see the switch for each's comment):
+	 *   Accepted   - arms the arrival; publishes FOfferAcceptedEvent.
+	 *   Inbound    - HoldingSince = Cause.At; publishes FFlightInboundEvent (the queue pass's wake-up).
+	 *   Landing    - hooks the aeroplane (Cause.AgentId).
+	 *   Departing  - stamps AirborneAt once; publishes FFlightAirborneEvent.
+	 *   Declined / Expired - publish FOfferDeclinedEvent / FOfferExpiredEvent; into History.
+	 *   Withdrawn  - into History, publishing nothing (no Ignored penalty: nobody let it lapse).
+	 *   Cancelled  - from Accepted/Inbound releases the stand; publishes FFlightCancelledEvent(Cause.CancelReason) unless
+	 *                the source is a Load; into History.
+	 *   Departed   - into History.
+	 * AND THE EFFECTS THAT DEPEND ON THE PHASE LEFT, not the one entered: leaving Offered drops the pending-offer count,
+	 * leaving Accepted disarms the arrival, leaving the ground lets go of the aeroplane (unhooks ByAgent and AgentId).
+	 * EVERY CHANGE bumps the revision once. A change to the phase the flight is already in is nothing, and says nothing.
+	 *
+	 * WHAT IS NOT HERE, on purpose: the LOGS stay at each door (they carry the door's own context - the agent, the closure's
+	 * reason), the money stays in OnAgentPhase (PostLandingFee/PostParkingFee - billing is its own job, the issue's
+	 * Part 2), and DispatchNow's stand release stays before its dispatch (the planner must not see the hold), so the Landing
+	 * row does not release.
+	 *
+	 * THE SWITCH ON THE PHASE ENTERED IS EXHAUSTIVE (AIRSIDE_EXHAUSTIVE_SWITCH): a new phase is a build error here, at the
+	 * one place that must say what entering it does.
+	 * ENFORCED BY: C4062 as an error around the body, Check-Architecture rule 57 (nothing else writes the phase), and
+	 * AirportOps.Model.FlightBoard.TransitionTable (one test per row)
+	 */
+	void TransitionTo(UFlight& Flight, EFlightPhase To, const FTransitionCause& Cause);
+
+	/** Release the hold and put it on final, Now being the game time the change is dated. False, flight still Inbound and
+	 *  stand re-held, if refused. */
+	bool DispatchNow(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight, double Now);
 
 	/** Into the queue: phase Inbound, HoldingSince = Since, stand kept. From the ETA callback and a load. */
 	void Enqueue(UFlight& Flight, double Since);
@@ -709,10 +793,9 @@ private:
 	/**
 	 * Retires Flight out of the live list: stamps TerminatedAt, moves it Flights -> History,
 	 * and drops its ByAgent entry if it still had one. THE ONE PLACE a flight leaves Flights,
-	 * so every terminal transition - Decline, TickOffers' lapse, OnAgentPhase's Departed
-	 * branch, and the migration sweep in
-	 * OnAfterRestore - goes through it rather than five call sites each remembering their own
-	 * piece of the move (issue #188).
+	 * so every terminal transition goes through it rather than call sites each remembering their own
+	 * piece of the move (issue #188) - and since #442 through TransitionTo's terminal rows, which call it.
+	 * ENFORCED BY: Check-Architecture rule 57 (no call of MoveToHistory outside TransitionTo's body)
 	 */
 	void MoveToHistory(UFlight& Flight, double Now);
 

@@ -146,7 +146,7 @@ bool FOfferInboxAcceptGoesThroughTheBoardTest::RunTest(const FString& Parameters
 	TestTrue(TEXT("accepting the first row accepts the flight"),
 		Inbox->Accept(Inbox->GetOffers()[0]));
 	TestEqual(TEXT("and the board moved it, which is the one door working"),
-		First->Phase, EFlightPhase::Accepted);
+		First->GetPhase(), EFlightPhase::Accepted);
 	TestEqual(TEXT("so one offer is left"), Inbox->GetPendingCount(), 1);
 
 	// The remaining offer cannot be accepted - the only stand is held - and the row must say
@@ -158,7 +158,7 @@ bool FOfferInboxAcceptGoesThroughTheBoardTest::RunTest(const FString& Parameters
 	TestFalse(TEXT("with a reason in it"), Row->GetRefusal().IsEmpty());
 
 	TestFalse(TEXT("and accepting it is refused"), Inbox->Accept(Row));
-	TestEqual(TEXT("leaving the flight in the inbox"), Second->Phase, EFlightPhase::Offered);
+	TestEqual(TEXT("leaving the flight in the inbox"), Second->GetPhase(), EFlightPhase::Offered);
 	return true;
 }
 

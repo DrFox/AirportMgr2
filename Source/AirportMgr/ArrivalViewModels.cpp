@@ -7,7 +7,7 @@
 
 FText UArrivalRowViewModel::DescribeStatus(const UFlight& Flight, double Now)
 {
-	switch (Flight.Phase)
+	switch (Flight.GetPhase())
 	{
 	case EFlightPhase::Accepted:
 		return FText::Format(NSLOCTEXT("AirportMgr", "ArrivalIn", "in {0}"),
@@ -40,7 +40,7 @@ FText UArrivalRowViewModel::DescribeDetail(const UFlight& Flight, double Now, bo
 	}
 	const FText Remaining = FText::Format(NSLOCTEXT("AirportMgr", "ArrivalLeft", "{0} left"),
 		UOfferViewModel::DescribeDuration(Left));
-	if (Flight.Phase == EFlightPhase::Inbound)
+	if (Flight.GetPhase() == EFlightPhase::Inbound)
 	{
 		// THE WAIT, beside what it is costing: holding time comes out of the same contract.
 		return FText::Format(NSLOCTEXT("AirportMgr", "ArrivalWaited", "waited {0} · {1}"),
@@ -102,11 +102,13 @@ void UArrivalsViewModel::Refresh(const UFlightBoard& Board, const USimClock& Clo
 		TArray<UFlight*> Ground;
 		for (UFlight* Each : Board.Live())
 		{
-			if (Each == nullptr || Each->Phase == EFlightPhase::Inbound)
+			if (Each == nullptr || Each->GetPhase() == EFlightPhase::Inbound)
 			{
 				continue;
 			}
-			(Each->Phase == EFlightPhase::Accepted ? Inbound : Ground).Add(Each);
+			// AN ACCEPTED FLIGHT IS COMING; ANYTHING ELSE LIVE AND NOT HOLDING IS ON THE FIELD (IsOnGround, #442: the two
+			// were an equality and its complement, each a place a new phase would have landed in the wrong list).
+			(Each->IsOnGround() ? Ground : Inbound).Add(Each);
 		}
 		Algo::StableSortBy(Inbound, [](const UFlight* F) { return F->ArrivesAt; });
 		for (UFlight* Each : Inbound) { UArrivalRowViewModel* Row = NewObject<UArrivalRowViewModel>(this); Row->Flight = Each; Rows.Add(Row); }

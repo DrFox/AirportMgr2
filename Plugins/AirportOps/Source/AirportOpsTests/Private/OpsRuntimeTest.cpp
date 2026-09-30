@@ -20,6 +20,7 @@
 #include "Model/JobBoard.h"
 #include "Model/LandingRun.h"
 #include "Model/InspectFacts.h"
+#include "Model/OpsAlerts.h"
 #include "Model/OpsEvents.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadEntity.h"
@@ -62,7 +63,7 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("a road segment exists"), Actor->ConnectNodes(RoadA, RoadB))) { return false; }
 	if (!TestNotNull(TEXT("the actor has a network"), Actor->Network.Get())) { return false; }
 
-	// A RUNWAY, clear of the road above, so UFlightBoard::DefaultApproachFocus has a threshold
+	// A RUNWAY, clear of the road above, so UFlightBoard::DefaultRunwayPreference has a threshold
 	// to find - issue #105's follow-up comment on this test asks for exactly that, plus the
 	// offer schedule check below.
 	URoadProfile* RunwayProfile = TestProfiles::Runway();
@@ -73,8 +74,8 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	FVector2D ExpectedFocus;
-	if (!TestTrue(TEXT("the runway gives DefaultApproachFocus a threshold to find"),
-		UFlightBoard::DefaultApproachFocus(*Actor->Network, ExpectedFocus)))
+	if (!TestTrue(TEXT("the runway gives DefaultRunwayPreference a threshold to find"),
+		UFlightBoard::DefaultRunwayPreference(*Actor->Network, ExpectedFocus)))
 	{
 		return false;
 	}
@@ -116,8 +117,8 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 			// AIRCRAFT (UOpsRuntime::OfferTick sets it before the admissibility check) -
 			// so this assertion, unlike an offer actually appearing, does not depend on this
 			// test's short runway matching a real AircraftType's LandingFieldLength.
-			TestEqual(TEXT("a runway-bearing network's board focus equals DefaultApproachFocus"),
-				Runtime->GetFlightBoard()->ApproachFocus, ExpectedFocus);
+			TestEqual(TEXT("a runway-bearing network's board focus equals DefaultRunwayPreference"),
+				Runtime->GetFlightBoard()->RunwayPreference, ExpectedFocus);
 		}
 
 		UOpsEventsTestListener* L = NewObject<UOpsEventsTestListener>();
@@ -625,6 +626,102 @@ bool FOpsRuntimeRearmsRepeatersOnLoadTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+namespace
+{
+	/** How many times the runtime has logged a day's upkeep so far - the line PostDailyUpkeep ends on, one per day it ran. */
+	int32 UpkeepDaysLogged(const FLogLineSpy& Spy)
+	{
+		return Spy.CapturedLines.FilterByPredicate([](const FString& Line) { return Line.Contains(TEXT("Upkeep day")); }).Num();
+	}
+}
+
+/**
+ * #442: THE DAY'S UPKEEP AND FDayEndedEvent WERE DUE A DAY AFTER THE LAST ATTACH OR LOAD, NOT AT MIDNIGHT. RearmRepeatingSchedules
+ * booked Every(SecondsPerDay), whose first firing is Now + a day - so a load at 05:59 pushed the 06:00 upkeep to the next 05:59,
+ * and a player who reloaded often enough paid none. The first firing is the next day boundary now, then a day apart.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeUpkeepAtMidnightAfterLoadTest,
+	"AirportOps.Present.Upkeep.PostsAtMidnightAfterALoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeUpkeepAtMidnightAfterLoadTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
+	// A NETWORK, which PostDailyUpkeep needs to post anything and a fresh actor lacks until its first edit.
+	TestWorld.Actor->PlaceNode(FVector2D(0.0, 90000.0));
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(TestWorld.Actor);
+
+	// A SAVE FROM 23:30 restored into the runtime's own clock the way OpsSave does - GameSeconds jumps, the queue does not - and
+	// the repeaters re-booked from there, as LoadFromSlot does.
+	USimClock* Saved = NewObject<USimClock>();
+	Saved->SetUniformDay(1.0);
+	Saved->StartAtHour(23.5);
+	TArray<uint8> Bytes;
+	OpsSave::SerializeObject(*Saved, Bytes);
+	OpsSave::DeserializeObject(*Runtime->GetClock(), Bytes);
+	Runtime->GetClock()->SetUniformDay(USimClock::SecondsPerDay);   // 1 game s per real s from here
+	Runtime->RearmRepeatingSchedules();
+	const double Loaded = Runtime->GetClock()->Now();
+	const double Midnight = USimClock::SecondsPerDay;
+	if (!TestEqual(TEXT("the clock is at 23:30 of day one"), Loaded, 23.5 * 3600.0, 1e-6)) { return false; }
+
+	FLogLineSpy Spy(FName(TEXT("LogAirportOps")));
+	GLog->AddOutputDevice(&Spy);
+	double PostedAt = -1.0;
+	int32 Before = 0;
+	for (int32 Minute = 0; Minute < 60; ++Minute)
+	{
+		Runtime->Tick(60.0);
+		if (PostedAt < 0.0 && UpkeepDaysLogged(Spy) > Before)
+		{
+			PostedAt = Runtime->GetClock()->Now();
+		}
+	}
+	GLog->RemoveOutputDevice(&Spy);
+
+	TestEqual(TEXT("one game hour from 23:30 posts the upkeep once"), UpkeepDaysLogged(Spy), 1);
+	TestTrue(TEXT("at midnight - the tick that reached 00:00, not a day after the load"),
+		PostedAt >= Midnight && PostedAt < Midnight + 61.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeUpkeepAtMidnightAfterAttachTest,
+	"AirportOps.Present.Upkeep.AttachPostsAtTheFirstMidnight",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeUpkeepAtMidnightAfterAttachTest::RunTest(const FString& Parameters)
+{
+	// THE SAME RULE AT ATTACH: a new game starts at the scenario's hour, and its first upkeep is the next midnight - not a day after
+	// the attach, which is the hour the game started at.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
+	TestWorld.Actor->PlaceNode(FVector2D(0.0, 90000.0));
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(TestWorld.Actor);
+	Runtime->GetClock()->SetUniformDay(USimClock::SecondsPerDay);
+	Runtime->RearmRepeatingSchedules();   // the day's length changed under the booking: re-book from here, as the load does
+	const double Midnight = Runtime->GetClock()->NextDayStart();
+	TestTrue(TEXT("the first midnight is ahead, within the day"), Midnight > Runtime->GetClock()->Now() && Midnight - Runtime->GetClock()->Now() <= USimClock::SecondsPerDay);
+
+	FLogLineSpy Spy(FName(TEXT("LogAirportOps")));
+	GLog->AddOutputDevice(&Spy);
+	while (Runtime->GetClock()->Now() < Midnight - 61.0)
+	{
+		Runtime->Tick(60.0);
+	}
+	const int32 BeforeMidnight = UpkeepDaysLogged(Spy);
+	Runtime->Tick(60.0);
+	Runtime->Tick(60.0);
+	GLog->RemoveOutputDevice(&Spy);
+	TestEqual(TEXT("nothing is posted before midnight"), BeforeMidnight, 0);
+	TestEqual(TEXT("and one upkeep once it has passed"), UpkeepDaysLogged(Spy), 1);
+	return true;
+}
+
 // AirportOps.Present.RuntimeTicksTheQueue - "every runtime tick ticks the queue" - WENT with ops batch 3 PR D: the
 // queue is the bus's "ArrivalQueue" pass now, and the seam it pinned (the sequencer wired, the queue reached from the
 // runtime) is ArrivalQueuePassTest.cpp's, which measures the opposite of what it asserted - a quiet queue runs
@@ -649,7 +746,7 @@ bool FOpsRuntimeWiresLitresTest::RunTest(const FString& Parameters)
 	}
 	UFlight* Flight = NewObject<UFlight>();
 	Flight->AgentId = 42;
-	Flight->Phase = EFlightPhase::Landing;
+	Flight->SetPhaseForTest(EFlightPhase::Landing);
 	Flight->FuelLitres = 321.0;
 	Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Flight);
 	FAirframe Airframe;
@@ -709,7 +806,7 @@ bool FOpsRuntimeMidFlightLoadTest::RunTest(const FString& Parameters)
 	Board->AddOffer(*Runtime->GetClock(), Taxiing);
 	if (!TestTrue(TEXT("accepted onto the stand"), Board->Accept(*Model, *Actor->Network, *Runtime->GetClock(), *Taxiing))) { return false; }
 	Board->Allocator->Release(*Model, *Taxiing);
-	Taxiing->Phase = EFlightPhase::TaxiIn;
+	Taxiing->SetPhaseForTest(EFlightPhase::TaxiIn);
 	Taxiing->AgentId = 4101;
 	Taxiing->bLandingFeePaid = true;
 	const int32 TaxiingId = Taxiing->Id;
@@ -733,7 +830,7 @@ bool FOpsRuntimeMidFlightLoadTest::RunTest(const FString& Parameters)
 	OnStand->Airframe.Wingspan = 3400.0;
 	OnStand->AirlineId = Airline;
 	OnStand->AgentId = 4102;
-	OnStand->Phase = EFlightPhase::Turnaround;
+	OnStand->SetPhaseForTest(EFlightPhase::Turnaround);
 	Board->AddOffer(*Runtime->GetClock(), OnStand);
 	const int32 OnStandId = OnStand->Id;
 
@@ -750,7 +847,7 @@ bool FOpsRuntimeMidFlightLoadTest::RunTest(const FString& Parameters)
 	UFlight* Again = Board->FindByIdForTest(TaxiingId);
 	UFlight* Retired = Board->FindByIdForTest(OnStandId);
 	if (!TestNotNull(TEXT("the taxiing flight came back"), Again) || !TestNotNull(TEXT("and the one on its stand"), Retired)) { return false; }
-	TestEqual(TEXT("taxiing in when saved: Inbound after the load"), Again->Phase, EFlightPhase::Inbound);
+	TestEqual(TEXT("taxiing in when saved: Inbound after the load"), Again->GetPhase(), EFlightPhase::Inbound);
 	TestEqual(TEXT("with no agent"), Again->AgentId, static_cast<int32>(INDEX_NONE));
 	TestEqual(TEXT("joining the queue at the LOADED time"), Again->HoldingSince, SavedAt, 1e-9);
 	const FEntityInstance* Stand = Actor->Network->GetEntity(Again->Stand);
@@ -763,13 +860,13 @@ bool FOpsRuntimeMidFlightLoadTest::RunTest(const FString& Parameters)
 		Kept != nullptr && Kept->Stand == PromisedStand && KeptStand != nullptr
 		&& Model->IsStandHeld(KeptStand->PoseNode, 0) && !Model->IsStandHeld(KeptStand->PoseNode, Kept->HolderId()));
 	TestTrue(TEXT("so the re-queued flight holds the other"), Again->Stand != PromisedStand);
-	TestEqual(TEXT("on its stand when saved: Departed"), Retired->Phase, EFlightPhase::Departed);
+	TestEqual(TEXT("on its stand when saved: Departed"), Retired->GetPhase(), EFlightPhase::Departed);
 	TestFalse(TEXT("and retired out of the live list"), Board->Live().Contains(Retired));
 	TestEqual(TEXT("dated the load"), Retired->TerminatedAt, SavedAt, 1e-9);
 
 	for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
 	TestTrue(TEXT("still owed an arrival after the load's re-arm and three frames"),
-		Again->Phase == EFlightPhase::Inbound || Again->Phase == EFlightPhase::Landing);
+		Again->GetPhase() == EFlightPhase::Inbound || Again->GetPhase() == EFlightPhase::Landing);
 	TestEqual(TEXT("its airline heard nothing it would score"), Runtime->GetAirlines()->Find(Airline)->Recent.Num(), RecentBefore);
 	return true;
 }
@@ -819,7 +916,7 @@ bool FOpsRuntimeMidFlightClosedTest::RunTest(const FString& Parameters)
 		Board->AddOffer(*Runtime->GetClock(), Taxiing);
 		if (!TestTrue(*(Case + TEXT(": accepted onto the stand while open")), Board->Accept(*Model, *Actor->Network, *Runtime->GetClock(), *Taxiing))) { return false; }
 		Board->Allocator->Release(*Model, *Taxiing);
-		Taxiing->Phase = EFlightPhase::TaxiIn;
+		Taxiing->SetPhaseForTest(EFlightPhase::TaxiIn);
 		Taxiing->AgentId = 4201;
 		const int32 TaxiingId = Taxiing->Id;
 		const FEntityInstanceId Stand = Taxiing->Stand;
@@ -837,7 +934,7 @@ bool FOpsRuntimeMidFlightClosedTest::RunTest(const FString& Parameters)
 		}
 		for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
 		if (!TestEqual(*(Case + TEXT(": the airport is not open")), Runtime->GetAirport()->Status(), Closed)) { return false; }
-		if (!TestEqual(*(Case + TEXT(": the closure left the flight on the ground alone")), Taxiing->Phase, EFlightPhase::TaxiIn)) { return false; }
+		if (!TestEqual(*(Case + TEXT(": the closure left the flight on the ground alone")), Taxiing->GetPhase(), EFlightPhase::TaxiIn)) { return false; }
 		const int32 RecentBefore = Runtime->GetAirlines()->Find(Airline)->Recent.Num();
 		const double SatisfactionBefore = Runtime->GetAirlines()->Find(Airline)->Satisfaction;
 
@@ -848,7 +945,7 @@ bool FOpsRuntimeMidFlightClosedTest::RunTest(const FString& Parameters)
 
 		UFlight* Again = Board->FindByIdForTest(TaxiingId);
 		if (!TestNotNull(*(Case + TEXT(": the flight came back")), Again)) { return false; }
-		TestEqual(*(Case + TEXT(": re-queued at an airport that is not open, it is cancelled")), Again->Phase, EFlightPhase::Cancelled);
+		TestEqual(*(Case + TEXT(": re-queued at an airport that is not open, it is cancelled")), Again->GetPhase(), EFlightPhase::Cancelled);
 		TestFalse(*(Case + TEXT(": out of the live list")), Board->Live().Contains(Again));
 		const FEntityInstance* Entity = Actor->Network->GetEntity(Stand);
 		TestFalse(*(Case + TEXT(": holding no stand")), Entity != nullptr && Model->IsStandHeld(Entity->PoseNode, 0));
@@ -895,7 +992,7 @@ bool FOpsRuntimeLoadRestoresFlightsByValueTest::RunTest(const FString& Parameter
 	UFlight* Restored = Board->FindByIdForTest(Id);
 	if (!TestNotNull(TEXT("the offer came back"), Restored)) { return false; }
 	TestTrue(TEXT("as a new object, not the one declined after the save"), Restored != Offer);
-	TestEqual(TEXT("in the phase the save had - Offered"), Restored->Phase, EFlightPhase::Offered);
+	TestEqual(TEXT("in the phase the save had - Offered"), Restored->GetPhase(), EFlightPhase::Offered);
 	TestEqual(TEXT("in the inbox"), Board->Offers().Num(), 1);
 	TestTrue(TEXT("the board keeps the runtime's own allocator"), Board->Allocator.Get() == Allocator && Allocator != nullptr);
 	TestTrue(TEXT("and the runtime's own ledger"), Board->Ledger.Get() == Runtime->GetLedger() && Runtime->GetLedger() != nullptr);
@@ -965,6 +1062,78 @@ bool FOpsRuntimeDesignFiguresAreTheScenariosTest::RunTest(const FString& Paramet
 		Runtime->GetJobBoard()->Fleet().PriceOf(Bowser), BowserPrice + 1234.0, 1e-9);
 	TestEqual(TEXT("the inbox cap is the scenario's"), Runtime->GetOfferGenerator()->MaxPendingOffers, Cap + 3);
 	TestEqual(TEXT("and the airline tuning, as it always was"), Runtime->GetAirlines()->Tuning.Start, Tuning.Start * 0.5, 1e-9);
+	return true;
+}
+
+/**
+ * #442's PIN, THROUGH THE RUNTIME: accept a flight, delete the only exit, let the passes run - an alert names the flight; the
+ * alert's Cancel (UOpsRuntime::CancelFlight) releases its stand, clears the alert, and costs the airline the closure penalty.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeCancelFlightTest,
+	"AirportOps.Present.Alerts.CancelFlightForwardsToTheBoard",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeCancelFlightTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
+	TestWorld.Actor->PlaceNode(FVector2D(0.0, 90000.0));
+	URoadNetwork* Net = TestWorld.Actor->Network;
+	if (!TestNotNull(TEXT("a network"), Net)) { return false; }
+	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	const FTestAirport Field = FTestAirport::Build(Airframe, FTestAirportOptions(), Net);
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(TestWorld.Actor);
+	Runtime->GetClock()->SetUniformDay(USimClock::SecondsPerDay);
+	UGroundTraffic* Model = TestWorld.Actor->GetTraffic()->GetModel();
+	if (!TestNotNull(TEXT("a traffic model"), Model)) { return false; }
+	UFlightBoard* Board = Runtime->GetFlightBoard();
+	Runtime->GetAirlines()->Ensure(TEXT("A"));
+
+	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+	Flight->Id = Board->TakeNextId();
+	Flight->Airframe = Airframe;
+	Flight->Callsign = TEXT("CU 204");
+	Flight->AirlineId = TEXT("A");
+	Flight->OfferWindowSeconds = 60.0;
+	Flight->OfferSecondsLeft = 60.0;
+	Flight->LeadTimeSeconds = 5.0;
+	Flight->RunwayPreference = Field.Threshold;
+	Board->AddOffer(*Runtime->GetClock(), Flight);
+	if (!TestTrue(TEXT("accepted while the airport could take it"), Board->Accept(*Model, *Net, *Runtime->GetClock(), *Flight))) { return false; }
+	const FEntityInstance* Stand = Net->GetEntity(Flight->Stand);
+	if (!TestNotNull(TEXT("holding a stand"), Stand)) { return false; }
+	const FGuidelineNodeId StandNode = Stand->PoseNode;
+	const double SatisfactionBefore = Runtime->GetAirlines()->Find(TEXT("A"))->Satisfaction;
+
+	// THE ONLY EXIT DELETED, through the actor: the facade re-derives the graph and the runtime hears the network change.
+	for (int32 Index = Net->GetSegments().Num() - 1; Index >= 0; --Index)
+	{
+		const FRoadSegment* Segment = Net->GetSegment(Net->SegmentIdAt(Index));
+		if (Segment != nullptr && Segment->Profile != nullptr && !Segment->Profile->bContinuousThroughJunctions)
+		{
+			TestWorld.Actor->DeleteSegment(Index);
+		}
+	}
+	for (int32 Tick = 0; Tick < 30; ++Tick) { Runtime->Tick(1.0); }
+
+	TestEqual(TEXT("its ETA came and it is holding - nothing can land it"), Flight->GetPhase(), EFlightPhase::Inbound);
+	const FOpsAlert* Alert = Runtime->GetAlerts()->GetAlerts().FindByPredicate([](const FOpsAlert& A) { return A.Key.Kind == EAlertKind::FlightCannotLand; });
+	if (!TestNotNull(TEXT("an alert names the flight that can never land"), Alert)) { return false; }
+	TestEqual(TEXT("the flight's"), Alert->Key.Id, Flight->Id);
+	TestTrue(TEXT("by callsign"), Alert->Text.ToString().Contains(TEXT("CU 204")));
+	TestTrue(TEXT("CONTROL: it still holds its stand - nothing has released it"), Model->IsStandHeld(StandNode, 0));
+
+	if (!TestTrue(TEXT("the alert's Cancel is taken"), Runtime->CancelFlight(Flight->Id))) { return false; }
+	for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(1.0); }
+	TestEqual(TEXT("the flight is cancelled"), Flight->GetPhase(), EFlightPhase::Cancelled);
+	TestFalse(TEXT("its stand is released"), Model->IsStandHeld(StandNode, 0));
+	TestEqual(TEXT("the alert clears"), Runtime->GetAlerts()->GetAlerts().FilterByPredicate(
+		[](const FOpsAlert& A) { return A.Key.Kind == EAlertKind::FlightCannotLand; }).Num(), 0);
+	TestEqual(TEXT("and the airline is charged the closure's per-flight penalty"),
+		Runtime->GetAirlines()->Find(TEXT("A"))->Satisfaction, SatisfactionBefore - Runtime->GetAirlines()->Tuning.ClosureCancelPenalty, 1e-9);
+	TestFalse(TEXT("a second cancel of the same flight is refused"), Runtime->CancelFlight(Flight->Id));
 	return true;
 }
 

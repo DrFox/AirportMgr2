@@ -128,7 +128,7 @@ bool FOfferCountdownPausedTest::RunTest(const FString& Parameters)
 	Rig.Clock->TogglePause();
 	Rig.Tick(30.0);
 	TestEqual(TEXT("a paused game stops the offer clock"), Flight->OfferSecondsLeft, 60.0, 1e-9);
-	TestEqual(TEXT("and it is still offered"), Flight->Phase, EFlightPhase::Offered);
+	TestEqual(TEXT("and it is still offered"), Flight->GetPhase(), EFlightPhase::Offered);
 	return true;
 }
 
@@ -142,7 +142,7 @@ bool FOfferCountdownIgnoredTest::RunTest(const FString& Parameters)
 	UFlight* Flight = Rig.Offer(60.0);
 	Rig.Tick(30.0);
 	Rig.Tick(31.0);
-	TestEqual(TEXT("an unanswered offer lapses"), Flight->Phase, EFlightPhase::Expired);
+	TestEqual(TEXT("an unanswered offer lapses"), Flight->GetPhase(), EFlightPhase::Expired);
 	TestEqual(TEXT("and it could have been taken, so it was ignored"), Flight->LapseReason, ELapseReason::Ignored);
 	TestEqual(TEXT("it leaves the inbox"), Rig.Board->PendingOfferCount(), 0);
 	return true;
@@ -162,7 +162,7 @@ bool FOfferCountdownGateNotInVerdictTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the quote is refused at the gate"), Quote.Why, EArrivalRefusal::NotAdmitted);
 	TestTrue(FString::Printf(TEXT("in the gate's words ('%s')"), *Quote.Sentence), Quote.Sentence.Contains(TEXT("closed")));
 	Rig.Tick(61.0);
-	TestEqual(TEXT("it lapses"), Flight->Phase, EFlightPhase::Expired);
+	TestEqual(TEXT("it lapses"), Flight->GetPhase(), EFlightPhase::Expired);
 	TestEqual(TEXT("as ignored - the plan would have taken it"), Flight->LapseReason, ELapseReason::Ignored);
 	return true;
 }
@@ -174,7 +174,7 @@ bool FOfferCountdownNeverAcceptableTest::RunTest(const FString& Parameters)
 	FCountdownRig Rig(/*bWithStand*/ false);
 	UFlight* Flight = Rig.Offer(60.0);
 	Rig.Tick(61.0);
-	TestEqual(TEXT("it lapses"), Flight->Phase, EFlightPhase::Expired);
+	TestEqual(TEXT("it lapses"), Flight->GetPhase(), EFlightPhase::Expired);
 	TestEqual(TEXT("and it never could have been taken - no stand"), Flight->LapseReason, ELapseReason::NeverAcceptable);
 	return true;
 }
@@ -189,12 +189,12 @@ bool FOfferCountdownAcceptAfterLapseTest::RunTest(const FString& Parameters)
 	UFlight* Flight = Rig.Offer(5.0);
 	Rig.Tick(6.0);
 	TestFalse(TEXT("a lapsed offer cannot be accepted"), Rig.Board->Accept(*Rig.Traffic, *Rig.Net, *Rig.Clock, *Flight));
-	TestEqual(TEXT("it stays Expired"), Flight->Phase, EFlightPhase::Expired);
+	TestEqual(TEXT("it stays Expired"), Flight->GetPhase(), EFlightPhase::Expired);
 
 	UFlight* Taken = Rig.Offer(5.0);
 	TestTrue(TEXT("one accepted in time"), Rig.Board->Accept(*Rig.Traffic, *Rig.Net, *Rig.Clock, *Taken));
 	Rig.Tick(100.0);
-	TestEqual(TEXT("does not lapse afterwards - the countdown stops at the accept"), Taken->Phase, EFlightPhase::Accepted);
+	TestEqual(TEXT("does not lapse afterwards - the countdown stops at the accept"), Taken->GetPhase(), EFlightPhase::Accepted);
 	return true;
 }
 
@@ -242,7 +242,7 @@ bool FOfferAirborneAtTest::RunTest(const FString& Parameters)
 	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 	Flight->Airframe = CountdownAirframe();
 	Flight->AgentId = 7;
-	Flight->Phase = EFlightPhase::TaxiOut;
+	Flight->SetPhaseForTest(EFlightPhase::TaxiOut);
 	Rig.Board->AddOffer(*Rig.Clock, Flight);
 	Rig.Clock->Advance(3.0);
 	const double At = Rig.Clock->Now();
