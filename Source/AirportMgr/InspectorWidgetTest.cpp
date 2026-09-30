@@ -24,6 +24,11 @@
 #include "Profiles/RoadProfile.h"
 #include "Solve/IcaoCode.h"
 #include "Model/GroundTraffic.h"
+#include "Model/Flight.h"
+#include "Model/FlightBoard.h"
+#include "Model/OpsAlerts.h"
+#include "Model/SimClock.h"
+#include "Model/TrafficOccupancy.h"
 #include "UI/UiButton.h"
 #include "UI/UiMenuButton.h"
 #include "UIStyle.h"
@@ -725,6 +730,119 @@ bool FUiMenuButtonConfirmTest::RunTest(const FString& Parameters)
 	Menu->Choose(0);
 	TestEqual(TEXT("a plain line chooses on one click"), Menu->ChosenCountForTest(), 2);
 	TestEqual(TEXT("that line"), Menu->LastChosenForTest(), 0);
+	return true;
+}
+
+/**
+ * THE HOLD AND DEADLOCK LINES, AT THE COMPOSITION (inspector hold info, 2026-09-30). Two aircraft
+ * flying flights wait on each other past StallSeconds: each card's title leads with its
+ * registration, names the OTHER in a deadlock line worded like the Deadlock alert, and says what it
+ * holds at and for whom by registration; the Show button selects the one waited for. A third, with
+ * no flight and no wait, keeps the id title and shows neither line nor button.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorHoldAndDeadlockTest,
+	"AirportMgr.Inspector.HoldAndDeadlockLines",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorHoldAndDeadlockTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	URoadNetwork& Net = *Actor->Network;
+	const FGuidelineNodeId A = Net.AddGuidelineNode(FVector2D(0.0, 0.0), false);
+	const FGuidelineNodeId B = Net.AddGuidelineNode(FVector2D(20000.0, 0.0), false);
+	FGuidelineEdgeId Lane;
+	{
+		FGuidelineEdge Edge;
+		Edge.A = A; Edge.B = B;
+		Edge.Control = FVector2D(10000.0, 0.0);
+		Edge.AllowedTraffic = FTrafficMask::All();
+		Edge.Direction = EGuidelineDir::Bidirectional;
+		Edge.bDerived = false;
+		Lane = Net.AddGuidelineEdge(MoveTemp(Edge));
+	}
+	int32 Ids[3] = {};
+	for (int32& Id : Ids)
+	{
+		if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(TestGraph::Probe(Net, A, B, ETraversalClass::Aircraft),
+			UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+		Id = Actor->GetTraffic()->GetNewestAgentId();
+	}
+	const int32 One = Ids[0], Two = Ids[1], Loner = Ids[2];
+
+	// FLIGHTS FOR TWO OF THEM - the board is where a registration lives; Airside has none.
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	UFlightBoard* Board = NewObject<UFlightBoard>(GetTransientPackage());
+	auto Fly = [&](int32 AgentId, const TCHAR* Callsign)
+	{
+		UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+		Flight->AgentId = AgentId;
+		Flight->Callsign = Callsign;
+		Flight->AirlineName = FText::FromString(TEXT("Flying Club"));
+		Flight->Phase = EFlightPhase::TaxiIn;
+		Board->AddOffer(*Clock, Flight);
+	};
+	Fly(One, TEXT("G-SVBT"));
+	Fly(Two, TEXT("G-HDVK"));
+
+	UGroundTraffic& Traffic = *Actor->GetGroundTraffic();
+	const double Stalled = Traffic.Rules.StallSeconds + 77.0;   // 1:20 and change
+	FGroundTrafficTestAccess Access(Traffic);
+	Access.ScriptWait(One, FTrafficResource::OfEdge(Lane), Two, Stalled);
+	Access.ScriptWait(Two, FTrafficResource::OfNode(B), One, Stalled);
+
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel is created with no asset"), Panel)) { return false; }
+	Panel->UseFlightBoardForTest(Board);
+
+	FAgentFacts Facts;
+	InspectFacts::DescribeAgent(Traffic, &Net, One, Facts);
+	FSelection Sel; Sel.Kind = ESelectionKind::Aircraft; Sel.Id = One;
+	Panel->Refresh(Actor, Sel);
+	TestEqual(TEXT("the title leads with the registration, then type and airline"), Panel->TitleForTest(),
+		FString::Printf(TEXT("G-SVBT · %s · Flying Club"), *Facts.TypeName));
+	TestTrue(TEXT("the deadlock line names the partner by registration"), Panel->DeadlockForTest().Contains(TEXT("Deadlocked with G-HDVK")));
+	TestTrue(TEXT("and asks for the fix in the alert's own words"),
+		Panel->DeadlockForTest().Contains(UOpsAlerts::DeadlockRemedy().ToString()));
+	TestEqual(TEXT("the hold line names the blocker by registration, with the stall clock"), Panel->StatusForTest(),
+		FString::Printf(TEXT("Waiting behind G-HDVK · %s"), *InspectFacts::MinutesSeconds(Stalled)));
+	TestEqual(TEXT("the button offers to show it"), Panel->WaitingForCaptionForTest(), FString(TEXT("Show G-HDVK")));
+
+	// THE OTHER CARD SAYS THE SAME RING from its end.
+	Sel.Id = Two;
+	Panel->Refresh(Actor, Sel);
+	TestTrue(TEXT("its deadlock line names the first"), Panel->DeadlockForTest().Contains(TEXT("Deadlocked with G-SVBT")));
+	TestTrue(TEXT("held at a node: a crossing"), Panel->StatusForTest().StartsWith(TEXT("Waiting at crossing for G-SVBT")));
+
+	// THE ALERT AGREES: the same traffic, recomputed, raises one Deadlock in the same words for the fix.
+	UOpsAlerts* Alerts = NewObject<UOpsAlerts>(GetTransientPackage());
+	FOpsAlertSources Sources;
+	Sources.Traffic = &Traffic;
+	Alerts->Recompute(Sources, 0.0);
+	const FOpsAlert* Raised = Alerts->GetAlerts().FindByPredicate([](const FOpsAlert& Each) { return Each.Key.Kind == EAlertKind::Deadlock; });
+	if (TestNotNull(TEXT("the alert sees the ring the cards show"), Raised))
+	{
+		TestTrue(TEXT("and words the fix as the card does"), Raised->Text.ToString().Contains(UOpsAlerts::DeadlockRemedy().ToString()));
+	}
+
+	// THE BUTTON SELECTS THE BLOCKER, through the controller the alert Go uses.
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(Actor);
+	TestTrue(TEXT("Show goes somewhere"), Panel->ShowWaitedFor(*C));
+	TestEqual(TEXT("an agent is selected"), C->GetSelection().Kind, ESelectionKind::Aircraft);
+	TestEqual(TEXT("the one this card waits for"), C->GetSelection().Id, One);
+
+	// NO FLIGHT, NO WAIT: the id title, no deadlock line, no button.
+	Sel.Id = Loner;
+	Panel->Refresh(Actor, Sel);
+	TestTrue(TEXT("an agent no flight owns keeps the id title"), Panel->TitleForTest().Contains(FString::Printf(TEXT("#%d"), Loner)));
+	TestEqual(TEXT("no deadlock line for a mover"), Panel->DeadlockForTest(), FString());
+	TestEqual(TEXT("no Show button for a mover"), Panel->WaitingForCaptionForTest(), FString());
+	TestFalse(TEXT("and Show does nothing"), Panel->ShowWaitedFor(*C));
 	return true;
 }
 

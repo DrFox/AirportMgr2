@@ -19,6 +19,7 @@
 #include "Model/Flight.h"
 #include "ArrivalViewModels.h"
 #include "Model/InspectFacts.h"
+#include "Model/OpsAlerts.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
 #include "Present/OpsRuntime.h"
@@ -40,6 +41,7 @@ void UInspectorWidget::BuildOnce(const UUIStyle& Style)
 	if (FollowButton != nullptr) { FollowButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleFollow); }
 	if (RunwayButton != nullptr) { RunwayButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleRunway); }
 	if (RunwayUseButton != nullptr) { RunwayUseButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleRunwayUse); }
+	if (WaitingForButton != nullptr) { WaitingForButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleWaitingFor); }
 	if (UnstickMenu != nullptr)
 	{
 		// WEAK, not this: a lambda held by a child widget that captured a raw pointer to its owner is
@@ -108,13 +110,15 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 		if (Column != nullptr) { Column->AddChildToVerticalBox(Field)->SetPadding(FMargin(0.0f, 2.0f)); }
 	};
 	Text(TitleText, TEXT("TitleText"), EUITextRole::Title, Style->Ink);
+	// UNDER THE TITLE, in the style's one warning colour: a deadlock is the card's most urgent fact.
+	Text(DeadlockText, TEXT("DeadlockText"), EUITextRole::Body, Style->Warning);
 	Text(FactsText, TEXT("FactsText"), EUITextRole::Body, Style->InkMuted);
 	Text(StatusText, TEXT("StatusText"), EUITextRole::Body, Style->InkMuted);
 
 	UHorizontalBox* Row = nullptr;
 	if (Column != nullptr && (DepartButton == nullptr || FollowButton == nullptr || RunwayButton == nullptr
 		|| RunwayUseButton == nullptr
-		|| UnstickMenu == nullptr))
+		|| UnstickMenu == nullptr || WaitingForButton == nullptr))
 	{
 		Row = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("InspectorVerbs"));
 		Column->AddChildToVerticalBox(Row)->SetPadding(FMargin(0.0f, 8.0f, 0.0f, 0.0f));
@@ -168,6 +172,17 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	if (!Actions.IsValidIndex(UnstickActionIndex))
 	{
 		UE_LOG(LogInspector, Warning, TEXT("No selection.unstick row in BuildActions(): the agent card has no Unstick"));
+	}
+
+	// THE WAITED-FOR VERB - no BuildActions row (see WaitingForButton), so captioned here and retitled
+	// per card in Refresh.
+	if (WaitingForButton == nullptr)
+	{
+		WaitingForButton = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass(), TEXT("WaitingForButton"));
+		WaitingForButton->SetLabel(NSLOCTEXT("AirportMgr", "InspectorShowBlocker", "Show"));
+		WaitingForButton->Build(*Style, EUiButtonKind::Secondary);
+		WaitingForButton->SetToolTipText(NSLOCTEXT("AirportMgr", "InspectorShowBlockerTip", "Select what this is waiting for"));
+		if (Row != nullptr) { Row->AddChildToHorizontalBox(WaitingForButton)->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f)); }
 	}
 }
 
@@ -243,6 +258,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		SetShown(false);
 		bDepartEnabled = false;
 		LastSelection = FSelection();
+		WaitedForId = 0;
 		return;
 	}
 	// A NEW SELECTION REOPENS A WINDOW THE PLAYER CLOSED: the close meant "not this one", and
@@ -263,7 +279,8 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	static_assert(static_cast<int32>(ESelectionKind::Count) == 5,
 		"a new ESelectionKind needs an inspector card - add its branch below, then update this count");
 
-	FString Title, Facts, Status;
+	FString Title, Facts, Status, Deadlock;
+	FText WaitingForCaption;
 	bool bAircraft = false;
 	bool bRunway = false;
 	FText RunwayCaption;
@@ -286,10 +303,12 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		{
 			SetShown(false);
 			bDepartEnabled = false;
+			WaitedForId = 0;
 			return;
 		}
 		bAircraft = true;
 		bDepartEnabled = F.bCanDepart;
+		const UGroundTraffic* Traffic = Target->GetGroundTraffic();
 
 		// THE FUEL LINE, from the layer that knows what fuel is. Reached through the ops
 		// subsystem rather than through Target, because the airport actor is Airside's and
@@ -307,7 +326,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			}
 			// THE CONTRACT, from the flight that owns this aircraft - its minute resolution keeps
 			// the gate below from recomposing more than once a game minute.
-			if (const UFlightBoard* Board = Runtime->GetFlightBoard())
+			if (const UFlightBoard* Board = Flights())
 			{
 				if (const UFlight* Flight = Board->FlightForAgent(F.Id); Flight != nullptr && Runtime->GetClock() != nullptr)
 				{
@@ -315,6 +334,27 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 				}
 			}
 		}
+
+		// THE NAMES (2026-09-30): the registration and airline for the title, and whom it waits for
+		// or is deadlocked with, by the name the player reads on the other card - never an id. Looked
+		// up here, before the gate, for Fuel's reason: they are the key's inputs. Airside hands ids
+		// (FAgentFacts::Hold, DeadlockedWith) because it knows no registrations.
+		FString Registration, Airline;
+		if (const UFlightBoard* Board = Flights())
+		{
+			if (const UFlight* Flight = Board->FlightForAgent(F.Id))
+			{
+				Registration = Flight->Callsign;
+				Airline = Flight->AirlineName.ToString();
+			}
+		}
+		const FString Blocker = F.Hold.IsSet() ? NameOfAgent(Traffic, F.Hold.WaitingOn) : FString();
+		TArray<FString> PartnerNames;
+		for (const int32 Partner : F.DeadlockedWith)
+		{
+			PartnerNames.Add(NameOfAgent(Traffic, Partner));
+		}
+		const FString Partners = FString::Join(PartnerNames, TEXT(", "));
 
 		// MAGNITUDE. FAgentMotion::GroundSpeed became signed on 2026-09-20 so the view could
 		// roll a reversing vehicle's wheels backwards, and a readout is not that view: an
@@ -340,13 +380,33 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		Key.Fuel = F.Fuel;
 		Key.Pushback = F.Pushback;
 		Key.Turnaround = F.Turnaround;
+		Key.Registration = Registration;
+		Key.Airline = Airline;
+		Key.Blocker = Blocker;
+		Key.Partners = Partners;
 
 		if (Key != LastComposedKey)
 		{
 			++ComposeCalls;   // See ComposeCountForTest.
 			LastComposedKey = Key;
 
-			LastComposedTitle = FString::Printf(TEXT("%s  #%d"), *F.TypeName, F.Id);
+			// THE REGISTRATION FIRST, as the player speaks of the aircraft - "G-SVBT · C172 · Flying
+			// Club". An agent no flight owns (a test's, a debug dispatch) keeps the id title.
+			if (!Registration.IsEmpty())
+			{
+				LastComposedTitle = Airline.IsEmpty()
+					? FString::Format(TEXT("{0} · {1}"), { Registration, F.TypeName })
+					: FString::Format(TEXT("{0} · {1} · {2}"), { Registration, F.TypeName, Airline });
+			}
+			else
+			{
+				LastComposedTitle = FString::Printf(TEXT("%s  #%d"), *F.TypeName, F.Id);
+			}
+			// THE RING, in the alert's own words for the fix (UOpsAlerts::DeadlockRemedy) - the card
+			// names the partners, the alert counts them, and both ask for the same change.
+			LastComposedDeadlock = Partners.IsEmpty() ? FString()
+				: FText::Format(NSLOCTEXT("AirportMgr", "InspectorDeadlock", "Deadlocked with {0} - {1}"),
+					FText::FromString(Partners), UOpsAlerts::DeadlockRemedy()).ToString();
 			// LOCTEXT for the words, FString::Format (not Printf) for the sentence - issue #192.
 			// UE 5.8's FString::Printf format string must be a compile-time literal
 			// (FormatStringSan), so an NSLOCTEXT result cannot be its Fmt argument. Every number is
@@ -388,11 +448,19 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			{
 				LastComposedFacts += TEXT("\n\n") + F.Turnaround;
 			}
-			LastComposedStatus = F.Status;
+			// THE HOLD LINE RE-SAID WITH A NAME - only where StatusOf's precedence chose it
+			// (bStatusIsHold), so "Departure armed" still outranks it as before.
+			LastComposedStatus = F.bStatusIsHold ? InspectFacts::HoldLine(F.Hold, Blocker) : F.Status;
 		}
 		Title = LastComposedTitle;
 		Facts = LastComposedFacts;
 		Status = LastComposedStatus;
+		Deadlock = LastComposedDeadlock;
+		WaitedForId = F.Hold.WaitingOn;
+		if (WaitedForId != 0)
+		{
+			WaitingForCaption = FText::Format(NSLOCTEXT("AirportMgr", "InspectorShowBlockerNamed", "Show {0}"), FText::FromString(Blocker));
+		}
 	}
 	else if (Selection.Kind == ESelectionKind::Runway)
 	{
@@ -418,6 +486,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			"Landing and taking off {0}. A change reaches the next flight planned.").ToString(), { InUse });
 		RunwayCaption = FText::Format(NSLOCTEXT("AirportMgr", "InspectorRunwayUse", "Use {0}"), FText::FromString(Other));
 		// The CURRENT mode, selection.runway_use's own caption rule - see its row in BuildActions.
+		WaitedForId = 0;
 		RunwayUseCaption = R.Use == ERunwayUse::ArrivalsOnly ? NSLOCTEXT("AirportMgr", "InspectorRunwayArrivals", "Arrivals only")
 			: R.Use == ERunwayUse::DeparturesOnly ? NSLOCTEXT("AirportMgr", "InspectorRunwayDepartures", "Departures only")
 			: NSLOCTEXT("AirportMgr", "InspectorRunwayMixed", "Mixed ops");
@@ -436,6 +505,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		// every taxiway limits wingspan to its letter (user 2026-09-29) - and, restricted, what
 		// restricts it (spec: "max span 65 m - restricted by building at ..."). Composed every
 		// tick like the runway card; the SetText gate below makes an unchanged one free.
+		WaitedForId = 0;
 		Title = FString::Format(*NSLOCTEXT("AirportMgr", "InspectorTaxiwayTitle", "Taxiway {0}").ToString(), { T.Index });
 		Facts = FString::Format(
 			*NSLOCTEXT("AirportMgr", "InspectorTaxiwayFacts", "Code {0}, {1} m wide, {2}\nStrip {3} m each side\nMax span {4} m").ToString(),
@@ -461,6 +531,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			bDepartEnabled = false;
 			return;
 		}
+		WaitedForId = 0;
 		// AN ENTITY, NOT ALWAYS A STAND, since the fuel slice. PoseRole is what tells the two
 		// apart (see FStandFacts::PoseRole); a stand's own card is unchanged.
 		if (S.PoseRole == EServiceRole::Aircraft)
@@ -552,6 +623,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		}
 		SetShown(false);
 		bDepartEnabled = false;
+		WaitedForId = 0;
 		return;
 	}
 
@@ -578,6 +650,29 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		LastStatus = Status;
 		++SetTextCalls;
 	}
+	if (DeadlockText != nullptr)
+	{
+		if (Deadlock != LastDeadlock)
+		{
+			DeadlockText->SetText(FText::FromString(Deadlock));
+			LastDeadlock = Deadlock;
+			++SetTextCalls;
+		}
+		// Collapsed, not an empty line: an empty row would still take its padding under the title.
+		const ESlateVisibility Wanted = Deadlock.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible;
+		if (DeadlockText->GetVisibility() != Wanted) { DeadlockText->SetVisibility(Wanted); }
+	}
+	if (WaitingForButton != nullptr)
+	{
+		const bool bWaiting = bAircraft && WaitedForId != 0;
+		WaitingForButton->SetVisibility(bWaiting ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		// Retitled through the button's own caption, the runway button's way.
+		const UTextBlock* Caption = WaitingForButton->GetLabel();
+		if (bWaiting && (Caption == nullptr || !Caption->GetText().EqualTo(WaitingForCaption)))
+		{
+			WaitingForButton->SetLabel(WaitingForCaption);
+		}
+	}
 	if (DepartButton != nullptr)
 	{
 		DepartButton->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
@@ -596,7 +691,8 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	{
 		UnstickMenu->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 		// LIT WHEN IT LOOKS STUCK - Selected is the Accent fill (UUiButton::LookFor), the one "look at
-		// me" this style has. Read off the model agent, since FAgentFacts carries no stall clock.
+		// me" this style has. Read off the model agent: LooksStuck also asks Stranded, which
+		// FAgentFacts::Hold (the stall clock only while waiting on someone) does not carry.
 		const FRoadAgent* Agent = bAircraft && Target->GetGroundTraffic() != nullptr
 			? Target->GetGroundTraffic()->FindAgent(Selection.Id) : nullptr;
 		bUnstickHighlighted = Agent != nullptr && UAgentRescue::LooksStuck(*Agent, UnstickHighlightSeconds);
@@ -688,6 +784,59 @@ void UInspectorWidget::HandleUnstickChosen(int32 Index)
 	C->UnstickSelected(static_cast<EUnstickAction>(Index));
 }
 
+bool UInspectorWidget::ShowWaitedFor(ARoadBuildController& InController)
+{
+	if (WaitedForId == 0)
+	{
+		UE_LOG(LogInspector, Warning, TEXT("Inspector Show ignored: the card waits for nobody"));
+		return false;
+	}
+	// THE ALERT GO'S PATH, not a second selection mechanism: it leaves a build tool, moves the
+	// camera, selects as the select tool would, and logs "Alert Go: ... -> ..." either way.
+	FAlertFocus Focus;
+	Focus.Kind = EAlertFocusKind::Agent;
+	Focus.Id = WaitedForId;
+	return InController.SelectAndFocus(Focus);
+}
+
+void UInspectorWidget::HandleWaitingFor()
+{
+	if (ARoadBuildController* C = Controller())
+	{
+		ShowWaitedFor(*C);
+		return;
+	}
+	UE_LOG(LogInspector, Warning, TEXT("Inspector Show ignored: no controller"));
+}
+
+void UInspectorWidget::UseFlightBoardForTest(const UFlightBoard* Board) { FlightBoardForTest = Board; }
+
+const UFlightBoard* UInspectorWidget::Flights() const
+{
+	if (const UFlightBoard* Board = FlightBoardForTest.Get())
+	{
+		return Board;
+	}
+	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	return Runtime != nullptr ? Runtime->GetFlightBoard() : nullptr;
+}
+
+FString UInspectorWidget::NameOfAgent(const UGroundTraffic* Traffic, int32 AgentId) const
+{
+	if (const UFlightBoard* Board = Flights())
+	{
+		if (const UFlight* Flight = Board->FlightForAgent(AgentId); Flight != nullptr && !Flight->Callsign.IsEmpty())
+		{
+			return Flight->Callsign;
+		}
+	}
+	if (const FRoadAgent* Agent = Traffic != nullptr ? Traffic->FindAgent(AgentId) : nullptr)
+	{
+		return FString::Printf(TEXT("%s #%d"), *InspectFacts::TypeNameOf(*Agent), AgentId);
+	}
+	return FString::Printf(TEXT("aircraft %d"), AgentId);
+}
+
 void UInspectorWidget::HandleDepart() { RunAction(DepartActionIndex); }
 void UInspectorWidget::HandleFollow() { RunAction(FollowActionIndex); }
 void UInspectorWidget::HandleRunway() { RunAction(RunwayActionIndex); }
@@ -697,6 +846,18 @@ bool UInspectorWidget::IsShownForTest() const { return IsShown(); }
 bool UInspectorWidget::IsDepartEnabledForTest() const { return bDepartEnabled; }
 FString UInspectorWidget::TitleForTest() const { return TitleText != nullptr ? TitleText->GetText().ToString() : FString(); }
 FString UInspectorWidget::FactsForTest() const { return FactsText != nullptr ? FactsText->GetText().ToString() : FString(); }
+FString UInspectorWidget::StatusForTest() const { return StatusText != nullptr ? StatusText->GetText().ToString() : FString(); }
+FString UInspectorWidget::DeadlockForTest() const
+{
+	return DeadlockText != nullptr && DeadlockText->GetVisibility() != ESlateVisibility::Collapsed
+		? DeadlockText->GetText().ToString() : FString();
+}
+FString UInspectorWidget::WaitingForCaptionForTest() const
+{
+	const UTextBlock* Caption = WaitingForButton != nullptr && WaitingForButton->GetVisibility() != ESlateVisibility::Collapsed
+		? WaitingForButton->GetLabel() : nullptr;
+	return Caption != nullptr ? Caption->GetText().ToString() : FString();
+}
 FLinearColor UInspectorWidget::DepartLabelColourForTest() const
 {
 	const UTextBlock* Caption = DepartButton != nullptr ? DepartButton->GetLabel() : nullptr;

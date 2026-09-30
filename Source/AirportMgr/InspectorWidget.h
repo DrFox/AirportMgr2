@@ -10,6 +10,8 @@
 class ARoadBuildController;
 class ARoadNetworkActor;
 class UBuildBarWidget;
+class UFlightBoard;
+class UGroundTraffic;
 class UButton;
 class UUiButton;
 class UTextBlock;
@@ -62,13 +64,24 @@ struct FInspectorKey
 	FString Fuel;
 	FString Pushback;
 	FString Turnaround;
+	/**
+	 * The NAMES the title, hold and deadlock lines print (2026-09-30) - the registration and airline
+	 * off the flight board, the blocker's and ring partners' names. Keyed RAW, like Fuel: looked up
+	 * before the gate, composed behind it. Phase (F.Status) already carries the stall clock.
+	 */
+	FString Registration;
+	FString Airline;
+	FString Blocker;
+	FString Partners;
 
 	bool operator==(const FInspectorKey& Other) const
 	{
 		return Id == Other.Id && Phase == Other.Phase && HeadingRounded == Other.HeadingRounded
 			&& SpeedTenthsRounded == Other.SpeedTenthsRounded && AltitudeRounded == Other.AltitudeRounded
 			&& Destination == Other.Destination && bEngineRunning == Other.bEngineRunning
-			&& Fuel == Other.Fuel && Pushback == Other.Pushback && Turnaround == Other.Turnaround;
+			&& Fuel == Other.Fuel && Pushback == Other.Pushback && Turnaround == Other.Turnaround
+			&& Registration == Other.Registration && Airline == Other.Airline && Blocker == Other.Blocker
+			&& Partners == Other.Partners;
 	}
 	bool operator!=(const FInspectorKey& Other) const { return !(*this == Other); }
 };
@@ -99,6 +112,9 @@ class AIRPORTMGR_API UInspectorWidget : public UAirportMgrPanelWidget
 
 public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TitleText;
+	/** "Deadlocked with G-HDVK - the layout needs another way round", in Style->Warning; collapsed
+	 *  unless the aircraft is in a ring UGroundTraffic::CurrentDeadlocks reports. */
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> DeadlockText;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> FactsText;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> StatusText;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> DepartButton;
@@ -110,6 +126,13 @@ public:
 	/** An agent card's escape hatch - selection.unstick, a popup of UAgentRescue's three actions
 	 *  (spec 2026-09-29-unstick-agent). */
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiMenuButton> UnstickMenu;
+	/**
+	 * "Show G-HDVK" - selects the agent this one waits for (ShowWaitedFor). Collapsed when it waits
+	 * for nobody. NOT A BuildActions ROW, unlike the verbs beside it: its subject and caption exist
+	 * only on this card (no key could name "whoever this aircraft waits for" from the bar), the
+	 * Unstick popup's lines' reason. It reuses the alert Go's selection path instead.
+	 */
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> WaitingForButton;
 
 	/**
 	 * How long an agent must have stood behind something before the Unstick button lights up, s.
@@ -149,6 +172,27 @@ public:
 
 	/** The lines the Unstick popup would show now, as UUiMenuButton::Items would give them. */
 	TArray<FUiMenuItem> UnstickItemsForTest() const { return UnstickItems(); }
+
+	/**
+	 * The WaitingFor button's action: select - and move the camera to - the agent the shown one waits
+	 * for, through the alert Go's own ARoadBuildController::SelectAndFocus, so the card opens on it.
+	 * False when the card shows no wait, or the blocker has gone. Public, taking the controller, for
+	 * the reason UAlertsPanelWidget::Go does: a headless test has no owning player to find it by.
+	 * ENFORCED BY: AirportMgr.Inspector.HoldAndDeadlockLines
+	 */
+	bool ShowWaitedFor(ARoadBuildController& InController);
+
+	/**
+	 * The flight board registrations are read from, in place of the ops runtime's - a headless world
+	 * has no game instance and so no UOpsRuntimeSubsystem. Weak: the test owns the board.
+	 */
+	void UseFlightBoardForTest(const UFlightBoard* Board);
+
+	FString StatusForTest() const;
+	/** The deadlock line, or empty while it is collapsed. */
+	FString DeadlockForTest() const;
+	/** The WaitingFor button's caption, or empty while it is collapsed. */
+	FString WaitingForCaptionForTest() const;
 
 
 	/**
@@ -251,6 +295,24 @@ private:
 	/** See ComposeCountForTest. */
 	int32 ComposeCalls = 0;
 
+	/** The deadlock line - composed and SetText-gated like its siblings above. */
+	FString LastComposedDeadlock, LastDeadlock;
+
+	/** The agent the shown card waits for, 0 for none - what ShowWaitedFor selects. */
+	int32 WaitedForId = 0;
+
+	/** See UseFlightBoardForTest. */
+	TWeakObjectPtr<const UFlightBoard> FlightBoardForTest;
+
+	/** UseFlightBoardForTest's board, else the ops runtime's; null when neither exists. */
+	const UFlightBoard* Flights() const;
+
+	/**
+	 * How the card names another agent: its flight's registration, else "<type> #<id>" (the title's
+	 * own fallback - a service vehicle reads "FUEL #7"), else "aircraft <id>" for one already gone.
+	 */
+	FString NameOfAgent(const UGroundTraffic* Traffic, int32 AgentId) const;
+
 	/** What Refresh last showed, so a NEW selection can reopen a window the player closed. */
 	FSelection LastSelection;
 
@@ -262,4 +324,5 @@ private:
 	UFUNCTION() void HandleRunway();
 	UFUNCTION() void HandleRunwayUse();
 	UFUNCTION() void HandleUnstickChosen(int32 Index);
+	UFUNCTION() void HandleWaitingFor();
 };

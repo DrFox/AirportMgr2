@@ -437,6 +437,22 @@ bool UGroundTraffic::SetVehicleForTest(int32 AgentId, const FVehicle& Vehicle)
 	return Index != INDEX_NONE && Agents[Index].SetVehicleForTest(Vehicle);
 }
 
+bool UGroundTraffic::ScriptWaitForTest(int32 AgentId, const FTrafficResource& Resource, int32 BlockerId, double StalledSeconds)
+{
+	const int32 Index = FindIndex(AgentId);
+	if (Index == INDEX_NONE)
+	{
+		return false;
+	}
+	// Through Refuse and the stall clock's own doors, as the claim pass and AdvanceOnce write them.
+	// Step INDEX_NONE and an unlimited stop: only the blocker, the resource and the clock are staged.
+	FRoadAgent& Agent = Agents[Index];
+	Agent.Refuse(INDEX_NONE, Resource, TNumericLimits<double>::Max(), BlockerId);
+	Agent.ResetStall();
+	Agent.AccrueStall(StalledSeconds);
+	return true;
+}
+
 bool UGroundTraffic::BeginCrossingForTest(int32 AgentId, FRoadSegmentId RunwaySeed)
 {
 	const int32 Index = FindIndex(AgentId);

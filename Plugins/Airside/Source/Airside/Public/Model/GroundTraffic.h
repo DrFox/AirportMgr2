@@ -869,6 +869,15 @@ private:
 	 */
 	bool SetVehicleForTest(int32 AgentId, const FVehicle& Vehicle);
 
+	/**
+	 * Refuses AgentId on Resource, held by BlockerId, and sets its stall clock to StalledSeconds -
+	 * the state one claim pass plus that long a wait would leave. So a test can stage a wait, or a
+	 * two-aircraft deadlock ring, without the geometry that would jam two aircraft for real (and
+	 * the resolver that would then replan them). The next Advance's claim pass overwrites it.
+	 * False for an unknown agent. Not public - see FGroundTrafficTestAccess (#104).
+	 */
+	bool ScriptWaitForTest(int32 AgentId, const FTrafficResource& Resource, int32 BlockerId, double StalledSeconds);
+
 public:
 	/** Route distance at which Step begins - the previous step's end, or 0. Public: FClaimPass,
 	 *  FDeadlockResolver and FPlanReResolver all read plan geometry through this and the two
@@ -903,6 +912,12 @@ struct FGroundTrafficTestAccess
 
 	/** See UGroundTraffic::SetVehicleForTest's own comment. */
 	bool SetVehicle(int32 AgentId, const FVehicle& Vehicle) { return Traffic.SetVehicleForTest(AgentId, Vehicle); }
+
+	/** See UGroundTraffic::ScriptWaitForTest's own comment. */
+	bool ScriptWait(int32 AgentId, const FTrafficResource& Resource, int32 BlockerId, double StalledSeconds)
+	{
+		return Traffic.ScriptWaitForTest(AgentId, Resource, BlockerId, StalledSeconds);
+	}
 
 	/** See UGroundTraffic::BeginCrossingForTest's own comment. */
 	bool BeginCrossing(int32 AgentId, FRoadSegmentId RunwaySeed)
