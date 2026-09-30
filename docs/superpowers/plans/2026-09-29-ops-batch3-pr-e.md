@@ -255,3 +255,23 @@ LandChoices.cpp 0/12 -> 0/14; LandAircraftPanelWidget.h 0/68 -> 0/72; LandAircra
 OfferInboxWidget.cpp 1/113 -> 1/116; OfferInboxWidget.h 0/98 -> 0/100; BuildActions.cpp 2/141 -> 2/144.
 
 Unverified in PIE: all of the above.
+
+### Whole-stack re-review (scoped, 2026-09-30: 0 Critical, 1 Important) - last round
+
+Full suite after: `1571 test(s) run, 0 failed, 0 crashed` (+1: the split). Check-Architecture PASS, rule-12 warnings 111 (one
+new claim, "the one door onto the runway", fell out of its ENFORCED BY window when m6 grew the comment - reworded). Red
+lines marked "pin" are for behaviour the previous round already fixed: the test was written against it, so its red is the
+mutation.
+
+| # | Finding | Fix | Test (red line) |
+|---|---|---|---|
+| I-1 | LoadRederivesWithoutCancelling stopped pinning "a load publishes no status change", and its name no longer said what it asserted | Split, sharing one rig (`FAirportClosedLoadRig`: closed, saved with a landable Accepted flight due 5 s later, reopened, loaded, run past the ETA). `AirportOps.Present.Airport.LoadRederivesSilently` (renamed): the status re-derived closed, `UAirport::ChangeCountForTest()` unchanged across the load and the ticks, no satisfaction change. `AirportOps.Present.Airport.ClosedLoadCancelsTheUnarrived` (new): nothing dispatched, no flight Landing, the planted flight Cancelled, unscored. ENFORCED BY lines re-pointed (Airport.h, OpsRuntime.cpp x2, FlightBoard.cpp) | pin; mutation "the load's Reseat -> Refresh": "no status change was published" expected 2, got 3. The cancel half's reds are the previous round's I1 lines |
+| m1 | Two copies of the owed-litres read | `UJobBoard::LitresWanted(AgentId, Airframe)` (private), used by the fuel-job site and the M4 site. DepartFromFallbackReadsTaxiOut wires `LitresOwedFor` to 1234 L (asserted not the default) and asserts Wanted equals it | pin; mutation "DefaultLitres at the M4 site": "owed what the flight was owed" 1234, got 317.8 |
+| m2 | The M4 log line said "unfuelled" as a literal | Logs `FuelOutcomeOf(0, Wanted)` by name | - |
+| m3 | Three docs still named DropAircraft the one publisher | OpsEventBus.h (FTurnaroundEndedEvent), JobBoard.h (DropAircraft), JobBoard.cpp (DepartTheReady's note) now name EndTurnaround and its two callers | - |
+| m4 | FLandChoicesKey's ENFORCED BY missed the status | Adds AirportMgr.UI.LandPanelGreysWhileClosed | - |
+| m5 | StatusSwapKeepsHeight never measured the card as built | Measures a fresh inbox before any ShowAirportStatus (Open's first call is a no-op, so only the build collapses the box) | pin; mutation "no build-time collapse": "and fresh from the build, the same again" 30, got 38 |
+| m6 | TickQueue tested the pause before the closure, so a closed, paused airport armed a net | AdmitsArrivals asked first | ClosedAirportDispatchesNothing gains a paused-and-closed step - red before the fix: "paused and closed: no safety net either" to be false |
+
+UE_LOG / comment lines, `1082a4db` -> now (none fell): FlightBoard.cpp 24/279 -> 24/280; JobBoard.cpp 23/196 -> 23/197;
+JobBoard.h 0/440 -> 0/447; OpsEventBus.h 2/157 -> 2/159; LandChoices.h 0/54 -> 0/55; Airport.h 0/44 -> 0/44.
