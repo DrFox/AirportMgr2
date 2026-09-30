@@ -191,9 +191,10 @@ public:
 	 * which. OnChanged still fires for all four, and still carries the rebuild - this is the extra fact OnChanged
 	 * cannot say: that every slot index a listener holds now names something else.
 	 *
-	 * NOT FROM RevertEdit (EndInteractiveEdit's cannot-afford branch, ApplyInteractiveMutation's Verify failure): a
-	 * revert hands back the very graph the open edit began on, so the dragging tool's indices still hold - and it
-	 * reaches here from INSIDE that tool's own call, where deactivating the tool would end the drag re-entrantly.
+	 * NOT FROM RollBackOpenEdit (EndInteractiveEdit's cannot-afford branch, ApplyInteractiveMutation's Verify failure,
+	 * #437): a rollback restores the very graph the open edit began on, IN PLACE, so the dragging tool's indices still
+	 * hold - and it reaches here from INSIDE that tool's own call, where deactivating the tool would end the drag
+	 * re-entrantly.
 	 *
 	 * BEFORE THIS, each door had its own hand-paired response in ARoadBuildController (OnUndo, OnRedo, OnClearNetwork),
 	 * a load had none, and an undo from anywhere else - the settings dialog's Revert - had none either.
@@ -671,7 +672,7 @@ private:
 	 * AND A LOAD, the fifth spelling (#426): RestoreInPlace adopts the SAME object it just deserialised into. The
 	 * pointer write is then a no-op and the rest is exactly the tail a load owes - which is the point: a load was the
 	 * one replacement that went round this door, calling RebuildMesh directly, so no OnChanged listener heard it.
-	 * Announcing the replacement (OnReplaced) is NOT part of this tail: the RevertEdit sites must not - see OnReplaced.
+	 * Announcing the replacement (OnReplaced) is NOT part of this tail: RollBackOpenEdit must not - see OnReplaced.
 	 *
 	 * HIDES THE GHOST because the preview may be describing a node that no longer exists in the
 	 * replacement, and its cache (IsGhostCacheHit) compares only the cursor and the start node -

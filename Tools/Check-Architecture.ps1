@@ -2045,7 +2045,7 @@ if ($revisionOwners.Count -eq 0) {
 }
 foreach ($owner in $revisionOwners.Keys) {
     if (-not $revisionSerializers.ContainsKey($owner)) {
-        $failures.Add("persistent-revision-bumps-on-load: $($revisionOwners[$owner]) $owner is saved (IOpsPersistent) and has a Revision() a view is gated on, but no Serialize override - a load restores it with no Post-like call, so the view keeps the pre-load answer (#426). Override Serialize and bump on Ar.IsLoading(), as ULedger does")
+        $failures.Add("persistent-revision-bumps-on-load: $($revisionOwners[$owner]) $owner is saved (IOpsPersistent) and has a Revision() a view is gated on, but no Serialize override - a load restores it with no Post-like call, so the view keeps the pre-load answer (#426). Override Serialize and bump on Ar.IsLoading(), as UJobBoard, UFlightBoard and ULedger do")
     }
 }
 $ranRules.Add('persistent-revision-bumps-on-load')

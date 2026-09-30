@@ -1536,7 +1536,12 @@ void URoadNetwork::Serialize(FArchive& Ar)
 	Super::Serialize(Ar);
 
 	// ONLY A REAL LOAD: a reference collector or a memory count also comes through Serialize and changes nothing.
-	if (!Ar.IsLoading() || Ar.IsObjectReferenceCollector() || Ar.IsCountingMemory())
+	// NOR A DUPLICATE (PPF_Duplicate): FDuplicateDataReader loads too, but DuplicateObject makes a NEW object - an undo
+	// Memento, a rollback point, a PIE copy - whose clocks start at zero with nothing derived from it alive to fool, and
+	// URoadNetwork::RestoreFrom's clock rule (#437) reads a snapshot's clocks as exactly that. Bumping here made every
+	// Memento read 1, and a snapshot's clock a lie about what it had seen.
+	// ENFORCED BY: Airside.Model.RestoreFromMovesClocksForward ("control: a duplicate starts its clocks at zero")
+	if (!Ar.IsLoading() || Ar.IsObjectReferenceCollector() || Ar.IsCountingMemory() || (Ar.GetPortFlags() & PPF_Duplicate) != 0)
 	{
 		return;
 	}

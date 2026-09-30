@@ -50,8 +50,9 @@ public:
 	 * every load, because a save game deserialises INTO the live network rather than into a new object, and every
 	 * cache keyed on those clocks - the deletion plan, the ghost, the pose-node index, the ops runtime's network poll -
 	 * would otherwise keep its answer for the graph just replaced. HERE, in Serialize, rather than in a call a loader
-	 * must remember (UJobBoard::Serialize's idiom, and UFlightBoard's): OpsSave, a Memento's DuplicateObject and the
-	 * editor's transaction buffer all deserialise through Serialize.
+	 * must remember (UJobBoard::Serialize's idiom, and UFlightBoard's): OpsSave and the editor's transaction buffer both
+	 * deserialise INTO the live object through Serialize. NOT A DUPLICATE (PPF_Duplicate): DuplicateObject loads a NEW
+	 * object, whose clocks start at zero (RestoreFrom, #437, relies on it).
 	 *
 	 * "HAS THE GUIDELINE GRAPH BEEN DERIVED FROM THIS ROAD" SURVIVES THE BUMP: the road and the guideline graph are
 	 * both UPROPERTYs and load together, so a load moves the clocks without making AreGuidelinesBehindRoad say yes -
