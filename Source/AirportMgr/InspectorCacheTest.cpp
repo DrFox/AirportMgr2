@@ -8,6 +8,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/InspectFacts.h"
 #include "Model/JobBoard.h"
+#include "Model/OpsDefinition.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
@@ -275,6 +276,9 @@ namespace InspectorCacheTest
 				TestGraph::Join(*Net, Pose, TestGraph::Node(*Net, -190000.0, 200000.0), Options);
 			}
 			Runtime = NewObject<UOpsRuntime>(GetTransientPackage());
+			// THE VEHICLE CATALOGUE, as Attach resolves it (#430): the rig's runtime is never attached, and the fleet's door
+			// refuses a kind the catalogue lacks.
+			UOpsRuntime::ResolveVehicleCatalogue(*Runtime->GetJobBoard(), *GetDefault<UScenario>());
 		}
 
 		/** Game seconds forward, in real steps the clock turns into game time. */
