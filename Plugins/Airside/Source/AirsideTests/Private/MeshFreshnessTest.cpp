@@ -770,7 +770,10 @@ namespace
 		const int32 TopologyBefore = Actor->TopologyRebuildCountForTest();
 		T.TestTrue(TEXT("the runway is reclassified"), Actor->SetRunwayFacts(0, Facts));
 		T.TestEqual(TEXT("SetRunwayFacts notifies exactly once"), Actor->RebuildCountForTest(), RebuildsBefore + 1);
-		T.TestEqual(TEXT("as Topology"), Actor->TopologyRebuildCountForTest(), TopologyBefore + 1);
+		// AS FACTS since #446, not Topology: a runway's facts are its paint and its pavement, and the derivation
+		// reads neither - see EChangeKind::Facts. The caches that read them hear the model's own revision bump.
+		T.TestEqual(TEXT("as Facts: the derived-graph pass does not run for a reclassification (#446)"),
+			Actor->TopologyRebuildCountForTest(), TopologyBefore);
 		return true;
 	}
 

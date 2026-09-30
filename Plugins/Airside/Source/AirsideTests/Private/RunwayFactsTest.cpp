@@ -1,6 +1,10 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Model/ReverseTurn.h"
+#include "Model/RoadApron.h"
+#include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RunwayFacts.h"
 #include "Profiles/RoadProfile.h"
@@ -119,6 +123,85 @@ bool FPavementRateFactorTest::RunTest(const FString&)
 	TestEqual(TEXT("tarmac is the authored rate itself"), Pavement::RateFactor(EPavement::Tarmac), 1.0);
 	TestEqual(TEXT("concrete"), Pavement::RateFactor(EPavement::Concrete), 1.4);
 	TestEqual(TEXT("reinforced"), Pavement::RateFactor(EPavement::Reinforced), 1.8);
+	return true;
+}
+
+/**
+ * #446: EVERY FACT A PLANNER READS MOVES GuidelineRevision - the clock offer admission, the job board's re-bid and re-offer,
+ * the flight board's verdicts, the held taxi-out, the Land panel and the inspector card key on. Until #446 these writes
+ * moved nothing, and the caches saw a runway flip or a shed purchase only because the facade escalated it to a Topology
+ * rebuild; a runway flip is a Facts edit now, which re-derives nothing, so the model has to say it changed. One row per
+ * mutator, so a new fact that forgets NoteFactChanged has a row here to be added to - and a refusal must move nothing.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FEveryFactMovesTheGuidelineRevisionTest, "Airside.Model.EveryFactMovesTheGuidelineRevision",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FEveryFactMovesTheGuidelineRevisionTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FRoadNodeId T = Net->AddNode(FVector2D(0.0, 0.0));
+	const FRoadNodeId E = Net->AddNode(FVector2D(60000.0, 0.0));
+	const FRoadSegmentId Strip = Net->AddStraightSegment(T, E, TestProfiles::Runway());
+	// A PLAIN TRANSIENT PROFILE offers every pavement (the taxiway fixture's does not), so the road can be put to grass.
+	const FRoadNodeId R = Net->AddNode(FVector2D(0.0, -30000.0));
+	const FRoadSegmentId Road = TestGraph::Lay(*Net, T, R, URoadProfile::MakeTransient(2300.0, 1500.0));
+
+	auto Moves = [this, Net](const TCHAR* What, TFunctionRef<bool()> Write)
+	{
+		const uint32 Before = Net->GetGuidelineRevision();
+		const bool bWrote = Write();
+		TestTrue(FString::Printf(TEXT("setup: %s is accepted"), What), bWrote);
+		TestNotEqual(FString::Printf(TEXT("%s moves GuidelineRevision - a planner reads it, and no rebuild may follow (#446)"), What),
+			Net->GetGuidelineRevision(), Before);
+	};
+
+	FRunwayFacts Grass;
+	Grass.Surface = EPavement::Grass;
+	Moves(TEXT("a runway's facts"), [Net, Strip, &Grass]() { return Net->SetRunwayFacts(Strip, Grass); });
+	Moves(TEXT("the drive side"), [Net]() { return Net->SetDriveSide(Net->GetDriveSide() == EDriveSide::Left ? EDriveSide::Right : EDriveSide::Left); });
+	Moves(TEXT("a road's pavement"), [Net, Road]() { return Net->SetSegmentSurface(Road, EPavement::Grass); });
+
+	const TArray<FVector2D> Plot = { FVector2D(0.0, 20000.0), FVector2D(5000.0, 20000.0), FVector2D(5000.0, 22400.0), FVector2D(0.0, 22400.0) };
+	UEntityDefinition* DepotDef = UEntityDefinition::MakeFuelDepotTransient();
+	FEntityPlacement Placement;
+	Placement.Definition = DepotDef;
+	Placement.Anchors = DepotDef->Anchors;
+	Placement.Position = (Plot[0] + Plot[1]) * 0.5;
+	Placement.PoseRole = EServiceRole::Fuel;
+	Placement.Outline = Plot;
+	Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
+	FEntityInstanceId Depot;
+	Moves(TEXT("a depot placed"), [Net, &Placement, &Depot]() { Depot = Net->PlaceEntity(Placement); return Depot.IsSet(); });
+	Moves(TEXT("a module bought"), [Net, &Depot]() { return Net->AddEntityModule(Depot, EDepotModule::Shed); });
+	Moves(TEXT("a module removed"), [Net, &Depot]() { return Net->RemoveEntityModules(Depot, EDepotModule::Shed, 1) == 1; });
+	Moves(TEXT("an entity re-pointed at a definition"), [Net, &Depot, DepotDef]() { return Net->SetEntityDefinition(Depot, DepotDef); });
+
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	FEntityInstanceId Stand;
+	Moves(TEXT("a stand placed"), [Net, StandDef, &Stand]()
+	{
+		Stand = Net->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(30000.0, 20000.0), 0.0, 0.0, StandDef->PoseRole, 0);
+		return Stand.IsSet();
+	});
+	Moves(TEXT("a stand's design wingspan"), [Net, &Stand]() { return Net->SetStandDesignWingspan(Stand, 4000.0); });
+	Moves(TEXT("an entity removed"), [Net, &Stand]() { return Net->RemoveEntity(Stand); });
+
+	FApronSurface Apron;
+	Apron.Outline = { FVector2D(0.0, 40000.0), FVector2D(9000.0, 40000.0), FVector2D(9000.0, 49000.0) };
+	FApronId ApronId;
+	Moves(TEXT("an apron added"), [Net, &Apron, &ApronId]() { ApronId = Net->AddApron(MoveTemp(Apron)); return ApronId.IsSet(); });
+	Moves(TEXT("an apron removed"), [Net, &ApronId]() { return Net->RemoveApron(ApronId); });
+
+	FReverseTurn Turn;
+	Moves(TEXT("a reverse turn recorded"), [Net, &Turn]() { return Net->AddReverseTurn(Turn) != INDEX_NONE; });
+	const FGuidelineNodeId Bar = Net->AddGuidelineNode(FVector2D(90000.0, 90000.0), /*bDerived*/ false);
+	Moves(TEXT("a holding bar set"), [Net, Bar]() { return Net->SetIntermediateHoldingPosition(Bar, true); });
+
+	// A REFUSAL CHANGED NOTHING, so it moves nothing: a stamp moved for nothing makes every cache keyed here redo its work.
+	const uint32 BeforeRefusals = Net->GetGuidelineRevision();
+	TestFalse(TEXT("setup: a module on a dead depot is refused"), Net->AddEntityModule(FEntityInstanceId(), EDepotModule::Shed));
+	TestEqual(TEXT("setup: removing none removes none"), Net->RemoveEntityModules(Depot, EDepotModule::Pump, 0), 0);
+	TestFalse(TEXT("setup: the drive side it already has is refused"), Net->SetDriveSide(Net->GetDriveSide()));
+	TestEqual(TEXT("and none of the refusals moved the clock"), Net->GetGuidelineRevision(), BeforeRefusals);
 	return true;
 }
 

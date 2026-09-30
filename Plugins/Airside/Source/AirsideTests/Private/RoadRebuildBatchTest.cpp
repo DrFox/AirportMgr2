@@ -201,7 +201,15 @@ bool FRebuildBatchKindIsCombinedTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("anything with Topology is Topology, whichever side it is on"),
 		CombineChangeKinds(EChangeKind::Topology, EChangeKind::Geometry) == EChangeKind::Topology
 		&& CombineChangeKinds(EChangeKind::Geometry, EChangeKind::Topology) == EChangeKind::Topology
-		&& CombineChangeKinds(EChangeKind::Markings, EChangeKind::Topology) == EChangeKind::Topology);
+		&& CombineChangeKinds(EChangeKind::Markings, EChangeKind::Topology) == EChangeKind::Topology
+		&& CombineChangeKinds(EChangeKind::Facts, EChangeKind::Topology) == EChangeKind::Topology);
+	// FACTS (#446): twice is Facts - a batch of module purchases re-derives nothing - and with Geometry or Markings it is
+	// Topology, because Facts neither repaints the holding bars nor reads a graph a drag has left behind the road.
+	TestTrue(TEXT("Facts twice is Facts - the re-mesh that re-derives nothing"),
+		CombineChangeKinds(EChangeKind::Facts, EChangeKind::Facts) == EChangeKind::Facts);
+	TestTrue(TEXT("Facts with Geometry or Markings is Topology, whichever side"),
+		CombineChangeKinds(EChangeKind::Facts, EChangeKind::Geometry) == EChangeKind::Topology
+		&& CombineChangeKinds(EChangeKind::Markings, EChangeKind::Facts) == EChangeKind::Topology);
 
 	// AT THE COMPOSITION. Geometry only arises from a move inside an OPEN drag (the bare-call
 	// trap), and a batch opened inside a drag is the legal nesting - so that is the fixture.

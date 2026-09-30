@@ -242,9 +242,10 @@ void URoadEditFacade::EndRebuildBatch()
 	FoldedNotifyCount = 0;
 	// Logged, so "did the bulk edit rebuild, and as what" is one grep, the way every other
 	// mutator's success line answers it for a single edit.
+	// ChangeKindName, not an if-chain: the chain named every kind that was not Topology or Geometry
+	// "Markings", which a fourth kind (Facts, #446) would have been logged as.
 	UE_LOG(LogRoadMesh, Log, TEXT("Rebuild batch closed: %d notify(s) folded into one %s rebuild"),
-		Folded, Kind == EChangeKind::Topology ? TEXT("Topology")
-			: Kind == EChangeKind::Geometry ? TEXT("Geometry") : TEXT("Markings"));
+		Folded, ChangeKindName(Kind));
 	NotifyChanged(Kind);
 }
 
@@ -961,7 +962,11 @@ bool URoadEditFacade::SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& InF
 
 	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("set runway facts"));
 	Network->SetRunwayFacts(Segment, Facts);
-	CommitAndNotify(Edit);
+	// FACTS, NOT THE TOPOLOGY DEFAULT (#446): a runway's facts are its pavement and its paint, and the
+	// derivation reads neither - re-deriving re-made every guideline node and re-pointed every agent for a
+	// click that moved none. The caches that DO read the facts hear the model's own GuidelineRevision bump.
+	// ENFORCED BY: AirportOps.Model.Offers.Generate.RunwayFlipAsksAgain, AirportOps.Service.Rebid.RunwayFlipRebids
+	CommitAndNotify(Edit, EChangeKind::Facts);
 
 	UE_LOG(LogRoadMesh, Log, TEXT("Runway at segment %d reclassified: %s, %s approach (the whole strip)"),
 		SegmentIndex, Pavement::Name(Facts.Surface), RunwayApproachName(Facts.Approach));
@@ -1403,7 +1408,11 @@ bool URoadEditFacade::AddEntityModule(FEntityInstanceId Entity, EDepotModule Mod
 		// destructor has pushed the step BEFORE the history is cleared below.
 		FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("buy module"));
 		Network->AddEntityModule(Entity, Module);
-		CommitAndNotify(Edit, EChangeKind::Topology);
+		// FACTS (#446), not the Topology it was: the derivation reads no module, so re-deriving re-solved the
+		// whole airport for a shed. The buildings hear OnNetworkChanged(Facts) and light the bay; the job board
+		// and the fuel verdict hear the model's GuidelineRevision bump.
+		// ENFORCED BY: Airside.Present.Facility.ModulePurchaseRelightsWithoutRederiving
+		CommitAndNotify(Edit, EChangeKind::Facts);
 	}
 	ClearHistory();
 	UE_LOG(LogRoadMesh, Log, TEXT("Depot %d: %s added; undo history cleared (a purchase is a checkpoint)"),
@@ -1427,14 +1436,15 @@ int32 URoadEditFacade::RemoveUnseatedModules(FEntityInstanceId Entity, EDepotMod
 		UE_LOG(LogRoadMesh, Warning, TEXT("RemoveUnseatedModules deferred: depot %d - an interactive edit is open"), Entity.Index);
 		return 0;
 	}
-	// NO SCOPE: a repair is not a step the player can undo (see the header). Notified as a Topology change, AddEntityModule's
-	// kind, so the yard and the drop count are rebuilt from the list as it now stands.
+	// NO SCOPE: a repair is not a step the player can undo (see the header). Notified as a Facts change, AddEntityModule's
+	// kind (Topology until #446), so the yard and the drop count are rebuilt from the list as it now stands - by the
+	// buildings, which hear OnNetworkChanged(Facts); nothing the derivation reads has changed.
 	const int32 Removed = Network->RemoveEntityModules(Entity, Module, Count);
 	if (Removed == 0)
 	{
 		return 0;
 	}
-	NotifyChanged(EChangeKind::Topology);
+	NotifyChanged(EChangeKind::Facts);
 	ClearHistory();
 	UE_LOG(LogRoadMesh, Log, TEXT("Depot %d: %d unseated %s removed; undo history cleared (a repair is a checkpoint)"),
 		Entity.Index, Removed, *UEnum::GetValueAsString(Module));

@@ -216,7 +216,9 @@ bool FGuidelineOverlayTest::RunTest(const FString& Parameters)
 	{
 		// A second, independent actor in the SAME world - FAirsideTestWorld's one Actor is
 		// already mid-fixture above, and this test wants a fresh network to build the second
-		// fixture onto rather than sharing the first's.
+		// fixture onto rather than sharing the first's. Refused as the world's airport, loudly (#446,
+		// URoadNetworkRegistry): expected, since this test drives it directly and never looks it up.
+		AddExpectedMessagePlain(TEXT("is already this world's airport"), ELogVerbosity::Error, EAutomationExpectedMessageFlags::Contains, 1);
 		ARoadNetworkActor* Fresh = TestWorld.World->SpawnActor<ARoadNetworkActor>();
 		if (TestNotNull(TEXT("second fixture built"), Fresh))
 		{

@@ -300,7 +300,11 @@ bool FPushGroundFreedQuietTest::RunTest(const FString&)
 	TestTrue(TEXT("and it is still parked"), Rig.IsParked());
 
 	// THE PLAYER DRAWS THE MISSING ARM - a graph edit, NetworkChanged, which dirties the pass: it goes.
+	// HAND-LAID, so ANNOUNCED BY HAND the way the actor announces every rebuild (#446: ARoadNetworkActor::OnNetworkChanged,
+	// which ops bridges to FNetworkChangedEvent - no longer a per-frame compare of the graph's revision). A real rebuild
+	// would re-derive from the runway and sweep this rig's hand-laid lines.
 	Rig.Lay(FVector2D(-10000.0, 0.0), FVector2D(-10000.0, -20000.0), Rig.South);
+	Rig.Actor->OnNetworkChanged.Broadcast(EChangeKind::Topology, *Rig.Net);
 	int32 Frames = 0;
 	for (; Frames < 60 && Rig.IsParked(); ++Frames)
 	{

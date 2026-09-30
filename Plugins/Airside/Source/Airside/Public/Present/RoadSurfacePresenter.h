@@ -232,6 +232,18 @@ public:
 	void RebuildMarkingsOnly(URoadNetwork& Network, const FSurfaceSettings& Settings);
 
 	/**
+	 * RebuildSurfaceOnly's passes, NOT QUIET (#446, EChangeKind::Facts) - the solve, the road mesh,
+	 * aprons, runway paint and rubber; no guideline graph, no anchor links, no census, no holding
+	 * paint. A runway's facts are a mesh slot (its pavement) and its paint (designators, approach
+	 * marks), so those are repainted; the graph they do not feed is left exactly as it was, every
+	 * handle alive. Logged like a committed edit, unlike a drag frame: this is one click, and "what
+	 * did the flip rebuild" should be answerable from the log.
+	 * THE DEPOT CENSUS IS NOT RE-RUN (DepotKit::ReportIncomplete belongs to the Full scope's links
+	 * pass): a module bought or an unseated one removed repeats its warnings on the next Topology.
+	 */
+	void RebuildFactsOnly(URoadNetwork& Network, const FSurfaceSettings& Settings);
+
+	/**
 	 * Forget what the ghost cache last showed, without touching the ghost component's
 	 * visibility.
 	 *

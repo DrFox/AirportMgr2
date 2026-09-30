@@ -30,6 +30,7 @@ struct FEntityInstance;
 struct FVehicle;
 enum class EAgentPhase : uint8;
 enum class EArrivalRefusal : uint8;
+enum class EChangeKind : uint8;
 
 /**
  * The AirportOps composition root. Owns the clock and the event bus, attaches to the one
@@ -153,6 +154,13 @@ public:
 
 	/** Binds to the actor's traffic delegates. Safe to call again with a new actor (unbinds the old). */
 	void Attach(ARoadNetworkActor* Actor);
+
+	/**
+	 * Unbinds from the attached actor and forgets it. PUBLIC since #446: UOpsRuntimeSubsystem calls it when the
+	 * world's airport leaves (URoadNetworkRegistry), where a per-tick IsValid used to notice the target was gone and
+	 * nothing ever unbound. Attach calls it first; safe with nothing attached.
+	 */
+	void Detach();
 
 	/** Advances the clock and pushes the speed multiplier into the actor. Real seconds in. */
 	void Tick(double RealDeltaSeconds);
@@ -406,13 +414,17 @@ private:
 	void OnPushGroundFreed(int32 AgentId);
 
 	/**
-	 * What FNetworkChangedEvent compares against - see UOpsRuntime::Tick. Not saved: a load swaps the
-	 * revision anyway, and a spurious first event only costs one pass. RESET BY Detach, which is also
-	 * how Attach gets its catch-up pass: the first Tick after an attach always publishes one.
-	 * ENFORCED BY: AirportOps.Present.Bus.QuietBoardDoesNoWork ("the first steps seeded the depot's fleet")
+	 * Airside's ARoadNetworkActor::OnNetworkChanged, bridged onto the bus as FNetworkChangedEvent (#446) -
+	 * bound in Attach, removed in Detach, like the three above. It REPLACED A PER-FRAME POLL: Tick compared
+	 * the network pointer and GuidelineRevision against a remembered pair (SeenNetwork, SeenGuidelineRevision)
+	 * every frame, so a change was published up to a frame late - which is why SaveToSlot had to refresh the
+	 * airport's status itself - and a Detach reset the pair so the first Tick after an Attach published a
+	 * catch-up. The event is published in the rebuild that made the change; Attach's MarkAllDirty and Reseat
+	 * are the catch-up. ENFORCED BY: AirportOps.Present.Bus.NetworkChangedPublishedOnceWithNoTick;
+	 * Check-Architecture rule 51 (network-change-announced)
 	 */
-	TWeakObjectPtr<const URoadNetwork> SeenNetwork;
-	uint32 SeenGuidelineRevision = 0;
+	FDelegateHandle NetworkChangedHandle;
+	void OnNetworkChanged(EChangeKind Kind, const URoadNetwork& Network);
 
 	/** The repeating offer callback, so Detach can cancel it. INDEX_NONE when unattached. */
 	int32 OfferHandle = INDEX_NONE;
@@ -450,8 +462,6 @@ private:
 
 	FDelegateHandle PhaseHandle;
 	FDelegateHandle RefusalHandle;
-
-	void Detach();
 
 	/**
 	 * Every design figure the scenario sets, onto its receiver - the clock's day, the vehicle catalogue and starter fleet

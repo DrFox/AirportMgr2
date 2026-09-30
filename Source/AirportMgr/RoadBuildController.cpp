@@ -1077,7 +1077,7 @@ void ARoadBuildController::BindFacadeListeners()
 	bRunwayCacheValid = false;
 
 	URoadEditFacade* Facade = Target != nullptr ? Target->GetEditFacade() : nullptr;
-	if (Facade == BoundRunwayCacheFacade.Get())
+	if (Facade == BoundRunwayCacheFacade.Get() && Target == BoundRunwayCacheActor.Get())
 	{
 		// Already subscribed to this exact facade (or both are null) - AddUObject has no
 		// duplicate-add guard of its own, so re-binding here would fire the handler twice
@@ -1088,24 +1088,41 @@ void ARoadBuildController::BindFacadeListeners()
 	// now works on a different airport. RemoveAll(this) takes both bindings and nothing else's.
 	if (URoadEditFacade* Old = BoundRunwayCacheFacade.Get())
 	{
-		Old->OnChanged.RemoveAll(this);
 		Old->OnReplaced.RemoveAll(this);
 	}
+	if (ARoadNetworkActor* OldActor = BoundRunwayCacheActor.Get())
+	{
+		OldActor->OnNetworkChanged.RemoveAll(this);
+	}
 	BoundRunwayCacheFacade = Facade;
+	BoundRunwayCacheActor = Target;
 	if (Facade != nullptr)
 	{
-		Facade->OnChanged.AddUObject(this, &ARoadBuildController::OnNetworkChangedInvalidateRunwayCache);
 		Facade->OnReplaced.AddUObject(this, &ARoadBuildController::OnNetworkReplaced);
+	}
+	// THE ACTOR'S ONE ANNOUNCEMENT, not the facade's OnChanged (#446) - see OnNetworkChangedInvalidateRunwayCache.
+	if (Target != nullptr)
+	{
+		Target->OnNetworkChanged.AddUObject(this, &ARoadBuildController::OnNetworkChangedInvalidateRunwayCache);
 	}
 }
 
-void ARoadBuildController::OnNetworkChangedInvalidateRunwayCache(EChangeKind Kind)
+// A MISSING CASE BELOW IS A BUILD ERROR - see ExhaustiveSwitch.h: a fifth EChangeKind must say whether it moves a runway.
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+void ARoadBuildController::OnNetworkChangedInvalidateRunwayCache(EChangeKind Kind, const URoadNetwork& Network)
 {
-	if (Kind == EChangeKind::Topology)
+	switch (Kind)
 	{
+	case EChangeKind::Topology:
+	case EChangeKind::Facts:
 		bRunwayCacheValid = false;
+		return;
+	case EChangeKind::Geometry:
+	case EChangeKind::Markings:
+		return;
 	}
 }
+AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 void ARoadBuildController::OnNetworkReplaced(ENetworkReplace Phase)
 {

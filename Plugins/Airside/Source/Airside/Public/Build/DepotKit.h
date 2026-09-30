@@ -86,10 +86,12 @@ namespace DepotKit
 	 * legitimate state - the player may be about to add the missing module - so this says
 	 * what is missing and the placement still stands.
 	 *
-	 * CALLED AGAIN AFTER EVERY EDIT, not just at placement, because a depot built correctly
+	 * CALLED AGAIN AFTER EVERY TOPOLOGY EDIT, not just at placement, because a depot built correctly
 	 * and later reduced would otherwise have been warned about once, at a moment the player
-	 * was not looking at it - see URoadSurfacePresenter::RebuildInternal's Topology branch,
-	 * which calls it after every rebuild, for where "again" means.
+	 * was not looking at it - see AirsideDerivation::Derive (#438, #472), whose Full and Links scopes
+	 * run it as the links pass's census after every Topology rebuild, for where "again" means. A Facts
+	 * rebuild (#446: a module bought, an unseated one repaired away) derives nothing and does not
+	 * re-run it; its warnings repeat on the next Topology.
 	 *
 	 * SEATED, NOT OWNED (#443, ruled 2026-09-30): a shed or a pump counts only when the plot seats it - the same
 	 * FDepotCapability the job board and the purchase rules read - so it warns of a depot whose modules the plot could

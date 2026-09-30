@@ -13,6 +13,7 @@
 #include "Model/RoadNetwork.h"
 #include "Present/PlotPresenter.h"
 #include "Present/RoadNetworkActor.h"
+#include "Present/RoadNetworkRegistry.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -127,27 +128,74 @@ void AAirsideBuildingsActor::PostRegisterAllComponents()
 		return;
 	}
 
+	// FOLLOW THE WORLD'S AIRPORT (#446) while RoadNetwork is unset: the registry says when one arrives or
+	// leaves, so a buildings actor registered before its road network - actors register in no promised
+	// order - binds the moment the road does, rather than drawing nothing for the whole session. Removed
+	// first: a reregister runs this again, and a second binding would bind twice.
+	URoadNetworkRegistry::OnAirportChanged().Remove(RegistryHandle);
+	RegistryHandle = URoadNetworkRegistry::OnAirportChanged().AddUObject(this, &AAirsideBuildingsActor::OnAirportChanged);
+
 	ARoadNetworkActor* Road = RoadNetwork.Get();
 	if (Road == nullptr)
 	{
-		int32 Found = 0;
-		for (TActorIterator<ARoadNetworkActor> It(GetWorld()); It; ++It)
+		// THE REGISTRY'S ANSWER, NOT A SCAN (#446). NEVER A GUESS BETWEEN TWO is the registry's rule now: a
+		// second network actor is refused there, loudly, so the one it holds is the only candidate there is.
+		Road = URoadNetworkRegistry::Find(GetWorld());
+		if (Road == nullptr)
 		{
-			Road = *It;
-			++Found;
-		}
-		if (Found != 1)
-		{
-			// NEVER A GUESS BETWEEN TWO - see RoadNetwork's own comment.
-			UE_LOG(LogAirside, Warning,
-				TEXT("Buildings: %d road network(s) in %s and none named - drawing nothing. ")
-				TEXT("Set RoadNetwork on %s."),
-				Found, *GetNameSafe(GetWorld()), *GetName());
+			// LOG, NOT WARNING (#446 review): actors register in level order, so on any PIE start or load where this
+			// actor precedes the road it lands here and binds moments later, when the road registers. BeginPlay warns
+			// if that never happened - the case that is a real mistake.
+			UE_LOG(LogAirside, Log,
+				TEXT("Buildings: no road network registered in %s yet - drawing nothing until one registers. ")
+				TEXT("Set RoadNetwork on %s to draw for a particular one."),
+				*GetNameSafe(GetWorld()), *GetName());
 			BindTo(nullptr);
 			return;
 		}
 	}
 	BindTo(Road);
+}
+
+// A MISSING CASE BELOW IS A BUILD ERROR - see ExhaustiveSwitch.h: a third way for an airport to move must say what the plots do.
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+void AAirsideBuildingsActor::OnAirportChanged(UWorld& World, ARoadNetworkActor& Airport, EAirportRegistration Change)
+{
+	// ANOTHER WORLD'S AIRPORT is not ours - the editor world's and a PIE world's share this one list. A NAMED
+	// RoadNetwork is followed by nothing else: the level said which one, and the registry does not overrule it.
+	if (&World != GetWorld() || RoadNetwork != nullptr)
+	{
+		return;
+	}
+	switch (Change)
+	{
+	case EAirportRegistration::Arrived:
+		if (&Airport != Bound.Get())
+		{
+			BindTo(&Airport);
+		}
+		return;
+	case EAirportRegistration::Left:
+		// ONLY THE ONE WE DRAW FOR: the leaver is named, so a refused second actor going cannot clear our plots.
+		if (&Airport == Bound.Get())
+		{
+			BindTo(nullptr);
+		}
+		return;
+	}
+}
+AIRSIDE_EXHAUSTIVE_SWITCH_END
+
+void AAirsideBuildingsActor::BeginPlay()
+{
+	Super::BeginPlay();
+	// THE WARNING PostRegisterAllComponents no longer gives: by BeginPlay every actor in the level has registered, so an
+	// unbound buildings actor now really has no road network to draw for, and no depot will show.
+	if (!Bound.IsValid())
+	{
+		UE_LOG(LogAirside, Warning, TEXT("Buildings: %s has no road network to draw for in %s - no depot will show."),
+			*GetName(), *GetNameSafe(GetWorld()));
+	}
 }
 
 void AAirsideBuildingsActor::UnregisterAllComponents(bool bForReregister)
@@ -156,6 +204,8 @@ void AAirsideBuildingsActor::UnregisterAllComponents(bool bForReregister)
 	// road network has not changed, and PostRegisterAllComponents rebinds anyway.
 	if (!bForReregister)
 	{
+		URoadNetworkRegistry::OnAirportChanged().Remove(RegistryHandle);
+		RegistryHandle.Reset();
 		Unbind();
 	}
 	Super::UnregisterAllComponents(bForReregister);
@@ -219,7 +269,7 @@ void AAirsideBuildingsActor::BindTo(ARoadNetworkActor* Road)
 	}
 
 	Bound = Road;
-	BoundHandle = Road->OnTopologyRebuilt.AddUObject(this, &AAirsideBuildingsActor::Rebuild);
+	BoundHandle = Road->OnNetworkChanged.AddUObject(this, &AAirsideBuildingsActor::OnNetworkChanged);
 	UE_LOG(LogAirside, Log, TEXT("Buildings: %s drawing plots for %s"),
 		*GetName(), *Road->GetName());
 
@@ -234,11 +284,32 @@ void AAirsideBuildingsActor::Unbind()
 {
 	if (ARoadNetworkActor* Road = Bound.Get())
 	{
-		Road->OnTopologyRebuilt.Remove(BoundHandle);
+		Road->OnNetworkChanged.Remove(BoundHandle);
 	}
 	Bound.Reset();
 	BoundHandle.Reset();
 }
+
+// A MISSING CASE BELOW IS A BUILD ERROR - see ExhaustiveSwitch.h: a fifth EChangeKind must say whether it moves a plot.
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+void AAirsideBuildingsActor::OnNetworkChanged(EChangeKind Kind, const URoadNetwork& Network)
+{
+	switch (Kind)
+	{
+	case EChangeKind::Topology:
+	case EChangeKind::Facts:
+		// A PLOT DRAWN OR REMOVED (Topology), OR A MODULE BOUGHT OR REPAIRED AWAY (Facts, #446) - the two kinds
+		// whose edits a yard is drawn from. Facts is new here: a shed purchase used to reach this as a Topology.
+		Rebuild(Network);
+		return;
+	case EChangeKind::Geometry:
+	case EChangeKind::Markings:
+		// NOTHING A PLOT DERIVES FROM MOVED - RoadNetworkActor::RebuildForKind's reason for skipping these, kept
+		// here now that this actor hears every kind (it heard Topology alone, on OnTopologyRebuilt).
+		return;
+	}
+}
+AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 void AAirsideBuildingsActor::Rebuild(const URoadNetwork& Network)
 {

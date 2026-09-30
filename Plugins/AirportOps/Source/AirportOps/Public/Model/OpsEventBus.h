@@ -116,9 +116,11 @@ struct AIRPORTOPS_API FFlightAirborneEvent
 };
 
 /**
- * The attached network changed - a different network object, or a new guideline revision (a road, a
- * stand, a depot drawn or removed). Published by UOpsRuntime::Tick from one compare a frame: the same
- * revision the job board's re-bid and re-offer gates read, so this cannot disagree with them.
+ * The attached network changed - any committed rebuild: a road, a stand, a depot drawn or removed, a runway's
+ * facts, a module bought, a network replaced (a clear, an undo, a load). Published by UOpsRuntime::OnNetworkChanged,
+ * the bridge from ARoadNetworkActor::OnNetworkChanged, IN THE REBUILD THAT MADE THE CHANGE (#446) - it was one
+ * compare a frame in UOpsRuntime::Tick, a frame late and blind to fact edits. GuidelineRevision is the network's
+ * after the rebuild: the same clock the job board's re-bid and re-offer gates read, so this cannot disagree with them.
  */
 struct AIRPORTOPS_API FNetworkChangedEvent
 {

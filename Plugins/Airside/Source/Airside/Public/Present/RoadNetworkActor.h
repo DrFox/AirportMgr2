@@ -110,23 +110,28 @@ public:
 	ARoadNetworkActor();
 
 	/**
-	 * The first road network in a world, creating one if there is none.
+	 * The world's road network, creating one if there is none.
 	 *
 	 * Having to drag an actor in before any tool would work was a convenience gap rather
 	 * than a design requirement. It stays a PLACEABLE actor, though, and deliberately: an
 	 * airport is level content, and being an actor is how the graph gets saved into the
 	 * map. One auto-spawned at runtime would be transient, which is the problem rather than
-	 * the fix.
+	 * the fix. The spawned one registers itself (PostRegisterAllComponents), so the next Find
+	 * answers it.
 	 */
 	static ARoadNetworkActor* FindOrCreate(UWorld* World);
 
 	/**
-	 * The first road network in a world, or nullptr - the read-only half of FindOrCreate.
+	 * The world's road network, or nullptr - the read-only half of FindOrCreate.
 	 *
-	 * For callers that must not spawn one (a controller's BeginPlay warns and no-ops
-	 * instead) or that re-poll every tick (a widget's inbox) - see #104: three call sites
-	 * used to run their own TActorIterator scan, one of them every frame with a
-	 * const_cast, instead of sharing this one.
+	 * A FORWARDER TO URoadNetworkRegistry (#446) - the one answer to "which airport", kept here
+	 * under its old name so the editor mode, the rig course and the controller did not each change.
+	 * It was a TActorIterator scan taking the FIRST hit, while the buildings actor refused to guess
+	 * between two and ops attached to whichever spawned first: with two network actors the driver
+	 * built into one, ops ran the other and the depots vanished. The registry refuses the second
+	 * actor loudly instead. For callers that must not spawn one (a controller's BeginPlay warns
+	 * and no-ops instead) or that re-ask every tick (a widget's inbox): an O(1) read.
+	 * ENFORCED BY: Check-Architecture rule 52 (one-airport-lookup)
 	 */
 	static ARoadNetworkActor* Find(const UWorld* World);
 
@@ -154,8 +159,31 @@ public:
 	 * origin - and a sprite there reads as a node the build tool drew at (0,0), a false
 	 * picture. The constructor clears the flag; this catches any component another path
 	 * attached.
+	 *
+	 * AND IT REGISTERS THIS ACTOR AS THE WORLD'S AIRPORT (URoadNetworkRegistry, #446), last, after the
+	 * rebuild, so whoever hears the registration finds a built network. HERE, NOT BeginPlay, which #446's
+	 * direction named: BeginPlay never runs in the editor world (URoadBuildEdMode's) nor in the test
+	 * fixture's, and the buildings actor binds from ITS PostRegisterAllComponents, which in PIE runs
+	 * before any BeginPlay - a registry filled at BeginPlay would be empty whenever those asked.
+	 * EndPlay, and UnregisterAllComponents while the actor is being destroyed, give the slot back.
 	 */
 	virtual void PostRegisterAllComponents() override;
+
+	/**
+	 * Unregisters from URoadNetworkRegistry (#446) - ops hears it and DETACHES, a real Detach rather
+	 * than the per-tick IsValid it used to notice a PIE stop by. THE AIRPORT LEAVES ONLY WHEN THE ACTOR
+	 * GOES: EndPlay (the game world's teardown, a destroyed actor's), and UnregisterAllComponents ONLY
+	 * WHILE IsActorBeingDestroyed() - the editor world's delete, where EndPlay never runs (UWorld::
+	 * DestroyActor marks the actor before it unregisters). NOT on bForReregister alone: the engine's
+	 * Details-edit path (AActor::PreEditChange / PostEditChangeProperty, Simulate-In-Editor included)
+	 * unregisters with bForReregister FALSE and then reregisters, and reading that as a departure had ops
+	 * detach and re-attach - a new game - on a property edit (#446 review). A level unloaded in the
+	 * editor world leaves no departure event: nothing in a world listens but that world's own buildings,
+	 * which go with it, and the registry's pointer is weak. Unregistering twice is harmless.
+	 * ENFORCED BY: AirportOps.Present.OpsRuntimeSubsystemSurvivesAReregister, AirportOps.Present.OpsRuntimeSubsystemReattaches
+	 */
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void UnregisterAllComponents(bool bForReregister = false) override;
 
 	/** Solve every node, build the mesh, and push it to the component. Forwards to
 	 *  Presenter with a FSurfaceSettings built from this actor's own Resolve* functions and
@@ -276,20 +304,32 @@ public:
 	URoadSurfacePresenter* GetPresenter() const { return Presenter; }
 
 	/**
-	 * Fired after every TOPOLOGY rebuild, once the surface is built - where the plot boxes
-	 * used to be drawn by a direct call on this actor.
+	 * "THE NETWORK CHANGED", ONCE, AFTER EVERY REBUILD OF EVERY KIND (#446) - the kind, and the network
+	 * as it now stands. Where the plot boxes used to be drawn by a direct call on this actor, and
+	 * where OnTopologyRebuilt fired for Topology alone.
 	 *
-	 * A DELEGATE, NOT A POINTER TO THE BUILDINGS ACTOR, so this actor does not know buildings
-	 * exist: a depot's sheds are objects standing on the airport, not road network, and this
-	 * class reached 2313 lines by owning everything that stood on it. Geometry (drag-frame)
-	 * and Markings rebuilds do not fire it, for the reason RebuildMeshForChange gives - nothing
-	 * a listener derives from has moved. Native, not dynamic: it carries a const reference,
-	 * and nothing in Blueprint listens.
+	 * ONE SIGNAL WITH COMPLETE COVERAGE instead of four partial ones: the buildings heard
+	 * OnTopologyRebuilt, traffic a direct call made AFTER that broadcast (so a listener reading traffic
+	 * saw freed handles), the controller's runway cache the facade's OnChanged - which fires BEFORE
+	 * the rebuild - and ops polled the network pointer and GuidelineRevision every frame. Every
+	 * rebuild ends in RebuildMeshForChange's one Broadcast, so a listener cannot miss a kind the
+	 * pipeline grew, and each decides for itself which kinds matter (a total switch - see EChangeKind).
+	 * Geometry fires too, once per drag frame, for that coverage; every listener today ignores it.
 	 *
-	 * ENFORCED BY: Airside.Present.BuildingsActorDrawsThroughTheDelegate.
+	 * ORDERED: traffic hears FIRST, synchronously, by a direct call just before this broadcast, not
+	 * as a binding here - a multicast delegate promises no order among its bindings, and "a
+	 * subscriber reading traffic sees re-pointed handles" is the order that matters.
+	 * ENFORCED BY: Airside.Present.NetworkChanged.TrafficHearsFirst
+	 *
+	 * A DELEGATE, NOT A POINTER TO THE BUILDINGS ACTOR OR TO OPS, so this actor does not know either
+	 * exists: a depot's sheds are objects standing on the airport, not road network, and this
+	 * class reached 2313 lines by owning everything that stood on it. Native, not dynamic: it
+	 * carries a const reference and a plain enum, and nothing in Blueprint listens.
+	 * ENFORCED BY: Airside.Present.BuildingsActorDrawsThroughTheDelegate,
+	 * AirportOps.Present.Bus.NetworkChangedPublishedOnceWithNoTick
 	 */
-	DECLARE_MULTICAST_DELEGATE_OneParam(FOnTopologyRebuilt, const URoadNetwork&);
-	FOnTopologyRebuilt OnTopologyRebuilt;
+	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnNetworkChanged, EChangeKind, const URoadNetwork&);
+	FOnNetworkChanged OnNetworkChanged;
 
 	/**
 	 * Every graph mutator, query and undo step - see URoadEditFacade.
@@ -1138,7 +1178,8 @@ private:
 	UPROPERTY(Transient) TObjectPtr<URoadSurfacePresenter> Presenter;
 
 	// THE PLOT PRESENTER AND ITS TWO COMPONENTS LIVED HERE until 2026-09-22 - see
-	// AAirsideBuildingsActor, which owns them now, and OnTopologyRebuilt, which feeds it.
+	// AAirsideBuildingsActor, which owns them now, and OnNetworkChanged (OnTopologyRebuilt until
+	// #446), which feeds it.
 
 	/** Every graph mutator, query and undo step - see URoadEditFacade's own header. Same
 	 *  CreateDefaultSubobject and Transient reasoning as Presenter. */
@@ -1151,7 +1192,8 @@ private:
 	/** How many of those calls ran the DERIVED-graph pass - guideline graph, anchor links,
 	 *  plots, traffic - rather than skipping it for a Geometry-only change. See
 	 *  TopologyRebuildCountForTest (issue #165): a Geometry notify bumps RebuildCount above
-	 *  but not this, which is the whole measurement a drag-frame test needs. */
+	 *  but not this, which is the whole measurement a drag-frame test needs. A Facts notify
+	 *  (#446) does not move it either - what a module-purchase test measures. */
 	int32 TopologyRebuildCount = 0;
 
 	/** Agents and dispatch - see UAirsideTraffic's own header. Same CreateDefaultSubobject
@@ -1211,11 +1253,17 @@ private:
 	 * passing Topology, kept at its old name and signature because IRoadEditTarget, a
 	 * UFUNCTION(CallInEditor) button, and every test in this plugin call it with no
 	 * argument and expect a full rebuild. This is where Kind is read: Geometry runs the
-	 * presenter's surface-only path and returns before the buildings (OnTopologyRebuilt)
-	 * or Traffic are touched;
+	 * presenter's surface-only path, Markings its paint-only path and Facts its re-mesh with no
+	 * re-derivation, none of them touching Traffic;
 	 * Topology runs the whole pipeline exactly as RebuildMesh always has.
+	 * EVERY KIND ends in the one OnNetworkChanged broadcast (#446) - see that delegate.
 	 */
 	void RebuildMeshForChange(EChangeKind Kind);
+
+	/** What each kind rebuilds, as one total switch - RebuildMeshForChange's body before its
+	 *  announcement, split out so the switch can be exhaustive (AIRSIDE_EXHAUSTIVE_SWITCH_*
+	 *  wraps a whole function) and the announcement stays one line after every case. */
+	void RebuildForKind(EChangeKind Kind);
 
 	/** The narrower FSurfaceSettings UpdateGhost/BuildGhostBuffers need - see its own
 	 *  comment for why this is not MakeSurfaceSettings with most of it discarded. */

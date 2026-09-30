@@ -1932,11 +1932,15 @@ foreach ($scaleTree in $scaleTrees) {
 $ranRules.Add('scale-on-change')
 
 # --- 35. RUNWAY FACTS GO THROUGH THE FACADE -----------------------------------------------------
-# Ops batch 3 PR E's review (I1): URoadNetwork::SetRunwayFacts moves no revision - not EditRevision,
+# Ops batch 3 PR E's review (I1): URoadNetwork::SetRunwayFacts moved no revision - not EditRevision,
 # not GuidelineRevision. Three gates key on GetGuidelineRevision to see a runway's facts change (the
-# held taxi out's replan, FInspectorCardKey, FLandChoicesKey), and they see it only because every
-# production write goes through URoadEditFacade, whose Topology rebuild re-makes the guideline graph.
-# A write that skipped the facade would leave all three stale, silently. So the NETWORK's setter may
+# held taxi out's replan, FInspectorCardKey, FLandChoicesKey), and they saw it only because every
+# production write went through URoadEditFacade, whose Topology rebuild re-made the guideline graph.
+# #446 MOVED THE CLOCK INTO THE MODEL (URoadNetwork::NoteFactChanged) and made the facade's notify a
+# Facts one that re-derives nothing, so the gates no longer depend on this rule. It STAYS for what the
+# facade still adds: the undo step, and the rebuild that repaints the runway and announces
+# OnNetworkChanged to the buildings, ops and the controller - a raw model write gets none of them.
+# A write that skipped the facade would leave the picture and ops stale, silently. So the NETWORK's setter may
 # be called only from RoadEditFacade*.cpp and Testing/ (and the test modules, which are not scanned);
 # the facade's own SetRunwayFacts(int32, ...) - reached as Facade-> or through IRoadEditTarget as
 # Target-> - is the door everything else uses. Declarations and definitions are exempt; comments and
@@ -1959,7 +1963,7 @@ foreach ($factsTree in $factsTrees) {
             if ($code -match '\bbool\s+(?:\w+::)?SetRunwayFacts\s*\(') { continue }
             $legal = $code -match '\b(?:Facade|Target)\s*->\s*SetRunwayFacts\s*\('
             if (-not $legal) {
-                $failures.Add("facts-through-facade: $($file.Name):$($i + 1) calls SetRunwayFacts( on something other than the facade or an edit target - a network write moves no revision, and the guideline-keyed gates would never see it; go through URoadEditFacade::SetRunwayFacts")
+                $failures.Add("facts-through-facade: $($file.Name):$($i + 1) calls SetRunwayFacts( on something other than the facade or an edit target - a raw network write gets no undo step, no repaint and no OnNetworkChanged, so the runway on screen and ops never hear it; go through URoadEditFacade::SetRunwayFacts")
             }
         }
     }
@@ -2963,6 +2967,103 @@ foreach ($owner in $inspectorDescribeOwners) {
     }
 }
 $ranRules.Add('cards-own-the-describes')
+
+# --- 51. "THE NETWORK CHANGED" IS ANNOUNCED, NEVER POLLED -------------------------------------------
+# Issue #446. UOpsRuntime::Tick compared the network pointer and GetGuidelineRevision() against a remembered pair every
+# frame and published FNetworkChangedEvent when either moved - a frame late (SaveToSlot patched that with a status
+# refresh of its own) and blind to a fact edit that re-derived no graph. ARoadNetworkActor::OnNetworkChanged now
+# announces every rebuild, and UOpsRuntime::OnNetworkChanged bridges it onto the bus. The SHAPE a poll needs is a
+# revision read beside the event it publishes, so:
+# (a) ONE PUBLISHER: FNetworkChangedEvent is constructed ( `FNetworkChangedEvent{` / `FNetworkChangedEvent(` ) in
+#     production code only inside UOpsRuntime::OnNetworkChanged. A second construction - back in Tick, or anywhere -
+#     is a second door, and the first thing a second door is is a poll.
+# (b) NO REVISION READ IN OpsRuntime.cpp BUT THE BRIDGE'S: GetGuidelineRevision( there is legal only inside
+#     UOpsRuntime::OnNetworkChanged, which fills the event from the network it was handed. (GetEditRevision is the
+#     depot-reservation memo's key in ReservedSlotsOf - a memo, not a change detector - and is not matched.)
+# (c) THE BRIDGE EXISTS AND IS BOUND, so this rule cannot pass by the whole mechanism going missing.
+# Comments and string literals are stripped first (rule 34's helpers); "which function" is rule 34's Get-ArchDefinition.
+# WHAT NO REGEX SEES: a poll keyed on another clock (EditRevision, an entity count) that dirties passes without the
+# event. Pinned from the other side by AirportOps.Present.Bus.NetworkChangedPublishedOnceWithNoTick, which fails if
+# the event does not arrive with no Tick.
+$bridgeFile = Join-Path $ops 'Private\Present\OpsRuntime.cpp'
+if (-not (Test-Path $bridgeFile)) {
+    $failures.Add("network-change-announced: $bridgeFile is named by rule 51 but does not exist - update the rule, do not let it check nothing")
+}
+else {
+    $bridgeText = Get-Content -Raw -LiteralPath $bridgeFile
+    if ($bridgeText -notmatch 'void\s+UOpsRuntime::OnNetworkChanged\s*\(') {
+        $failures.Add("network-change-announced: UOpsRuntime::OnNetworkChanged not found in OpsRuntime.cpp - the bridge moved or went; update rule 51, do not let it check nothing")
+    }
+    if ($bridgeText -notmatch 'OnNetworkChanged\.AddUObject\s*\(\s*this\s*,\s*&UOpsRuntime::OnNetworkChanged\s*\)') {
+        $failures.Add("network-change-announced: OpsRuntime.cpp never binds Target->OnNetworkChanged to UOpsRuntime::OnNetworkChanged - the bridge is unwired, and ops would hear no network change at all (#446)")
+    }
+    $lines = Get-Content -LiteralPath $bridgeFile
+    $current = ''
+    $inBlock = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        $def = Get-ArchDefinition $code
+        if ($null -ne $def) { $current = $def }
+        if ($code -match '\bGetGuidelineRevision\s*\(' -and $current -ne 'UOpsRuntime::OnNetworkChanged') {
+            $failures.Add("network-change-announced: OpsRuntime.cpp:$($i + 1) reads GetGuidelineRevision( in $current - ops hears the network change from ARoadNetworkActor::OnNetworkChanged (UOpsRuntime::OnNetworkChanged), it does not compare revisions (#446)")
+        }
+    }
+}
+foreach ($announceTree in @($ops, (Join-Path $Root 'Source\AirportMgr'), $plugin)) {
+    foreach ($file in Get-Sources $announceTree @('.cpp', '.h')) {
+        if ($file.Name -like '*Test.cpp' -or $file.FullName -match '[\\/]Testing[\\/]') { continue }
+        $lines = Get-Content -LiteralPath $file.FullName
+        $current = ''
+        $inBlock = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            $def = Get-ArchDefinition $code
+            if ($null -ne $def) { $current = $def }
+            if ($code -match '^\s*struct\b') { continue }
+            if ($code -match '\bFNetworkChangedEvent\s*[\{\(]' -and $current -ne 'UOpsRuntime::OnNetworkChanged') {
+                $failures.Add("network-change-announced: $($file.Name):$($i + 1) constructs FNetworkChangedEvent in $current - its one publisher is UOpsRuntime::OnNetworkChanged, the bridge from the actor's announcement (#446)")
+            }
+        }
+    }
+}
+$ranRules.Add('network-change-announced')
+
+# --- 52. ONE ANSWER TO "WHICH AIRPORT" ------------------------------------------------------------
+# Issue #446. Four lookups found the world's ARoadNetworkActor with two rules: ARoadNetworkActor::Find and ops'
+# catch-up scan took the FIRST TActorIterator hit, ops also took whichever SPAWNED first (an OnActorSpawned hook) and
+# re-checked IsValid every tick, and the buildings actor refused to guess between two. With two network actors the
+# driver built into one, ops ran the other, and the depots vanished. URoadNetworkRegistry (a UWorldSubsystem the actor
+# registers with) is the one answer now, and refuses a second actor with an Error. So in production code (the test
+# modules and *Test.cpp are exempt: a test may count actors on purpose):
+# (a) no TActorIterator/TActorRange/TObjectIterator/TObjectRange<ARoadNetworkActor>, and no UGameplayStatics
+#     GetActorOfClass / GetAllActorsOfClass(WithTag) naming ARoadNetworkActor, anywhere - ARoadNetworkActor::Find
+#     forwards to the registry (the object and gameplay-statics forms added in #446's review: each is a scan too);
+# (b) no AddOnActorSpawnedHandler under AirportOps - the spawn hook ops used to find the airport by;
+# (c) the registry exists and its refusal is an Error, so the rule cannot pass with the one answer gone.
+$registryFile = Join-Path $plugin 'Private\Present\RoadNetworkRegistry.cpp'
+if (-not (Test-Path $registryFile)) {
+    $failures.Add("one-airport-lookup: $registryFile is named by rule 52 but does not exist - update the rule, do not let it check nothing")
+}
+elseif ((Get-Content -Raw -LiteralPath $registryFile) -notmatch 'UE_LOG\s*\(\s*LogAirside\s*,\s*Error') {
+    $failures.Add("one-airport-lookup: RoadNetworkRegistry.cpp no longer logs an Error when it refuses a second airport - the refusal must be loud (#446)")
+}
+foreach ($lookupTree in @($plugin, $editor, $ops, (Join-Path $Root 'Source\AirportMgr'))) {
+    foreach ($file in Get-Sources $lookupTree @('.cpp', '.h')) {
+        if ($file.Name -like '*Test.cpp' -or $file.FullName -match '[\\/]Testing[\\/]') { continue }
+        $lines = Get-Content -LiteralPath $file.FullName
+        $inBlock = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            if ($code -match '\bT(?:Actor|Object)(?:Iterator|Range)\s*<\s*ARoadNetworkActor\s*>' -or $code -match '\bGet(?:All)?Actors?OfClass\w*\s*\([^;]*ARoadNetworkActor') {
+                $failures.Add("one-airport-lookup: $($file.Name):$($i + 1) searches the world for an ARoadNetworkActor - ask URoadNetworkRegistry (ARoadNetworkActor::Find), the one answer, which refuses a second airport loudly (#446)")
+            }
+            if ($file.FullName.StartsWith($ops) -and $code -match '\bAddOnActorSpawnedHandler\s*\(') {
+                $failures.Add("one-airport-lookup: $($file.Name):$($i + 1) hooks OnActorSpawned in AirportOps - ops hears the world's airport from URoadNetworkRegistry::OnAirportChanged (#446)")
+            }
+        }
+    }
+}
+$ranRules.Add('one-airport-lookup')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was

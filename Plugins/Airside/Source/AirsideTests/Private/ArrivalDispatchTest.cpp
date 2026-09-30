@@ -204,6 +204,9 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	// 4. A RUNWAY TOO SHORT TO STOP ON IS STILL REFUSED, and refused without spawning - an
 	//    arrival that cannot be completed must leave nothing frozen on final.
 	{
+		// A SECOND NETWORK ACTOR IN ONE WORLD is refused as the world's airport, loudly (#446, URoadNetworkRegistry) -
+		// expected here and at the third below: each is an independent fixture this test drives directly, never looked up.
+		AddExpectedMessagePlain(TEXT("is already this world's airport"), ELogVerbosity::Error, EAutomationExpectedMessageFlags::Contains, 2);
 		ARoadNetworkActor* Small = TestWorld.World->SpawnActor<ARoadNetworkActor>();
 		if (TestNotNull(TEXT("a second actor"), Small))
 		{

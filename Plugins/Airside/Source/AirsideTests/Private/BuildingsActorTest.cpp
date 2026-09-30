@@ -7,6 +7,7 @@
 #include "Present/AirsideBuildingsActor.h"
 #include "Present/PlotPresenter.h"
 #include "Present/RoadNetworkActor.h"
+#include "Present/RoadNetworkRegistry.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -44,8 +45,8 @@ namespace
  * The buildings actor draws a depot the road network holds, through the delegate alone.
  *
  * THE SEAM TEST, per CLAUDE.md's refactor contract: OnTopologyRebuilt replaced a direct
- * Plots->RebuildFrom call, and a delegate nobody bound passes every model test while the
- * airport's depots silently vanish. Spawned by hand rather than by FAirsideTestWorld so the
+ * Plots->RebuildFrom call (and OnNetworkChanged replaced OnTopologyRebuilt, #446), and a
+ * delegate nobody bound passes every model test while the airport's depots silently vanish. Spawned by hand rather than by FAirsideTestWorld so the
  * test owns the order - road first, depot placed, THEN the buildings actor - which is also
  * what proves the catch-up rebuild on binding.
  */
@@ -140,6 +141,65 @@ bool FBuildingsActorFindOrCreateIsIdempotentTest::RunTest(const FString& Paramet
 	if (!TestNotNull(TEXT("created"), First)) { return false; }
 	TestEqual(TEXT("the second call finds the first"), Second, First);
 	TestEqual(TEXT("bound to the road network it was given"), First->GetRoadNetwork(), Road);
+	return true;
+}
+
+/**
+ * #446: TWO NETWORK ACTORS GIVE ONE AIRPORT AND AN ERROR. Four lookups used to answer "which airport" with two rules
+ * (the first found, the first spawned, never a guess), and with two actors the driver built into one while ops ran
+ * the other. URoadNetworkRegistry holds the one answer: the second actor to register is refused, LOUDLY - an Error
+ * naming both, which is what tells a designer which to delete - and the first keeps the slot. Not promoted when the
+ * first leaves: which actor the game runs must never depend on teardown order.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRegistrySecondAirportRefusedTest,
+	"Airside.Present.Registry.SecondAirportIsRefusedLoudly",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRegistrySecondAirportRefusedTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld Bare(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), Bare.World)) { return false; }
+	ARoadNetworkActor* First = Bare.World->SpawnActor<ARoadNetworkActor>();
+	if (!TestNotNull(TEXT("a first road network"), First)) { return false; }
+	TestEqual(TEXT("the first registers itself - no scan found it"), URoadNetworkRegistry::Find(Bare.World), First);
+
+	AddExpectedMessagePlain(TEXT("is already this world's airport"), ELogVerbosity::Error, EAutomationExpectedMessageFlags::Contains, 1);
+	ARoadNetworkActor* Second = Bare.World->SpawnActor<ARoadNetworkActor>();
+	if (!TestNotNull(TEXT("a second road network"), Second)) { return false; }
+	TestEqual(TEXT("the second is refused: the first keeps the slot"), URoadNetworkRegistry::Find(Bare.World), First);
+	TestEqual(TEXT("and ARoadNetworkActor::Find, every driver's lookup, gives the same answer"), ARoadNetworkActor::Find(Bare.World), First);
+
+	First->Destroy();
+	TestNull(TEXT("the first gone, the slot is empty - the refused second is not promoted by teardown order"),
+		URoadNetworkRegistry::Find(Bare.World));
+	return true;
+}
+
+/**
+ * #446: THE BUILDINGS FOLLOW THE REGISTRY, so a buildings actor registered BEFORE its road network - actors register in
+ * no promised order - binds the moment the road does. Its old scan ran once, at its own registration, and drew nothing
+ * for the session if the road came second. THE SEAM TEST for URoadNetworkRegistry::OnAirportChanged's subscriber.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingsActorBindsToALateAirportTest,
+	"Airside.Present.BuildingsActorBindsToALateAirport",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingsActorBindsToALateAirportTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld Bare(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), Bare.World)) { return false; }
+	AAirsideBuildingsActor* Buildings = Bare.World->SpawnActor<AAirsideBuildingsActor>();
+	if (!TestNotNull(TEXT("a buildings actor"), Buildings)) { return false; }
+	TestNull(TEXT("control: nothing to bind to yet"), Buildings->GetRoadNetwork());
+
+	ARoadNetworkActor* Road = Bare.World->SpawnActor<ARoadNetworkActor>();
+	if (!TestNotNull(TEXT("a road network, second"), Road)) { return false; }
+	TestEqual(TEXT("the buildings bound to it as it registered, with no call of their own"), Buildings->GetRoadNetwork(), Road);
+
+	Road->Destroy();
+	TestNull(TEXT("and let go when it left"), Buildings->GetRoadNetwork());
 	return true;
 }
 

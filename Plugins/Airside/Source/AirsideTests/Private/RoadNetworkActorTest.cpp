@@ -103,7 +103,9 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 	// mesh comes out - and a graph that solves to an empty buffer looks, on screen,
 	// exactly like a click that did nothing.
 	{
-		// A second, independent actor in the SAME world - see FAirsideTestWorld above.
+		// A second, independent actor in the SAME world - see FAirsideTestWorld above. Refused as the world's
+		// airport, loudly (#446, URoadNetworkRegistry): expected, since this test drives it directly and never looks it up.
+		AddExpectedMessagePlain(TEXT("is already this world's airport"), ELogVerbosity::Error, EAutomationExpectedMessageFlags::Contains, 1);
 		ARoadNetworkActor* Drawn = TestWorld.World->SpawnActor<ARoadNetworkActor>();
 		const int32 P = Drawn->PlaceNode(FVector2D(0.0, 0.0));
 		const int32 Q = Drawn->PlaceNode(FVector2D(1000.0, 0.0));
