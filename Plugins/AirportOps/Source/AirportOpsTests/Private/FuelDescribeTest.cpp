@@ -34,9 +34,9 @@ bool FFuelDescribePumpingTest::RunTest(const FString& Parameters)
 	D.TripStartedAt = 0.0;
 	D.TripEndsAt = 800.0;
 	TestEqual(TEXT("halfway through the first trip, 500 L are in"),
-		Service->DescribeAgent(1, 400.0), FString(TEXT("Fuel 2,900 L · 2,400 L left · fuelling (trip 1 of 3)")));
+		Service->DescribeAgent(1, 400.0, nullptr), FString(TEXT("Fuel 2,900 L · 2,400 L left · fuelling (trip 1 of 3)")));
 	TestEqual(TEXT("a pump that has not moved has not delivered"),
-		Service->DescribeAgent(1, 0.0), FString(TEXT("Fuel 2,900 L · 2,900 L left · fuelling (trip 1 of 3)")));
+		Service->DescribeAgent(1, 0.0, nullptr), FString(TEXT("Fuel 2,900 L · 2,900 L left · fuelling (trip 1 of 3)")));
 	return true;
 }
 
@@ -47,42 +47,42 @@ bool FFuelDescribeStatesTest::RunTest(const FString& Parameters)
 	{
 		UJobBoard* Service = NewObject<UJobBoard>();
 		Demand(*Service, EServiceJobState::Underway, 1900.0, 1000.0, 1);
-		TestEqual(TEXT("second trip on its way"), Service->DescribeAgent(1, 0.0),
+		TestEqual(TEXT("second trip on its way"), Service->DescribeAgent(1, 0.0, nullptr),
 			FString(TEXT("Fuel 2,900 L · 1,900 L left · truck en route (trip 2 of 3)")));
 	}
 	{
 		UJobBoard* Service = NewObject<UJobBoard>();
 		Demand(*Service, EServiceJobState::Open, 1900.0, 1000.0, 1);
-		TestEqual(TEXT("between trips it waits for a truck"), Service->DescribeAgent(1, 0.0),
+		TestEqual(TEXT("between trips it waits for a truck"), Service->DescribeAgent(1, 0.0, nullptr),
 			FString(TEXT("Fuel 2,900 L · 1,900 L left · waiting for a truck (trip 2 of 3)")));
 	}
 	{
 		UJobBoard* Service = NewObject<UJobBoard>();
 		Demand(*Service, EServiceJobState::Open, 300.0, 0.0, 0);
-		TestEqual(TEXT("a one-trip job names no trips"), Service->DescribeAgent(1, 0.0),
+		TestEqual(TEXT("a one-trip job names no trips"), Service->DescribeAgent(1, 0.0, nullptr),
 			FString(TEXT("Fuel 300 L · 300 L left · waiting for a truck")));
 	}
 	{
 		UJobBoard* Service = NewObject<UJobBoard>();
 		Demand(*Service, EServiceJobState::Done, 0.0, 2900.0, 3);
-		TestEqual(TEXT("done, in how many trips"), Service->DescribeAgent(1, 0.0),
+		TestEqual(TEXT("done, in how many trips"), Service->DescribeAgent(1, 0.0, nullptr),
 			FString(TEXT("Fuel 2,900 L · done in 3 trips")));
 	}
 	{
 		UJobBoard* Service = NewObject<UJobBoard>();
 		Demand(*Service, EServiceJobState::Done, 0.0, 0.0, 0);
-		TestEqual(TEXT("a type with no tank"), Service->DescribeAgent(1, 0.0), FString(TEXT("Fuel · none needed")));
+		TestEqual(TEXT("a type with no tank"), Service->DescribeAgent(1, 0.0, nullptr), FString(TEXT("Fuel · none needed")));
 	}
 	{
 		UJobBoard* Service = NewObject<UJobBoard>();
 		FServiceJob& D = Demand(*Service, EServiceJobState::Unserviceable, 2900.0, 0.0, 0);
 		D.Why = EServiceRefusal::NoDepot;
-		TestEqual(TEXT("the refusal, as before"), Service->DescribeAgent(1, 0.0),
+		TestEqual(TEXT("the refusal, as before"), Service->DescribeAgent(1, 0.0, nullptr),
 			FString(TEXT("Fuel 2,900 L · no fuel depot")));
 	}
 	{
 		UJobBoard* Service = NewObject<UJobBoard>();
-		TestEqual(TEXT("no demand, no line"), Service->DescribeAgent(1, 0.0), FString());
+		TestEqual(TEXT("no demand, no line"), Service->DescribeAgent(1, 0.0, nullptr), FString());
 	}
 	return true;
 }
@@ -106,17 +106,17 @@ bool FFuelDescribeVehicleTest::RunTest(const FString& Parameters)
 	Vehicle.AgentId = 7;
 	Vehicle.CurrentJob = JobId;
 	Vehicle.Queue = { 99 };
-	TestEqual(TEXT("driving to a job"), Service->DescribeAgent(7, 0.0),
+	TestEqual(TEXT("driving to a job"), Service->DescribeAgent(7, 0.0, nullptr),
 		FString(TEXT("Bowser · to stand 2 · 9,700 L · 1 queued")));
 
 	Vehicle.State = EServiceVehicleState::Serving;
 	Vehicle.Queue.Reset();
-	TestEqual(TEXT("serving, nothing behind it"), Service->DescribeAgent(7, 0.0),
+	TestEqual(TEXT("serving, nothing behind it"), Service->DescribeAgent(7, 0.0, nullptr),
 		FString(TEXT("Bowser · fuelling at stand 2 · 9,700 L")));
 
 	Vehicle.State = EServiceVehicleState::ToFacility;
 	Vehicle.CurrentJob = 0;
-	TestEqual(TEXT("going home"), Service->DescribeAgent(7, 0.0),
+	TestEqual(TEXT("going home"), Service->DescribeAgent(7, 0.0, nullptr),
 		FString(TEXT("Bowser · to depot 4 · 9,700 L")));
 	return true;
 }
@@ -169,7 +169,7 @@ bool FFuelDescribeDepotBacklogTest::RunTest(const FString& Parameters)
 		const_cast<FServiceJob*>(Service->GetJobs().FindByPredicate([JobId](const FServiceJob& J) { return J.Id == JobId; }))->VehicleId = BowserId;
 	}
 
-	const FDepotBacklog Backlog = Service->DescribeDepot(Depot, Now);
+	const FDepotBacklog Backlog = Service->DescribeDepot(Depot, Now, nullptr);
 	TestEqual(TEXT("the summary: how many, when it clears, how many late"), Backlog.Summary,
 		FString(TEXT("2 jobs · clears in 21 min · 1 late")));
 	TestEqual(TEXT("and where the backlog sits: each vehicle, then its jobs in order"), Backlog.Detail,
@@ -183,11 +183,11 @@ bool FFuelDescribeDepotBacklogTest::RunTest(const FString& Parameters)
 	FEntityInstanceId Idle;
 	Idle.Index = 8;
 	Service->AddVehicleForTest(TEXT("UTILITY"), Idle, EServiceVehicleState::Idle, 1000.0);
-	TestEqual(TEXT("a depot with a vehicle and nothing to do says so"), Service->DescribeDepot(Idle, Now).Summary, FString(TEXT("No jobs")));
+	TestEqual(TEXT("a depot with a vehicle and nothing to do says so"), Service->DescribeDepot(Idle, Now, nullptr).Summary, FString(TEXT("No jobs")));
 	FEntityInstanceId Empty;
 	Empty.Index = 9;
-	TestEqual(TEXT("a depot with no vehicle says to buy one"), Service->DescribeDepot(Empty, Now).Summary, FString(TEXT("No vehicles \u2014 buy one")));
-	TestEqual(TEXT("and lists nothing under it"), Service->DescribeDepot(Empty, Now).Detail, FString());
+	TestEqual(TEXT("a depot with no vehicle says to buy one"), Service->DescribeDepot(Empty, Now, nullptr).Summary, FString(TEXT("No vehicles \u2014 buy one")));
+	TestEqual(TEXT("and lists nothing under it"), Service->DescribeDepot(Empty, Now, nullptr).Detail, FString());
 	return true;
 }
 
@@ -211,7 +211,7 @@ bool FFuelDescribeDepotSpansTest::RunTest(const FString& Parameters)
 	FServiceVehicle& Bowser = Service->AddVehicleForTest(TEXT("FUEL"), Depot, EServiceVehicleState::ToJob, 9700.0);
 	Bowser.CurrentJob = JobId;
 
-	const FDepotBacklog Backlog = Service->DescribeDepot(Depot, Now);
+	const FDepotBacklog Backlog = Service->DescribeDepot(Depot, Now, nullptr);
 	TestTrue(*FString::Printf(TEXT("the job's promise in the clock's words: '%s'"), *Backlog.Detail), Backlog.Detail.Contains(TEXT("+1 h 35 min")));
 	TestTrue(TEXT("and its lateness"), Backlog.Detail.Contains(TEXT("late 35 min")));
 	TestEqual(TEXT("and the summary's"), Backlog.Summary, FString(TEXT("1 job \u00B7 clears in 1 h 35 min \u00B7 1 late")));

@@ -2,6 +2,7 @@
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/InspectFacts.h"
+#include "Model/FacilityPurchases.h"
 #include "Model/JobBoard.h"
 #include "Model/OpsAlerts.h"
 #include "Model/OpsEventBus.h"
@@ -22,6 +23,8 @@ namespace
 		/** The stand placed AFTER the first was deleted: number 4, in the first one's recycled slot. */
 		FEntityInstanceId Fourth;
 		FEntityInstanceId FirstGone;
+		/** A fuel depot on the same network - a real facility, so UFacilityPurchases::Quote has a card to fill. */
+		FEntityInstanceId Depot;
 
 		bool Build()
 		{
@@ -35,7 +38,9 @@ namespace
 				return false;
 			}
 			Fourth = Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, 0.0), 0.0);
-			return Fourth.IsSet();
+			UEntityDefinition* DepotDef = UEntityDefinition::MakeFuelDepotTransient();
+			Depot = Net->PlaceEntity(DepotDef, DepotDef->Anchors, FVector2D(0.0, 30000.0), 0.0, 0.0, EServiceRole::Fuel);
+			return Fourth.IsSet() && Depot.IsSet();
 		}
 	};
 }
@@ -50,7 +55,8 @@ bool FStandLabelAgreeTest::RunTest(const FString&)
 	if (!TestNotNull(TEXT("the fourth stand is alive"), Fourth)) { return false; }
 	const int32 Number = Fourth->StandNumber;
 	TestEqual(TEXT("it is stand 4 - the first's number is retired, not reused"), Number, 4);
-	TestNotEqual(TEXT("and its entity index is NOT its number, which is the whole of the bug"), Field.Fourth.Index, Number);
+	TestEqual(TEXT("it took the DELETED stand's slot - the recycling that makes an index the wrong name for a stand"), Field.Fourth.Index, Field.FirstGone.Index);
+	TestNotEqual(TEXT("so its entity index is NOT its number, which is the whole of the bug"), Field.Fourth.Index, Number);
 
 	FStandFacts Card;
 	if (!TestTrue(TEXT("the stand card reads it"), InspectFacts::DescribeStand(nullptr, *Field.Net, Field.Fourth.Index, Card))) { return false; }
@@ -78,8 +84,7 @@ bool FStandLabelAgreeTest::RunTest(const FString&)
 
 	// THE BACKLOG, and the vehicle's own line in it: the same stand, a depot card's two places that name it.
 	UJobBoard* Board = NewObject<UJobBoard>(GetTransientPackage());
-	FEntityInstanceId Depot;
-	Depot.Index = 7;
+	const FEntityInstanceId Depot = Field.Depot;
 	FServiceJob& Job = Board->AddJobForTest(2, EServiceJobState::Underway, EServiceRefusal::None, 0);
 	Job.Stand = Field.Fourth;
 	Job.QuantityOwed = 500.0;
@@ -91,6 +96,18 @@ bool FStandLabelAgreeTest::RunTest(const FString&)
 		Backlog.Detail.Contains(FString::Printf(TEXT("to %s"), *Expected)));
 	TestTrue(*FString::Printf(TEXT("and so does the job's line (%s): '%s'"), *Expected, *Backlog.Detail),
 		Backlog.Detail.Contains(FString::Printf(TEXT("  %s ·"), *Expected)));
+
+	// THE FLEET ROWS ARE THE DEPOT CARD'S THIRD PLACE THAT NAMES THE STAND: UFacilityPurchases::Quote builds each row's Line through
+	// VehicleLine, which took the network as an optional argument and printed the index when a caller left it off - so one card said "to stand 4"
+	// in its backlog and "to stand 0" in its fleet row (#447 review).
+	UFacilityPurchases* Shop = NewObject<UFacilityPurchases>(GetTransientPackage());
+	Shop->JobBoard = Board;
+	const FFacilityQuote Quote = Shop->Quote(*Field.Net, Depot);
+	if (TestTrue(TEXT("the depot is a facility with the vehicle as a fleet row"), Quote.IsFacility() && Quote.Fleet.Num() == 1))
+	{
+		TestTrue(*FString::Printf(TEXT("the fleet row says where it is going by number (%s): '%s'"), *Expected, *Quote.Fleet[0].Line),
+			Quote.Fleet[0].Line.Contains(FString::Printf(TEXT("to %s"), *Expected)));
+	}
 	return true;
 }
 

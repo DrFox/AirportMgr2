@@ -87,14 +87,10 @@ bool FSunDriverDuskIsTheClocksTest::RunTest(const FString& Parameters)
 	Clock->DawnHour = 8.0;
 	TestTrue(TEXT("dawn follows too: 07:30 is night at dawn 8"), FMath::IsNearlyEqual(ElevationAt(7.5), Floor, 1e-6));
 
-	// NO CLOCK (the editor): the scenario's own defaults, not a third set of numbers.
-	double Dawn = -1.0;
-	double Dusk = -1.0;
-	ASunDriver::ResolveDaylightHours(nullptr, Dawn, Dusk);
-	TestEqual(TEXT("no clock: the scenario's default dawn"), Dawn, GetDefault<UScenario>()->DawnHour);
-	TestEqual(TEXT("no clock: the scenario's default dusk"), Dusk, GetDefault<UScenario>()->DuskHour);
+	// NO CLOCK (the editor): the path keeps FSunPath's own hours, which DefaultsAreTheScenarios pins to the scenario's - one path to those figures.
 	const FSunPath Editor = Driver->MakePath(nullptr);
-	TestEqual(TEXT("and the path the driver builds with no clock carries them"), Editor.DuskHour, GetDefault<UScenario>()->DuskHour);
+	TestEqual(TEXT("no clock: the scenario's default dawn"), Editor.DawnHour, GetDefault<UScenario>()->DawnHour);
+	TestEqual(TEXT("no clock: the scenario's default dusk"), Editor.DuskHour, GetDefault<UScenario>()->DuskHour);
 	return true;
 }
 

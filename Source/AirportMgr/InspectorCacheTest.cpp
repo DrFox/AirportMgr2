@@ -347,6 +347,30 @@ bool FInspectorCacheDepotBoardTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorCacheDepotOffRoadTest, "AirportMgr.Inspector.Cache.OffTheRoadTheRoadIsTheFix",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FInspectorCacheDepotOffRoadTest::RunTest(const FString&)
+{
+	// OFF THE ROAD, THE ROAD IS THE FIX (#447): a depot no service road reaches has no vehicle to buy yet - the card says "Cannot dispatch", which names
+	// what the player draws, and does not say "buy one" (which would send them to a shop that cannot help). The card asks the board for its status only
+	// when the depot is reachable; this was pinned when the widget worded "No vehicles" (FDepotCard::StatusWith) and went with it, so the gate is
+	// pinned here, at the card.
+	using namespace InspectorCacheTest;
+	FDepotRig Rig;
+	if (!TestTrue(TEXT("the rig, with a depot"), Rig.Ok() && Rig.Depot.IsSet())) { return false; }
+	UEntityDefinition* DepotDef = UEntityDefinition::MakeFuelDepotTransient();
+	const FEntityInstanceId OffRoad = Rig.Net->PlaceEntity(DepotDef, DepotDef->Anchors, FVector2D(-200000.0, -200000.0), 0.0, 0.0,
+		DepotDef->PoseRole, DepotDef->Trucks);
+	if (!TestTrue(TEXT("a second depot, joined to no road"), OffRoad.IsSet())) { return false; }
+	TestEqual(TEXT("and it has no vehicle"), Rig.Runtime->GetJobBoard()->VehiclesAt(OffRoad), 0);
+
+	Rig.Panel->RefreshWith(Rig.Runtime, Rig.Actor, Rig.Select(ESelectionKind::Stand, OffRoad.Index));
+	TestEqual(TEXT("off the road, the road is the fix it names - not 'buy one'"), Rig.Panel->StatusForTest(), FString(TEXT("Cannot dispatch")));
+	Rig.Panel->RefreshWith(Rig.Runtime, Rig.Actor, Rig.Select(ESelectionKind::Stand, Rig.Depot.Index));
+	TestEqual(TEXT("while the depot on a road, with no vehicle, says to buy one"), Rig.Panel->StatusForTest(), FString(TEXT("No vehicles — buy one")));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorCacheDepotBoughtTest, "AirportMgr.Inspector.Cache.DepotSeesAVehicleBoughtAndSold",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FInspectorCacheDepotBoughtTest::RunTest(const FString&)

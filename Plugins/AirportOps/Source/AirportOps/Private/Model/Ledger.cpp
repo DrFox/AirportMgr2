@@ -46,7 +46,7 @@ int32 ULedger::Post(double At, ELedgerCategory Category, double Amount, FText Wh
 
 	// Added rather than recomputed: Post is the hot path, and the fold that would verify it is
 	// what FoldBalanceForTest and its test are for.
-	const double Before = CachedBalance;
+	const bool bWasOverdrawn = IsOverdrawn();   // the state BEFORE the post, asked of the one definition (#447 review)
 	CachedBalance += Amount;
 	++RevisionCount;
 
@@ -58,9 +58,9 @@ int32 ULedger::Post(double At, ELedgerCategory Category, double Amount, FText Wh
 	if (Bus != nullptr)
 	{
 		Bus->Publish(FMoneyPostedEvent{ Entry.Id, Category, Amount, CachedBalance });
-		if ((Before < 0.0) != (CachedBalance < 0.0))
+		if (bWasOverdrawn != IsOverdrawn())
 		{
-			Bus->Publish(FBalanceSignChangedEvent{ CachedBalance < 0.0 });
+			Bus->Publish(FBalanceSignChangedEvent{ IsOverdrawn() });
 		}
 	}
 	return Entry.Id;

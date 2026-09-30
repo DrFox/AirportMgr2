@@ -40,7 +40,8 @@ public:
 	 * the panel tints it. A FACT OF THE ROW, set by Refresh - the panel used to recover it by comparing the status's localised TEXT
 	 * against its own NSLOCTEXT, which a reworded status or a translation would have broken silently (#447; ULedgerRowViewModel's
 	 * bOutgoing rejects exactly this idea).
-	 * ENFORCED BY: Check-Architecture rule 4's 'text compared to a literal' row, AirportMgr.UI.Arrivals.HoldingIsAFactNotAWord
+	 * ENFORCED BY: Check-Architecture rule 68 (no `.EqualTo(` then `NSLOCTEXT(` over a statement), AirportMgr.UI.Arrivals.HoldingIsAFactNotAWord (the fact),
+	 * AirportMgr.UI.Arrivals.HoldingRowIsInAccent (the panel reads it)
 	 */
 	bool IsHolding() const { return bHolding; }
 

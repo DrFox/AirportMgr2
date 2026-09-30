@@ -923,7 +923,7 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 			static_cast<int32>(Fixture.Service->GetJobs()[0].Why),
 			static_cast<int32>(EServiceRefusal::NoDepot));
 		TestEqual(TEXT("and the card says so"),
-			Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0),
+			Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0, nullptr),
 			FString(TEXT("Fuel 300 L \u00B7 no fuel depot")));
 	}
 
@@ -953,7 +953,7 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 			static_cast<int32>(Fixture.Service->GetJobs()[0].Why),
 			static_cast<int32>(EServiceRefusal::TooNarrow));
 		TestEqual(TEXT("and the card says the road is too narrow, not missing"),
-			Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0),
+			Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0, nullptr),
 			FString(TEXT("Fuel 300 L \u00B7 no road wide enough for the fuel vehicle")));
 	}
 
@@ -974,7 +974,7 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 			static_cast<int32>(Fixture.Service->GetJobs()[0].Why),
 			static_cast<int32>(EServiceRefusal::NoPump));
 		TestEqual(TEXT("and the card names the pump, not the road"),
-			Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0),
+			Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0, nullptr),
 			FString(TEXT("Fuel 300 L \u00B7 depot has no pump")));
 	}
 
@@ -1024,7 +1024,7 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 		// ENTRANCES rather than report a bare "not on a road" (which sent the player looking at
 		// the stand's sides, where there is nothing to draw).
 		TestEqual(TEXT("and the card names what the road has to reach"),
-			Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0),
+			Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0, nullptr),
 			FString(TEXT("Fuel 300 L \u00B7 no road within reach of the stand's entrances")));
 	}
 	return true;
@@ -2011,7 +2011,7 @@ bool FFuelVehicleTooLargeRefusedTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("because the vehicle is larger than the stand was drawn for"),
 		static_cast<int32>(Demand->Why), static_cast<int32>(EServiceRefusal::VehicleTooLarge));
 	TestEqual(TEXT("and the card names the vehicle, not the road"),
-		Fixture.Service->DescribeAgent(Aircraft, 0.0),
+		Fixture.Service->DescribeAgent(Aircraft, 0.0, nullptr),
 		FString(TEXT("Fuel 300 L \u00B7 the depot's vehicle is too large for this stand")));
 	TestEqual(TEXT("no truck went out"), Fixture.Service->AgentForJob(*Demand), 0);
 	return true;
@@ -2382,7 +2382,7 @@ bool FFuelNoLitresTest::RunTest(const FString& Parameters)
 	Fixture.Advance(2.0);
 	TestNotNull(TEXT("it has a turnaround"), Fixture.Service->TurnaroundFor(Aircraft));
 	TestEqual(TEXT("and no job"), Fixture.Service->GetJobs().Num(), 0);
-	TestEqual(TEXT("and the card says so"), Fixture.Service->DescribeAgent(Aircraft, 0.0), FString(TEXT("Fuel · none needed")));
+	TestEqual(TEXT("and the card says so"), Fixture.Service->DescribeAgent(Aircraft, 0.0, nullptr), FString(TEXT("Fuel · none needed")));
 	TestEqual(TEXT("and no truck was sent"), Fixture.Service->TrucksOutForTest(Fixture.Depot), 0);
 	return true;
 }
@@ -3265,7 +3265,7 @@ bool FFuelEmptyDepotSaysNoVehiclesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("refused for the missing vehicle"),
 		static_cast<int32>(Fixture.Service->GetJobs()[0].Why), static_cast<int32>(EServiceRefusal::NoVehicles));
 	TestEqual(TEXT("and the card says what to do"),
-		Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0),
+		Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0, nullptr),
 		FString(TEXT("Fuel 300 L \u00B7 depot has no vehicles - buy one")));
 	return true;
 }

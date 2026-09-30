@@ -501,9 +501,10 @@ public:
 	 * it - the same argument InspectFacts::StatusOf makes for its own line.
 	 *
 	 * NETWORK NAMES THE STANDS (#447): a vehicle's line says "to stand 4" by the number painted at the stand (OpsNames::StandLabel), which
-	 * only the network's entity holds. Null - a world-free test of the board - names them by index, as before.
+	 * only the network's entity holds. REQUIRED, NO DEFAULT: it was optional at first, and the depot card's fleet rows left it off and said "to stand 0"
+	 * beside the backlog's "to stand 4" (#447 review). A world-free test of the board passes nullptr, which names them by index.
 	 */
-	FString DescribeAgent(int32 AgentId, double Now, const URoadNetwork* Network = nullptr) const;
+	FString DescribeAgent(int32 AgentId, double Now, const URoadNetwork* Network) const;
 
 	/**
 	 * DescribeAgent, and whether its answer MOVES WITH THE CLOCK: true only while the fuel line counts litres down
@@ -513,7 +514,7 @@ public:
 	 * AirportMgr.Inspector.Cache.FuelLineLiveWhilePumping (the card follows it while live)
 	 * Network: see the overload above.
 	 */
-	FString DescribeAgent(int32 AgentId, double Now, bool& bOutMovesWithClock, const URoadNetwork* Network = nullptr) const;
+	FString DescribeAgent(int32 AgentId, double Now, bool& bOutMovesWithClock, const URoadNetwork* Network) const;
 
 	/**
 	 * The player's Unstick for a VEHICLE (spec 2026-09-29-unstick-agent): every job it holds - the
@@ -542,12 +543,12 @@ public:
 	 * card a function of the minute it keys on, and redraws it at most once a game minute.
 	 *
 	 * THE STATUS IS THE BOARD'S (#447): a depot with no vehicle says "No vehicles - buy one" in Summary, where the card laid that over
-	 * the summary in its own wording beside RefusalText's. Network names the stands as the card does (OpsNames::StandLabel); null names
-	 * them by index, for a test of the board with no graph.
+	 * the summary in its own wording beside RefusalText's. Network names the stands as the card does (OpsNames::StandLabel); a test of the
+	 * board with no graph passes nullptr and gets the index. Required, no default - see DescribeAgent.
 	 * ENFORCED BY: AirportOps.Fuel.Describe.DepotBacklog (the no-vehicle and no-job cases),
 	 * AirportOps.Model.StandLabel.AlertBacklogAndCardSayTheSameNumber
 	 */
-	FDepotBacklog DescribeDepot(FEntityInstanceId Depot, double Now, const URoadNetwork* Network = nullptr) const;
+	FDepotBacklog DescribeDepot(FEntityInstanceId Depot, double Now, const URoadNetwork* Network) const;
 
 	/**
 	 * THE FLEET'S MEMBERSHIP DOOR (#443): every vehicle that joins or leaves goes through FServiceFleet::Add and
@@ -568,8 +569,9 @@ public:
 	int32 VehiclesAt(FEntityInstanceId Depot) const;
 
 	/** "Bowser #7 · at depot 1 · 10,000 L" - the one line the depot card's backlog and its fleet rows share. The kind's
-	 *  NAME, through FServiceFleet::NameOf (#430): the card listed "FUEL #7" beside the "Bowser" it sold. */
-	FString VehicleLine(const FServiceVehicle& Vehicle, const URoadNetwork* Network = nullptr) const;
+	 *  NAME, through FServiceFleet::NameOf (#430): the card listed "FUEL #7" beside the "Bowser" it sold. Its stand is named by number through
+	 *  Network (OpsNames::StandLabel), which BOTH callers must pass - null (a graph-free test) names it by index. */
+	FString VehicleLine(const FServiceVehicle& Vehicle, const URoadNetwork* Network) const;
 
 	/** A turnaround with a deadline and one job, bypassing OnAgentPhase - for the backlog's lateness. */
 	void AddTurnaroundForTest(int32 AircraftId, double TurnaroundEndsAt, int32 JobId);
@@ -817,11 +819,11 @@ private:
 
 	/** The vehicle card's line - its kind's NAME (FServiceFleet::NameOf, #430), what it is doing, what it carries, what
 	 *  is queued. */
-	FString DescribeVehicle(const FServiceVehicle& Vehicle, const URoadNetwork* Network = nullptr) const;
+	FString DescribeVehicle(const FServiceVehicle& Vehicle, const URoadNetwork* Network) const;
 
 	/** "to stand 3", "at depot 1" - the one phrase the vehicle card and the depot card share, so the
-	 *  two cannot describe the same vehicle two ways. The stand is named by its number when Network is given (OpsNames::StandLabel). */
-	FString VehicleDoing(const FServiceVehicle& Vehicle, const URoadNetwork* Network = nullptr) const;
+	 *  two cannot describe the same vehicle two ways. The stand is named by its number through Network (OpsNames::StandLabel); null, for a graph-free test, names it by index. */
+	FString VehicleDoing(const FServiceVehicle& Vehicle, const URoadNetwork* Network) const;
 
 	/** A job the vehicle can no longer do goes back to the board, remainder and all. */
 	void Reopen(FServiceJob& Job);

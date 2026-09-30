@@ -52,6 +52,11 @@ void UArrivalsPanelWidget::TickPanel(float DeltaTime)
 	Refresh();
 }
 
+FLinearColor UArrivalsPanelWidget::StatusColourForTest(int32 Row) const
+{
+	return Statuses.IsValidIndex(Row) && Statuses[Row] != nullptr ? Statuses[Row]->GetColorAndOpacity().GetSpecifiedColor() : FLinearColor::Transparent;
+}
+
 void UArrivalsPanelWidget::Refresh()
 {
 	UOpsRuntime* Runtime = OpsRuntime();

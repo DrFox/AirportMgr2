@@ -337,6 +337,13 @@ void UUiWindowHost::CloseByPlayer(FName Id)
 		{
 			E->Panel->OnWindowClosedByPlayer();
 		}
+		// LOOK THE ENTRY UP AGAIN: the panel called back into the host (Settings' Close is a SetShown), and a pointer into Windows is not held
+		// across a call that may touch the array - a callback that added a window would leave E dangling (#447 review).
+		E = Find(Id);
+		if (E == nullptr)
+		{
+			return;
+		}
 		if (E->Spec.bToggled)
 		{
 			// THE CLOSE BUTTON IS THE TOGGLE: hidden plainly, so the next key press opens it (#447).

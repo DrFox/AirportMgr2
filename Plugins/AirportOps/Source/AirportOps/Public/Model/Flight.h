@@ -416,8 +416,8 @@ public:
 	 */
 	double ContractSecondsLeft(double Now) const { return AirborneBy() - Now; }
 
-	/** Past the contract's deadline at Now - ContractSecondsLeft below zero. A flight with no contract (ContractSeconds 0: the debug land
-	 *  key's, never offered) has none to be late for; callers that show a contract test ContractSeconds first, as the rows do. */
+	/** Past the contract's deadline at Now - ContractSecondsLeft below zero. MEANINGLESS FOR A FLIGHT WITH NO CONTRACT (ContractSeconds 0: the debug
+	 *  land key's, never offered): its deadline is its accept time, so this reads late from then on. */
 	bool IsLate(double Now) const { return ContractSecondsLeft(Now) < 0.0; }
 
 	/**

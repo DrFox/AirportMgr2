@@ -14,6 +14,12 @@ class URoadNetwork;
  * A VEHICLE'S NAME is FServiceFleet::NameOf (#430, #483) and needs no sibling here: the kind's name and the vehicle's id are the
  * catalogue's and the board's to say. A STAND's number lives on the network's entity, which the job board does not hold - so it
  * takes the network per call, the way the board's other readers do.
+ *
+ * NAMING AN ARBITRARY AGENT (a hold's blocker, a deadlock partner) IS NOT HERE, and stays FAircraftCard::NameOfAgent in the game module: it
+ * composes a flight's callsign, a vehicle's name and id, and Airside's type name, for the inspector's hold line, and the ops layer has no text that
+ * names "whichever agent" for it to be shared with (an alert names a flight by callsign and a vehicle by FServiceFleet::NameOf). Every piece it calls
+ * is reachable from AirportOps, so it moves here beside StandLabel the day an ops text needs it - the issue (#447) listed it with this service and this
+ * is the reason it was left.
  */
 namespace OpsNames
 {

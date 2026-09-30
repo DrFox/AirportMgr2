@@ -3,7 +3,6 @@
 #include "Components/DirectionalLightComponent.h"
 #include "Engine/DirectionalLight.h"
 #include "Model/GameTimeText.h"
-#include "Model/OpsDefinition.h"
 #include "Model/SimClock.h"
 #include "Present/OpsRuntime.h"
 #include "OpsRuntimeResolver.h"
@@ -28,26 +27,17 @@ double ASunDriver::ResolveDayFraction(const USimClock* Clock)
 	return Clock->TimeOfDay() / USimClock::SecondsPerDay;
 }
 
-void ASunDriver::ResolveDaylightHours(const USimClock* Clock, double& OutDawnHour, double& OutDuskHour)
-{
-	if (Clock != nullptr)
-	{
-		OutDawnHour = Clock->DawnHour;
-		OutDuskHour = Clock->DuskHour;
-		return;
-	}
-	// THE SCENARIO'S DEFAULTS, the very figures a new game's clock is given (UScenario::DawnHour/DuskHour) - not a literal 6 and 20 of the
-	// sky's own, which is how night came to be defined twice.
-	const UScenario* Defaults = GetDefault<UScenario>();
-	OutDawnHour = Defaults->DawnHour;
-	OutDuskHour = Defaults->DuskHour;
-}
-
 // Copy the tunables above onto a path, so details-panel edits take effect live - and the clock's daylight, so night starts when the clock says.
 FSunPath ASunDriver::MakePath(const USimClock* Clock) const
 {
 	FSunPath Path;
-	ResolveDaylightHours(Clock, Path.DawnHour, Path.DuskHour);
+	if (Clock != nullptr)
+	{
+		// THE CLOCK'S DAY. With none, Path keeps FSunPath's own hours - the scenario's defaults (DefaultsAreTheScenarios) - which is the one path
+		// to those figures: this used to read GetDefault<UScenario>() as well, a second route to the same numbers (#447 review).
+		Path.DawnHour = Clock->DawnHour;
+		Path.DuskHour = Clock->DuskHour;
+	}
 	Path.MaxElevationDegrees = MaxElevationDegrees;
 	Path.MinElevationDegrees = MinElevationDegrees;
 	Path.NoonAzimuthDegrees = NoonAzimuthDegrees;

@@ -43,6 +43,8 @@ public:
 	int32 RowCountForTest() const { return Titles.Num(); }
 	/** Paint from the viewmodel without a runtime - UOfferInboxWidget::PaintRowsForTest's seam. */
 	void PaintRowsForTest() { if (PanelStyle != nullptr) { PaintRows(*PanelStyle); } }
+	/** The colour Row's status text was last painted in - what AirportMgr.UI.Arrivals.HoldingRowIsInAccent reads. */
+	FLinearColor StatusColourForTest(int32 Row) const;
 
 	/** Top-right beside Offers; foldable and resizable, not closable - there is no bar button to
 	 *  bring it back, and a flight the player took must stay findable. */

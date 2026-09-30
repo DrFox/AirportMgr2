@@ -976,16 +976,6 @@ $AllowedCallers = @(
         ProdReason  = 'format a game time through GameTimeText::TimeOfDay / Stamp (and a span through Duration) - the clock face is written in GameTimeText.cpp alone (#447)'
     },
     @{
-        # A VIEW DOES NOT RECOVER A FACT BY COMPARING ITS OWN LOCALISED TEXT (#447): the arrivals panel found "holding" by `GetStatus().EqualTo(NSLOCTEXT(
-        # ..."HOLDING"))` - a reworded status or a translation silently un-tinted it. The row says IsHolding(). ULedgerRowViewModel::bOutgoing is the
-        # same idea done right.
-        Name        = 'text compared to a literal'
-        Pattern     = '\.EqualTo\s*\(\s*NSLOCTEXT\s*\('
-        ProdAllowed = @()
-        TestExempt  = $true
-        ProdReason  = 'ask the view model for the fact (UArrivalRowViewModel::IsHolding, ULedgerRowViewModel::IsOutgoing) - do not compare what it prints (#447)'
-    },
-    @{
         # WHETHER A WINDOW IS OPEN IS THE HOST'S (#447): four panels kept a bShowing each, a Toggle, an IsShowing and an OnWindowClosedByPlayer resync beside
         # the host's bWanted/bUserClosed and the base's bShownRequested. UUiWindowHost::Toggle and UAirportMgrPanelWidget::IsShown are the one state and the
         # one answer; FUiWindowSpec::bToggled makes the close the toggle; OnShownChanged is what a panel did on its own Toggle. Rule 66 is the list that must agree.
@@ -994,18 +984,6 @@ $AllowedCallers = @(
         ProdAllowed = @()
         TestExempt  = $true
         ProdReason  = 'ask IsShown() and let the host own the state (UUiWindowHost::Toggle, FUiWindowSpec::bToggled, OnShownChanged) - a panel keeping its own flag is the copy that parts from the window (#447)'
-    },
-    @{
-        # A STAND IS NAMED BY ITS NUMBER, ONE WAY (#447): the stand card and the painted sign say StandNumber; the depot card's backlog and the JobUnserviceable
-        # alert printed the entity INDEX ("No fuel for stand 0" beside a sign reading 4). OpsNames::StandLabel is the ops layer's one naming. THE SHAPES
-        # THAT SHIPPED: an index in a Printf format or in FText::AsNumber. OpsEventBus.cpp's event Describe strings are LOG text (beside the flight and
-        # agent ids, where the index is what a developer reads) and UE_LOG lines are not Printf calls, so neither is named player-facing text.
-        # DOES NOT SEE: an index carried in a local first (`const int32 S = Job.Stand.Index;`) and printed from that - AirportOps.Model.StandLabel.* is the behaviour half.
-        Name        = 'a stand is named by OpsNames::StandLabel'
-        Pattern     = '(FString::Printf|FText::AsNumber)\b[^;]*\bStand\.Index\b'
-        ProdAllowed = @('Private\Model\OpsEventBus.cpp')
-        TestExempt  = $true
-        ProdReason  = 'name a stand to the player with OpsNames::StandLabel (the number on its sign), not its entity index, which a delete recycles (#447)'
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -3906,7 +3884,11 @@ if (-not (Test-Path $hudLayerCpp) -or -not (Test-Path $hudLayerH)) {
             $failures.Add("toggled-windows-agree: $cls (Layer.$member) has no $($cls.Substring(1)).cpp beside BuildHudLayer - update rule 66")
             continue
         }
-        $panelText = Get-Content -LiteralPath $panelCpp -Raw
+        # COMMENTS STRIPPED (rule 34's stripper): a WHY comment that says `bToggled = true` is not the assignment.
+        $panelCode = @()
+        $inPanelBlock = $false
+        foreach ($panelLine in (Get-Content -LiteralPath $panelCpp)) { $panelCode += (Strip-ArchCode $panelLine ([ref]$inPanelBlock)) }
+        $panelText = $panelCode -join "`n"
         if ($panelText -notmatch '\bbToggled\s*=\s*true\b') {
             $failures.Add("toggled-windows-agree: $($cls.Substring(1)).cpp is on UBuildHudLayer's PanelFor (a key or a bar button toggles it) but its WantsWindow does not set bToggled = true - its close would stick and the next key press open it hidden (#447)")
         }
@@ -3934,15 +3916,74 @@ if (-not (Test-Path $sunPathCpp) -or -not (Test-Path $sunDriverCpp)) {
     if ($sunPathText -match '\bQuarterDay\b') {
         $failures.Add("night-defined-once: SunPath.cpp has a QuarterDay constant - the hard-coded 06:00-18:00 day that parted from the clock's (#447)")
     }
-    $sunDriverText = Get-Content -LiteralPath $sunDriverCpp -Raw
+    # COMMENTS STRIPPED: a WHY comment quoting the assignment is not the assignment.
+    $sunDriverCode = @()
+    $inBlock = $false
+    foreach ($line in (Get-Content -LiteralPath $sunDriverCpp)) { $sunDriverCode += (Strip-ArchCode $line ([ref]$inBlock)) }
+    $sunDriverText = $sunDriverCode -join "`n"
     $makePath = [regex]::Match($sunDriverText, 'FSunPath\s+ASunDriver::MakePath\s*\([^)]*\)\s*const\s*\{(?<body>.*?)\n\}', 'Singleline')
     if (-not $makePath.Success) {
         $failures.Add("night-defined-once: ASunDriver::MakePath not found in SunDriver.cpp - it moved, or rule 67 is stale (#447)")
-    } elseif ($makePath.Groups['body'].Value -notmatch 'ResolveDaylightHours\s*\(\s*Clock\s*,\s*Path\.DawnHour\s*,\s*Path\.DuskHour\s*\)') {
-        $failures.Add("night-defined-once: ASunDriver::MakePath does not hand the clock's dawn and dusk to the path (ResolveDaylightHours(Clock, Path.DawnHour, Path.DuskHour)) - the sky would follow a day the clock does not (#447)")
+    } elseif ($makePath.Groups['body'].Value -notmatch 'Path\.DawnHour\s*=\s*Clock\s*->\s*DawnHour\s*;' -or $makePath.Groups['body'].Value -notmatch 'Path\.DuskHour\s*=\s*Clock\s*->\s*DuskHour\s*;') {
+        $failures.Add("night-defined-once: ASunDriver::MakePath does not hand the clock's dawn and dusk to the path (Path.DawnHour = Clock->DawnHour; Path.DuskHour = Clock->DuskHour;) - the sky would follow a day the clock does not (#447)")
     }
 }
 $ranRules.Add('night-defined-once')
+
+# --- 68. TEXT IS NOT COMPARED TO A LITERAL, AND A STAND IS NOT PRINTED BY INDEX (#447) --------------------------------
+# Two shapes that shipped, each checked over STATEMENTS (comments and strings stripped, continuation lines JOINED to the statement's end - up to eight
+# lines, to `;`, `{`, `}` or a `:`, rule 58's joining) because BOTH were split across two lines and a line-by-line row could not see either:
+#   a. `.EqualTo(` then `NSLOCTEXT(`: the arrivals panel recovered "holding" by comparing the status's localised text against a copy of the word -
+#      `Row->GetStatus().EqualTo(` ending one line and `NSLOCTEXT("AirportMgr", "ArrivalHolding", "HOLDING"))` starting the next. A reworded status or a
+#      translation un-tinted it silently. The row says IsHolding(); ULedgerRowViewModel::bOutgoing is the same idea done right.
+#   b. A stand's entity INDEX in player-facing text: `FString::Printf`, `FText::AsNumber` or `FText::Format` with `Stand.Index` in the same statement. The
+#      stand card and the painted sign say StandNumber; the depot card's backlog and the JobUnserviceable alert printed the index ("stand 0" beside a sign
+#      reading 4). OpsNames::StandLabel is the ops layer's one naming. OpsEventBus.cpp's event Describe strings are LOG text (beside the flight and agent
+#      ids, where the index is what a developer reads), and UE_LOG lines are not Printf/AsNumber/Format calls, so neither is player-facing text here.
+# DOES NOT SEE: an index carried in a local first (`const int32 S = Job.Stand.Index;`) and printed from that, or a statement over eight lines - the
+# behaviour half is AirportOps.Model.StandLabel.AlertBacklogAndCardSayTheSameNumber. Test files are exempt. Mutation-checked with the EXACT two lines
+# from 891ecb66 ArrivalsPanelWidget.cpp:130-131 (the PR body has the output).
+$textRuleTrees = @((Join-Path $Root 'Plugins\Airside\Source'), (Join-Path $Root 'Plugins\AirportOps\Source'), (Join-Path $Root 'Source\AirportMgr'))
+$textEqualTo  = '\.EqualTo\s*\(\s*NSLOCTEXT\s*\('
+$standPrinted = '(?:FString::Printf|FText::AsNumber|FText::Format)\b[^;{}]*\bStand\s*\.\s*Index\b'
+$textRuleFiles = 0
+foreach ($textTree in $textRuleTrees) {
+    foreach ($file in Get-Sources $textTree @('.cpp', '.h')) {
+        if ($file.Name -like '*Test.cpp' -or $file.Name -like '*Test.h' -or $file.FullName -match '[\\/](Testing|AirsideTests|AirportOpsTests)[\\/]') { continue }
+        $textRuleFiles++
+        $lines = Get-Content -LiteralPath $file.FullName
+        $inBlock = $false
+        $statement = ''
+        $statementStart = 0
+        $statementLines = 0
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $trimmed = (Strip-ArchCode $lines[$i] ([ref]$inBlock)).Trim()
+            $flush = $false
+            if ($trimmed -eq '') {
+                $flush = $statement -ne ''
+            } else {
+                if ($statement -eq '') { $statementStart = $i }
+                $statement += ' ' + $trimmed
+                $statementLines++
+                $flush = ($trimmed -match '[;{}:]$') -or ($statementLines -ge 8)
+            }
+            if ($flush) {
+                if ($statement -match $textEqualTo) {
+                    $failures.Add("text-not-compared-or-indexed: $($file.FullName):$($statementStart + 1) compares localised text against NSLOCTEXT - ask the view model for the fact (UArrivalRowViewModel::IsHolding, ULedgerRowViewModel::IsOutgoing) and do not compare what it prints (#447): $($statement.Trim())")
+                }
+                if ($statement -match $standPrinted -and $file.Name -ne 'OpsEventBus.cpp') {
+                    $failures.Add("text-not-compared-or-indexed: $($file.FullName):$($statementStart + 1) prints a stand's entity index to the player - name it with OpsNames::StandLabel, the number on its sign (a delete recycles the index) (#447): $($statement.Trim())")
+                }
+                $statement = ''
+                $statementLines = 0
+            }
+        }
+    }
+}
+if ($textRuleFiles -lt 50) {
+    $failures.Add("text-not-compared-or-indexed: rule 68 read only $textRuleFiles production file(s) - the trees moved, or the rule checks nothing (#447)")
+}
+$ranRules.Add('text-not-compared-or-indexed')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
