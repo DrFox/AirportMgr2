@@ -672,6 +672,10 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	JobBoard->Bus = &Bus;
 	Ledger->Pricing = Pricing;
 	Ledger->Clock = Clock;
+	// AND THE BOARD'S, for the one hook handed none: a load re-queues or retires the flights whose aeroplanes were
+	// not saved (#404), dated by the loaded Now - see UFlightBoard::RestoreClock.
+	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightRequeuesOrRetires
+	FlightBoard->RestoreClock = Clock;
 
 	// THE LEDGER IS THE PURSE the build tools spend from. Handed to the facade here and
 	// nowhere else, so design-time building - which has no runtime and therefore no purse -
@@ -973,9 +977,13 @@ void UOpsRuntime::PostDailyUpkeep()
 
 TArray<IOpsPersistent*> UOpsRuntime::Persistents() const
 {
-	// ORDER IS THE SAME ON BOTH SIDES and that is all it has to be: every blob is keyed by its
-	// own SaveBlobName, and OnBeforeRestore runs for all of them before any is deserialised, so
-	// nothing here depends on a neighbour having been restored first.
+	// ORDER IS THE SAME ON BOTH SIDES, and every blob is keyed by its own SaveBlobName.
+	//
+	// ONE ORDERING IS LOAD-BEARING: THE CLOCK FIRST. OpsSave::Restore runs each object's RestoreBlob and then its
+	// OnAfterRestore before moving to the next (the comment this replaced said OnBeforeRestore ran for all of them
+	// first; OpsSave.cpp's loop does not), and UFlightBoard::OnAfterRestore dates #404's re-queued and retired flights
+	// by UFlightBoard::RestoreClock - which reads the LOADED time only if the clock was restored before the board.
+	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightRequeuesOrRetires
 	TArray<IOpsPersistent*> Out;
 	Out.Add(Clock);
 	Out.Add(JobBoard);

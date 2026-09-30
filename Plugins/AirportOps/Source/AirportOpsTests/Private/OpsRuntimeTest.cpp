@@ -5,7 +5,10 @@
 #include "Model/TaxiwayStrip.h"
 #include "Model/OfferGenerator.h"
 #include "Model/ArrivalSequencer.h"
+#include "Model/AirlineRoster.h"
 #include "Model/Airport.h"
+#include "Model/GroundTraffic.h"
+#include "Model/StandAllocator.h"
 #include "Model/BuildPurse.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
@@ -603,6 +606,96 @@ bool FOpsRuntimeWiresLitresTest::RunTest(const FString& Parameters)
 		Runtime->GetJobBoard()->LitresOwedFor(42, Airframe), 321.0, 1e-9);
 	TestEqual(TEXT("an agent no flight owns gets the stated fallback"),
 		Runtime->GetJobBoard()->LitresOwedFor(7, Airframe), UJobBoard::DefaultLitres(Airframe), 1e-9);
+	return true;
+}
+
+/**
+ * #404 THROUGH LoadFromSlot ITSELF (spec 2026-09-29-ops-batch3 §4). AirportOps.Model.FlightSave.MidFlightGoesRoundOrRetires
+ * runs the load by hand; this is the one that fails if the runtime's own sequence breaks it: the board's clock
+ * unwired or restored after the board (the clock is moved on between save and load, so either dates the flight
+ * wrong), or the demotion landing after OnGraphRebuilt (the stand hold, released before the save as a dispatch
+ * releases it, then comes back only through the Reapply of an Inbound flight).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeMidFlightLoadTest,
+	"AirportOps.Present.RuntimeLoad.MidFlightRequeuesOrRetires",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeMidFlightLoadTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	const int32 RoadA = Actor->PlaceNode(FVector2D(0.0, 30000.0));
+	const int32 RoadB = Actor->PlaceNode(FVector2D(20000.0, 30000.0));
+	Actor->ConnectNodes(RoadA, RoadB);
+	Actor->MinimumRunwayLength = 100.0;
+	Actor->PlaceRunway(FVector2D(0.0, -50000.0), FVector2D(6000.0, -50000.0), TestProfiles::Runway());
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	Actor->Network->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 90000.0), 0.0, 3600.0, StandDef->PoseRole, StandDef->Trucks);
+
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
+	UFlightBoard* Board = Runtime->GetFlightBoard();
+	UGroundTraffic* Model = Actor->GetTraffic()->GetModel();
+	if (!TestNotNull(TEXT("a traffic model"), Model)) { return false; }
+	const TArray<FAirlineStanding>& Rows = Runtime->GetAirlines()->GetStandings();
+	if (!TestTrue(TEXT("the catalog seeded an airline to score"), Rows.Num() > 0)) { return false; }
+	const FName Airline = Rows[0].AirlineId;
+
+	// TAXIING IN: accepted onto the stand, its hold released as DispatchNow releases it, on the ground as a
+	// made-up agent - the shape a save of a real taxi-in has, since the agent is what the load throws away.
+	UFlight* Taxiing = NewObject<UFlight>(GetTransientPackage());
+	Taxiing->Airframe.Wingspan = 3400.0;
+	Taxiing->AirlineId = Airline;
+	Taxiing->OfferWindowSeconds = 1.0e6;
+	Taxiing->OfferSecondsLeft = 1.0e6;
+	Taxiing->LeadTimeSeconds = 1.0e7;
+	Board->AddOffer(*Runtime->GetClock(), Taxiing);
+	if (!TestTrue(TEXT("accepted onto the stand"), Board->Accept(*Model, *Actor->Network, *Runtime->GetClock(), *Taxiing))) { return false; }
+	Board->Allocator->Release(*Model, *Taxiing);
+	Taxiing->Phase = EFlightPhase::TaxiIn;
+	Taxiing->AgentId = 4101;
+	Taxiing->bLandingFeePaid = true;
+	const int32 TaxiingId = Taxiing->Id;
+
+	// ON ITS STAND.
+	UFlight* OnStand = NewObject<UFlight>(GetTransientPackage());
+	OnStand->Airframe.Wingspan = 3400.0;
+	OnStand->AirlineId = Airline;
+	OnStand->AgentId = 4102;
+	OnStand->Phase = EFlightPhase::Turnaround;
+	Board->AddOffer(*Runtime->GetClock(), OnStand);
+	const int32 OnStandId = OnStand->Id;
+
+	const int32 RecentBefore = Runtime->GetAirlines()->Find(Airline)->Recent.Num();
+	Runtime->GetClock()->Advance(1.0);
+	const double SavedAt = Runtime->GetClock()->Now();
+	const FString Slot = TEXT("AirportOpsTest_MidFlightLoad");
+	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
+	// MOVED ON before the load: a board dated by the pre-load clock would read this time, not SavedAt.
+	Runtime->GetClock()->Advance(5.0);
+	if (!TestTrue(TEXT("the clock moved on since the save, or the order check proves nothing"), Runtime->GetClock()->Now() > SavedAt)) { return false; }
+	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
+
+	UFlight* Again = Board->FindByIdForTest(TaxiingId);
+	UFlight* Retired = Board->FindByIdForTest(OnStandId);
+	if (!TestNotNull(TEXT("the taxiing flight came back"), Again) || !TestNotNull(TEXT("and the one on its stand"), Retired)) { return false; }
+	TestEqual(TEXT("taxiing in when saved: Inbound after the load"), Again->Phase, EFlightPhase::Inbound);
+	TestEqual(TEXT("with no agent"), Again->AgentId, static_cast<int32>(INDEX_NONE));
+	TestEqual(TEXT("joining the queue at the LOADED time - the clock restored before the board"), Again->HoldingSince, SavedAt, 1e-9);
+	const FEntityInstance* Stand = Actor->Network->GetEntity(Again->Stand);
+	TestTrue(TEXT("its stand held again - Inbound before the load's OnGraphRebuilt re-applied the holds"),
+		Stand != nullptr && Model->IsStandHeld(Stand->PoseNode, 0));
+	TestEqual(TEXT("on its stand when saved: Departed"), Retired->Phase, EFlightPhase::Departed);
+	TestFalse(TEXT("and retired out of the live list"), Board->Live().Contains(Retired));
+	TestEqual(TEXT("dated the load"), Retired->TerminatedAt, SavedAt, 1e-9);
+
+	for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
+	TestTrue(TEXT("still owed an arrival after the load's re-arm and three frames"),
+		Again->Phase == EFlightPhase::Inbound || Again->Phase == EFlightPhase::Landing);
+	TestEqual(TEXT("its airline heard nothing it would score"), Runtime->GetAirlines()->Find(Airline)->Recent.Num(), RecentBefore);
 	return true;
 }
 

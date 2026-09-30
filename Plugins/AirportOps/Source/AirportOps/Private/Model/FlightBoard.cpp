@@ -553,6 +553,21 @@ void UFlightBoard::OnAfterRestore(int32 SnapshotVersion)
 	// growing a second version check to remember here.
 	//
 	// SNAPSHOT FIRST: MoveToHistory mutates Flights, and this loop is walking it.
+	//
+	// THE LOADED NOW, for #404 below - see RestoreClock. Zero without one (a bare board in a test): said, once and
+	// only when a flight needs dating, since a re-queued flight dated 0 jumps the queue and a retired one is rolled
+	// up on the next day's beat.
+	const double Now = RestoreClock != nullptr ? RestoreClock->Now() : 0.0;
+	bool bSaidUndated = false;
+	const auto DatedNow = [this, Now, &bSaidUndated]()
+	{
+		if (RestoreClock == nullptr && !bSaidUndated)
+		{
+			bSaidUndated = true;
+			UE_LOG(LogAirportOps, Warning, TEXT("Restore: the flight board has no clock; flights restored mid-flight are dated 0"));
+		}
+		return Now;
+	};
 	const TArray<TObjectPtr<UFlight>> Loaded = Flights;
 	for (const TObjectPtr<UFlight>& Each : Loaded)
 	{
@@ -560,6 +575,39 @@ void UFlightBoard::OnAfterRestore(int32 SnapshotVersion)
 		{
 			continue;
 		}
+
+		// #404: AGENTS ARE NOT SAVED - UOpsRuntime::LoadFromSlot clears every one before OpsSave::Restore - so a
+		// flight saved past Inbound comes back naming an aeroplane that does not exist, and nothing would ever move
+		// it again. Ruled (spec 2026-09-29-ops-batch3 §0, §4): the arrivals side GOES ROUND AGAIN, the ground side
+		// RETIRES AS DEPARTED. Before the Reapply: LoadFromSlot's OnGraphRebuilt re-holds Accepted and Inbound stands.
+		// ENFORCED BY: AirportOps.Model.FlightSave.MidFlightGoesRoundOrRetires, AirportOps.Present.RuntimeLoad.MidFlightRequeuesOrRetires
+		if (Each->Phase == EFlightPhase::Landing || Each->Phase == EFlightPhase::TaxiIn)
+		{
+			// INBOUND, at the BACK of the queue (HoldingSince = now, not its old ETA: the flights that were already
+			// holding when the game was saved were waiting first). Its Stand is still the one it was accepted onto,
+			// so the Reapply holds it again. bLandingFeePaid IS LEFT AS SAVED rather than forced true: it is saved
+			// and set with the ledger post (PostLandingFee), so a flight that was charged stays charged and its second
+			// landing posts nothing - and one saved before its landing was heard is charged once, when it lands.
+			UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) restored mid-%s: re-queued (its aircraft, agent %d, was not saved)"),
+				Each->Id, *Each->Callsign, *UEnum::GetValueAsString(Each->Phase), Each->AgentId);
+			Each->Phase = EFlightPhase::Inbound;
+			Each->HoldingSince = DatedNow();
+			Each->AgentId = INDEX_NONE;
+			continue;
+		}
+		if (Each->Phase >= EFlightPhase::Turnaround && Each->Phase <= EFlightPhase::Departing)
+		{
+			// DEPARTED, UNSCORED: the save system is not the player's fault, so nothing the airline roster scores is
+			// published (no FlightAirborne, no TurnaroundEnded) and no parking fee is posted. The range reads
+			// EFlightPhase's load-bearing declaration order: Turnaround, Manoeuvring, TaxiOut, Departing.
+			UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) restored mid-%s: retired as departed (its aircraft, agent %d, was not saved)"),
+				Each->Id, *Each->Callsign, *UEnum::GetValueAsString(Each->Phase), Each->AgentId);
+			Each->Phase = EFlightPhase::Departed;
+			Each->AgentId = INDEX_NONE;
+			MoveToHistory(*Each, DatedNow());
+			continue;
+		}
+
 		if (Each->Phase == EFlightPhase::Declined || Each->Phase == EFlightPhase::Expired
 			|| Each->Phase == EFlightPhase::Departed || Each->Phase == EFlightPhase::Cancelled
 			|| Each->Phase == EFlightPhase::Withdrawn)
