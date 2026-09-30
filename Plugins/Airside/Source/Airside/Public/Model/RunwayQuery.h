@@ -5,6 +5,50 @@
 #include "Model/RunwayFacts.h"
 
 class URoadNetwork;
+struct FTrafficOccupancy;
+
+/**
+ * Which of a runway's two jobs a query is about. Named, not a bool: RankRunway reads a different "dedicated"
+ * setting for each, and a bare `true` at a call site would not say which. A plain enum - no UPROPERTY holds
+ * one, so UHT has nothing to see.
+ */
+enum class ERunwayTraffic : uint8
+{
+	Arrival,
+	Departure,
+};
+
+/**
+ * How one candidate runway stands in a planner's choice between runways: FREE before held, then DEDICATED
+ * (set to this kind of traffic, so the player said which strip they want it on) before mixed, then the SHORTER
+ * taxi. ArrivalPlanner::Plan and DeparturePlanner::PlanAny each typed this comparison until 2026-09-30 (#433),
+ * so a fourth criterion - a curfew, a wind preference - had two places to be forgotten in. Held FIRST because a
+ * held runway is a runway that cannot be used now, which no preference outweighs; taxi LAST because it is the
+ * tie-break the other two exist to override (2026-09-29: shortest alone sent every movement to the runway
+ * nearest the apron, samples/2runways.png).
+ * Filled by RunwayQuery::RankRunway, so the three inputs are read the same way for both kinds of traffic.
+ */
+struct FRunwayRank
+{
+	bool bHeld = false;
+	bool bDedicated = false;
+	/** The candidate's taxi length, uu - the route's, however the planner measures it. */
+	double Taxi = 0.0;
+
+	/** Does this rank STRICTLY ahead of Best? Equal ranks do not beat each other, so the first candidate found wins a tie. */
+	bool Beats(const FRunwayRank& Best) const
+	{
+		if (bHeld != Best.bHeld)
+		{
+			return !bHeld;
+		}
+		if (bDedicated != Best.bDedicated)
+		{
+			return bDedicated;
+		}
+		return Taxi < Best.Taxi;
+	}
+};
 
 /**
  * The runway reads a runway network answers, as free functions rather than URoadNetwork
@@ -217,6 +261,56 @@ namespace RunwayQuery
 	 */
 	AIRSIDE_API TArray<FGuidelineNodeId> RunwayExitNodes(const URoadNetwork& Network, FRoadSegmentId Seed,
 		const FVector2D& Threshold, const FVector2D& Direction, double MinDistance);
+
+	/**
+	 * Every runway whose ERunwayUse takes ARRIVALS, each at its END IN USE, in the network's own order (sorting
+	 * is the caller's - ArrivalPlanner orders them nearest its approach focus).
+	 *
+	 * THE ONE ANSWER to "where may an arrival land", and the enumerator DepartureRunways mirrors, because the two
+	 * were spelled per consumer until #433: ArrivalPlanner filtered by use, DeparturePlanner filtered by use, and
+	 * RunwayAdmission::CheckArrival's "can it leave again" walked every runway and filtered nothing - so a field
+	 * of arrivals-only strips admitted jets that could land and never depart. Each consumer now asks its kind's
+	 * enumerator, and the raw walk (AirsideCapability::SummariseRunways) is banned from all three.
+	 * ENFORCED BY: Check-Architecture.ps1 rule 39; Airside.Model.RunwayUse.EveryModePairLandsOnlyWhatCanLeave.
+	 *
+	 * THE END IS RESOLVED through InUseRunwayAt from a point just inside the summary's threshold, not read off the
+	 * summary: the planners choose ends through the in-use resolver only (rule 28). The probe sits 10 uu in
+	 * because RunwayExtentAt's proximity gate is against the nearest segment END, so a midpoint on a long segment
+	 * is "not on a runway"; one probe per runway, because a probe at each end would resolve to the same in-use end
+	 * twice.
+	 *
+	 * OutRunwayCount, when given, is how many runways the field has AT ALL, whatever their use: what lets a caller
+	 * tell "no runway" from "every runway refuses this kind of traffic" - the second is the player's setting, and
+	 * its sentence says so. Written even when the result is empty. A runway InUseRunwayAt cannot resolve is
+	 * counted but not returned; it has never happened (the summary found the runway by the same walk), and the
+	 * caller would then say "setting" for a strip that is broken - kept rather than asserted.
+	 *
+	 * COST: one SummariseRunways walk (every segment) plus one InUseRunwayAt per runway; runways were 2 on the
+	 * busiest field on 2026-09-30 (FTestTwoRunways).
+	 */
+	AIRSIDE_API TArray<FRunwayEnd> ArrivalRunways(const URoadNetwork& Network, int32* OutRunwayCount = nullptr);
+
+	/** ArrivalRunways' mirror: every runway whose ERunwayUse takes DEPARTURES, each at its end in use. */
+	AIRSIDE_API TArray<FRunwayEnd> DepartureRunways(const URoadNetwork& Network, int32* OutRunwayCount = nullptr);
+
+	/**
+	 * Is any segment of Seed's strip held - by anyone, a reservation included? False with no occupancy. Moved
+	 * here from ArrivalPlanner on 2026-09-30 (#433) so RankRunway can ask it for either kind of traffic;
+	 * ArrivalPlanner::IsChainHeld forwards to this at its old name, which is what UGroundTraffic's OnRunwayFreed
+	 * diff and the tests still call.
+	 * ENFORCED BY: Airside.Model.RunwayUse.RankOrdersFreeDedicatedShortest (asserts the forwarder answers as this does).
+	 */
+	AIRSIDE_API bool IsChainHeld(const URoadNetwork& Network, FRoadSegmentId Seed, const FTrafficOccupancy* Occupancy);
+
+	/**
+	 * The rank of the runway End for Traffic: held is IsChainHeld of its strip - the claim a movement makes at its
+	 * handover - dedicated is its ERunwayUse being set to exactly this kind of traffic (an unset use reads Mixed,
+	 * so is not dedicated), and Taxi is TaxiLength, which only the caller has (an arrival's taxi in from its exit,
+	 * a departure's out to its entry). Compare with FRunwayRank::Beats.
+	 * ENFORCED BY: Check-Architecture.ps1 rule 39 (the planners rank through this, not their own copy).
+	 */
+	AIRSIDE_API FRunwayRank RankRunway(const URoadNetwork& Network, const FRunwayEnd& End,
+		ERunwayTraffic Traffic, const FTrafficOccupancy* Occupancy, double TaxiLength);
 }
 
 /**
