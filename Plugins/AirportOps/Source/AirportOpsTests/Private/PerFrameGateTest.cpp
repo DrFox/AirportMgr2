@@ -1,5 +1,7 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Kismet/GameplayStatics.h"
+#include "Misc/ScopeExit.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
@@ -139,6 +141,8 @@ bool FSimTimeScaleOnChangeTest::RunTest(const FString&)
 	AtSpeed(TEXT("a speed step"));
 	const double Saved = Actor->GetSimTimeScale();
 	const FString Slot = TEXT("AirportOpsTest_SimTimeScale");
+	// THE SLOT GOES WITH THE TEST, however it ends - a save left on disk is state the next run did not make.
+	ON_SCOPE_EXIT { UGameplayStatics::DeleteGameInSlot(Slot, 0); };
 	if (!TestTrue(TEXT("saved"), Runtime->SaveToSlot(Slot))) { return false; }
 	Runtime->StepSpeed(+1);
 	AtSpeed(TEXT("another step"));
@@ -148,14 +152,32 @@ bool FSimTimeScaleOnChangeTest::RunTest(const FString&)
 	TestEqual(TEXT("a load: the saved speed reaches the actor"), Actor->GetSimTimeScale(), Saved, 1e-12);
 	AtSpeed(TEXT("a load"));
 
+	// A NETWORK CLEAR replaces the network object and keeps the actor, whose scale is x2 here - so a clear that reset
+	// the scale to its default (1) would read wrong below, and the runtime does NOT repair it: no set in between. The
+	// only code that could make this red is a second writer of the scale, which rule 34 (scale-on-change) fails first.
+	const int32 SetsBeforeClear = Runtime->TimeScaleSetsForTest();
+	if (!TestNotEqual(TEXT("the actor is off its default scale - or the clear step measures nothing"), Actor->GetSimTimeScale(), 1.0)) { return false; }
 	Actor->ClearNetwork();
 	Runtime->Tick(1.0 / 30.0);
 	AtSpeed(TEXT("a network clear"));
+	TestEqual(TEXT("and the runtime set nothing to make it so"), Runtime->TimeScaleSetsForTest() - SetsBeforeClear, 0);
 
 	Runtime->TogglePause();
 	AtSpeed(TEXT("paused"));
 	Runtime->TogglePause();
 	AtSpeed(TEXT("resumed"));
+
+	// A NEW ACTOR: a level change, or PIE's duplicate. Its Transient scale starts at 1 whatever the player's speed, and
+	// Attach is the only thing that tells it otherwise.
+	Runtime->StepSpeed(+1);
+	ARoadNetworkActor* Fresh = TestWorld.World->SpawnActor<ARoadNetworkActor>();
+	if (!TestNotNull(TEXT("a second actor"), Fresh)) { return false; }
+	Fresh->PlaceNode(FVector2D(0.0, 30000.0));
+	if (!TestEqual(TEXT("it starts at its default"), Fresh->GetSimTimeScale(), 1.0, 1e-12)) { return false; }
+	Runtime->Attach(Fresh);
+	TestEqual(FString::Printf(TEXT("attached to it at x%.0f: it runs at the clock's multiplier"), USimClock::Multiplier(Clock.GetSpeed())),
+		Fresh->GetSimTimeScale(), USimClock::Multiplier(Clock.GetSpeed()), 1e-12);
+	TestNotEqual(TEXT("which is not its default - or this measured nothing"), Fresh->GetSimTimeScale(), 1.0);
 	return true;
 }
 

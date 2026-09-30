@@ -299,12 +299,14 @@ public:
 	int32 StepCountForTest() const { return StepCount; }
 
 	/**
-	 * Moves on EVERY change a reader of this board could see - Step, OnAgentPhase, RecallVehicleOfAgent, a restore,
-	 * the ForTest adders: every public mutator, since Jobs, Vehicles and Turnarounds are private. The inspector's
+	 * Moves with every mutator of Jobs, Vehicles and Turnarounds - private, so every public door to them: Step,
+	 * OnAgentPhase, RecallVehicleOfAgent, OnBeforeRestore and the ForTest adders. The bumps in Serialize and
+	 * ResolveVehicles are REDUNDANT, kept as cheap insurance: a load's OnBeforeRestore runs immediately before the
+	 * blob's Serialize and has already moved it, and ResolveVehicles fills the letter table, which no Describe reads. The inspector's
 	 * depot card and fuel line key on it (ops batch 3 PR E). NOT StepCount, which the spec named: OnAgentPhase and
 	 * the recall change the board outside Step, and a card keyed on steps would show them a pass late or never.
 	 * A session counter, not saved - the same idiom as UFlightBoard::Revision.
-	 * ENFORCED BY: AirportOps.Fuel.RevisionMovesOnEveryChange
+	 * ENFORCED BY: AirportOps.Fuel.RevisionMovesOnEveryChange (each public door, one line each)
 	 */
 	uint32 Revision() const { return RevisionCount; }
 
@@ -324,6 +326,8 @@ public:
 	 * DescribeAgent, and whether its answer MOVES WITH THE CLOCK: true only while the fuel line counts litres down
 	 * through a trip being pumped (its "LIVE WHILE PUMPING" rule). Anything else it says changes only with the
 	 * board, so a caller may keep it until Revision moves - the inspector does (ops batch 3 PR E).
+	 * ENFORCED BY: AirportOps.Fuel.LineSaysWhenItMovesWithTheClock (live only while serving);
+	 * AirportMgr.Inspector.Cache.FuelLineLiveWhilePumping (the card follows it while live)
 	 */
 	FString DescribeAgent(int32 AgentId, double Now, bool& bOutMovesWithClock) const;
 
