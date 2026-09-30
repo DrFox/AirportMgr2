@@ -388,6 +388,13 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 			// hold on the span pointing at nothing until it has backed out - the state it was in
 			// for the whole leg before this change, for the rest of one leg rather than the whole
 			// of it. The remainder, the goal and every claim after the back-out are live.
+			//
+			// WHAT A FAILURE HERE DOES, stated because it differs by where it lands: a step after the
+			// span that will not re-resolve is replanned or TRUNCATED, and the truck then parks at the
+			// span's end on a live goal (Airside.Model.Traffic.RebuildDuringReverseTruncatesTheRemainder);
+			// but when the span's own END node is freed with no live node at its position, Strand
+			// marks the route dead while the agent stays Reversing, and that case is not handled
+			// here - see that test's comment, and #455.
 			Plan = &Agent.Follower.Plan;
 			FromStep = Agent.GetResumeStep();
 		}
@@ -413,6 +420,7 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		// is the span's end node, freed like any other derived one, and it is where the vehicle
 		// will park (issue #434): re-pointed by position, as a parked agent's is, from the end of
 		// the route it is backing along.
+		// ENFORCED BY: Airside.Model.Traffic.RebuildDuringAReverseThatEndsTheRoute
 		if (Agent.Phase == EAgentPhase::Reversing && Plan == nullptr
 			&& Agent.Follower.Plan.Polyline.Num() > 0
 			&& Network.GetGuidelineNode(Agent.GoalNode) == nullptr)
@@ -847,7 +855,8 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	// would end the reverse mid-leg), no stranding in place of a step it is not on, and no Replace
 	// (Follower.Start at the handover rebuilds the profile and the reverse-leg list from the
 	// remainder anyway). It is re-resolved as a route NOT YET DRIVEN, the case the taxi-in plan is.
-	// ENFORCED BY: Airside.Model.Traffic.RebuildDuringReverse (still Reversing once the rebuild is done)
+	// ENFORCED BY: Airside.Model.Traffic.RebuildDuringReverseTruncatesTheRemainder (a step after the span fails
+	// to re-resolve; without the Taxiing conjunct that step's failure strands or rejoins the reverse away)
 	const bool bDriving = (&Plan == &Agent.Follower.Plan) && Agent.Phase == EAgentPhase::Taxiing;
 
 	auto Strand = [&Agent, &Plan, bDriving, &Occupancy](const TCHAR* Why)

@@ -317,8 +317,8 @@ double FClaimPass::CentreOf(const FRoadAgent& Agent)
 	// A REVERSE FLIPS IT FOR THE SAME REASON (issue #434). A vehicle backing along its plan has the
 	// body's forward pointing AGAINST the plan, so the steered axle - which DistanceAlongPlan
 	// reports, see FRoadAgent::ReverseProgress - is the TRAILING one of the two axles in plan
-	// distance and the body centre, aft of it, is further along. Airside.Model.Traffic.
-	// ReversingHoldsItsSpan measures the far end of the span, which is where a wrong sign shows.
+	// distance and the body centre, aft of it, is further along.
+	// ENFORCED BY: Airside.Model.ClaimCentre (a reversing body's centre, measured from its fixed axle)
 	const double Ahead = Agent.Chassis().BodyCentreX - Agent.Chassis().SteerAxleX;
 	const bool bBodyBacks = Agent.Phase == EAgentPhase::Manoeuvring || Agent.Phase == EAgentPhase::Reversing;
 	const double Sign = bBodyBacks ? -1.0 : 1.0;

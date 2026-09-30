@@ -438,6 +438,17 @@ bool UGroundTraffic::SetVehicleForTest(int32 AgentId, const FVehicle& Vehicle)
 	return Index != INDEX_NONE && Agents[Index].SetVehicleForTest(Vehicle);
 }
 
+bool UGroundTraffic::SetGoalForTest(int32 AgentId, FGuidelineNodeId Goal)
+{
+	const int32 Index = FindIndex(AgentId);
+	if (Index == INDEX_NONE)
+	{
+		return false;
+	}
+	Agents[Index].SetGoal(Goal);
+	return true;
+}
+
 bool UGroundTraffic::ScriptWaitForTest(int32 AgentId, const FTrafficResource& Resource, int32 BlockerId, double StalledSeconds)
 {
 	const int32 Index = FindIndex(AgentId);

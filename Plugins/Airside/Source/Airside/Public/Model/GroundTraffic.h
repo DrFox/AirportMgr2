@@ -876,8 +876,8 @@ private:
 
 	/**
 	 * Offers every waiting aircraft (bAwaitingStand) the best free stand reachable from where
-	 * it stopped, through RedirectAgent. Runs at the end of Advance when bStandsMayHaveFreed;
-	 * one pass, then the flag clears whether or not anyone was placed.
+	 * its route ends, by the verb its phase calls for (below). Runs at the end of Advance when
+	 * bStandsMayHaveFreed; one pass, then the flag clears whether or not anyone was placed.
 	 *
 	 * BY PHASE, NOT BY GOAL (issue #435): a TAXIING waiter is still moving, and its GoalNode is
 	 * the end of the route it has not finished - so the way to a stand starts exactly where its live
@@ -887,7 +887,8 @@ private:
 	 * a teleport. So RedirectAgent is only for a waiter that is standing at that point already:
 	 * Parked on the fallback junction, or Stranded. A Taxiing waiter whose extension is refused
 	 * keeps waiting and is asked again the next time something frees; it is never redirected.
-	 * ENFORCED BY: Airside.Model.Traffic.ReofferTaxiingWaiterDoesNotJump
+	 * ENFORCED BY: Airside.Model.Traffic.ReofferTaxiingWaiterDoesNotJump (the extension),
+	 * Airside.Model.Traffic.ReofferRefusedExtensionKeepsWaiting (the refusal)
 	 */
 	void ReofferStands(const URoadNetwork& Network);
 
@@ -1062,6 +1063,16 @@ private:
 	 */
 	bool ScriptWaitForTest(int32 AgentId, const FTrafficResource& Resource, int32 BlockerId, double StalledSeconds);
 
+	/**
+	 * Points AgentId's GoalNode at Goal without touching its plan, so the goal no longer names
+	 * where the live plan ends. The one state that makes ReofferStands' ExtendRoute REFUSE for an
+	 * aircraft (its re-offered route starts at GoalNode, and Splice wants it to start where the
+	 * live plan ends) - a state nothing in production can reach, which is exactly why the "keeps
+	 * waiting, never redirected" path needs a hook to be tested at all (issue #435's review).
+	 * False for an unknown agent. Not public - see FGroundTrafficTestAccess (#104).
+	 */
+	bool SetGoalForTest(int32 AgentId, FGuidelineNodeId Goal);
+
 public:
 	/** Route distance at which Step begins - the previous step's end, or 0. Public: FClaimPass,
 	 *  FDeadlockResolver and FPlanReResolver all read plan geometry through this and the two
@@ -1108,6 +1119,9 @@ struct FGroundTrafficTestAccess
 	{
 		return Traffic.BeginCrossingForTest(AgentId, RunwaySeed);
 	}
+
+	/** See UGroundTraffic::SetGoalForTest's own comment. */
+	bool SetGoal(int32 AgentId, FGuidelineNodeId Goal) { return Traffic.SetGoalForTest(AgentId, Goal); }
 
 	/**
 	 * ReplanAt with no banned node, from outside the resolver. What the deadlock resolver

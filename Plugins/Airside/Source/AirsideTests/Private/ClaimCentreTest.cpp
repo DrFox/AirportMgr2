@@ -92,6 +92,44 @@ bool FClaimCentreTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("a push reads its own distance, not the taxi that brought it in"),
 		FClaimPass::CentreOf(Stale), 1500.0, 0.01);
 
+	// A REVERSING BODY TRAILS ITS OWN STEERED AXLE THE OTHER WAY ROUND (issue #434).
+	//
+	// A truck backing along its route has the body's forward pointing AGAINST the plan, so of its two
+	// axles the STEERED one is at the smaller route distance and the body centre - aft of it in the
+	// body's frame - is further along, exactly as a pushed aeroplane's is. The follower is not stepped
+	// while the reverse plays, so Follower.Travelled sits frozen at the span's start and the run's own
+	// counter (the FIXED axle, a wheelbase in at arming) says how far it has got.
+	//
+	// THE EXPECTED VALUE IS MEASURED FROM THE OTHER AXLE, not restated from CentreOf's own arithmetic:
+	// the fixed axle's route distance is Follower.Travelled + Reverse.Travelled, and the centre is
+	// BodyCentreX - FixedAxleX forward of it in the body's frame, which is BACKWARDS along the plan.
+	// Two routes to one number; a flipped sign, or a steered-axle distance read off the fixed axle's
+	// counter, disagrees with it by the wheelbase or twice the offset.
+	FVehicle Truck = TestAirframes::Van();
+	Truck.Chassis.SteerAxleX = 494.0;
+	Truck.Chassis.FixedAxleX = 0.0;
+	Truck.Chassis.BodyCentreX = 250.0;
+	FRoutePlan Straight;
+	Straight.Result = ERouteResult::Found;
+	Straight.Polyline = { FVector2D(0.0, 0.0), FVector2D(10000.0, 0.0) };
+	Straight.Length = 10000.0;
+	FRouteStep Only;
+	Only.EndVertex = 1;
+	Only.EndDistance = 10000.0;
+	Straight.Steps = { Only };
+	FRoadAgent Backing;
+	Backing.StartDrive(Straight, Truck);
+	Backing.Phase = EAgentPhase::Reversing;
+	Backing.Follower.Travelled = 4000.0;             // where the taxi stopped: the span's start
+	Backing.Reverse.Travelled = 494.0 + 300.0;       // the fixed axle, 300 uu further than the arming pose
+
+	const double FixedAxleAt = Backing.Follower.Travelled + Backing.Reverse.Travelled;
+	const double BodyCentreAt = FixedAxleAt - (Truck.Chassis.BodyCentreX - Truck.Chassis.FixedAxleX);
+	TestEqual(TEXT("a reversing body's centre is measured back from its fixed axle, along the plan"),
+		FClaimPass::CentreOf(Backing), BodyCentreAt, 0.01);
+	TestEqual(TEXT("and the distance it reports is the STEERED axle's: the fixed axle's less a wheelbase"),
+		Backing.DistanceAlongPlan(), FixedAxleAt - 494.0, 0.01);
+
 	return true;
 }
 
