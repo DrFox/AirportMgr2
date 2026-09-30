@@ -22,7 +22,10 @@ namespace
 
 FString FAgentPhaseEvent::Describe() const
 {
-	return FString::Printf(TEXT("agent %d, %s -> %s"), AgentId, *UEnum::GetValueAsString(From), *UEnum::GetValueAsString(To));
+	// THE CAUSE IS SAID TOO (#436): it is what a handler decides on, so a log that showed only the pair would hide the
+	// one fact the event now carries.
+	return FString::Printf(TEXT("agent %d, %s -> %s (%s)"), AgentId, *UEnum::GetValueAsString(From), *UEnum::GetValueAsString(To),
+		*UEnum::GetValueAsString(Cause));
 }
 
 FString FArrivalRefusedEvent::Describe() const

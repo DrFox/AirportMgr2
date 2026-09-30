@@ -45,7 +45,7 @@ bool FAgentPushbackCompositionTest::RunTest(const FString& Parameters)
 	// relays it - which is the layer the flight board listens to.
 	TArray<TPair<EAgentPhase, EAgentPhase>> Transitions;
 	Actor->GetTraffic()->OnAgentPhaseChanged.AddLambda(
-		[&Transitions](int32, EAgentPhase From, EAgentPhase To) { Transitions.Emplace(From, To); });
+		[&Transitions](const FAgentTransition& T) { Transitions.Emplace(T.From, T.To); });
 
 	FAirframe Airframe;
 	Airframe.Chassis.Ground = TestAirframes::Piper().Chassis.Ground;

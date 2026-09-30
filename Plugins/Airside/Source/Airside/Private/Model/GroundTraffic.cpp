@@ -308,7 +308,8 @@ void UGroundTraffic::ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork*
 int32 UGroundTraffic::Admit(FRoadAgent&& Agent)
 {
 	Agent.AssignId(NextAgentId++);
-	const EAgentPhase Born = Agent.Phase;
+	// BUILT BEFORE THE MOVE, from the agent it names: Gone -> the phase it was born in, Dispatched.
+	const FAgentTransition Born = TransitionOf(Agent, EAgentPhase::Gone, EAgentEvent::Dispatched);
 	const int32 Id = Agent.Id;
 	Agents.Add(MoveTemp(Agent));
 	// BEFORE THE BROADCAST BELOW, same reason as RetireAgent's and AdvanceOnce's removal path
@@ -325,12 +326,39 @@ int32 UGroundTraffic::Admit(FRoadAgent&& Agent)
 	// Broadcast AFTER the add AND the rebuild, so a listener that spawns the view can find the
 	// agent it is being told about - see UAirsideTraffic::SpawnView, which reads LastMotion
 	// off it.
-	OnAgentPhaseChanged.Broadcast(Id, EAgentPhase::Gone, Born);
+	Announce(Born);
 	// #169: a new agent's dispatch claims its goal node in this same call, before this
 	// function returns - see OccupancyRevision's own comment for why one bump per call
 	// covers every claim made inside it.
 	++OccupancyRevisionCount;
 	return Id;
+}
+
+FAgentTransition UGroundTraffic::TransitionOf(const FRoadAgent& Agent, EAgentPhase From, EAgentEvent Cause)
+{
+	FAgentTransition Made;
+	Made.AgentId = Agent.Id;
+	Made.From = From;
+	Made.To = Agent.Phase;
+	Made.Cause = Cause;
+	Made.GoalAtEvent = Agent.GoalNode;
+	Made.At = Agent.LastMotion.Position;
+	Made.Heading = Agent.LastMotion.Heading;
+	return Made;
+}
+
+void UGroundTraffic::Announce(const FAgentTransition& Transition)
+{
+	// A PHASE CHANGE NOTHING NAMED is a defect upstream - FRoadAgent::Advance made a handover without an event, or an
+	// operation announced without a cause - and every consumer that maps Cause will read it as nothing happening.
+	// Said loudly, and announced anyway: a listener that never hears a phase change is the worse failure.
+	// ENFORCED BY: Airside.Model.RoadAgent.EveryPhaseChangeNamesItsEvent (for Advance's handovers)
+	if (Transition.Cause == EAgentEvent::None)
+	{
+		UE_LOG(LogAirsideTraffic, Error, TEXT("Agent %d: %s -> %s announced with no cause"), Transition.AgentId,
+			*UEnum::GetValueAsString(Transition.From), *UEnum::GetValueAsString(Transition.To));
+	}
+	OnAgentPhaseChanged.Broadcast(Transition);
 }
 
 void UGroundTraffic::RebuildAgentIndex() const
@@ -502,11 +530,13 @@ void UGroundTraffic::ReleaseGoal(FRoadAgent& Agent, int32 AgentId)
 	// CLEARED HERE, WHERE THE GOAL ACTUALLY MOVES - not by the caller after this returns.
 	// ReofferStands used to clear it on the agent AFTER RedirectAgent by re-running
 	// FindIndex(Id), but TakeGoal is about to give the agent a real destination, and
-	// RedirectAgent's broadcast (OnAgentPhaseChanged) can run a listener that retires an
-	// agent synchronously - UJobBoard::OnAgentPhase calls RetireAgent from inside it. A
-	// caller re-indexing Agents by Id AFTER that broadcast can find INDEX_NONE and index off
-	// the end. Clearing before the broadcast needs no such lookup: Agent is still the entry
-	// the caller already found.
+	// RedirectAgent's broadcast (OnAgentPhaseChanged) may run a listener that retires an
+	// agent synchronously - the re-entrancy contract AdvanceOnce states. (UJobBoard::OnAgentPhase
+	// did, when it was bound straight to the broadcast; since the ops bus it hears the event a
+	// drain later and nothing in production retires inside it - but the contract is this class's,
+	// not its listeners'.) A caller re-indexing Agents by Id AFTER that broadcast can find
+	// INDEX_NONE and index off the end. Clearing before the broadcast needs no such lookup: Agent
+	// is still the entry the caller already found.
 	Agent.ClearAwaitingStand();
 }
 
@@ -738,7 +768,7 @@ bool UGroundTraffic::RerouteAgent(int32 AgentId, const URoadNetwork* Network, in
 	return true;
 }
 
-bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan)
+bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan, EAgentEvent Cause)
 {
 	const int32 Index = FindIndex(AgentId);
 	if (Index == INDEX_NONE || !Plan.IsDrivable())
@@ -912,9 +942,12 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	Agent.Advance(0.0, Motion, Event);
 
 	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d redirected: %.0f uu"), AgentId, Plan.Length);
+	// ONE TRANSITION, THE CALLER'S CAUSE, even when the posing Advance above armed a reverse leg (Parked -> Reversing
+	// for a truck whose route home opens backwards): the redirect is why it moved, and the arm is how. A redirect
+	// that moves no phase (a taxiing agent given a new route) announces nothing, as before.
 	if (Agent.Phase != Before)
 	{
-		OnAgentPhaseChanged.Broadcast(AgentId, Before, Agent.Phase);
+		Announce(TransitionOf(Agent, Before, Cause));
 	}
 	// #169: the occupancy revision was bumped in TakeGoal, with the claim - unconditional, unlike
 	// the broadcast above.
@@ -1064,7 +1097,9 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("Agent %d departs straight out of its stand (%.0f deg off the parked heading)"),
 			AgentId, Ask.OffDegrees);
-		return RedirectAgent(AgentId, &Network, Plan.Route)
+		// DepartOrdered, NOT Redirected: this is the taxi OUT, and the flight board reads it so (review M4) - it used to
+		// ask the live agent whether a departure was armed, a drain later.
+		return RedirectAgent(AgentId, &Network, Plan.Route, EAgentEvent::DepartOrdered)
 			? EDepartureRefusal::None : EDepartureRefusal::NoRoute;
 	}
 
@@ -1137,7 +1172,7 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 		AgentId, Push.PushRoute.Length, Push.TaxiOutRoute.Length,
 		*UEnum::GetValueAsString(Own.PushbackNeed));
 
-	OnAgentPhaseChanged.Broadcast(AgentId, Before, Agent.Phase);
+	Announce(TransitionOf(Agent, Before, EAgentEvent::DepartOrdered));
 	// #169: the occupancy revision was bumped in TakeGoal, with the claim - unconditional,
 	// unlike the broadcast above. See RedirectAgent's own copy of this comment.
 	return EDepartureRefusal::None;
@@ -1221,12 +1256,14 @@ bool UGroundTraffic::RetireAgent(int32 AgentId)
 	{
 		return false;
 	}
-	const EAgentPhase Before = Agents[Index].Phase;
+	// BUILT BEFORE THE REMOVAL, from the agent it names - its goal and where it stood. To is Gone: the agent never
+	// reaches that phase itself, it is taken out of the table.
+	FAgentTransition Retired = TransitionOf(Agents[Index], Agents[Index].Phase, EAgentEvent::Retired);
+	Retired.To = EAgentPhase::Gone;
 	Agents.RemoveAt(Index);
 	// BEFORE THE BROADCAST BELOW, which can run a listener that calls back into FindIndex
-	// (RetireAgent is exactly the kind of call UJobBoard::OnAgentPhase makes synchronously
-	// - see AdvanceOnce's own re-entrancy comment) - a stale index table would answer that
-	// call with an entry shifted or gone.
+	// (a synchronous listener may call RetireAgent itself - see AdvanceOnce's own re-entrancy
+	// comment) - a stale index table would answer that call with an entry shifted or gone.
 	RebuildAgentIndex();
 
 	// The table outlives the agent unless somebody says so: a retired vehicle's reservations
@@ -1235,7 +1272,7 @@ bool UGroundTraffic::RetireAgent(int32 AgentId)
 	bStandsMayHaveFreed = true;
 
 	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d retired"), AgentId);
-	OnAgentPhaseChanged.Broadcast(AgentId, Before, EAgentPhase::Gone);
+	Announce(Retired);
 	++OccupancyRevisionCount;   // #169: ReleaseAll, above, may have freed a stand or a runway.
 	// AND SAYS WHICH, NOW - see DiffFreedom (review M1). After the broadcast, like the revision bump.
 	// ENFORCED BY: Airside.Model.Traffic.RunwayFreed.DespawnOnRunway, AirportOps.Present.ArrivalQueue.RetireFreesWithoutAdvance
@@ -1247,9 +1284,19 @@ void UGroundTraffic::ClearAgents()
 {
 	// Announced before Reset so a listener asking about the id still gets To == Gone for
 	// every agent it was tracking, the same promise Advance's removal path makes.
+	//
+	// COPIED OUT FIRST, then announced: a synchronous listener may retire or dispatch (the re-entrancy contract
+	// AdvanceOnce states), and a range-for over Agents while it does is a loop over an array being written.
+	TArray<FAgentTransition> Cleared;
+	Cleared.Reserve(Agents.Num());
 	for (const FRoadAgent& Agent : Agents)
 	{
-		OnAgentPhaseChanged.Broadcast(Agent.Id, Agent.Phase, EAgentPhase::Gone);
+		FAgentTransition& Each = Cleared.Add_GetRef(TransitionOf(Agent, Agent.Phase, EAgentEvent::Cleared));
+		Each.To = EAgentPhase::Gone;
+	}
+	for (const FAgentTransition& Each : Cleared)
+	{
+		Announce(Each);
 	}
 
 	Agents.Reset();
@@ -1315,6 +1362,11 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 	// Everything inside a step stays exactly as it was - claims first, motion second, and
 	// the whole handover chain - so this changes the SIZE of a step and nothing about what
 	// one does.
+	//
+	// THE MOMENTS ARE THIS CALL'S, so they are emptied FIRST - before the paused frame's early return too: a
+	// presenter reads them after every Advance, paused ones included, and last frame's touchdown read again on a
+	// paused frame is a second puff.
+	MomentsThisAdvance.Reset();
 	if (DeltaSeconds <= 0.0)
 	{
 		return;
@@ -1649,11 +1701,15 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 	// the phase, accrue the stall clock, drop an agent once it says Gone. The deadlock pass
 	// that READS that clock runs after it, below, and does not touch this order.
 	//
-	// RE-ENTRANCY CONTRACT (issue #193): the broadcasts below - OnAgentPhaseChanged, here and
-	// in RedirectAgent/RetireAgent - can run a listener that calls back into this class and
-	// retires or redirects ANY agent, including ones still to be visited this tick
-	// (UJobBoard::OnAgentPhase calls RetireAgent synchronously). This loop tolerates that
-	// for two reasons together: it runs by DESCENDING index, so a RemoveAt at or below the
+	// RE-ENTRANCY CONTRACT (issue #193): the broadcasts below - OnAgentPhaseChanged, through
+	// Announce, here and in RedirectAgent/RetireAgent - can run a listener that calls back into
+	// this class and retires or redirects ANY agent, including ones still to be visited this tick.
+	// NO PRODUCTION LISTENER DOES, since the ops bus (#436 corrected this line): UAirsideTraffic
+	// spawns and destroys views and relays, and the ops runtime only PUBLISHES - UJobBoard::OnAgentPhase,
+	// which used to call RetireAgent synchronously from inside the broadcast, runs a drain later.
+	// The contract stays because it is this class's, not its listeners': a synchronous listener
+	// is legal, and Airside.Model.Traffic.ReofferStandsRetireReentrancy is one that retires.
+	// This loop tolerates that for two reasons together: it runs by DESCENDING index, so a RemoveAt at or below the
 	// current Index only ever shifts already-visited slots (Index and above), never the ones
 	// still to come; and it holds no reference across a broadcast - Agent and Index are used
 	// only before each Broadcast call, never after. A caller that re-derives an index AFTER a
@@ -1676,15 +1732,19 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 			// Cleared or otherwise finished - the aircraft has gone, so everything it held
 			// goes with it. An agent that stayed in the table would hold a runway nothing
 			// could ever release.
+			//
+			// THE TRANSITION FIRST, from the agent it names (Event is Gone - Advance's own return), then the removal.
+			FAgentTransition Gone = TransitionOf(Agent, Before, Event);
+			Gone.To = EAgentPhase::Gone;
 			Occupancy.ReleaseAll(Id);
 			bStandsMayHaveFreed = true;
 			Agents.RemoveAt(Index);
 			// BEFORE THE BROADCAST, same reason as RetireAgent's own call: a listener firing
-			// synchronously from it (UJobBoard::OnAgentPhase) can call back into FindIndex.
+			// synchronously from it can call back into FindIndex (the contract above).
 			RebuildAgentIndex();
 			// Broadcast AFTER the removal so a listener that asks GetAgentCount sees the
 			// agent already gone, which is what "To == Gone" promises.
-			OnAgentPhaseChanged.Broadcast(Id, Before, EAgentPhase::Gone);
+			Announce(Gone);
 			++OccupancyRevisionCount;   // #169: ReleaseAll, above, may have freed a stand or a runway.
 			continue;
 		}
@@ -1818,7 +1878,8 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 		case EAgentEvent::Gone:
 		default:
 			// Gone is unreachable here: Advance returns false the same frame it fires, and
-			// that path already continued above.
+			// that path already continued above. The rest - Stranded, the reverse leg's two, the
+			// touchdown - change nothing this loop holds; they are announced or collected below.
 			break;
 		}
 
@@ -1841,15 +1902,30 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 			Agent.ResetStall();
 		}
 
-		if (Agent.Phase != Before)
+		// THE EVENT DECIDES, not a diff (#436): Advance named what it did, at most one handover a call, and the
+		// transition carries that name as its Cause. One that moved no phase - a touchdown, the climb - is a MOMENT:
+		// collected for the presenter (GetMomentsThisAdvance), not broadcast as a phase change nobody made.
+		//
+		// `|| Agent.Phase != Before` IS THE NET, not the rule: a phase change Advance did not name would otherwise go
+		// unannounced, which is worse than announcing it with Cause None - which Announce logs as the defect it is.
+		// ENFORCED BY: Airside.Model.RoadAgent.EveryPhaseChangeNamesItsEvent (no such change exists today)
+		if (Event != EAgentEvent::None || Agent.Phase != Before)
 		{
-			OnAgentPhaseChanged.Broadcast(Id, Before, Agent.Phase);
-			// #169: covers the Parked handover above (Pass->ClaimGoalNode claimed the stand
-			// earlier in this same iteration) and every other phase change that can move an
-			// arrival's answer - Arriving ending, a departure starting its push. LinedUp and
-			// Airborne bump for themselves, above, because they are the one case a phase change
-			// does NOT accompany the occupancy change.
-			++OccupancyRevisionCount;
+			const FAgentTransition Made = TransitionOf(Agent, Before, Event);
+			if (Made.From == Made.To)
+			{
+				MomentsThisAdvance.Add(Made);
+			}
+			else
+			{
+				Announce(Made);
+				// #169: covers the Parked handover above (Pass->ClaimGoalNode claimed the stand
+				// earlier in this same iteration) and every other phase change that can move an
+				// arrival's answer - Arriving ending, a departure starting its push. LinedUp and
+				// Airborne bump for themselves, above, because they are the one case a phase change
+				// does NOT accompany the occupancy change.
+				++OccupancyRevisionCount;
+			}
 		}
 	}
 
@@ -1920,7 +1996,8 @@ void UGroundTraffic::ReofferStands(const URoadNetwork& Network)
 		// one case nothing has measured. It keeps waiting, and the next freed stand asks again - or its own stop
 		// at the end of the route does (AdvanceOnce's Parked case, #455), which is what asks it if no stand frees.
 		const bool bMoving = Agent->Phase == EAgentPhase::Taxiing;
-		const bool bSent = bMoving ? ExtendRoute(Id, &Network, Route) : RedirectAgent(Id, &Network, Route);
+		// ReOffered, NOT Redirected: the flight board keeps it in its taxi IN whatever its stand does next (review M1).
+		const bool bSent = bMoving ? ExtendRoute(Id, &Network, Route) : RedirectAgent(Id, &Network, Route, EAgentEvent::ReOffered);
 		if (!bSent && bMoving)
 		{
 			UE_LOG(LogAirsideTraffic, Log,
@@ -1933,8 +2010,9 @@ void UGroundTraffic::ReofferStands(const URoadNetwork& Network)
 			// bAwaitingStand itself, before its own OnAgentPhaseChanged broadcast - see its
 			// comment. (ExtendRoute clears it through the same ReleaseGoal and broadcasts nothing.)
 			// Re-deriving the index AFTER that call is exactly the bug this fix
-			// removes: a listener on that broadcast (UJobBoard::OnAgentPhase) can call
-			// RetireAgent synchronously and remove Id from Agents, so FindIndex(Id) here would
+			// removes: a synchronous listener on that broadcast may call RetireAgent and remove Id
+			// from Agents (the contract AdvanceOnce states; Airside.Model.Traffic.
+			// ReofferStandsRetireReentrancy is one), so FindIndex(Id) here would
 			// return INDEX_NONE and Agents[INDEX_NONE] would be an out-of-bounds write. Id and
 			// Stand.Index are plain values, not indices into Agents, so the log below is safe
 			// whether or not the agent survived its own redirect.

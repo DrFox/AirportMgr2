@@ -222,7 +222,8 @@ FUnstickVerdict UAgentRescue::FindStand(UGroundTraffic& Traffic, const URoadNetw
 		{
 			return FUnstickVerdict::No(LOCTEXT("NoFreeStand", "No free stand fits it"));
 		}
-		return Traffic.RedirectAgent(Agent.Id, &Network, Route) ? FUnstickVerdict::Yes()
+		// RESCUED, the player's own reason (#436): the flight board keeps the taxi in it was in.
+		return Traffic.RedirectAgent(Agent.Id, &Network, Route, EAgentEvent::Rescued) ? FUnstickVerdict::Yes()
 			: FUnstickVerdict::No(LOCTEXT("RedirectRefused", "Could not send it to the stand"));
 	}
 

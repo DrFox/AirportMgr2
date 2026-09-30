@@ -98,8 +98,14 @@ class AIRSIDE_API UGroundTraffic : public UObject
 	friend struct FGroundTrafficTestAccess;
 
 public:
-	/** See UAirsideTraffic::OnAgentPhaseChanged, which relays this one layer up. */
-	DECLARE_MULTICAST_DELEGATE_ThreeParams(FOnAgentPhaseChanged, int32 /*AgentId*/, EAgentPhase /*From*/, EAgentPhase /*To*/);
+	/**
+	 * Every PHASE change of every agent, as one FAgentTransition carrying its Cause (#436) - see UAirsideTraffic::
+	 * OnAgentPhaseChanged, which relays this one layer up. BROADCAST FROM ONE PLACE, Announce, which every operation
+	 * and AdvanceOnce build their transition for; a moment that moves no phase (a touchdown, the climb) is not
+	 * broadcast here but collected per Advance - see GetMomentsThisAdvance.
+	 * ENFORCED BY: Check-Architecture rule 48 (agent-transition-one-door)
+	 */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnAgentPhaseChanged, const FAgentTransition& /*Transition*/);
 	FOnAgentPhaseChanged OnAgentPhaseChanged;
 
 	/** Fired when DispatchArrival refuses, with the planner's reason. The log line stays too. */
@@ -226,8 +232,13 @@ public:
 	 * or Departing - an aircraft on the runway is not something a job can redirect - and for
 	 * an unknown id. Arms a departure if the new route ends on a runway, exactly as
 	 * DispatchAgent does, through the same helper.
+	 *
+	 * Cause is what the phase change it makes is announced with (#436): Redirected for a caller with no more specific
+	 * reason; ReofferStands says ReOffered, DepartAgent's straight-out DepartOrdered, the player's Unstick Rescued -
+	 * the facts UFlightBoard used to re-derive from the live agent a drain late (a taxi in or a taxi out).
 	 */
-	bool RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan);
+	bool RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan,
+		EAgentEvent Cause = EAgentEvent::Redirected);
 
 	/**
 	 * Appends Tail to a MOVING agent's route, IN PLACE: RouteSearch::Splice of the live plan's
@@ -471,6 +482,18 @@ public:
 	 * pre-M2 behaviour and what a caller with no graph yet gets.
 	 */
 	void Advance(double DeltaSeconds, const URoadNetwork* Network);
+
+	/**
+	 * The MOMENTS the last Advance made, in order, across all its substeps: an FAgentTransition with From == To
+	 * (TouchedDown, Airborne) - a thing that happened to an agent without moving its phase, so not a phase change
+	 * to broadcast. Cleared at the top of every Advance.
+	 *
+	 * COLLECTED, NOT POLLED OFF THE AGENT (#446): FLandingRun::bTouchedDown is an edge one SUBSTEP long, and
+	 * UAirsideTraffic read it once a FRAME after an Advance of up to 32 substeps, so at x4 and up the smoke showed
+	 * only when the touchdown fell on a frame's last substep. Each moment carries the pose it happened at.
+	 * ENFORCED BY: Airside.Present.TouchdownShownOncePerLanding
+	 */
+	const TArray<FAgentTransition>& GetMomentsThisAdvance() const { return MomentsThisAdvance; }
 
 	// MaxSubstepSeconds AND MaxSubsteps MOVED TO FTrafficRules (#107 item 6): both were
 	// UPROPERTY(EditAnywhere) here, but this class is a Transient, non-instanced UObject one
@@ -736,6 +759,26 @@ private:
 	/** How many substeps the last Advance call took. See GetLastStepsForTest. Not a
 	 *  UPROPERTY: bookkeeping about the last call, not state a save would ever need. */
 	int32 LastStepsForTest = 0;
+
+	/** See GetMomentsThisAdvance. Not a UPROPERTY, for LastStepsForTest's reason: it is about the last call. */
+	TArray<FAgentTransition> MomentsThisAdvance;
+
+	/**
+	 * The transition an agent just made, as announced: its id, From, its phase now, Cause, and its goal and pose now.
+	 * Called where the transition was made, BEFORE anything removes the agent - a Gone is built from the agent it
+	 * names, then the agent goes, then it is announced.
+	 */
+	static FAgentTransition TransitionOf(const FRoadAgent& Agent, EAgentPhase From, EAgentEvent Cause);
+
+	/**
+	 * THE ONE BROADCAST of OnAgentPhaseChanged (#436). It used to be broadcast from eight sites, one of them a
+	 * Before/After diff, each passing (Id, From, To) and dropping why. Every operation and AdvanceOnce build an
+	 * FAgentTransition where the change is made and hand it here. A Cause of None is logged as an Error - a phase
+	 * change nothing named is the defect the RoadAgentTest pin exists to catch - and still announced, because a
+	 * listener that misses a phase change is worse.
+	 * ENFORCED BY: Check-Architecture rule 48 (agent-transition-one-door)
+	 */
+	void Announce(const FAgentTransition& Transition);
 
 	/**
 	 * The wait-for graph and its cycle bookkeeping (issue #84) - CyclesSeen, YieldedAt,

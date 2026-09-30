@@ -28,6 +28,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
+#include "OpsTransitionTestHelpers.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -293,6 +294,23 @@ namespace
 		int32 WorstJumpPhase = 0;
 		int32 WorstJumpPhaseBefore = -1;
 
+		/**
+		 * The bus the traffic's phase changes are published into and drained from - see RelayPhases. SHARED, so a
+		 * copy of the fixture and the traffic's lambda hold the same one; a by-value member captured by `this` would
+		 * dangle the moment a fixture moved.
+		 */
+		TSharedRef<FOpsEventBus> PhaseBus = MakeShared<FOpsEventBus>();
+
+		/**
+		 * THE ONE SYNCHRONOUS RELAY (#436): the board hears each phase change INSIDE the traffic's broadcast, as the
+		 * fixture used to deliver every one. ONLY for a test that pins what happens there - an order that a drain-late
+		 * delivery hides, like the board unhooking a vehicle BEFORE retiring its agent (OwnRetirementsAreNotLosses):
+		 * UGroundTraffic's re-entrancy contract makes a synchronous listener legal, and this is one. Drains what the bus
+		 * holds first, then replaces the bus relay, so no event is heard twice or out of order.
+		 * ENFORCED BY: Check-Architecture rule 48 (agent-transition-one-door) - the only allow-listed synchronous relay
+		 */
+		void RelayPhasesSynchronously();
+
 	private:
 		void RelayPhases();
 		void RunAnchorLinks();
@@ -525,17 +543,38 @@ void FFuelFixture::RunAnchorLinks()
 
 void FFuelFixture::RelayPhases()
 {
-	// EXACTLY WHAT UOpsRuntime::OnAgentPhase WILL DO (Task 8). Bound here so the world-free
-	// tests exercise the same relay the composition does, rather than calling OnAgentPhase
-	// by hand at moments the test chose.
+	// WHAT UOpsRuntime DOES, ORDER INCLUDED (#436): the traffic's broadcast PUBLISHES into a bus, and the board hears
+	// the event when Advance drains it - after the traffic step, as production's ops tick drains after the motion
+	// tick. This relay used to call OnAgentPhase synchronously INSIDE the broadcast, so the 52 tests on this fixture
+	// exercised an ordering production never has (the board acting mid-Advance) and never the one it does (the event
+	// heard a step late, the agent moved on). The board is handed the transition as the bus carries it.
 	UJobBoard* Bound = Service;
 	URoadNetwork* Graph = Net;
 	UGroundTraffic* Model = Traffic;
 	USimClock* Time = Clock;
-	Traffic->OnAgentPhaseChanged.AddLambda(
-		[Bound, Graph, Model, Time](int32 AgentId, EAgentPhase From, EAgentPhase To)
+	PhaseBus->BeginWiring();
+	PhaseBus->Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("JobBoard"), [Bound, Graph, Model, Time](const FAgentPhaseEvent& E)
 		{
-			Bound->OnAgentPhase(*Model, *Graph, *Time, AgentId, From, To);
+			Bound->OnAgentPhase(*Model, *Graph, *Time, E);
+		});
+	PhaseBus->EndWiring();
+	Traffic->OnAgentPhaseChanged.AddLambda([Bus = PhaseBus](const FAgentTransition& Transition)
+		{
+			Bus->Publish(FAgentPhaseEvent{ Transition });
+		});
+}
+
+void FFuelFixture::RelayPhasesSynchronously()
+{
+	PhaseBus->Drain();
+	Traffic->OnAgentPhaseChanged.Clear();
+	UJobBoard* Bound = Service;
+	URoadNetwork* Graph = Net;
+	UGroundTraffic* Model = Traffic;
+	USimClock* Time = Clock;
+	Traffic->OnAgentPhaseChanged.AddLambda([Bound, Graph, Model, Time](const FAgentTransition& Transition)
+		{
+			Bound->OnAgentPhase(*Model, *Graph, *Time, Transition);
 		});
 }
 
@@ -660,7 +699,13 @@ void FFuelFixture::Advance(double Seconds)
 		// THE CLOCK MOVES TOO, in the order UOpsRuntime runs it: game time first, then the
 		// service reads both it and the movement seconds the traffic just advanced.
 		Clock->Advance(Step);
+		// THE DRAIN, where UOpsRuntime::Tick has it: after the clock, so the phase changes the traffic step published
+		// are heard now - then the board's Step, which in production is a pass of that same drain, and one more
+		// drain for what the Step itself published (a dispatch, a departure), which production hears in the drain's
+		// next round.
+		PhaseBus->Drain();
 		Service->Tick(*Traffic, *Net, *Clock);
+		PhaseBus->Drain();
 
 		// AFTER THE SERVICE, not before, and that is the whole point of watching here. The
 		// service is what REDIRECTS a truck - it hands the agent a new route, which poses it -
@@ -3379,15 +3424,16 @@ bool FFuelLifecycleRetiredElsewhereRebidsQueueTest::RunTest(const FString& Param
 	// out a Step later by a poll that re-opened only the job it was ON and left its queue on a vehicle nobody was
 	// driving; the explicit recall (Unstick) gives every job back. The Gone event now takes the recall's body.
 	// NO STEP RUNS between the retire and the first assertions, so it is the EVENT that is measured, not the poll.
-	// THE FIXTURE DELIVERS THAT EVENT INSIDE RetireAgent; production delivers it a drain later (issue #436) - the
-	// same handler either way, because the board unhooks a vehicle's agent BEFORE retiring it, so its own retirements
-	// find nothing to recall.
+	// THE EVENT IS DRAINED BY HAND, with no Step: the fixture delivers it a drain later, as production does (#436) -
+	// it used to deliver it INSIDE RetireAgent, which production never has. The board unhooks a vehicle's agent
+	// BEFORE retiring it, so its own retirements find nothing to recall (OwnRetirementsAreNotLosses).
 	FuelServiceTest::FQueuedBowser Rig;
 	if (!Rig.Build(*this)) { return false; }
 	const int32 OldAgent = Rig.Vehicle()->AgentId;
 	const uint32 RevisionBefore = Rig.Fixture.Service->GetFleetRevisionForTest();
 
 	Rig.Fixture.Traffic->RetireAgent(OldAgent);
+	Rig.Fixture.PhaseBus->Drain();
 
 	const FServiceVehicle* Vehicle = Rig.Vehicle();
 	if (!TestNotNull(TEXT("the vehicle survives its agent"), Vehicle)) { return false; }
@@ -3491,8 +3537,8 @@ bool FFuelLifecycleLateGoneEventTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the net spoke once"), NetLines, 1);
 
 	// THE LATE EVENT, delivered now.
-	Rig.Fixture.Service->OnAgentPhase(*Rig.Fixture.Traffic, *Rig.Fixture.Net, *Rig.Fixture.Clock, OldAgent,
-		EAgentPhase::Parked, EAgentPhase::Gone);
+	Rig.Fixture.Service->OnAgentPhase(*Rig.Fixture.Traffic, *Rig.Fixture.Net, *Rig.Fixture.Clock,
+		OpsTestTransition(OldAgent, EAgentPhase::Parked, EAgentPhase::Gone, EAgentEvent::Retired));
 	Vehicle = Rig.Vehicle();
 	if (!TestNotNull(TEXT("the vehicle is still on the board"), Vehicle)) { return false; }
 	TestEqual(TEXT("it keeps the agent it set off on - the stale event named another"), Vehicle->AgentId, NewAgent);
@@ -3567,11 +3613,15 @@ bool FFuelRevisionPointsOfChangeTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("an aircraft parked, unheard by the board"), Aircraft != 0)) { return false; }
 		TestNull(TEXT("premise: the board has no turnaround for it"), Fixture.Service->TurnaroundFor(Aircraft));
 		const uint32 BeforeOpen = Fixture.Service->RevisionCountForTest();
-		Fixture.Service->OnAgentPhase(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock, Aircraft, EAgentPhase::Manoeuvring, EAgentPhase::Parked);
+		// THE NODE IT PARKED ON travels with the event (#436) - the stand, read off the agent standing on it.
+		const FGuidelineNodeId ParkedOn = Fixture.Traffic->FindAgent(Aircraft)->GoalNode;
+		Fixture.Service->OnAgentPhase(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock,
+			OpsTestTransition(Aircraft, EAgentPhase::Manoeuvring, EAgentPhase::Parked, EAgentEvent::Parked, ParkedOn));
 		TestNotNull(TEXT("premise: it opened a turnaround"), Fixture.Service->TurnaroundFor(Aircraft));
 		TestTrue(TEXT("a turnaround opening moves the change count on its own"), Fixture.Service->RevisionCountForTest() != BeforeOpen);
 		const uint32 BeforeDrop = Fixture.Service->RevisionCountForTest();
-		Fixture.Service->OnAgentPhase(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock, Aircraft, EAgentPhase::Parked, EAgentPhase::Taxiing);
+		Fixture.Service->OnAgentPhase(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock,
+			OpsTestTransition(Aircraft, EAgentPhase::Parked, EAgentPhase::Taxiing, EAgentEvent::DepartOrdered));
 		TestNull(TEXT("premise: the turnaround went"), Fixture.Service->TurnaroundFor(Aircraft));
 		TestTrue(TEXT("a turnaround and its jobs dropped moves the change count on its own"), Fixture.Service->RevisionCountForTest() != BeforeDrop);
 	}
@@ -3675,9 +3725,11 @@ bool FFuelLifecycleOwnRetirementTest::RunTest(const FString& Parameters)
 {
 	// THE BOARD RETIRES ITS OWN AGENTS - arriving home, a player's despawn, a withdrawn depot - and each of those
 	// broadcasts Gone, which OnAgentPhase now hears as "a vehicle lost its agent". It must find NOTHING: the board
-	// unhooks the vehicle before it retires the agent (RetireAgentOf). The fixture delivers the broadcast INSIDE
-	// RetireAgent, so a retire-then-unhook order shows here as the loss warning firing on the board's own retirement
-	// and recalling a vehicle mid-transition - which production, delivering a drain later, would hide.
+	// unhooks the vehicle before it retires the agent (RetireAgentOf). THIS TEST HEARS THE BROADCAST INSIDE
+	// RetireAgent - FFuelFixture::RelayPhasesSynchronously, the one synchronous relay (#436) - so a retire-then-unhook
+	// order shows here as the loss warning firing on the board's own retirement and recalling a vehicle mid-transition,
+	// which the bus-drained delivery every other test uses (production's) would hide. The order matters because a
+	// synchronous listener is legal (UGroundTraffic's re-entrancy contract).
 	// THE LOSS LINE IS A WARNING, and FLogLineSpy keeps Log verbosity only, so an absence asserted through it can never
 	// fail. FWarningSpy sees Warnings, and the CONTROL below proves it: a bare RetireAgent - not the board's - must print
 	// the line, or "none printed" means nothing.
@@ -3688,6 +3740,7 @@ bool FFuelLifecycleOwnRetirementTest::RunTest(const FString& Parameters)
 		FTruckOut Out;
 		if (SendTruckOut(Fixture, Out))
 		{
+			Fixture.RelayPhasesSynchronously();
 			Fixture.Traffic->RetireAgent(Out.TruckId);
 			bControlRetired = true;
 		}
@@ -3706,6 +3759,7 @@ bool FFuelLifecycleOwnRetirementTest::RunTest(const FString& Parameters)
 		FTruckOut Out;
 		if (SendTruckOut(Fixture, Out))
 		{
+			Fixture.RelayPhasesSynchronously();
 			bHome = Fixture.AdvanceUntil([&]
 			{
 				const FServiceJob* Job = JobById(*Fixture.Service, Out.JobId);
@@ -3721,6 +3775,7 @@ bool FFuelLifecycleOwnRetirementTest::RunTest(const FString& Parameters)
 		FTruckOut Out;
 		if (SendTruckOut(Fixture, Out))
 		{
+			Fixture.RelayPhasesSynchronously();
 			bDespawned = Fixture.Service->RecallVehicleOfAgent(Out.TruckId, /*bRetire=*/true, *Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
 		}
 	}
@@ -3730,6 +3785,7 @@ bool FFuelLifecycleOwnRetirementTest::RunTest(const FString& Parameters)
 		FTruckOut Out;
 		if (SendTruckOut(Fixture, Out))
 		{
+			Fixture.RelayPhasesSynchronously();
 			Fixture.Net->RemoveEntity(Fixture.Depot);
 			Fixture.Advance(0.2);
 			bWithdrawn = Fixture.Service->GetVehicles().Num() == 0 && Fixture.Traffic->FindAgent(Out.TruckId) == nullptr;

@@ -1076,9 +1076,11 @@ void UFlightBoard::PostParkingFee(double Now, UFlight& Flight)
 		FText::Format(NSLOCTEXT("Ledger", "ParkingBy", "Parking: {0}"), Flight.AirlineName));
 }
 
-void UFlightBoard::OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwork& Network,
-	const USimClock& Clock, int32 AgentId, EAgentPhase From, EAgentPhase To)
+void UFlightBoard::OnAgentPhase(const URoadNetwork& Network, const USimClock& Clock, const FAgentTransition& Transition)
 {
+	const int32 AgentId = Transition.AgentId;
+	const EAgentPhase From = Transition.From;
+	const EAgentPhase To = Transition.To;
 	UFlight* Flight = FindByAgent(AgentId);
 	if (Flight == nullptr)
 	{
@@ -1092,49 +1094,31 @@ void UFlightBoard::OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwor
 	// only - OnAgentPhase hears every agent phase, and most move a flight nowhere.
 	const EFlightPhase WasPhase = Flight->Phase;
 
-	// WHERE THE AEROPLANE IS NOW, read live off the agent - the event is a fact about the past (the bus delivers
-	// it a step late), exactly as UJobBoard::OnAgentPhase reads it, and through the same StandAtGoal (review M8).
-	// The fallback junction a stand-less arrival waits on (UGroundTraffic::ReResolvePlan) is no stand's pose.
-	const FRoadAgent* Agent = Traffic.FindAgent(AgentId);
-	const bool bStillParked = Agent != nullptr && Agent->Phase == EAgentPhase::Parked;
-	const FEntityInstanceId GoalStand = Agent != nullptr ? StandAtGoal(Network, *Agent) : FEntityInstanceId();
+	// WHERE IT PARKED, AS THE EVENT SAYS (#436): the transition's GoalAtEvent is the node it parked on when it parked,
+	// through the same StandAtNode UJobBoard::OnAgentPhase asks (review M8). The fallback junction a stand-less
+	// arrival waits on (UGroundTraffic::ReResolvePlan) is no stand's pose. This used to read the LIVE agent - Phase,
+	// GoalNode, bDepartureArmed - because the bus delivers the event a step late and the (From, To) pair could not
+	// say which taxi a Parked -> Taxiing was; its Cause says so now, and the two special cases that corrected the pair
+	// (#405's fallback park, review M4's depart from it) are cases of FlightPhaseFromTransition, WHY comments and all.
+	const FEntityInstanceId ParkedStand = To == EAgentPhase::Parked ? StandAtNode(Network, Transition.GoalAtEvent) : FEntityInstanceId();
 
-	EFlightPhase Next = FlightPhaseFromAgent(To, WasPhase);
-	if (WasPhase < EFlightPhase::Turnaround)
+	const EFlightPhase Next = FlightPhaseFromTransition(Transition, WasPhase, ParkedStand.IsSet());
+	if (Transition.Cause == EAgentEvent::Parked && WasPhase < EFlightPhase::Turnaround && !ParkedStand.IsSet())
 	{
-		if (To == EAgentPhase::Parked && !(bStillParked && GoalStand.IsSet()))
-		{
-			// #405: A TURNAROUND IS TIME ON A STAND. Parked on the fallback junction - or a Parked the agent has
-			// already left (ReofferStands redirected it in the same frame) - the flight is still taxiing in, so the
-			// re-offer's Parked -> Taxiing reads TaxiIn below rather than TaxiOut. No parking clock, no turnaround:
-			// UJobBoard::OnAgentPhase opens none there either, by the same StandAtGoal.
-			// ENFORCED BY: AirportOps.Model.Bus.FallbackParkStaysTaxiIn, AirportOps.Model.Bus.SameFrameRedirectStaysTaxiIn
-			Next = WasPhase;
-			UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s): its aircraft (agent %d) stopped short of a stand; still %s"),
-				Flight->Id, *Flight->Callsign, AgentId, *FlightBoardText::PhaseName(WasPhase));
-		}
-		else if (To == EAgentPhase::Taxiing && From == EAgentPhase::Parked && Agent != nullptr && Agent->bDepartureArmed)
-		{
-			// THE MIRROR: leaving the junction ARMED FOR A DEPARTURE is the taxi out - the inspector's Depart driving
-			// straight out (UGroundTraffic::DepartAgent's RedirectAgent branch, whose TakeGoal arms the route that ends
-			// on a runway). FlightPhaseFromAgent reads "never reached Turnaround" as the taxi in; without this, that
-			// departure would read TaxiIn. THE POSITIVE FACT, not "its goal is no stand" (review M1): a redirect whose
-			// new stand is deleted before the event is heard has no stand goal either, and is still taxiing in. A
-			// pushback enters Manoeuvring, which maps absolutely.
-			// ENFORCED BY: AirportOps.Model.Bus.DepartFromFallbackReadsTaxiOut, AirportOps.Model.Bus.RedirectStaysTaxiInWhenItsStandGoes
-			Next = EFlightPhase::TaxiOut;
-		}
+		// SAID, because it is a Parked that moves the flight nowhere - see FlightPhaseFromTransition's Parked case.
+		UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s): its aircraft (agent %d) stopped short of a stand; still %s"),
+			Flight->Id, *Flight->Callsign, AgentId, *FlightBoardText::PhaseName(WasPhase));
 	}
 	Flight->Phase = Next;
 	if (Flight->Phase != WasPhase)
 	{
-		UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s): %s -> %s (agent %d %s -> %s)"),
+		UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s): %s -> %s (agent %d %s -> %s, %s)"),
 			Flight->Id, *Flight->Callsign, *UEnum::GetValueAsString(WasPhase), *UEnum::GetValueAsString(Flight->Phase),
-			AgentId, *UEnum::GetValueAsString(From), *UEnum::GetValueAsString(To));
+			AgentId, *UEnum::GetValueAsString(From), *UEnum::GetValueAsString(To), *UEnum::GetValueAsString(Transition.Cause));
 	}
 	else if (To == EAgentPhase::Stranded)
 	{
-		// A STRANDED AEROPLANE MOVES ITS FLIGHT NOWHERE - FlightPhaseFromAgent's default. It is not
+		// A STRANDED AEROPLANE MOVES ITS FLIGHT NOWHERE - FlightPhaseFromTransition's Stranded case. It is not
 		// at its stand, so no turnaround starts; the flight stays in its taxi until the player
 		// retires the aeroplane. Said, because it is the one agent phase change here with no
 		// flight phase change to show for it.
@@ -1145,12 +1129,13 @@ void UFlightBoard::OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwor
 	if (To == EAgentPhase::Parked)
 	{
 		// WHICH stand it actually got, which need not be the one held - see UFlight::Stand.
-		// The agent's own GoalNode is the authority, exactly as UJobBoard reads it - and, as there,
-		// only while the agent is STILL parked: the bus delivers this a step late, and an aircraft
-		// redirected since has a GoalNode that is its next stand, not this one (UJobBoard::OnAgentPhase).
-		if (bStillParked && GoalStand.IsSet())
+		// The node it parked on is the authority, exactly as UJobBoard reads it - the EVENT's, not the
+		// live agent's: the bus delivers this a step late, and an aircraft redirected since has a GoalNode
+		// that is its next stand, not this one. It used to be asked whether it was STILL parked to rule
+		// that out; GoalAtEvent cannot be anything but the node it parked on (#436).
+		if (ParkedStand.IsSet())
 		{
-			Flight->Stand = GoalStand;
+			Flight->Stand = ParkedStand;
 		}
 	}
 

@@ -14,6 +14,7 @@
 #include "Model/StandAllocator.h"
 #include "Profiles/RoadProfile.h"
 #include "Testing/AirsideTestGraph.h"
+#include "OpsTransitionTestHelpers.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -245,7 +246,7 @@ bool FOfferAirborneAtTest::RunTest(const FString& Parameters)
 	Rig.Board->AddOffer(*Rig.Clock, Flight);
 	Rig.Clock->Advance(3.0);
 	const double At = Rig.Clock->Now();
-	Rig.Board->OnAgentPhase(*Rig.Traffic, *Rig.Net, *Rig.Clock, 7, EAgentPhase::Taxiing, EAgentPhase::Departing);
+	Rig.Board->OnAgentPhase(*Rig.Net, *Rig.Clock, OpsTestTransition(7, EAgentPhase::Taxiing, EAgentPhase::Departing, EAgentEvent::LinedUp));
 	TestEqual(TEXT("the moment it departs is written down"), Flight->AirborneAt, At, 1e-9);
 	return true;
 }

@@ -11,6 +11,7 @@
 enum class EAgentPhase : uint8;
 class URoadNetwork;
 struct FRoadAgent;
+struct FAgentTransition;
 
 /**
  * Where one flight has got to.
@@ -18,7 +19,7 @@ struct FRoadAgent;
  * AN ENUM, NEVER A SET OF BOOLS: "offered" and "inbound" can never both be true, and the
  * states are visited in one order - the same rule EAgentPhase and EFuelDemandState follow.
  *
- * THE DECLARATION ORDER IS LOAD-BEARING. FlightPhaseFromAgent decides which way an aeroplane
+ * THE DECLARATION ORDER IS LOAD-BEARING. FlightPhaseFromTransition decides which way an aeroplane
  * is taxiing by asking whether the flight has reached Turnaround yet, so Turnaround must stay
  * between TaxiIn and TaxiOut. Reordering these breaks that with no compiler complaint.
  *
@@ -52,7 +53,7 @@ enum class EFlightPhase : uint8
 	 * Coming off the stand - see EAgentPhase::Manoeuvring.
 	 *
 	 * ITS POSITION IN THIS LIST IS LOAD-BEARING, like every other entry's: it must sit AFTER
-	 * Turnaround or FlightPhaseFromAgent would read the taxi that follows it as a taxi IN.
+	 * Turnaround or FlightPhaseFromTransition would read the taxi that follows it as a taxi IN.
 	 */
 	Manoeuvring,
 	TaxiOut,
@@ -71,7 +72,7 @@ enum class EFlightPhase : uint8
 	 * (spec 2026-09-29-ops-batch3 §3). Not Expired: nobody let it lapse, so no OfferExpired and no Ignored
 	 * penalty; not Cancelled: it was never the airline's flight here.
 	 * ENFORCED BY: AirportOps.Model.FlightBoard.CancelUnarrivedCancelsAndWithdraws
-	 * APPENDED LAST because the order above is load-bearing (FlightPhaseFromAgent, UFlightBoard::Live).
+	 * APPENDED LAST because the order above is load-bearing (FlightPhaseFromTransition, UFlightBoard::Live).
 	 */
 	Withdrawn
 };
@@ -217,6 +218,11 @@ public:
 	/**
 	 * USimClock::Now at which it reached Departing, or 0 if it has not. C scores this against
 	 * AirborneBy(); recorded now so C needs no migration.
+	 *
+	 * THE LINE-UP, NOT THE CLIMB, despite the name (#436): Departing starts when the aeroplane lines up and rolls.
+	 * EAgentEvent::Airborne is a MOMENT - the phase stays Departing - so it is not on OnAgentPhaseChanged; it is on
+	 * UGroundTraffic::GetMomentsThisAdvance, which nothing in ops reads. Scoring the real wheels-up would bridge that
+	 * list (the per-frame moments), a change to the contract the airlines score, left for its own issue.
 	 */
 	UPROPERTY() double AirborneAt = 0.0;
 
@@ -240,7 +246,7 @@ public:
 	 * THE TWO CAN DIFFER, and that is by design: the hold guarantees A stand exists for this
 	 * flight, and ArrivalPlanner then picks the nearest free one when it lands, which may be
 	 * a different stand if a nearer one freed meanwhile. UFlightBoard overwrites this at
-	 * Parked AT A STAND (StandAtGoal) from the agent's own GoalNode, so once it has parked what is
+	 * Parked AT A STAND (StandAtNode) from the node it parked on, so once it has parked what is
 	 * saved is the stand it is on. Before that - landing, taxiing in, or parked on the fallback
 	 * junction (#405) - it is still the stand it was accepted onto, which a load's re-queue (#404)
 	 * re-holds, or gives up if another flight holds it now (UStandAllocator::Reapply).
@@ -303,21 +309,29 @@ public:
 };
 
 /**
- * The flight phase an agent phase implies, given where the flight had got to.
+ * The flight phase an agent's transition implies, given where the flight had got to.
  *
- * TAKES THE CURRENT PHASE because EAgentPhase::Taxiing happens twice - once to the stand and
- * once away from it - and the agent cannot tell the two apart. Everything else is a plain
- * map, and the asymmetry is the whole reason this is a function rather than a table.
+ * SWITCHED ON THE TRANSITION'S CAUSE (#436), not on its To phase behind a default - it was
+ * FlightPhaseFromAgent(To, Current), and UFlightBoard::OnAgentPhase then read the live agent (Phase, GoalNode,
+ * bDepartureArmed) a drain late to correct the two cases the pair could not tell apart. Both now come with the
+ * event: a Parked is a turnaround only when bParkedAtStand - the transition's GoalAtEvent is a stand's pose (#405) -
+ * and a DepartOrdered is the taxi OUT wherever it left from, while a ReOffered stays the taxi in (review M1, M4).
  *
- * NOT THE WHOLE RULE since #405: Parked maps to Turnaround here, but UFlightBoard::OnAgentPhase
- * asks the live agent first - a flight enters Turnaround only parked AT A STAND (StandAtGoal),
- * and one that never reached a stand leaving armed for a departure reads TaxiOut.
+ * STILL TAKES THE CURRENT PHASE for the causes that continue a taxi (a redirect, a rescue, the reverse leg's end):
+ * the taxi goes on in whichever direction it was going, and only the flight knows which that was. The comparison
+ * reads EFlightPhase's declaration order, which its own comment pins.
+ * ENFORCED BY: AirportOps.Model.Flight.PhaseFromTransition, AirportOps.Model.Bus.SameFrameRedirectStaysTaxiIn
  */
-AIRPORTOPS_API EFlightPhase FlightPhaseFromAgent(EAgentPhase To, EFlightPhase Current);
+AIRPORTOPS_API EFlightPhase FlightPhaseFromTransition(const FAgentTransition& Transition, EFlightPhase Current,
+	bool bParkedAtStand);
 
 /**
- * The stand whose pose is this agent's goal, or unset: a live IsStand() entity. The ONE "is it at (or bound for)
- * a stand" question both boards ask - UFlightBoard (does a Parked flight enter Turnaround) and UJobBoard (does a
- * Parked aircraft open a turnaround) - so the two cannot disagree about the fallback junction (review M8).
+ * The stand whose pose is this node, or unset: a live IsStand() entity. The ONE "is it at (or bound for) a stand"
+ * question both boards ask - UFlightBoard (does a Parked flight enter Turnaround) and UJobBoard (does a Parked
+ * aircraft open a turnaround) - so the two cannot disagree about the fallback junction (review M8). Asked of a
+ * transition's GoalAtEvent since #436: the node it parked on, not the one it may have been sent to since.
  */
+AIRPORTOPS_API FEntityInstanceId StandAtNode(const URoadNetwork& Network, FGuidelineNodeId Node);
+
+/** StandAtNode of the agent's goal NOW - for a test asking about a live agent; the boards ask of the event. */
 AIRPORTOPS_API FEntityInstanceId StandAtGoal(const URoadNetwork& Network, const FRoadAgent& Agent);

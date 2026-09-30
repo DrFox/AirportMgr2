@@ -713,7 +713,7 @@ void UJobBoard::FinishServe(FServiceVehicle& Vehicle, const USimClock& Clock)
 	PostServiceFee(Clock.Now(), Job->QuantityDelivered);
 }
 
-void UJobBoard::OnVehicleArrived(FServiceVehicle& Vehicle, const FRoadAgent& Agent, UGroundTraffic& Traffic,
+void UJobBoard::OnVehicleArrived(FServiceVehicle& Vehicle, FGuidelineNodeId ParkedOn, UGroundTraffic& Traffic,
 	const URoadNetwork& Network, const USimClock& Clock)
 {
 	// NO BUMP OF ITS OWN: every branch below is a transition, and each moves FleetRevision (an arrival that
@@ -722,7 +722,7 @@ void UJobBoard::OnVehicleArrived(FServiceVehicle& Vehicle, const FRoadAgent& Age
 
 	if (Vehicle.State == EServiceVehicleState::ToFacility)
 	{
-		if (Home.IsSet() && Agent.GoalNode == Home)
+		if (Home.IsSet() && ParkedOn == Home)
 		{
 			// HOME. Retired here and nowhere else: a truck does not fly away, so nothing in the traffic
 			// model would ever remove it (UGroundTraffic::RetireAgent exists for exactly this). The
@@ -746,7 +746,7 @@ void UJobBoard::OnVehicleArrived(FServiceVehicle& Vehicle, const FRoadAgent& Age
 	}
 	FServiceJob* Job = FindJob(Vehicle.CurrentJob);
 	const FGuidelineNodeId Anchor = Job != nullptr ? ServiceAnchorOf(Network, Job->Stand, Vehicle.Role) : FGuidelineNodeId();
-	if (Job == nullptr || Agent.GoalNode != Anchor)
+	if (Job == nullptr || ParkedOn != Anchor)
 	{
 		// AT THE WRONG SERVICE POINT - it was sent on while on its last leg to another, and finished that
 		// leg. On from here, parked, exactly as the recall's own last-leg case goes home.
@@ -834,8 +834,9 @@ void UJobBoard::DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& T
 	Turnarounds.RemoveAll([AircraftId](const FTurnaround& Each) { return Each.AircraftId == AircraftId; });
 
 	// THE VEHICLES OUT FOR IT MOVE ON - a truck left at a hydrant nobody is using would hold that node
-	// for ever. Collected first: StartNext can dispatch, and a dispatch broadcasts a phase change that
-	// re-enters this class.
+	// for ever. Collected first: StartNext can dispatch, and a dispatch broadcasts a phase change that a
+	// synchronous listener may answer by re-entering this class (UGroundTraffic's re-entrancy contract - production's
+	// listener hears it a drain later, the fixtures' too since #436, but the guard is for the contract).
 	TArray<int32> Recalled;
 	for (const int32 JobId : JobIds)
 	{
@@ -869,9 +870,51 @@ void UJobBoard::DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& T
 	}
 }
 
-void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Network,
-	const USimClock& Clock, int32 AgentId, EAgentPhase From, EAgentPhase To)
+namespace JobBoardPhase
 {
+	/**
+	 * Did this transition take the agent off where it stood UNDER ITS OWN POWER - sent somewhere - as against being
+	 * removed (Retired, Cleared) or losing its road (Stranded)? THE ONE LIST, by cause (#436): OnAgentPhase typed it
+	 * twice as a phase set, {Manoeuvring, Reversing, Taxiing, Departing}, once per branch that needed it. Every cause
+	 * by name and no default, so a cause added to EAgentEvent is a compiler warning here, not a silent "no".
+	 */
+	bool LeftUnderItsOwnPower(EAgentEvent Cause)
+	{
+		switch (Cause)
+		{
+		case EAgentEvent::DepartOrdered:
+		case EAgentEvent::Redirected:
+		case EAgentEvent::ReOffered:
+		case EAgentEvent::Rescued:
+			return true;
+		case EAgentEvent::None:
+		case EAgentEvent::Vacated:
+		case EAgentEvent::LinedUp:
+		case EAgentEvent::Parked:
+		case EAgentEvent::PushedBack:
+		case EAgentEvent::Airborne:
+		case EAgentEvent::Gone:
+		case EAgentEvent::Stranded:
+		case EAgentEvent::BackingIn:
+		case EAgentEvent::BackedOut:
+		case EAgentEvent::TouchedDown:
+		case EAgentEvent::Dispatched:
+		case EAgentEvent::Retired:
+		case EAgentEvent::Cleared:
+			return false;
+		}
+		return false;
+	}
+}
+
+void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Network,
+	const USimClock& Clock, const FAgentTransition& Transition)
+{
+	const int32 AgentId = Transition.AgentId;
+	const EAgentPhase From = Transition.From;
+	const EAgentPhase To = Transition.To;
+	const bool bLeftUnderItsOwnPower = JobBoardPhase::LeftUnderItsOwnPower(Transition.Cause);
+
 	// NO BUMP ON ENTRY (#443): this hears every phase change of every agent in the airport, and most are none of the
 	// board's business. What changes the board moves Revision where it happens: DropAircraft (an aircraft's turnaround and
 	// jobs go), the lifecycle transitions and Reopen (a vehicle's agent parked, lost or stranded), and the turnaround
@@ -881,28 +924,27 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 	// hand. Its turnaround and jobs go, and any vehicle out for it moves on - its next job, or home.
 	if (From == EAgentPhase::Parked && To != EAgentPhase::Parked && TurnaroundFor(AgentId) != nullptr)
 	{
-		// A DEPARTING PHASE, named rather than "not Gone": Gone is a retire and Stranded a road lost under
-		// it, and neither is the aircraft leaving under its own power.
-		const bool bDeparted = To == EAgentPhase::Manoeuvring || To == EAgentPhase::Reversing
-			|| To == EAgentPhase::Taxiing || To == EAgentPhase::Departing;
-		DropAircraft(AgentId, bDeparted, Traffic, Network, Clock);
+		// A DEPARTURE, named by its cause rather than "not Gone": a retire and a road lost under it (Retired, Cleared,
+		// Stranded) are not the aircraft leaving under its own power - see LeftUnderItsOwnPower.
+		DropAircraft(AgentId, bLeftUnderItsOwnPower, Traffic, Network, Clock);
 		return;
 	}
 
 	// A DEPARTURE THAT WAS NEVER TURNED AROUND (whole-stack review M4, ruling 2026-09-30): an aircraft parked on the
 	// fallback junction - no stand, so no turnaround and no fuel job - that the inspector's Depart sends off. It
 	// leaves Unfuelled, owed what its flight was offered at: LitresOwedFor, the same source a turnaround's fuel job
-	// takes its load from (OnAgentPhase's Parked branch below), so the two cannot be owed different amounts. ARMED FOR
-	// A RUNWAY, not merely moving: a Parked -> Taxiing that is the re-offer taking it to a stand (FallbackParkStaysTaxiIn)
-	// is not a departure, and its turnaround at the stand will end it properly. The Parked event is heard a step
-	// late, so the agent is asked as it is now - which is where a departure is still taxiing out, armed.
+	// takes its load from (OnAgentPhase's Parked branch below), so the two cannot be owed different amounts. SENT OFF
+	// FOR A RUNWAY, not merely moving: a Parked -> Taxiing that is the re-offer taking it to a stand (FallbackParkStaysTaxiIn)
+	// is not a departure, and its turnaround at the stand will end it properly. THE CAUSE SAYS WHICH (#436) -
+	// DepartOrdered, UGroundTraffic::DepartAgent's own - where this used to ask the live agent, a step late, whether
+	// it was still armed for a departure. The agent is still asked for its AIRFRAME, which is identity, not state:
+	// the litres owed are an aeroplane's figure, and only an agent started with an FAirframe carries one.
 	// ENFORCED BY: AirportOps.Model.Bus.DepartFromFallbackReadsTaxiOut, AirportOps.Model.Bus.FallbackParkStaysTaxiIn
-	if (From == EAgentPhase::Parked && (To == EAgentPhase::Manoeuvring || To == EAgentPhase::Reversing
-		|| To == EAgentPhase::Taxiing || To == EAgentPhase::Departing))
+	if (From == EAgentPhase::Parked && bLeftUnderItsOwnPower)
 	{
 		const FRoadAgent* Leaving = Traffic.FindAgent(AgentId);
 		const FAirframe* Airframe = Leaving != nullptr ? Leaving->AsAircraft() : nullptr;
-		if (Airframe != nullptr && Leaving->bDepartureArmed)
+		if (Airframe != nullptr && Transition.Cause == EAgentEvent::DepartOrdered)
 		{
 			const double Wanted = LitresWanted(AgentId, *Airframe);
 			UE_LOG(LogAirportOps, Log, TEXT("Fuel: aircraft %d departed without a turnaround - %s, %.0f L owed"),
@@ -918,7 +960,7 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 	// body as the player's Unstick (LoseAgent; RecallVehicleOfAgent is its explicit form). This used to be dropped by
 	// the `To != Parked` return below and found a Step later by a poll that re-opened only the current job.
 	// THE BOARD'S OWN RETIREMENTS FIND NOTHING HERE: they unhook the vehicle before retiring (RetireAgentOf), so by the
-	// time this fires - inside the call in a fixture, a drain later in production - no vehicle has that agent.
+	// time this fires - a drain later, in production and in the fixtures alike since #436 - no vehicle has that agent.
 	// ENFORCED BY: AirportOps.Fuel.Lifecycle.AgentRetiredElsewhereRebidsWholeQueue, AirportOps.Fuel.Lifecycle.OwnRetirementsAreNotLosses,
 	// AirportOps.Fuel.DepotGoneBeforeRecallLeavesNoAgent
 	if (To == EAgentPhase::Gone)
@@ -940,7 +982,7 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 	// deleted road vanish. ToFacility, so whatever the player does next - a Replan to its old goal, Send
 	// home - ends at home: OnVehicleArrived turns a ToFacility vehicle for home wherever it parks.
 	// ENFORCED BY: AirportOps.Model.AgentRescue.StrandedVehicleReleasesJobs
-	if (To == EAgentPhase::Stranded)
+	if (Transition.Cause == EAgentEvent::Stranded)
 	{
 		if (const FServiceVehicle* Found = VehicleForAgent(AgentId))
 		{
@@ -953,7 +995,7 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 		return;
 	}
 
-	if (To != EAgentPhase::Parked)
+	if (Transition.Cause != EAgentEvent::Parked)
 	{
 		return;
 	}
@@ -967,31 +1009,37 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 	// 2026-09-29 §1), and the agent may have moved on since. UGroundTraffic::ReofferStands redirects an
 	// aircraft parked on a fallback junction to a stand that freed in the same frame, and its GoalNode is
 	// then the NEW stand - acting on it would open a turnaround for an aircraft still taxiing in. Its own
-	// Parked event for the real stand follows.
+	// Parked event for the real stand follows. SINCE #436 THE AIRCRAFT CASE IS THE EVENT'S OWN: GoalAtEvent is the
+	// node it parked ON, the fallback junction, which is no stand - so no turnaround opens, and the live agent is no
+	// longer asked whether it is still parked (see the aircraft branch below).
 	// ENFORCED BY: AirportOps.Present.Bus.StaleParkedOpensNoTurnaround
-	if (Agent->Phase != EAgentPhase::Parked)
-	{
-		return;
-	}
-
-	// A VEHICLE ARRIVING - at a stand, or home. Its own state says which it was heading for.
+	//
+	// A VEHICLE ARRIVING - at a stand, or home. Its own state says which it was heading for, and GoalAtEvent says
+	// where it parked. STILL ASKED WHETHER IT IS PARKED NOW, and only here: the board acts on a vehicle's arrival by
+	// DRIVING it on (serve, refill, the next leg), and an agent something has sent on since the event is not standing
+	// where the event says - acting on it would start a serve at a stand it has left.
 	if (const FServiceVehicle* Found = VehicleForAgent(AgentId))
 	{
-		OnVehicleArrived(*FindVehicleMutable(Found->Id), *Agent, Traffic, Network, Clock);
+		if (Agent->Phase == EAgentPhase::Parked)
+		{
+			OnVehicleArrived(*FindVehicleMutable(Found->Id), Transition.GoalAtEvent, Traffic, Network, Clock);
+		}
 		return;
 	}
 
-	// AN AIRCRAFT THAT HAS PARKED. Its goal must be a STAND's pose - an aircraft parked on a taxiway
+	// AN AIRCRAFT THAT HAS PARKED. The node it parked on must be a STAND's pose - an aircraft parked on a taxiway
 	// junction (the stand-death fallback) is at no stand and demands nothing, which falls out of this
-	// same lookup rather than needing a rule of its own - StandAtGoal, the one UFlightBoard asks too, so the flight
-	// enters Turnaround exactly where a turnaround opens (review M8). AsAircraft AS WELL AS Class: the turnaround
-	// below is an aeroplane's figure, and only an agent started with an FAirframe carries one.
+	// same lookup rather than needing a rule of its own - StandAtNode, the one UFlightBoard asks too, so the flight
+	// enters Turnaround exactly where a turnaround opens (review M8). Asked of the EVENT's node (#436), so a Parked
+	// heard after a same-frame re-offer finds the junction it parked on, not the stand it has been sent to since.
+	// AsAircraft AS WELL AS Class: the turnaround below is an aeroplane's figure, and only an agent started with an
+	// FAirframe carries one - the live agent is read for that, its identity, and for nothing that moves.
 	const FAirframe* Aircraft = Agent->AsAircraft();
 	if (Agent->Class != ETraversalClass::Aircraft || Aircraft == nullptr || TurnaroundFor(AgentId) != nullptr)
 	{
 		return;
 	}
-	const FEntityInstanceId Stand = StandAtGoal(Network, *Agent);
+	const FEntityInstanceId Stand = StandAtNode(Network, Transition.GoalAtEvent);
 	if (!Stand.IsSet())
 	{
 		return;
@@ -1124,8 +1172,8 @@ bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 	}
 	for (const int32 VehicleId : ToDecide)
 	{
-		// RE-FOUND EACH TIME: a StartNext can dispatch, the dispatch broadcasts, and the broadcast may
-		// re-enter this class and grow the vehicle array.
+		// RE-FOUND EACH TIME: a StartNext can dispatch, the dispatch broadcasts, and a synchronous listener on
+		// the broadcast may re-enter this class and grow the vehicle array (the contract DropAircraft names).
 		if (FServiceVehicle* Vehicle = FindVehicleMutable(VehicleId))
 		{
 			StartNext(*Vehicle, Traffic, Network, Clock);
@@ -1155,7 +1203,7 @@ bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 	// wedge - said, not polled: the Error names it in the log the moment it is made, where the backstop hid it behind a
 	// board pass that ran every frame - AND SETTLED, as StartNext's own tail settles it: a future path must not park a
 	// vehicle on the hydrant for good with the Error merely firing every Step. Ids first, then acted on: GoToFacility can
-	// dispatch, the broadcast can re-enter, and the vehicle array can move under a live reference.
+	// dispatch, a synchronous listener on its broadcast may re-enter, and the vehicle array can move under a live reference.
 	// AN ERROR LOG, NOT AN ENSURE (2026-09-30, after #454): an ensure prints a [Callstack], and Tools/Run-AirsideTests.ps1
 	// fails the whole run on any [Callstack] in the log as a crash during teardown (issue #291) - so the one test that
 	// stages this on purpose turned every full-suite run red with every test green. The detection is kept: the automation
@@ -1215,8 +1263,10 @@ bool UJobBoard::HasRefusedDeparture(double Now) const
 void UJobBoard::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
 {
 	// GATHERED FIRST, DEPARTED AFTER. UGroundTraffic::DepartAgent broadcasts the phase change
-	// synchronously, OnAgentPhase is on the other end of that broadcast, and it drops the aircraft's
-	// turnaround - so departing inside a loop over Turnarounds would mutate the array being walked.
+	// synchronously, and OnAgentPhase drops the aircraft's turnaround when it hears it - which since the
+	// ops bus is a drain later (UOpsRuntime::OnAgentPhase only publishes), not inside this loop. Kept
+	// anyway, and it costs one small array: a synchronous listener is legal (UGroundTraffic's re-entrancy
+	// contract), and a loop over Turnarounds that one could mutate is a crash waiting on a wiring change.
 	// Ids, not pointers, for the same reason.
 	TArray<int32> Ready;
 	for (const FTurnaround& Turnaround : Turnarounds)

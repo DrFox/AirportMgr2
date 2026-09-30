@@ -53,7 +53,7 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("route found"), Plan.IsValid())) { return false; }
 
 	TArray<TPair<EAgentPhase, EAgentPhase>> Relayed;
-	Traffic->OnAgentPhaseChanged.AddLambda([&Relayed](int32, EAgentPhase From, EAgentPhase To) { Relayed.Emplace(From, To); });
+	Traffic->OnAgentPhaseChanged.AddLambda([&Relayed](const FAgentTransition& T) { Relayed.Emplace(T.From, T.To); });
 
 	// A REAL VEHICLE since 2026-09-23: it used to be the default airframe with Climb cleared
 	// so no departure could arm; an FVehicle has no climb, so none can.
@@ -206,7 +206,7 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 		static_cast<UObject*>(DupTraffic->GetModel()), static_cast<UObject*>(Model));
 
 	int32 DupRelayed = 0;
-	DupTraffic->OnAgentPhaseChanged.AddLambda([&DupRelayed](int32, EAgentPhase, EAgentPhase) { ++DupRelayed; });
+	DupTraffic->OnAgentPhaseChanged.AddLambda([&DupRelayed](const FAgentTransition&) { ++DupRelayed; });
 	const FRoutePlan DupPlan = TestGraph::Probe(*Dup->Network, A, B, ETraversalClass::GroundVehicle);
 	if (TestTrue(TEXT("the duplicate's own graph still routes"), DupPlan.IsValid()))
 	{
@@ -330,6 +330,53 @@ bool FTrafficRulesGapClearsHalfTheFootprintTest::RunTest(const FString& Paramete
 	// ABOVE THE FLOOR IT IS USED AS IT STANDS.
 	Rules.VehicleGap = 900.0;
 	TestEqual(TEXT("a gap above the floor is the gap"), Rules.GapFor(ETraversalClass::GroundVehicle), 900.0);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// #446's touchdown item: FLandingRun::bTouchedDown is true for the ONE substep that put the wheels down, and
+// UAirsideTraffic::Advance used to read it once per FRAME, after a model Advance that runs several substeps at x4 and
+// up - so the smoke appeared only when the touchdown happened to fall on a frame's last substep (about a quarter of
+// landings at x8). The pin: frames of FOUR substeps each, and four runs whose lead-in of single substeps puts the
+// touchdown on each of the four positions in turn. Every run shows exactly one touchdown; the poll showed one of four.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTouchdownShownOncePerLandingTest,
+	"Airside.Present.TouchdownShownOncePerLanding",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTouchdownShownOncePerLandingTest::RunTest(const FString& Parameters)
+{
+	const FAirframe Piper = TestAirframes::Piper();
+	FTrafficRules Rules;
+	Rules.MaxSubstepSeconds = 1.0 / 60.0;
+	Rules.MaxSubsteps = 32;
+	constexpr int32 SubstepsPerFrame = 4;
+	const double Frame = SubstepsPerFrame * Rules.MaxSubstepSeconds;
+	for (int32 LeadIn = 0; LeadIn < SubstepsPerFrame; ++LeadIn)
+	{
+		// WORLD-FREE, a bare presenter: no smoke component, which is why the count is of touchdowns SHOWN and not of
+		// puffs - see TouchdownsShownForTest. SpawnView says "model only" and the model simulates regardless.
+		UAirsideTraffic* Traffic = NewObject<UAirsideTraffic>(GetTransientPackage());
+		const FTestAirport Airport = FTestAirport::Build(Piper);
+		if (!TestTrue(TEXT("the arrival is admitted"),
+			Traffic->DispatchArrival(*Airport.Net, Airport.Threshold - FVector2D(1000.0, 0.0), Piper, 0.0, 1.0)))
+		{
+			return false;
+		}
+		for (int32 K = 0; K < LeadIn; ++K)
+		{
+			Traffic->Advance(Rules.MaxSubstepSeconds, 0.0, Airport.Net, Rules);
+		}
+		int32 Frames = 0;
+		for (; Frames < 20000 && Traffic->LastAgentPhaseForTest() == EAgentPhase::Arriving; ++Frames)
+		{
+			Traffic->Advance(Frame, 0.0, Airport.Net, Rules);
+		}
+		TestEqual(*FString::Printf(TEXT("lead-in %d: the landing rolled out and vacated"), LeadIn),
+			Traffic->LastAgentPhaseForTest(), EAgentPhase::Taxiing);
+		TestEqual(*FString::Printf(TEXT("lead-in %d: frames of %d substeps show its touchdown exactly once"),
+			LeadIn, SubstepsPerFrame), Traffic->TouchdownsShownForTest(), 1);
+	}
 	return true;
 }
 

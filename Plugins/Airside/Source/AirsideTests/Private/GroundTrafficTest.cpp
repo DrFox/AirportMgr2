@@ -2067,9 +2067,9 @@ bool FTrafficStrandedIsNotParkedTest::RunTest(const FString& Parameters)
 		TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
 	TArray<EAgentPhase> Heard;
-	Traffic->OnAgentPhaseChanged.AddLambda([&](int32 Id, EAgentPhase, EAgentPhase To)
+	Traffic->OnAgentPhaseChanged.AddLambda([&](const FAgentTransition& T)
 	{
-		if (Id == Plane) { Heard.Add(To); }
+		if (T.AgentId == Plane) { Heard.Add(T.To); }
 	});
 
 	TickUntil(*Traffic, *Net, 5.0, [](int32) { return true; });
@@ -3180,11 +3180,12 @@ bool FReofferStandsRetireReentrancyTest::RunTest(const FString& Parameters)
 {
 	// #193: ReofferStands used to re-derive its agent's index with FindIndex AFTER calling
 	// RedirectAgent, which broadcasts OnAgentPhaseChanged. In play, UJobBoard::OnAgentPhase
-	// answers that broadcast by calling UGroundTraffic::RetireAgent SYNCHRONOUSLY - so a
+	// answered that broadcast by calling UGroundTraffic::RetireAgent SYNCHRONOUSLY - so a
 	// listener that retires the very agent being redirected removes it from Agents mid-call,
-	// and Agents[FindIndex(Id)] afterwards indexed with INDEX_NONE. This test stands in for
-	// UJobBoard with a plain lambda, so it exercises the real re-entrancy without pulling
-	// in the AirportOps module: the fix is in Model/, and belongs to a Model/ test.
+	// and Agents[FindIndex(Id)] afterwards indexed with INDEX_NONE. Since the ops bus it hears
+	// the event a drain later (#436), but a synchronous listener is still legal - UGroundTraffic's
+	// re-entrancy contract - and this test IS one: it pins that contract with a plain lambda,
+	// without pulling in the AirportOps module: the fix is in Model/, and belongs to a Model/ test.
 	const FTestAirport A = FTestAirport::Build(TestAirframes::Piper(), { .StandCount = 2 });
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 
@@ -3210,17 +3211,17 @@ bool FReofferStandsRetireReentrancyTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// THE LISTENER STANDS IN FOR UJobBoard::OnAgentPhase: it retires this agent the moment
+	// THE LISTENER STANDS IN FOR WHAT UJobBoard::OnAgentPhase WAS: it retires this agent the moment
 	// it sees ITS phase change away from Parked - which is the redirect ReofferStands is about
 	// to drive - and does so exactly once, so the Gone broadcast RetireAgent itself raises does
 	// not recurse.
 	bool bRetiredDuringRedirect = false;
 	int32 PhaseChangedBroadcasts = 0;
 	Traffic->OnAgentPhaseChanged.AddLambda(
-		[&](int32 EventId, EAgentPhase From, EAgentPhase To)
+		[&](const FAgentTransition& T)
 		{
 			++PhaseChangedBroadcasts;
-			if (EventId == Id && From == EAgentPhase::Parked && To != EAgentPhase::Gone && !bRetiredDuringRedirect)
+			if (T.AgentId == Id && T.From == EAgentPhase::Parked && T.To != EAgentPhase::Gone && !bRetiredDuringRedirect)
 			{
 				bRetiredDuringRedirect = true;
 				Traffic->RetireAgent(Id);
@@ -5014,9 +5015,11 @@ bool FTrafficRebuildDuringReverseStrandsWhenTheSpanEndIsGoneTest::RunTest(const 
 	const FVector2D StoppedAt = Traffic->FindAgent(Truck)->LastMotion.Position;
 
 	int32 HeardStranded = 0;
-	const FDelegateHandle Listener = Traffic->OnAgentPhaseChanged.AddLambda([&](int32 Id, EAgentPhase From, EAgentPhase To)
+	const FDelegateHandle Listener = Traffic->OnAgentPhaseChanged.AddLambda([&](const FAgentTransition& T)
 	{
-		HeardStranded += (Id == Truck && From == EAgentPhase::Reversing && To == EAgentPhase::Stranded) ? 1 : 0;
+		// AND NAMED (#436): the Stranded cause travels with it, so ops need not ask the agent why it stopped.
+		HeardStranded += (T.AgentId == Truck && T.From == EAgentPhase::Reversing && T.To == EAgentPhase::Stranded
+			&& T.Cause == EAgentEvent::Stranded) ? 1 : 0;
 	});
 
 	// THE SPAN'S END GOES, and nothing replaces it: no live node holds where the reverse leg ends.
@@ -5348,6 +5351,67 @@ bool FTrafficReverseIgnoresARefusalElsewhereOnTheRouteTest::RunTest(const FStrin
 	if (!TestTrue(TEXT("it is sent home"), Traffic->RedirectAgent(Truck, Bay.Net, Home))) { return false; }
 	TestEqual(TEXT("and arms the reverse at once: the redirect cleared the old route's refusal (red while a stale WaitingOn held the arm)"),
 		Traffic->FindAgent(Truck)->Phase, EAgentPhase::Reversing);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// EVERY OPERATION ANNOUNCES ITS CAUSE (#436), through the one Announce: an admit is Dispatched, a park Parked on the
+// node it parked on, a redirect the caller's cause with its new goal, a retire Retired and a clear Cleared - each To
+// Gone. The seam is the Cause each door writes and GoalAtEvent: unwire either (announce None, or the live goal later)
+// and a line below goes red.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficOperationsAnnounceTheirCauseTest,
+	"Airside.Model.Traffic.OperationsAnnounceTheirCause",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficOperationsAnnounceTheirCauseTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(0.0, 0.0), false);
+	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(20000.0, 0.0), false);
+	TestGraph::Join(*Net, A, B, { EGuidelineDir::Bidirectional, nullptr, false });
+	const FRoutePlan Out = TestGraph::Probe(*Net, A, B, ETraversalClass::GroundVehicle);
+	const FRoutePlan Back = TestGraph::Probe(*Net, B, A, ETraversalClass::GroundVehicle);
+	if (!TestTrue(TEXT("the line routes both ways"), Out.IsValid() && Back.IsValid())) { return false; }
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	TArray<FAgentTransition> Heard;
+	Traffic->OnAgentPhaseChanged.AddLambda([&Heard](const FAgentTransition& T) { Heard.Add(T); });
+	const auto Last = [&Heard]() { return Heard.Num() > 0 ? Heard.Last() : FAgentTransition(); };
+
+	const FVehicle Van = UAirsideSettings::ResolveDefaultVehicle();
+	const int32 Id = Traffic->DispatchAgent(Net, Out, Van, ETraversalClass::GroundVehicle, 0.0);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+	TestTrue(TEXT("the admit is Dispatched, Gone -> Taxiing"), Last().AgentId == Id && Last().Cause == EAgentEvent::Dispatched
+		&& Last().From == EAgentPhase::Gone && Last().To == EAgentPhase::Taxiing);
+
+	if (!TestTrue(TEXT("it parks at the far end"), RunUntil(*Traffic, *Net, 120.0,
+		[&]() { const FRoadAgent* P = Traffic->FindAgent(Id); return P != nullptr && P->Phase == EAgentPhase::Parked; })))
+	{
+		return false;
+	}
+	TestTrue(TEXT("the park is Parked, on the node it parked on"), Last().Cause == EAgentEvent::Parked
+		&& Last().To == EAgentPhase::Parked && Last().GoalAtEvent == B);
+
+	TestTrue(TEXT("redirected"), Traffic->RedirectAgent(Id, Net, Back, EAgentEvent::ReOffered));
+	TestTrue(TEXT("the redirect carries the CALLER's cause and the NEW goal"), Last().Cause == EAgentEvent::ReOffered
+		&& Last().From == EAgentPhase::Parked && Last().To == EAgentPhase::Taxiing && Last().GoalAtEvent == A);
+
+	TestTrue(TEXT("retired"), Traffic->RetireAgent(Id));
+	TestTrue(TEXT("the retire is Retired, to Gone"), Last().AgentId == Id && Last().Cause == EAgentEvent::Retired
+		&& Last().From == EAgentPhase::Taxiing && Last().To == EAgentPhase::Gone);
+
+	const int32 Second = Traffic->DispatchAgent(Net, Out, Van, ETraversalClass::GroundVehicle, 0.0);
+	Traffic->ClearAgents();
+	TestTrue(TEXT("a clear is Cleared, to Gone"), Last().AgentId == Second && Last().Cause == EAgentEvent::Cleared
+		&& Last().To == EAgentPhase::Gone);
+
+	for (const FAgentTransition& T : Heard)
+	{
+		TestNotEqual(*FString::Printf(TEXT("agent %d %s -> %s names a cause"), T.AgentId, *UEnum::GetValueAsString(T.From),
+			*UEnum::GetValueAsString(T.To)), T.Cause, EAgentEvent::None);
+		TestNotEqual(TEXT("and a phase change is a change"), T.From, T.To);
+	}
 	return true;
 }
 

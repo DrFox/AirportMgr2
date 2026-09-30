@@ -43,7 +43,7 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	// test of FRoadAgent proves nothing about whether UAirsideTraffic::Advance broadcasts it.
 	TArray<TPair<EAgentPhase, EAgentPhase>> Transitions;
 	Actor->GetTraffic()->OnAgentPhaseChanged.AddLambda(
-		[&Transitions](int32, EAgentPhase From, EAgentPhase To) { Transitions.Emplace(From, To); });
+		[&Transitions](const FAgentTransition& T) { Transitions.Emplace(T.From, T.To); });
 
 	FGroundPerformance Ground = TestAirframes::Piper().Chassis.Ground;
 

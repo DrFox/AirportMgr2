@@ -142,10 +142,15 @@ bool FPushbackClearanceTest::RunTest(const FString& Parameters)
 	// that would have left seconds later.
 	Traffic->OccupancyForTest().ReleaseAll(99);
 
+	TArray<FAgentTransition> Heard;
+	Traffic->OnAgentPhaseChanged.AddLambda([&Heard](const FAgentTransition& T) { Heard.Add(T); });
 	TestEqual(TEXT("and once the ground frees, the same aeroplane is cleared"),
 		Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None);
 	TestEqual(TEXT("into the manoeuvre, NOT straight into a taxi"),
 		Traffic->FindAgent(Id)->Phase, EAgentPhase::Manoeuvring);
+	// THE PUSH'S CAUSE (#436), the same DepartOrdered the straight-out branch gives: both are the taxi out.
+	TestTrue(TEXT("announced as DepartOrdered, Parked -> Manoeuvring"), Heard.Num() == 1
+		&& Heard[0].Cause == EAgentEvent::DepartOrdered && Heard[0].To == EAgentPhase::Manoeuvring);
 
 	// A PUSHING AEROPLANE HOLDS ITS OWN LEAD-IN. FClaimPass::Run's first arm releases every
 	// guideline claim for a phase that is not on a route; a manoeuvring agent that fell into
@@ -199,6 +204,8 @@ bool FPushbackStraightOutTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
+	TArray<FAgentTransition> Heard;
+	Traffic->OnAgentPhaseChanged.AddLambda([&Heard](const FAgentTransition& T) { Heard.Add(T); });
 	const EDepartureRefusal Why = Traffic->DepartAgent(Id, *Net);
 	if (!TestEqual(FString::Printf(TEXT("it is cleared to leave (%d)"), static_cast<int32>(Why)),
 		Why, EDepartureRefusal::None))
@@ -208,6 +215,10 @@ bool FPushbackStraightOutTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("and drives straight out - it never enters the manoeuvre at all"),
 		Traffic->FindAgent(Id)->Phase, EAgentPhase::Taxiing);
+	// THE TAXI OUT BY ITS CAUSE (#436): the straight-out branch is a RedirectAgent, and it must say DepartOrdered - the
+	// flight board reads that as the taxi OUT where the plain redirect a re-offer makes stays the taxi in.
+	TestTrue(TEXT("and announces it as DepartOrdered, Parked -> Taxiing"), Heard.Num() == 1
+		&& Heard[0].Cause == EAgentEvent::DepartOrdered && Heard[0].From == EAgentPhase::Parked && Heard[0].To == EAgentPhase::Taxiing);
 
 	return true;
 }

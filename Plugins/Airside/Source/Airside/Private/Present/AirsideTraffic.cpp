@@ -34,20 +34,21 @@ void UAirsideTraffic::PostInitProperties()
 	}
 }
 
-void UAirsideTraffic::OnModelPhaseChanged(int32 AgentId, EAgentPhase From, EAgentPhase To)
+void UAirsideTraffic::OnModelPhaseChanged(const FAgentTransition& Transition)
 {
 	// The view follows the agent's LIFE, which the phase events already describe: born on
 	// Gone -> anything, dead on anything -> Gone. Spawning inline in Dispatch* would be a
 	// second place that knows when an agent exists.
-	if (From == EAgentPhase::Gone)
+	if (Transition.From == EAgentPhase::Gone)
 	{
-		SpawnView(AgentId);
+		SpawnView(Transition.AgentId);
 	}
-	if (To == EAgentPhase::Gone)
+	if (Transition.To == EAgentPhase::Gone)
 	{
-		DestroyView(AgentId);
+		DestroyView(Transition.AgentId);
 	}
-	OnAgentPhaseChanged.Broadcast(AgentId, From, To);
+	// THE MODEL'S VALUE, passed on whole - see OnAgentPhaseChanged's declaration.
+	OnAgentPhaseChanged.Broadcast(Transition);
 }
 
 void UAirsideTraffic::OnModelArrivalRefused(EArrivalRefusal Why)
@@ -330,49 +331,77 @@ void UAirsideTraffic::Advance(double DeltaSeconds, double InSurfaceZ, const URoa
 				(*View)->SetMotion(Agent.LastMotion, SurfaceZ);
 			}
 		}
+	}
 
-		// TOUCHDOWN. An EDGE, true for one Advance only, so this fires once per landing -
-		// see FLandingRun::bTouchedDown, which is cleared at the top of every Advance for
-		// exactly this reason.
-		const FAirframe* Aircraft = Agent.AsAircraft();
-		if (Agent.Arrival.bTouchedDown && Smoke != nullptr && Aircraft != nullptr)
+	// TOUCHDOWN, FROM THE MODEL'S MOMENTS - one per landing, however many substeps this frame ran (#446). It used to
+	// be FLandingRun::bTouchedDown read off each agent HERE, once a frame: an EDGE true for one substep only, cleared
+	// at the top of the next, so a frame of several substeps kept it only when the touchdown was the last of them -
+	// about a quarter of landings at x8. The model collects each one on the substep it happens, with its pose.
+	// ENFORCED BY: Airside.Present.TouchdownShownOncePerLanding
+	for (const FAgentTransition& Moment : Model->GetMomentsThisAdvance())
+	{
+		if (Moment.Cause == EAgentEvent::TouchedDown)
 		{
-			const FVector2D Along(FMath::Cos(Agent.LastMotion.Heading), FMath::Sin(Agent.LastMotion.Heading));
-			// Same convention as FRunwayMarkingBuilder's runway frame: across is the along
-			// vector turned a quarter turn. Two copies of a rotation that disagreed would
-			// put the puffs on the wrong side of an aircraft landing the other way.
-			const FVector2D Across(-Along.Y, Along.X);
-
-			// The MAINS, not the origin. FAirframe's origin is the nose gear, so the main
-			// gear is FixedAxleX along the fuselage from it - a negative number, 14 m on the
-			// Q400. Smoking at the origin would put the puffs under the nose, which touches
-			// down seconds later and somewhere else.
-			const FVector2D Mains = Agent.LastMotion.Position + Along * Aircraft->Chassis.FixedAxleX;
-			const double HalfTrack = Aircraft->Chassis.MainGearTrack * 0.5;
-
-			// UNMEASURED TRACK MEANS ONE PUFF, on the centreline, rather than a fabricated
-			// pair - the same discipline FChassis::HasAxles applies to the steering law. A
-			// made-up track puts smoke where the aeroplane has no wheels.
-			if (Aircraft->Chassis.HasMainGearTrack())
-			{
-				Smoke->Puff(FVector(Mains - Across * HalfTrack, SurfaceZ), Aircraft->Wingspan);
-				Smoke->Puff(FVector(Mains + Across * HalfTrack, SurfaceZ), Aircraft->Wingspan);
-			}
-			else
-			{
-				Smoke->Puff(FVector(Mains, SurfaceZ), Aircraft->Wingspan);
-			}
-
-			// INSTRUMENTED AT THE BOUNDARY, because the alternative is asking for another
-			// PIE session. This says the touchdown was seen, where the wheels were, and
-			// whether the track was measured - the three things that would have to be
-			// guessed at otherwise if no smoke appeared.
-			UE_LOG(LogAirside, Log,
-				TEXT("Touchdown smoke: agent %d, %d puff(s) at (%.0f, %.0f), track %.0f uu, span %.0f uu."),
-				Agent.Id, Aircraft->Chassis.HasMainGearTrack() ? 2 : 1, Mains.X, Mains.Y,
-				Aircraft->Chassis.MainGearTrack, Aircraft->Wingspan);
+			ShowTouchdown(Moment);
 		}
 	}
+}
+
+void UAirsideTraffic::ShowTouchdown(const FAgentTransition& Moment)
+{
+	// THE AIRFRAME IS STILL THE AGENT'S: a landing is never removed on the frame it touches down (it vacates, taxis
+	// and parks first), and an airframe is identity, not state that moves. The POSE is the moment's own.
+	const FRoadAgent* Agent = Model->FindAgent(Moment.AgentId);
+	const FAirframe* Aircraft = Agent != nullptr ? Agent->AsAircraft() : nullptr;
+	if (Aircraft == nullptr)
+	{
+		return;
+	}
+	// COUNTED WITH OR WITHOUT SMOKE: a world-free presenter has no smoke component, and a test of how many
+	// touchdowns were shown must not depend on one - see TouchdownsShownForTest.
+	++TouchdownsShown;
+	if (Smoke == nullptr)
+	{
+		return;
+	}
+
+	const FVector2D Along(FMath::Cos(Moment.Heading), FMath::Sin(Moment.Heading));
+	// Same convention as FRunwayMarkingBuilder's runway frame: across is the along
+	// vector turned a quarter turn. Two copies of a rotation that disagreed would
+	// put the puffs on the wrong side of an aircraft landing the other way.
+	const FVector2D Across(-Along.Y, Along.X);
+
+	// The MAINS, not the origin. FAirframe's origin is the nose gear, so the main
+	// gear is FixedAxleX along the fuselage from it - a negative number, 14 m on the
+	// Q400. Smoking at the origin would put the puffs under the nose, which touches
+	// down seconds later and somewhere else.
+	//
+	// AT THE MOMENT'S POSE, not LastMotion: by the end of a frame of several substeps the aeroplane has rolled on
+	// from where the wheels met the runway.
+	const FVector2D Mains = Moment.At + Along * Aircraft->Chassis.FixedAxleX;
+	const double HalfTrack = Aircraft->Chassis.MainGearTrack * 0.5;
+
+	// UNMEASURED TRACK MEANS ONE PUFF, on the centreline, rather than a fabricated
+	// pair - the same discipline FChassis::HasAxles applies to the steering law. A
+	// made-up track puts smoke where the aeroplane has no wheels.
+	if (Aircraft->Chassis.HasMainGearTrack())
+	{
+		Smoke->Puff(FVector(Mains - Across * HalfTrack, SurfaceZ), Aircraft->Wingspan);
+		Smoke->Puff(FVector(Mains + Across * HalfTrack, SurfaceZ), Aircraft->Wingspan);
+	}
+	else
+	{
+		Smoke->Puff(FVector(Mains, SurfaceZ), Aircraft->Wingspan);
+	}
+
+	// INSTRUMENTED AT THE BOUNDARY, because the alternative is asking for another
+	// PIE session. This says the touchdown was seen, where the wheels were, and
+	// whether the track was measured - the three things that would have to be
+	// guessed at otherwise if no smoke appeared.
+	UE_LOG(LogAirside, Log,
+		TEXT("Touchdown smoke: agent %d, %d puff(s) at (%.0f, %.0f), track %.0f uu, span %.0f uu."),
+		Moment.AgentId, Aircraft->Chassis.HasMainGearTrack() ? 2 : 1, Mains.X, Mains.Y,
+		Aircraft->Chassis.MainGearTrack, Aircraft->Wingspan);
 }
 
 EAgentPhase UAirsideTraffic::LastAgentPhaseForTest() const

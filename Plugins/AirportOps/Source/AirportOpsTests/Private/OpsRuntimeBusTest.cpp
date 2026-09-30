@@ -33,6 +33,7 @@
 #include "Present/OpsRuntime.h"
 #include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestWorld.h"
+#include "OpsTransitionTestHelpers.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -89,7 +90,7 @@ bool FOpsRuntimeBusPhaseTest::RunTest(const FString&)
 	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
 	Runtime->GetEvents()->OnAgentPhaseChanged.AddDynamic(Listener, &UOpsEventsTestListener::OnPhase);
 
-	TestWorld.Actor->GetTraffic()->OnAgentPhaseChanged.Broadcast(42, EAgentPhase::Taxiing, EAgentPhase::Parked);
+	TestWorld.Actor->GetTraffic()->OnAgentPhaseChanged.Broadcast(OpsTestTransition(42, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked));
 	TestEqual(TEXT("nothing runs inside Airside's broadcast - it is queued (#193)"), RuntimeBusTestPhaseCount(*Listener), 0);
 
 	Runtime->Tick(0.0);
@@ -110,7 +111,7 @@ bool FOpsRuntimeBusReattachTest::RunTest(const FString&)
 	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
 	Runtime->GetEvents()->OnAgentPhaseChanged.AddDynamic(Listener, &UOpsEventsTestListener::OnPhase);
 
-	TestWorld.Actor->GetTraffic()->OnAgentPhaseChanged.Broadcast(7, EAgentPhase::Taxiing, EAgentPhase::Parked);
+	TestWorld.Actor->GetTraffic()->OnAgentPhaseChanged.Broadcast(OpsTestTransition(7, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked));
 	Runtime->Tick(0.0);
 	TestEqual(TEXT("a second Attach re-wires rather than stacking a second set of handlers"),
 		RuntimeBusTestPhaseCount(*Listener), 1);
@@ -129,7 +130,7 @@ bool FOpsRuntimeBusLoadTest::RunTest(const FString&)
 
 	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
 	Runtime->GetEvents()->OnAgentPhaseChanged.AddDynamic(Listener, &UOpsEventsTestListener::OnPhase);
-	TestWorld.Actor->GetTraffic()->OnAgentPhaseChanged.Broadcast(5, EAgentPhase::Taxiing, EAgentPhase::Gone);
+	TestWorld.Actor->GetTraffic()->OnAgentPhaseChanged.Broadcast(OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Gone, EAgentEvent::Retired));
 	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
 	Runtime->Tick(0.0);
 	TestEqual(TEXT("an event queued before a load never reaches anyone: it names an agent that no longer exists"),
@@ -149,7 +150,7 @@ bool FOpsRuntimeBusStaleAgentTest::RunTest(const FString&)
 
 	// A handler runs a frame after the event was raised, so the agent it names may be gone -
 	// here it never existed. Both boards must shrug, and the UI still hears it.
-	TestWorld.Actor->GetTraffic()->OnAgentPhaseChanged.Broadcast(999999, EAgentPhase::Taxiing, EAgentPhase::Parked);
+	TestWorld.Actor->GetTraffic()->OnAgentPhaseChanged.Broadcast(OpsTestTransition(999999, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked));
 	Runtime->Tick(0.0);
 	TestEqual(TEXT("a phase for an agent that is already gone is survived and still reaches the UI"),
 		RuntimeBusTestPhaseCount(*Listener), 1);
@@ -166,7 +167,7 @@ bool FOpsRuntimeBusDetachTest::RunTest(const FString&)
 	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
 	Runtime->GetEvents()->OnAgentPhaseChanged.AddDynamic(Listener, &UOpsEventsTestListener::OnPhase);
 
-	TestWorld.Actor->GetTraffic()->OnAgentPhaseChanged.Broadcast(3, EAgentPhase::Taxiing, EAgentPhase::Parked);
+	TestWorld.Actor->GetTraffic()->OnAgentPhaseChanged.Broadcast(OpsTestTransition(3, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked));
 	Runtime->Attach(nullptr);
 	Runtime->Attach(TestWorld.Actor);
 	Runtime->Tick(0.0);
@@ -237,7 +238,11 @@ bool FOpsRuntimeBusStaleParkedTest::RunTest(const FString&)
 	const int32 Aircraft = Actor->GetTraffic()->GetNewestAgentId();
 	Runtime->Tick(0.0);
 
-	Actor->GetTraffic()->OnAgentPhaseChanged.Broadcast(Aircraft, EAgentPhase::Taxiing, EAgentPhase::Parked);
+	// THE NODE IT PARKED ON is the junction it waited at, not the stand it has been sent to since - which is what a
+	// stale Parked carries since #436, and what the board decides on. The live agent's GoalNode IS the stand: a board
+	// that read it instead of the event would open the turnaround this test forbids.
+	Actor->GetTraffic()->OnAgentPhaseChanged.Broadcast(
+		OpsTestTransition(Aircraft, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked, TaxiSouth));
 	Runtime->Tick(0.0);
 	TestEqual(TEXT("a Parked event for an aircraft that is still taxiing opens no turnaround and no job"),
 		Runtime->GetJobBoard()->GetJobs().Num(), 0);
@@ -273,12 +278,12 @@ bool FOpsBusLandingFeeTest::RunTest(const FString&)
 	Bus.BeginWiring();
 	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("FlightBoard"), [&](const FAgentPhaseEvent& E)
 	{
-		Board->OnAgentPhase(*Traffic, *Net, *Clock, E.AgentId, E.From, E.To);
+		Board->OnAgentPhase(*Net, *Clock, E);
 	});
 	Bus.EndWiring();
-	Traffic->OnAgentPhaseChanged.AddLambda([&Bus](int32 Id, EAgentPhase From, EAgentPhase To)
+	Traffic->OnAgentPhaseChanged.AddLambda([&Bus](const FAgentTransition& Transition)
 	{
-		Bus.Publish(FAgentPhaseEvent{ Id, From, To });
+		Bus.Publish(FAgentPhaseEvent{ Transition });
 	});
 
 	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
@@ -734,19 +739,19 @@ namespace
 			Bus.BeginWiring();
 			Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("JobBoard"), [this](const FAgentPhaseEvent& E)
 			{
-				Jobs->OnAgentPhase(*Traffic, *Field.Net, *Clock, E.AgentId, E.From, E.To);
+				Jobs->OnAgentPhase(*Traffic, *Field.Net, *Clock, E);
 			});
 			Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("FlightBoard"), [this](const FAgentPhaseEvent& E)
 			{
-				Board->OnAgentPhase(*Traffic, *Field.Net, *Clock, E.AgentId, E.From, E.To);
+				Board->OnAgentPhase(*Field.Net, *Clock, E);
 			});
 			Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Reaction, TEXT("test"), [this](const FTurnaroundEndedEvent& E) { Ended.Add(E); });
 			Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Reaction, TEXT("Airlines"),
 				[this](const FTurnaroundEndedEvent& E) { Airlines->OnTurnaroundEnded(E, Board); });
 			Bus.EndWiring();
-			Traffic->OnAgentPhaseChanged.AddLambda([this](int32 Id, EAgentPhase From, EAgentPhase To)
+			Traffic->OnAgentPhaseChanged.AddLambda([this](const FAgentTransition& Transition)
 			{
-				Bus.Publish(FAgentPhaseEvent{ Id, From, To });
+				Bus.Publish(FAgentPhaseEvent{ Transition });
 			});
 
 			Flight = NewObject<UFlight>(GetTransientPackage());
@@ -887,7 +892,10 @@ bool FDepartFromFallbackTest::RunTest(const FString&)
 	const FDeparturePlan Plan = DeparturePlanner::PlanAny(*Rig.Field.Net, Parked->GoalNode, *Parked->AsAircraft(), Parked->Class,
 		&Rig.Traffic->GetOccupancy());
 	if (!TestTrue(TEXT("a departure plans from the junction"), Plan.IsValid())) { return false; }
-	if (!TestTrue(TEXT("and it drives straight out onto it"), Rig.Traffic->RedirectAgent(Rig.Agent, Rig.Field.Net, Plan.Route))) { return false; }
+	// WITH THE CAUSE THE BRANCH GIVES IT - DepartOrdered (Airside.Model.PushbackStraightOut pins that it does). This stage
+	// used to redirect with none: the board then asked the live agent whether it was armed for a runway (#436).
+	if (!TestTrue(TEXT("and it drives straight out onto it"),
+		Rig.Traffic->RedirectAgent(Rig.Agent, Rig.Field.Net, Plan.Route, EAgentEvent::DepartOrdered))) { return false; }
 	Rig.Drain();
 	// READ STRAIGHT AFTER THE MOVE, not only from Seen: Seen records CHANGES, and a flight left reading TaxiIn
 	// (the phase it waited in) would add nothing to it.

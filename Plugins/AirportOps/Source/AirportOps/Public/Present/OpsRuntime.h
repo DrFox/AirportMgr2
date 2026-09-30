@@ -443,6 +443,6 @@ private:
 
 	void Detach();
 	void ApplySpeed(ESimSpeed Speed);
-	void OnAgentPhase(int32 AgentId, EAgentPhase From, EAgentPhase To);
+	void OnAgentPhase(const FAgentTransition& Transition);
 	void OnArrivalRefused(EArrivalRefusal Why);
 };

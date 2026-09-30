@@ -66,6 +66,11 @@ namespace
 			Bus.BeginWiring();
 			Bus.Subscribe<FAlertRaisedEvent>(EOpsTier::Presentation, TEXT("test"), [this](const FAlertRaisedEvent& E) { Raised.Add(E.Alert); });
 			Bus.Subscribe<FAlertClearedEvent>(EOpsTier::Presentation, TEXT("test"), [this](const FAlertClearedEvent& E) { Cleared.Add(E.Key); });
+			// THE FLIGHT BOARD HEARS THE TRAFFIC'S PHASES on this bus, as UOpsRuntime wires it (Sim tier).
+			Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("FlightBoard"), [this](const FAgentPhaseEvent& E)
+			{
+				Board->OnAgentPhase(*Airport.Net, *Clock, E);
+			});
 			Bus.EndWiring();
 
 			const FGuidelineNodeId Exit = RouteSearch::FindNearestNode(*Airport.Net, Airport.ExitAt, ETraversalClass::Aircraft, 200.0);
@@ -85,13 +90,11 @@ namespace
 			Flight->AgentId = Plane;
 			Flight->Phase = EFlightPhase::TaxiIn;
 			Board->AddOffer(*Clock, Flight);
-			UFlightBoard* Bound = Board;
-			URoadNetwork* Graph = Airport.Net;
-			UGroundTraffic* Model = Traffic;
-			USimClock* Time = Clock;
-			Traffic->OnAgentPhaseChanged.AddLambda([Bound, Graph, Model, Time](int32 Id, EAgentPhase From, EAgentPhase To)
+			// PUBLISHED INTO THE BUS, heard when Recompute drains it - what UOpsRuntime does (#436). This relay used to
+			// call the board inside the traffic's broadcast, an ordering production never has.
+			Traffic->OnAgentPhaseChanged.AddLambda([this](const FAgentTransition& Transition)
 			{
-				Bound->OnAgentPhase(*Model, *Graph, *Time, Id, From, To);
+				Bus.Publish(FAgentPhaseEvent{ Transition });
 			});
 			return Plane > 0;
 		}
@@ -106,6 +109,9 @@ namespace
 			Sources.Offers = Offers;
 			Sources.Ledger = Ledger;
 			Sources.Airport = Status;
+			// THE PHASES FIRST, as production's drain has them: the Sim tier settles the boards before the alerts pass
+			// reads them.
+			Bus.Drain();
 			Alerts->Recompute(Sources, Clock->Now());
 			Bus.Drain();
 		}

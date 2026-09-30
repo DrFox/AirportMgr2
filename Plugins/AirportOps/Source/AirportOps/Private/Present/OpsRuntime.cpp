@@ -334,7 +334,7 @@ void UOpsRuntime::WireBus()
 	{
 		if (UGroundTraffic* Model = LiveModel())
 		{
-			JobBoard->OnAgentPhase(*Model, *Target->Network, *Clock, E.AgentId, E.From, E.To);
+			JobBoard->OnAgentPhase(*Model, *Target->Network, *Clock, E);
 		}
 		// ANY PHASE CHANGE may be the board's business - an aircraft parked, a vehicle arrived or lost
 		// its agent - and deciding which here would be a second copy of OnAgentPhase's own rules.
@@ -402,9 +402,11 @@ void UOpsRuntime::WireBus()
 	});
 	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("FlightBoard"), [this](const FAgentPhaseEvent& E)
 	{
-		if (UGroundTraffic* Model = LiveModel())
+		// ASKED FOR THE LIVE AIRPORT, not handed the model: the flight board maps the event's Cause and reads no agent
+		// (#436), so the model is only the sign that an airport is attached and its network is the one to ask.
+		if (LiveModel() != nullptr)
 		{
-			FlightBoard->OnAgentPhase(*Model, *Target->Network, *Clock, E.AgentId, E.From, E.To);
+			FlightBoard->OnAgentPhase(*Target->Network, *Clock, E);
 		}
 	});
 
@@ -1200,14 +1202,17 @@ void UOpsRuntime::TogglePause()
 	ApplySpeed(Clock->GetSpeed());
 }
 
-void UOpsRuntime::OnAgentPhase(int32 AgentId, EAgentPhase From, EAgentPhase To)
+void UOpsRuntime::OnAgentPhase(const FAgentTransition& Transition)
 {
 	// PUBLISHED, NOT HANDLED. This runs inside UGroundTraffic's broadcast, and nothing may act
 	// there (#193's re-entrancy contract exists because a listener that did could retire any agent
 	// mid-loop). The rule this function used to keep by hand - THE SERVICE FIRST, THEN THE BUS, so a
 	// Blueprint listener that asked the fuel service what an aircraft was doing never saw the state
 	// from BEFORE the event that woke it - is now the tier order in WireBus: Sim, then Presentation.
-	Bus.Publish(FAgentPhaseEvent{ AgentId, From, To });
+	//
+	// THE WHOLE TRANSITION, Cause and GoalAtEvent with it (#436) - so a handler a drain later decides on what was true
+	// when the change was made, and the delay this publish introduces costs nothing.
+	Bus.Publish(FAgentPhaseEvent{ Transition });
 }
 
 void UOpsRuntime::OnArrivalRefused(EArrivalRefusal Why)

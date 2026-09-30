@@ -737,6 +737,30 @@ $AllowedCallers = @(
         ProdAllowed = @('Private\Build\RoadNetworkSolver.cpp', 'Private\Build\AirsideDerivation.cpp', 'Private\Debug\RoadJunctionGallery.cpp')
         TestExempt  = $true
         ProdReason  = 'solve through AirsideDerivation::Derive (#438) and mesh from the result it returns, as URoadSurfacePresenter does'
+    },
+    @{
+        # AN AGENT'S TRANSITION IS BROADCAST FROM ONE DOOR (#436). UGroundTraffic broadcast OnAgentPhaseChanged from eight
+        # sites, one of them a Before/After diff, each passing (Id, From, To) and dropping WHY - so ops re-derived the
+        # cause from the live agent a drain late. Now every site builds an FAgentTransition and hands it to
+        # UGroundTraffic::Announce; rule 48 holds GroundTraffic.cpp to the one call inside it. The two other files are
+        # RELAYS of a delegate of the same name: UAirsideTraffic passes the model's transition on whole, and UOpsEvents
+        # is the ops bus's Blueprint face. Tests are exempt: OpsRuntimeBusTest stages a transition on the relay directly.
+        Name        = 'OnAgentPhaseChanged.Broadcast'
+        Pattern     = '\bOnAgentPhaseChanged\.Broadcast\s*\('
+        ProdAllowed = @('Private\Model\GroundTraffic.cpp', 'Private\Present\AirsideTraffic.cpp', 'Private\Model\OpsEvents.cpp')
+        TestExempt  = $true
+        ProdReason  = 'build an FAgentTransition where the change is made and hand it to UGroundTraffic::Announce, the one broadcast (#436)'
+    },
+    @{
+        # A ONE-SUBSTEP EDGE IS READ ON THE SUBSTEP (#446). FLandingRun::bTouchedDown is true for the one Advance that put
+        # the wheels down; UAirsideTraffic read it once a FRAME, after up to 32 substeps, and lost the smoke of three
+        # landings in four at x8. FRoadAgent::Advance reads it on the call that set it and reports EAgentEvent::TouchedDown,
+        # which UGroundTraffic collects per Advance - anything else hangs off that, not off the flag.
+        Name        = 'FLandingRun::bTouchedDown read'
+        Pattern     = '\bbTouchedDown\b'
+        ProdAllowed = @('Public\Model\LandingRun.h', 'Private\Model\LandingRun.cpp', 'Private\Model\RoadAgent.cpp')
+        TestExempt  = $true
+        ProdReason  = 'hang it off EAgentEvent::TouchedDown (UGroundTraffic::GetMomentsThisAdvance) - the flag is an edge one substep long, and a per-frame read loses it at x4 and up (#446)'
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -2664,6 +2688,75 @@ if (-not (Test-Path $sessionHeader) -or -not (Test-Path $sessionController)) {
     }
 }
 $ranRules.Add('session-api-both-drivers')
+
+# --- 48. AN AGENT'S TRANSITION HAS ONE DOOR, AND OPS TESTS HEAR IT THROUGH A BUS ----------------------
+# Issue #436, two halves of one shape - the phase event whose CAUSE was not delivered, and the fixture that hid how
+# late it was delivered.
+# (a) ONE BROADCAST. Rule 4's 'OnAgentPhaseChanged.Broadcast' row keeps the call out of every other production file;
+#     this holds GroundTraffic.cpp to exactly ONE - the one inside UGroundTraffic::Announce, which every operation and
+#     AdvanceOnce hand an FAgentTransition. A second call there is a second door, and the first thing a second door
+#     drops is the Cause.
+# (b) NO SYNCHRONOUS RELAY IN THE OPS TESTS. FFuelFixture::RelayPhases called UJobBoard::OnAgentPhase INSIDE the
+#     traffic's broadcast, and 52 tests plus two more fixtures ran an ordering production never has: production
+#     publishes into the ops bus and handles the event a drain later (UOpsRuntime::OnAgentPhase). An
+#     OnAgentPhaseChanged.AddLambda under AirportOpsTests whose body calls ->OnAgentPhase( / .OnAgentPhase( is that
+#     relay again. A test that exists to pin re-entrancy keeps ONE named synchronous relay - listed in
+#     $syncRelayAllowed by the name of the function it sits in: FFuelFixture::RelayPhasesSynchronously, which
+#     AirportOps.Fuel.Lifecycle.OwnRetirementsAreNotLosses needs to see the board unhook a vehicle BEFORE retiring its
+#     agent - an order a drain-late delivery hides. (Airside.Model.Traffic.ReofferStandsRetireReentrancy is the Model/
+#     side's pin, in AirsideTests, and calls RetireAgent rather than a board.)
+# WHAT NO REGEX SEES: a relay that calls the board through a helper of its own name - the body is read for
+# OnAgentPhase( only. Pinned from the other side by AirportOps.Present.Bus.StaleParkedOpensNoTurnaround and
+# AirportOps.Model.Bus.SameFrameRedirectStaysTaxiIn, which fail if the board decides on anything but the event.
+$announceFile = Join-Path $plugin 'Private\Model\GroundTraffic.cpp'
+if (-not (Test-Path $announceFile)) {
+    $failures.Add("agent-transition-one-door: $announceFile is named by rule 48 but does not exist - update the rule, do not let it check nothing")
+}
+else {
+    $broadcasts = 0
+    $announces = $false
+    $lines = Get-Content -LiteralPath $announceFile
+    $inBlock = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        if ($code -match '\bOnAgentPhaseChanged\.Broadcast\s*\(') { $broadcasts++ }
+        if ($code -match '^void\s+UGroundTraffic::Announce\s*\(') { $announces = $true }
+    }
+    if ($broadcasts -ne 1) {
+        $failures.Add("agent-transition-one-door: GroundTraffic.cpp broadcasts OnAgentPhaseChanged $broadcasts time(s), not the 1 inside UGroundTraffic::Announce - build an FAgentTransition and Announce it (#436)")
+    }
+    if (-not $announces) {
+        $failures.Add("agent-transition-one-door: GroundTraffic.cpp no longer defines UGroundTraffic::Announce - rule 48 is stale or the one door moved (#436)")
+    }
+}
+$syncRelayAllowed = @('RelayPhasesSynchronously')
+foreach ($file in Get-Sources $opsTests @('.cpp', '.h')) {
+    $lines = Get-Content -LiteralPath $file.FullName
+    $inBlock = $false
+    $codeLines = @()
+    for ($i = 0; $i -lt $lines.Count; $i++) { $codeLines += ,(Strip-ArchCode $lines[$i] ([ref]$inBlock)) }
+    for ($i = 0; $i -lt $codeLines.Count; $i++) {
+        if ($codeLines[$i] -notmatch '\bOnAgentPhaseChanged\.AddLambda\s*\(') { continue }
+        # THE LAMBDA'S BODY: from the AddLambda line until its parentheses close - the call's own `(` balanced.
+        $depth = 0
+        $body = ''
+        for ($j = $i; $j -lt $codeLines.Count -and $j -lt $i + 40; $j++) {
+            $body += $codeLines[$j] + "`n"
+            $depth += ([regex]::Matches($codeLines[$j], '\(')).Count - ([regex]::Matches($codeLines[$j], '\)')).Count
+            if ($depth -le 0 -and $j -gt $i) { break }
+            if ($depth -le 0 -and $codeLines[$j] -match '\)\s*;') { break }
+        }
+        if ($body -notmatch '(->|\.)OnAgentPhase\s*\(') { continue }
+        # WHICH FUNCTION it sits in: the nearest line above that opens one at the file's own indent.
+        $owner = ''
+        for ($k = $i; $k -ge 0; $k--) {
+            if ($codeLines[$k] -match '^\s*(?:void|bool|int32|auto)\s+(?:\w+::)*(\w+)\s*\(') { $owner = $Matches[1]; break }
+        }
+        if ($syncRelayAllowed -contains $owner) { continue }
+        $failures.Add("agent-transition-one-door: $($file.FullName):$($i + 1) relays OnAgentPhaseChanged to a board SYNCHRONOUSLY (in $owner) - publish into an FOpsEventBus and drain, as UOpsRuntime does (#436); a re-entrancy pin names its one helper in rule 48's `$syncRelayAllowed")
+    }
+}
+$ranRules.Add('agent-transition-one-door')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
