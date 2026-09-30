@@ -29,12 +29,28 @@ struct FSunLighting
  * captioned "For when you operate later", so night operations are a progression unlock.
  * When those lights exist, the floor lifts and night becomes the unlock.
  *
- * Between 18:00 and 06:00 the sun therefore sits at the floor while its azimuth carries on
+ * Between DuskHour and DawnHour the sun therefore sits at the floor while its azimuth carries on
  * round to the north, which reads as a long high-latitude twilight - a real thing the sky
  * does, not a glitch.
+ *
+ * NIGHT IS THE CLOCK'S (#447). DawnHour and DuskHour are the game clock's daylight (USimClock, the scenario's 6..20 by default) - the
+ * same hours the day's time compression, the demand curve and the inbox's night shading follow - and ASunDriver hands them on. The sky
+ * used to hard-code 06:00-18:00, so for two game hours a day the field was lit as night while everything else said day, and a scenario
+ * that moved DuskHour moved nothing in the sky.
  */
 struct FSunPath
 {
+	/**
+	 * Hours of day, 0-24, at which the sun comes up to the floor's end and goes back down to it: the clock's daylight. THE DEFAULTS ARE THE
+	 * SCENARIO'S (UScenario::DawnHour/DuskHour, also USimClock's) so a path nobody configured is the default day; ASunDriver::MakePath always
+	 * sets them from the clock in play.
+	 * NOON STAYS AT 12:00, THE PEAK THE ART DIRECTION WAS JUDGED AT: the morning rises over Noon - Dawn and the afternoon sets over Dusk - Noon,
+	 * so a dusk at 20:00 is a longer afternoon arc, not a peak moved to 13:00 that would have re-lit every morning.
+	 * ENFORCED BY: AirportMgr.Sky.SunPath.DefaultsAreTheScenarios (the defaults equal the scenario's and the clock's)
+	 */
+	double DawnHour = 6.0;
+	double DuskHour = 20.0;
+
 	/** Elevation at noon. The angle the art direction was judged against. */
 	double MaxElevationDegrees = 42.0;
 

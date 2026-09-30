@@ -62,9 +62,18 @@ public:
 
 	void SetShown(FName Id, bool bShown);
 	bool IsShown(FName Id) const;
+	/**
+	 * Shows Id if hidden, hides it if shown, and returns whether it shows now - the ONE toggle a key, a bar button and a panel's own Toggle()
+	 * all run (#447), for a window whose spec is bToggled. The state it flips is the host's (bWanted, bUserClosed), read back by IsShown:
+	 * there is no second copy on the panel to keep in step. False for an unknown id.
+	 */
+	bool Toggle(FName Id);
 	/** Clears a player's close, so the panel's next SetShown(true) shows it. */
 	void ForgetDismissal(FName Id);
-	/** The window's close button. Hides it and tells the panel (a toggled panel un-toggles). */
+	/**
+	 * The window's close button. Tells the panel FIRST, while it still shows (Settings' Cancel asks IsShown to know it has a session to revert),
+	 * then hides it - plainly for a bToggled window, whose close is its toggle, and STICKING for any other (see FUiWindowSpec::bToggled).
+	 */
 	void CloseByPlayer(FName Id);
 	void BringToFront(FName Id);
 

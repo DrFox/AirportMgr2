@@ -141,11 +141,6 @@ public:
 	/** The game clock the hold duration converts by, in place of the ops runtime's - UseFlightBoardForTest's reason. */
 	void UseClockForTest(const USimClock* Clock);
 
-	/** The conversion's name before #441 moved it to FAircraftCard::GameSecondsOfStall: a forwarder, so the old name and the new
-	 *  are one figure.
-	 *  ENFORCED BY: AirportMgr.Inspector.Card.Aircraft (a known stall reads the same through both names) */
-	static double GameSecondsOfStall(double StalledSeconds, const USimClock& Clock);
-
 	/** The deadlock line, or empty while it is collapsed. */
 	FString DeadlockForTest() const;
 	/** The WaitingFor button's caption, or empty while it is collapsed. */

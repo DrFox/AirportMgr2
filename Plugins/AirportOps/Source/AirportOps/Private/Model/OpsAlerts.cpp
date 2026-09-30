@@ -10,6 +10,7 @@
 #include "Model/Ledger.h"
 #include "Model/OfferGenerator.h"
 #include "Model/OpsEventBus.h"
+#include "Model/OpsNames.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
@@ -136,10 +137,11 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 				continue;
 			}
 			// THE BOARD'S OWN WORDS for what is missing (UJobBoard::RefusalText) - a second wording here would
-			// be a second account of why a stand gets no fuel.
+			// be a second account of why a stand gets no fuel. AND THE STAND'S OWN NUMBER, the one on the stand card and painted at its
+			// turn-off (OpsNames::StandLabel): it printed the entity index, so the alert said "stand 0" beside a sign reading 4 (#447).
 			FOpsAlert& Alert = Found.Add_GetRef(OpsAlertOf(EAlertKind::JobUnserviceable, Job.Id, NAME_None,
 				FText::Format(NSLOCTEXT("OpsAlerts", "JobUnserviceable", "No fuel for stand {0}: {1}"),
-					FText::AsNumber(Job.Stand.Index), FText::FromString(UJobBoard::RefusalText(Job.Why)))));
+					FText::FromString(OpsNames::StandLabel(Sources.Network, Job.Stand)), FText::FromString(UJobBoard::RefusalText(Job.Why)))));
 			const FEntityInstance* Stand = Sources.Network != nullptr ? Sources.Network->GetEntity(Job.Stand) : nullptr;
 			if (Stand != nullptr)
 			{
@@ -235,7 +237,7 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 	}
 
 	// MONEY: a negative balance locks every paid placement (ULedger::CanAfford).
-	if (Sources.Ledger != nullptr && Sources.Ledger->Balance() < 0.0)
+	if (Sources.Ledger != nullptr && Sources.Ledger->IsOverdrawn())
 	{
 		Found.Add(OpsAlertOf(EAlertKind::Overdrawn, 0, NAME_None,
 			NSLOCTEXT("OpsAlerts", "Overdrawn", "Overdrawn - building is locked")));

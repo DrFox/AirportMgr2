@@ -52,15 +52,12 @@ public:
 
 	ULedgerPanelViewModel* GetPanel() const { return Panel; }
 
-	/** Whether the card is showing. The bar's button reads this to light itself. */
-	bool IsShowing() const { return bShowing; }
-
-	/** Open or close it. Called by the game.ledger action - see BuildActions. */
-	void Toggle();
-
-	/** Top-right, under the inbox's corner; closable (the close is the toggle). */
+	/** Top-right, under the inbox's corner; closable (the close is the toggle, which the game.ledger action runs - see BuildActions and
+	 *  UAirportMgrPanelWidget::Toggle / IsShown, which the bar's button reads to light itself). */
 	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
-	virtual void OnWindowClosedByPlayer() override;
+	/** REPAINTED ON OPEN, not left to the next tick. A panel that appeared empty for a frame and then filled would read as a bug in the
+	 *  ledger rather than as a frame of latency. */
+	virtual void OnShownChanged(bool bShown) override;
 
 	/**
 	 * Re-read the ledger and repaint. What NativeTick calls, and what a headless test calls
@@ -83,8 +80,6 @@ private:
 
 	// PanelStyle moved to the base class (issue #187): this panel was one of the two that already
 	// carried the pattern by hand, and UAirportMgrPanelWidget::Initialize now does it for every panel.
-
-	bool bShowing = false;
 
 	/** One row: when, category, what, amount. */
 	UWidget* BuildRow(const UUIStyle& Style, const ULedgerRowViewModel& Row);

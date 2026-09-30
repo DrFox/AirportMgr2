@@ -597,11 +597,6 @@ const USimClock* UInspectorWidget::GameClock(const UOpsRuntime* Runtime) const
 	return Runtime != nullptr ? Runtime->GetClock() : nullptr;
 }
 
-double UInspectorWidget::GameSecondsOfStall(double StalledSeconds, const USimClock& Clock)
-{
-	return FAircraftCard::GameSecondsOfStall(StalledSeconds, Clock);
-}
-
 const UFlightBoard* UInspectorWidget::Flights(const UOpsRuntime* Runtime) const
 {
 	if (const UFlightBoard* Board = FlightBoardForTest.Get())

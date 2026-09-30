@@ -40,9 +40,9 @@ public:
 	/** Persist what is in force, close. */
 	void SaveAndClose();
 
-	/** Open if closed, cancel if open - what the game.settings action does. */
-	void Toggle();
-	bool IsShowing() const { return bShowing; }
+	/** Open if closed, cancel if open - what the game.settings action does. The base Toggle would only flip the window; opening
+	 *  begins an edit session and closing reverts it. */
+	virtual void Toggle() override;
 
 	/** Centred, modal, closable (the close is Cancel), not resizable - a form, not a list. */
 	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
@@ -86,5 +86,4 @@ private:
 	FPlayerSettings Snapshot;
 	/** What is in force while the dialog is open. */
 	FPlayerSettings Current;
-	bool bShowing = false;
 };

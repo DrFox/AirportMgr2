@@ -1,7 +1,9 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "SunDriver.h"
+#include "Model/OpsDefinition.h"
 #include "Model/SimClock.h"
+#include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -53,6 +55,42 @@ bool FSunDriverReadsClockTest::RunTest(const FString& Parameters)
 	// re-deriving it in the driver would be a second implementation of the same wrap.
 	Clock->Advance(USimClock::SecondsPerDay);
 	TestEqual(TEXT("12:00 on day two wraps to half"), ASunDriver::ResolveDayFraction(Clock), 0.5, 1e-9);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSunDriverDuskIsTheClocksTest,
+	"AirportMgr.Sky.SunDriver.DuskIsTheClocks",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSunDriverDuskIsTheClocksTest::RunTest(const FString& Parameters)
+{
+	// THE WIRING a test of FSunPath alone cannot see (#447): the driver hands the CLOCK's dawn and dusk to the path. Night is defined once - the
+	// clock's, the scenario's - so a dusk of 20 leaves the field lit at 19:30 and dark at 20:30, and a scenario that moves DuskHour moves the sky.
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	ASunDriver* Driver = TestWorld.World != nullptr ? TestWorld.World->SpawnActor<ASunDriver>() : nullptr;
+	if (!TestNotNull(TEXT("a sun driver"), Driver)) { return false; }
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	const auto ElevationAt = [&](double Hour) { return -Driver->MakePath(Clock).At(Hour / 24.0).Rotation.Pitch; };
+	const double Floor = Driver->MinElevationDegrees;
+
+	Clock->DuskHour = 20.0;
+	TestTrue(*FString::Printf(TEXT("dusk 20: 19:30 is above the floor (%.2f vs %.2f)"), ElevationAt(19.5), Floor), ElevationAt(19.5) > Floor + 0.5);
+	TestTrue(*FString::Printf(TEXT("dusk 20: 20:30 is at the floor (%.2f)"), ElevationAt(20.5)), FMath::IsNearlyEqual(ElevationAt(20.5), Floor, 1e-6));
+
+	Clock->DuskHour = 18.0;
+	TestTrue(TEXT("a scenario that moves dusk to 18 moves the sky: 19:30 is now night"), FMath::IsNearlyEqual(ElevationAt(19.5), Floor, 1e-6));
+	Clock->DuskHour = 22.0;
+	TestTrue(TEXT("and to 22: 21:30 is day"), ElevationAt(21.5) > Floor + 0.5);
+
+	Clock->DuskHour = 20.0;
+	Clock->DawnHour = 8.0;
+	TestTrue(TEXT("dawn follows too: 07:30 is night at dawn 8"), FMath::IsNearlyEqual(ElevationAt(7.5), Floor, 1e-6));
+
+	// NO CLOCK (the editor): the path keeps FSunPath's own hours, which DefaultsAreTheScenarios pins to the scenario's - one path to those figures.
+	const FSunPath Editor = Driver->MakePath(nullptr);
+	TestEqual(TEXT("no clock: the scenario's default dawn"), Editor.DawnHour, GetDefault<UScenario>()->DawnHour);
+	TestEqual(TEXT("no clock: the scenario's default dusk"), Editor.DuskHour, GetDefault<UScenario>()->DuskHour);
 	return true;
 }
 

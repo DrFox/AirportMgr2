@@ -2,7 +2,9 @@
 #include "AirportMgrPanelWidget.h"
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
+#include "AlertsPanelWidget.h"
 #include "BuildBarWidget.h"
+#include "Components/VerticalBox.h"
 #include "InspectorWidget.h"
 #include "Misc/AutomationTest.h"
 #include "OfferInboxWidget.h"
@@ -134,6 +136,31 @@ bool FAirportMgrPanelHostedTicksOnceTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("no host: its own NativeTick runs the panel tick"), Panel->PanelTickCountForTest(), 1);
 	Panel->RunPanelTick(0.016f);
 	TestEqual(TEXT("RunPanelTick is the one entry"), Panel->PanelTickCountForTest(), 2);
+	return true;
+}
+
+/**
+ * WITH NO HOST, THE PANEL HEARS ITS OWN CHANGE (#447): a headless test, the bar and any unhosted panel have no window to call
+ * OnShownChanged, so SetShown calls it - the hook means the same hosted and not, and "paint on open" does not depend on having a window.
+ * Toggle flips the last request when there is no host, and IsShown answers it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAirportMgrPanelShownChangedUnhostedTest,
+	"AirportMgr.Panels.OnShownChangedFiresWithoutAHost",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAirportMgrPanelShownChangedUnhostedTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	UAlertsPanelWidget* Panel = CreateWidget<UAlertsPanelWidget>(TestWorld.World, UAlertsPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("an alerts panel"), Panel) || !TestNotNull(TEXT("with rows to paint"), Panel->RowColumn.Get())) { return false; }
+	TestFalse(TEXT("hidden at first"), Panel->IsShown());
+	TestEqual(TEXT("and unpainted"), Panel->RowColumn->GetChildrenCount(), 0);
+	Panel->Toggle();
+	TestTrue(TEXT("Toggle shows it, with no host"), Panel->IsShown());
+	TestTrue(TEXT("and OnShownChanged painted it on open"), Panel->RowColumn->GetChildrenCount() > 0);
+	Panel->Toggle();
+	TestFalse(TEXT("toggled again it is hidden"), Panel->IsShown());
 	return true;
 }
 

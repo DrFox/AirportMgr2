@@ -408,6 +408,19 @@ public:
 	double AirborneBy() const { return AcceptedAt + ContractSeconds; }
 
 	/**
+	 * GAME seconds left on the turnaround contract at Now; NEGATIVE once it has passed. THE ONE SUBTRACTION (#447): the arrivals row, the
+	 * aircraft card's turnaround line and its gate each wrote `AirborneBy() - Now`, and #398 will change what "late" means - in one place
+	 * now, not three that then disagree about whether the same flight is late.
+	 * ENFORCED BY: Check-Architecture rule 4's 'contract left is the flight's' row (no `AirborneBy() -` outside this header),
+	 * AirportOps.Model.Flight.ContractLeftAndLate
+	 */
+	double ContractSecondsLeft(double Now) const { return AirborneBy() - Now; }
+
+	/** Past the contract's deadline at Now - ContractSecondsLeft below zero. MEANINGLESS FOR A FLIGHT WITH NO CONTRACT (ContractSeconds 0: the debug
+	 *  land key's, never offered): its deadline is its accept time, so this reads late from then on. */
+	bool IsLate(double Now) const { return ContractSecondsLeft(Now) < 0.0; }
+
+	/**
 	 * THE POINT RUNWAYS ARE ORDERED FROM, nearest first - not a runway, and not a place the aeroplane goes (#442; this was
 	 * ApproachFocus, "where THIS flight is aimed", and the aim stopped choosing the runway in #412).
 	 *

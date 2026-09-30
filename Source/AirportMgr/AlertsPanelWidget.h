@@ -58,9 +58,6 @@ public:
 	int32 AlertCount() const { return Alerts.Num(); }
 	const TArray<FOpsAlert>& GetAlerts() const { return Alerts; }
 
-	bool IsShowing() const { return bShowing; }
-	void Toggle();
-
 	/**
 	 * Row Index's "Go": the camera to its subject and the subject selected (ARoadBuildController::
 	 * SelectAndFocus). Overdrawn, which has no place, opens the ledger instead. False when there is no
@@ -102,7 +99,8 @@ public:
 	bool ClickCancelForTest(const FOpsAlertKey& Key);
 
 	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
-	virtual void OnWindowClosedByPlayer() override;
+	/** PAINTED ON OPEN, not a frame later - the ledger panel's reason. */
+	virtual void OnShownChanged(bool bShown) override;
 
 protected:
 	virtual void BuildOnce(const UUIStyle& Style) override;
@@ -117,7 +115,6 @@ private:
 	UPROPERTY(Transient) TArray<TObjectPtr<UAlertRowEntry>> Entries;
 	/** The style's warning icon, resolved once in BuildOnce - the toast stack's reason (issue #186). */
 	UPROPERTY(Transient) TObjectPtr<class UTexture2D> WarningIcon;
-	bool bShowing = false;
 
 	/** Set when the list changes; the rows are rebuilt on the next tick while shown - not every frame. */
 	bool bRowsDirty = true;

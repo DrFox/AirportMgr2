@@ -224,7 +224,7 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Airside leaves the fuel line empty - it must not know what fuel is"),
 		AirsideFacts.Fuel.IsEmpty());
 	TestEqual(TEXT("and the ops layer fills it"),
-		Runtime->GetJobBoard()->DescribeAgent(Aircraft, 0.0).EndsWith(TEXT("\u00B7 done")), true);
+		Runtime->GetJobBoard()->DescribeAgent(Aircraft, 0.0, nullptr).EndsWith(TEXT("\u00B7 done")), true);
 
 	// 5. And the depot's own card can tell itself from a stand.
 	FStandFacts DepotFacts;

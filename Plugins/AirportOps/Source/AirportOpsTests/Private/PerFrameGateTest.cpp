@@ -182,16 +182,16 @@ bool FFuelLineLiveTest::RunTest(const FString&)
 	Job.TripStartedAt = 0.0;
 	Job.TripEndsAt = 800.0;
 	bool bLive = false;
-	const FString AtStart = Board->DescribeAgent(1, 0.0, bLive);
+	const FString AtStart = Board->DescribeAgent(1, 0.0, bLive, nullptr);
 	TestTrue(TEXT("pumping: it moves with the clock"), bLive);
-	TestNotEqual(TEXT("and it does - 400 s in, less is left"), Board->DescribeAgent(1, 400.0, bLive), AtStart);
+	TestNotEqual(TEXT("and it does - 400 s in, less is left"), Board->DescribeAgent(1, 400.0, bLive, nullptr), AtStart);
 	Job.State = EServiceJobState::Underway;
-	Board->DescribeAgent(1, 0.0, bLive);
+	Board->DescribeAgent(1, 0.0, bLive, nullptr);
 	TestFalse(TEXT("a truck on its way: it does not"), bLive);
 	Job.State = EServiceJobState::Done;
-	Board->DescribeAgent(1, 0.0, bLive);
+	Board->DescribeAgent(1, 0.0, bLive, nullptr);
 	TestFalse(TEXT("done: it does not"), bLive);
-	Board->DescribeAgent(42, 0.0, bLive);
+	Board->DescribeAgent(42, 0.0, bLive, nullptr);
 	TestFalse(TEXT("an agent it knows nothing of: it does not"), bLive);
 	return true;
 }

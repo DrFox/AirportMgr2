@@ -69,18 +69,14 @@ public:
 	/** Width of the aeroplane's name, so the refusals line up down the panel. */
 	UPROPERTY(EditAnywhere, Category = "Land|Style") float NameWidth = 230.0f;
 
-	bool IsShowing() const { return bShowing; }
-
-	/** Open or close it. Called by the aircraft.land action - see BuildActions. */
-	void Toggle();
-
-	/** Top-left; closable (the close is the toggle). */
+	/** Top-left; closable (the close is the toggle, which the aircraft.land action runs - see BuildActions and UAirportMgrPanelWidget::Toggle). */
 	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
-	virtual void OnWindowClosedByPlayer() override;
+	/** JUDGED ON OPEN, not left to the next tick - a panel that appeared empty for a frame and then filled reads as a bug. */
+	virtual void OnShownChanged(bool bShown) override;
 
 	/**
 	 * Re-quote every row if anything a quote reads has moved, and repaint if a verdict changed. What
-	 * NativeTick calls while open, and what Toggle calls on opening.
+	 * NativeTick calls while open, and what OnShownChanged calls on opening.
 	 */
 	void Refresh();
 
@@ -130,8 +126,6 @@ private:
 	UPROPERTY() TArray<TObjectPtr<UAircraftType>> Types;
 
 	UPROPERTY() TArray<TObjectPtr<ULandRowEntry>> Entries;
-
-	bool bShowing = false;
 
 	/**
 	 * What each row last SHOWED - its refusal, empty when admitted - in row order. The panel

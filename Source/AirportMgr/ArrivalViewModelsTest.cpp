@@ -1,9 +1,13 @@
 #include "CoreMinimal.h"
 #include "ArrivalViewModels.h"
+#include "ArrivalsPanelWidget.h"
+#include "Blueprint/UserWidget.h"
 #include "Misc/AutomationTest.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/SimClock.h"
+#include "Testing/AirsideTestWorld.h"
+#include "UIStyle.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -124,6 +128,61 @@ bool FArrivalsTurnaroundLineTest::RunTest(const FString& Parameters)
 		FString(TEXT("Turnaround 2 h \u00B7 12 min late")));
 	F->ContractSeconds = 0.0;
 	TestTrue(TEXT("no contract (the debug land key), no line"), UArrivalRowViewModel::DescribeTurnaround(*F, 0.0).IsEmpty());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalsHoldingIsAFactTest, "AirportMgr.UI.Arrivals.HoldingIsAFactNotAWord",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalsHoldingIsAFactTest::RunTest(const FString& Parameters)
+{
+	// THE PANEL TINTS "HOLDING" (the one state the player can act on) and used to find it by comparing the status's LOCALISED TEXT against a copy of
+	// the word - a reworded status or a translation would have un-tinted it silently (#447). The row says so itself now, set by the same Refresh that
+	// words the status, through the same phase test.
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = NewObject<UFlightBoard>();
+	UFlight* Holding = Flight(TEXT("CU 1"), EFlightPhase::Inbound);
+	Holding->HoldingSince = 5.0;
+	UFlight* Landing = Flight(TEXT("CU 2"), EFlightPhase::Landing);
+	UFlight* OnStand = Flight(TEXT("G-ABCD"), EFlightPhase::Turnaround);
+	for (UFlight* Each : { Holding, Landing, OnStand }) { Board->AddOffer(*Clock, Each); }
+
+	UArrivalsViewModel* Arrivals = NewObject<UArrivalsViewModel>();
+	Arrivals->Refresh(*Board, *Clock);
+	int32 HoldingRows = 0;
+	for (const UArrivalRowViewModel* Row : Arrivals->GetRows())
+	{
+		const bool bSaysHolding = Row->GetTitle().ToString().Contains(TEXT("CU 1"));
+		TestEqual(*FString::Printf(TEXT("'%s': the row is holding exactly when its flight is the holding one"), *Row->GetTitle().ToString()),
+			Row->IsHolding(), bSaysHolding);
+		HoldingRows += Row->IsHolding() ? 1 : 0;
+	}
+	TestEqual(TEXT("one holding row of three"), HoldingRows, 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalsHoldingRowAccentTest, "AirportMgr.UI.Arrivals.HoldingRowIsInAccent",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalsHoldingRowAccentTest::RunTest(const FString& Parameters)
+{
+	// THE PANEL'S USE OF IsHolding (#447): HoldingIsAFactNotAWord pins the fact; this pins that the panel READS it - a holding row's status is
+	// drawn in Style.Accent, the one state the player can act on, and any other row in InkMuted. Without it the panel could stop tinting and
+	// every test above still pass.
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	UArrivalsPanelWidget* Panel = CreateWidget<UArrivalsPanelWidget>(TestWorld.World, UArrivalsPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("an arrivals panel"), Panel) || !TestNotNull(TEXT("with its style"), Panel->PanelStyleForTest())) { return false; }
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = NewObject<UFlightBoard>();
+	UFlight* Holding = Flight(TEXT("CU 1"), EFlightPhase::Inbound);
+	Holding->HoldingSince = 5.0;
+	UFlight* Landing = Flight(TEXT("CU 2"), EFlightPhase::Landing);
+	for (UFlight* Each : { Holding, Landing }) { Board->AddOffer(*Clock, Each); }
+	Panel->GetArrivals()->Refresh(*Board, *Clock);
+	Panel->PaintRowsForTest();
+	if (!TestEqual(TEXT("a row each"), Panel->RowCountForTest(), 2)) { return false; }
+	const UUIStyle& Style = *Panel->PanelStyleForTest();
+	// HOLDING FIRST (the list's own order), then the flight on the ground.
+	TestEqual(TEXT("the holding row's status is in accent"), Panel->StatusColourForTest(0), FLinearColor(Style.Accent));
+	TestEqual(TEXT("and the other row's is muted"), Panel->StatusColourForTest(1), FLinearColor(Style.InkMuted));
 	return true;
 }
 

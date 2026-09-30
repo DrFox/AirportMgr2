@@ -35,6 +35,19 @@ public:
 	FText GetDetail() const { return Detail; }
 	bool IsLate() const { return bLate; }
 
+	/**
+	 * The flight is holding for a runway (the phase DescribeStatus words "HOLDING"): the one state the player can do something about, so
+	 * the panel tints it. A FACT OF THE ROW, set by Refresh - the panel used to recover it by comparing the status's localised TEXT
+	 * against its own NSLOCTEXT, which a reworded status or a translation would have broken silently (#447; ULedgerRowViewModel's
+	 * bOutgoing rejects exactly this idea).
+	 * ENFORCED BY: Check-Architecture rule 68 (no `.EqualTo(` then `NSLOCTEXT(` over a statement), AirportMgr.UI.Arrivals.HoldingIsAFactNotAWord (the fact),
+	 * AirportMgr.UI.Arrivals.HoldingRowIsInAccent (the panel reads it)
+	 */
+	bool IsHolding() const { return bHolding; }
+
+	/** Whether Flight is in the phase DescribeStatus words "HOLDING" - what Refresh stores as IsHolding, public so a test can ask it of a flight. */
+	static bool IsHoldingPhase(const UFlight& Flight);
+
 	/** "HOLDING", "in 6 min", "LANDING", "TAXI IN", "ON STAND", ... - by phase. */
 	static FText DescribeStatus(const UFlight& Flight, double Now);
 
@@ -56,6 +69,7 @@ private:
 	UPROPERTY(Transient) FText Status;
 	UPROPERTY(Transient) FText Detail;
 	UPROPERTY(Transient) bool bLate = false;
+	UPROPERTY(Transient) bool bHolding = false;
 };
 
 /**

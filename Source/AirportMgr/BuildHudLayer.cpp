@@ -93,34 +93,36 @@ namespace
 		"Every EHudWindow needs a name in HudWindowNames");
 }
 
+namespace
+{
+	/**
+	 * THE ONE LIST of which panel each EHudWindow is - ToggleWindow and IsWindowShowing both read it, where each was its own four-case switch
+	 * over the same four panels (#447). A fifth window adds one case here. Null for a window this layer has no panel for.
+	 */
+	UAirportMgrPanelWidget* PanelFor(const UBuildHudLayer& Layer, EHudWindow Window)
+	{
+		switch (Window)
+		{
+		case EHudWindow::Ledger:   return Layer.LedgerPanel;
+		case EHudWindow::Alerts:   return Layer.AlertsPanel;
+		case EHudWindow::Land:     return Layer.LandPanel;
+		case EHudWindow::Settings: return Layer.SettingsPanel;
+		default:                   return nullptr;
+		}
+	}
+}
+
 void UBuildHudLayer::ToggleWindow(EHudWindow Window)
 {
-	bool bOpen = false;
-	switch (Window)
+	UAirportMgrPanelWidget* Panel = PanelFor(*this, Window);
+	if (Panel == nullptr)
 	{
-	case EHudWindow::Ledger:
-		if (LedgerPanel == nullptr) { return; }
-		LedgerPanel->Toggle();
-		bOpen = LedgerPanel->IsShowing();
-		break;
-	case EHudWindow::Alerts:
-		if (AlertsPanel == nullptr) { return; }
-		AlertsPanel->Toggle();
-		bOpen = AlertsPanel->IsShowing();
-		break;
-	case EHudWindow::Land:
-		if (LandPanel == nullptr) { return; }
-		LandPanel->Toggle();
-		bOpen = LandPanel->IsShowing();
-		break;
-	case EHudWindow::Settings:
-		if (SettingsPanel == nullptr) { return; }
-		SettingsPanel->Toggle();
-		bOpen = SettingsPanel->IsShowing();
-		break;
-	default:
 		return;
 	}
+	// THE PANEL'S TOGGLE, which is the host's for a hosted window (UAirportMgrPanelWidget::Toggle) - and Settings' own, which begins or
+	// cancels an edit - and the ANSWER is the host's too: nothing here keeps a second copy of whether it is open.
+	Panel->Toggle();
+	const bool bOpen = Panel->IsShown();
 	// ONE LINE FOR ALL FOUR, in the words the controller's three used ("Ledger panel opened", "Land panel closed") - and the alerts
 	// window's count, which is what tells a player the badge and the window agree.
 	const FString Count = Window == EHudWindow::Alerts ? FString::Printf(TEXT(" (%d alert(s))"), AlertCount()) : FString();
@@ -129,14 +131,8 @@ void UBuildHudLayer::ToggleWindow(EHudWindow Window)
 
 bool UBuildHudLayer::IsWindowShowing(EHudWindow Window) const
 {
-	switch (Window)
-	{
-	case EHudWindow::Ledger:   return LedgerPanel != nullptr && LedgerPanel->IsShowing();
-	case EHudWindow::Alerts:   return AlertsPanel != nullptr && AlertsPanel->IsShowing();
-	case EHudWindow::Land:     return LandPanel != nullptr && LandPanel->IsShowing();
-	case EHudWindow::Settings: return SettingsPanel != nullptr && SettingsPanel->IsShowing();
-	default:                   return false;
-	}
+	const UAirportMgrPanelWidget* Panel = PanelFor(*this, Window);
+	return Panel != nullptr && Panel->IsShown();
 }
 
 int32 UBuildHudLayer::AlertCount() const

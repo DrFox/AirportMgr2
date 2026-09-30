@@ -77,27 +77,15 @@ bool ULedgerPanelWidget::WantsWindow(FUiWindowSpec& Out) const
 	Out.Title = LOCTEXT("LedgerWindow", "Ledger");
 	Out.Anchor = EUiWindowAnchor::TopRight;
 	Out.Offset = FVector2D(12.0, TopOffset);
+	Out.bToggled = true;   // B and the close button are one toggle - the host's, so the bar never lights a window nobody can see (#447)
 	return true;
 }
 
-void ULedgerPanelWidget::OnWindowClosedByPlayer()
+void ULedgerPanelWidget::OnShownChanged(bool bShown)
 {
-	// THE CLOSE BUTTON IS THE TOGGLE: bShowing must agree, or the next B "opens" it hidden and the
-	// bar lights a panel nobody can see.
-	if (bShowing)
-	{
-		Toggle();
-	}
-}
-
-void ULedgerPanelWidget::Toggle()
-{
-	bShowing = !bShowing;
-	SetShown(bShowing);
-
 	// REPAINTED ON OPEN, not left to the next tick. A panel that appeared empty for a frame
 	// and then filled would read as a bug in the ledger rather than as a frame of latency.
-	if (bShowing)
+	if (bShown)
 	{
 		Refresh();
 	}
@@ -223,7 +211,7 @@ void ULedgerPanelWidget::TickPanel(float InDeltaTime)
 
 	// ONLY WHILE OPEN. A closed panel costs nothing - the ledger's own revision gate would
 	// make the work cheap anyway, but a panel nobody is looking at should not be asking.
-	if (bShowing)
+	if (IsShown())
 	{
 		Refresh();
 	}

@@ -7,6 +7,7 @@
 #include "Model/JobBoard.h"
 #include "Model/OpsAlerts.h"
 #include "Model/RoadAgent.h"
+#include "Model/GameTimeText.h"
 #include "Model/SimClock.h"
 #include "OfferViewModels.h"
 #include "Present/OpsRuntime.h"
@@ -15,9 +16,9 @@
 bool FInspectorTurnaround::Refresh(const UFlight& Of, double Now)
 {
 	// WHAT THE SENTENCE PRINTS, computed for two subtractions: the contract, and the whole
-	// minutes left or late - DescribeDuration's own rounding of AirborneBy() - Now.
-	const double Left = Of.AirborneBy() - Now;
-	const bool bNowLate = Left < 0.0;
+	// minutes left or late - GameTimeText::Duration's own rounding of the flight's ContractSecondsLeft.
+	const double Left = Of.ContractSecondsLeft(Now);
+	const bool bNowLate = Of.IsLate(Now);
 	const int32 NowMinutes = FMath::RoundToInt(FMath::Abs(Left) / 60.0);
 	if (Flight.Get() == &Of && Contract == Of.ContractSeconds && bLate == bNowLate && Minutes == NowMinutes)
 	{
@@ -29,15 +30,6 @@ bool FInspectorTurnaround::Refresh(const UFlight& Of, double Now)
 	bLate = bNowLate;
 	Minutes = NowMinutes;
 	return true;
-}
-
-double FAircraftCard::GameSecondsOfStall(double StalledSeconds, const USimClock& Clock)
-{
-	// NOT TimeScale(): that is Multiplier x day rate, and the stall already carries the
-	// multiplier (agents run on it). Only the day's compression is missing. The rate NOW, not
-	// integrated over the wait - a stall that straddles dawn or dusk reads at the current band's
-	// rate, an error of one band change against a figure shown to the minute.
-	return StalledSeconds * Clock.GameSecondsPerRealSecond(Clock.TimeOfDay());
 }
 
 FString FAircraftCard::NameOfVehicle(const UJobBoard* Jobs, int32 AgentId)
@@ -267,7 +259,7 @@ const FInspectorCardView* FAircraftCard::Describe(const FInspectorCardInput& In)
 			if (bFuelLineLive || FuelLineBoard.Get() != Fuel || FuelLineRevision != Fuel->Revision() || FuelLineAgent != F.Id)
 			{
 				++FuelLookups;
-				FuelLine = Fuel->DescribeAgent(F.Id, Now, bFuelLineLive);
+				FuelLine = Fuel->DescribeAgent(F.Id, Now, bFuelLineLive, Target.GetNetwork());
 				FuelLineBoard = Fuel;
 				FuelLineRevision = Fuel->Revision();
 				FuelLineAgent = F.Id;
@@ -322,7 +314,7 @@ const FInspectorCardView* FAircraftCard::Describe(const FInspectorCardInput& In)
 	// card counts in. No clock, no figure - never movement seconds dressed as game minutes.
 	if (In.Clock != nullptr && F.Hold.IsSet())
 	{
-		Names.Waited = UOfferViewModel::DescribeDuration(GameSecondsOfStall(F.Hold.StalledSeconds, *In.Clock)).ToString();
+		Names.Waited = GameTimeText::Duration(In.Clock->GameSecondsOfMovement(F.Hold.StalledSeconds)).ToString();
 	}
 
 	FAircraftDisplay Display = DisplayOf(F, Names);

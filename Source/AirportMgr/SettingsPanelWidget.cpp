@@ -34,6 +34,7 @@ bool USettingsPanelWidget::WantsWindow(FUiWindowSpec& Out) const
 	Out.Offset = FVector2D::ZeroVector;
 	Out.bModal = true;
 	Out.bResizable = false;
+	Out.bToggled = true;   // Escape and the close button are one toggle - the host's; the close is a Cancel (OnWindowClosedByPlayer)
 	return true;
 }
 
@@ -150,7 +151,6 @@ void USettingsPanelWidget::Open()
 	Snapshot = Sink->Read();
 	Current = Snapshot;
 	LoadControls();
-	bShowing = true;
 	SetShown(true);
 	UE_LOG(LogRoadBuild, Log, TEXT("Settings: opened (UI %.2f, pan %.1f, zoom %.1f, graphics %d, drive %s, grid on start %s)"),
 		Current.UIScale, Current.PanSpeedScale, Current.ZoomSpeedScale, Current.GraphicsQuality,
@@ -242,7 +242,7 @@ void USettingsPanelWidget::HandleSave()
 
 void USettingsPanelWidget::Cancel()
 {
-	if (!bShowing)
+	if (!IsShown())
 	{
 		return;
 	}
@@ -261,7 +261,7 @@ void USettingsPanelWidget::Cancel()
 
 void USettingsPanelWidget::SaveAndClose()
 {
-	if (!bShowing)
+	if (!IsShown())
 	{
 		return;
 	}
@@ -275,13 +275,12 @@ void USettingsPanelWidget::SaveAndClose()
 
 void USettingsPanelWidget::Close()
 {
-	bShowing = false;
 	SetShown(false);
 }
 
 void USettingsPanelWidget::Toggle()
 {
-	if (bShowing)
+	if (IsShown())
 	{
 		Cancel();
 	}
@@ -293,7 +292,8 @@ void USettingsPanelWidget::Toggle()
 
 void USettingsPanelWidget::OnWindowClosedByPlayer()
 {
-	// THE CLOSE IS CANCEL, and bShowing must follow - or the next Escape "opens" it hidden.
+	// THE CLOSE IS CANCEL. The host calls this BEFORE it hides the window (UUiWindowHost::CloseByPlayer), so Cancel still finds it shown and
+	// reverts; the host's own hide of a bToggled window is what keeps the next Escape from "opening" it hidden.
 	Cancel();
 }
 

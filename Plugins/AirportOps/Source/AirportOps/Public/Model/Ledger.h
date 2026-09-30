@@ -164,6 +164,15 @@ public:
 	virtual double Balance() const override { return CachedBalance; }
 
 	/**
+	 * Below zero: the state that locks every paid placement (CanAfford) and raises the Overdrawn alert. THE ONE DEFINITION of "overdrawn"
+	 * (#447) - the bar's red balance, the ledger panel's flag and the alert each wrote `Balance() < 0.0` themselves, so a change to what
+	 * overdrawn means (an overdraft limit, a grace) would have had to find every copy and left the lock and the colour disagreeing.
+	 * ENFORCED BY: Check-Architecture rule 4's 'overdrawn is the ledger's' row (no other file compares the balance to zero),
+	 * AirportOps.Model.Ledger.IsOverdrawnIsBelowZero
+	 */
+	bool IsOverdrawn() const { return CachedBalance < 0.0; }
+
+	/**
 	 * Bumped by every Post and every RollUp. A view rebuilds only when this changes.
 	 *
 	 * A COUNTER AND NOT A DELEGATE. The HUD polls - UBuildBarWidget::RefreshClock already

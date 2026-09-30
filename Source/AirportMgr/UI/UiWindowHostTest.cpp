@@ -1,7 +1,9 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
+#include "AlertsPanelWidget.h"
 #include "Components/ScrollBox.h"
+#include "Components/VerticalBox.h"
 #include "ArrivalsPanelWidget.h"
 #include "BuildBarWidget.h"
 #include "InspectorWidget.h"
@@ -62,8 +64,8 @@ bool FUiWindowHostShowTest::RunTest(const FString& Parameters)
 }
 
 /**
- * THE CLOSE BUTTON IS THE PANEL'S OWN TOGGLE for a toggled panel - closing must leave bShowing
- * false, or the bar keeps lighting a ledger nobody can see.
+ * THE CLOSE BUTTON IS THE TOGGLE for a toggled panel - closing must leave the window NOT shown and not dismissed, or the bar keeps
+ * lighting a ledger nobody can see and the next key press "opens" it hidden.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiWindowCloseTest, "AirportMgr.UI.WindowHost.CloseUntogglesThePanel",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -75,7 +77,7 @@ bool FUiWindowCloseTest::RunTest(const FString& Parameters)
 	F.Ledger->Toggle();
 	F.Window->HandleClose();
 	TestFalse(TEXT("closed"), F.Host->IsShown(TEXT("ledger")));
-	TestFalse(TEXT("and the ledger agrees it is not showing"), F.Ledger->IsShowing());
+	TestFalse(TEXT("and the ledger agrees it is not showing - there is no second copy of the answer to disagree"), F.Ledger->IsShown());
 	F.Ledger->Toggle();
 	TestTrue(TEXT("the next toggle opens it again"), F.Host->IsShown(TEXT("ledger")));
 	return true;
@@ -83,7 +85,8 @@ bool FUiWindowCloseTest::RunTest(const FString& Parameters)
 
 /**
  * A PLAYER'S CLOSE STICKS while the panel keeps asking to show (the inspector asks every tick
- * while anything is selected), until the panel hides it itself or forgets the close.
+ * while anything is selected), until the panel hides it itself or forgets the close - for a window that is NOT a toggle. The ARRIVALS
+ * window stands for them: a toggled one (the ledger) hides plainly, which is the next test's.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiWindowStickyCloseTest, "AirportMgr.UI.WindowHost.PlayerCloseSticksUntilForgotten",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -92,7 +95,9 @@ bool FUiWindowStickyCloseTest::RunTest(const FString& Parameters)
 {
 	UiWindowHostTest::FFixture F;
 	if (!TestNotNull(TEXT("a window"), F.Window)) { return false; }
-	const FName Id(TEXT("ledger"));
+	UArrivalsPanelWidget* Arrivals = CreateWidget<UArrivalsPanelWidget>(F.TestWorld.World, UArrivalsPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("a second window, not a toggle"), F.Host->AddWindow(*Arrivals))) { return false; }
+	const FName Id(TEXT("arrivals"));
 	F.Host->SetShown(Id, true);
 	F.Host->CloseByPlayer(Id);
 	F.Host->SetShown(Id, true);
@@ -104,6 +109,42 @@ bool FUiWindowStickyCloseTest::RunTest(const FString& Parameters)
 	F.Host->SetShown(Id, false);
 	F.Host->SetShown(Id, true);
 	TestTrue(TEXT("the panel hiding it itself also clears the close"), F.Host->IsShown(Id));
+	return true;
+}
+
+/**
+ * THE HOST OWNS "IS IT OPEN" (#447). The toggle a key, a bar button and a panel's own Toggle() run is UUiWindowHost::Toggle, over the host's own
+ * state; the player's close on a bToggled window is that toggle (no sticky dismissal, nothing on the panel to resync); and the panel hears
+ * EVERY change through OnShownChanged, from whichever door - here the HOST's, where the panel's own Toggle was the only door that ever
+ * painted it on open. Four panels kept a private bShowing and an OnWindowClosedByPlayer resync for this.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUiWindowToggleTest, "AirportMgr.UI.WindowHost.ToggleIsTheHostsAndCloseIsToggle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUiWindowToggleTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld{ /*bSpawnActor=*/false };
+	UUiWindowHost* Host = CreateWidget<UUiWindowHost>(TestWorld.World, UUiWindowHost::StaticClass());
+	UAlertsPanelWidget* Alerts = CreateWidget<UAlertsPanelWidget>(TestWorld.World, UAlertsPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("a host and an alerts panel"), Host) || !TestNotNull(TEXT("alerts"), Alerts)) { return false; }
+	Host->SetViewSizeForTest(FVector2D(1920.0, 1080.0));
+	if (!TestNotNull(TEXT("hosted"), Host->AddWindow(*Alerts)) || !TestNotNull(TEXT("with rows to paint"), Alerts->RowColumn.Get())) { return false; }
+	const FName Id(TEXT("alerts"));
+
+	TestEqual(TEXT("a closed panel has painted nothing"), Alerts->RowColumn->GetChildrenCount(), 0);
+	TestTrue(TEXT("the host's Toggle opens it"), Host->Toggle(Id));
+	TestTrue(TEXT("and the panel reads the host's answer"), Alerts->IsShown());
+	TestTrue(TEXT("PAINTED ON OPEN by OnShownChanged, which the host called - no tick has run and the panel's own Toggle was not used"),
+		Alerts->RowColumn->GetChildrenCount() > 0);
+
+	Host->CloseByPlayer(Id);
+	TestFalse(TEXT("the close hid it"), Host->IsShown(Id));
+	TestFalse(TEXT("and the panel agrees"), Alerts->IsShown());
+	TestTrue(TEXT("THE CLOSE WAS THE TOGGLE: the next toggle opens it, where a sticky dismissal would leave it hidden"), Host->Toggle(Id));
+	TestFalse(TEXT("toggled again it closes"), Host->Toggle(Id));
+	Alerts->Toggle();
+	TestTrue(TEXT("the panel's own Toggle is the host's - one state"), Host->IsShown(Id));
+	TestFalse(TEXT("an unknown id toggles nothing"), Host->Toggle(TEXT("no-such-window")));
 	return true;
 }
 

@@ -107,12 +107,33 @@ void UAirportMgrPanelWidget::OnWindowClosedByPlayer()
 {
 }
 
+void UAirportMgrPanelWidget::OnShownChanged(bool /*bShown*/)
+{
+}
+
+void UAirportMgrPanelWidget::Toggle()
+{
+	if (Host != nullptr)
+	{
+		// THE HOST'S STATE, and the request follows it so an IsShown answered without the host (after a detach) is not stale.
+		bShownRequested = Host->Toggle(WindowId);
+		return;
+	}
+	SetShown(!bShownRequested);
+}
+
 void UAirportMgrPanelWidget::SetShown(bool bShown)
 {
+	const bool bWas = bShownRequested;
 	bShownRequested = bShown;
 	if (Host != nullptr)
 	{
-		Host->SetShown(WindowId, bShown);
+		Host->SetShown(WindowId, bShown);   // which tells the panel, through OnShownChanged, if the window changed
+	}
+	else if (bWas != bShown)
+	{
+		// NO HOST TO TELL US: the headless test and any unhosted panel hear their own change, so the hook means the same with or without a window.
+		OnShownChanged(bShown);
 	}
 }
 

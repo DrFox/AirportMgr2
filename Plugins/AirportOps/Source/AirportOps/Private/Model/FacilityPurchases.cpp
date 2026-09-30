@@ -223,7 +223,7 @@ FFacilityQuote UFacilityPurchases::Quote(const URoadNetwork& Network, FEntityIns
 		FFleetRowQuote& Row = Out.Fleet.AddDefaulted_GetRef();
 		Row.VehicleId = Vehicle.Id;
 		Row.TypeCode = Vehicle.TypeCode;
-		Row.Line = JobBoard->VehicleLine(Vehicle);
+		Row.Line = JobBoard->VehicleLine(Vehicle, &Network);
 		Row.Refund = RefundOf(Vehicle.TypeCode);
 		Row.Refusal = JudgeSale(Vehicle.Id);
 		Row.SellLabel = FText::Format(LOCTEXT("SellLabel", "Sell {0}"), Money(Row.Refund));

@@ -148,8 +148,9 @@ public:
  *    recompose them.
  *  - a DEPOT reads its vehicles and their jobs (UJobBoard::Revision) and the clock, which the card reads AT THE
  *    MINUTE (Now floored to 60 s) so its text is a function of Minute exactly: DescribeDepot rounds its minutes
- *    from Now, and a key on the minute alone would have held a figure that moved mid-minute. Its PURCHASE ROWS
- *    and "No vehicles" (UOpsRuntime::QuoteFacility - the balance, the fleet, the sheds) are in the same view and so
+ *    from Now, and a key on the minute alone would have held a figure that moved mid-minute. "No vehicles - buy one" is
+ *    the board's own status (DescribeDepot's Summary), so it moves with that revision. Its PURCHASE ROWS
+ *    (UOpsRuntime::QuoteFacility - the balance, the fleet, the sheds) are in the same view and so
  *    under the same key: the balance moves no revision of the job board or the network, but ULedger::Revision
  *    (every Post, every RollUp, every load) is the one that does, and the quote was being asked EVERY TICK for want of
  *    keying on it (#441).
@@ -255,9 +256,6 @@ class FDepotCard final : public FInspectorKeyedCard
 {
 public:
 	virtual EInspectorCard Id() const override { return EInspectorCard::Depot; }
-
-	/** The depot status line: "No vehicles - buy one" for an empty depot on a road, else Current. */
-	static FString StatusWith(const FFacilityQuote& Quote, bool bReachable, const FString& Current);
 
 	/** How many times the card asked UJobBoard::DescribeDepot - at most once a game minute on a quiet board. */
 	int32 BacklogCount() const { return BacklogCalls; }
@@ -366,10 +364,10 @@ struct FAircraftDisplay
 /**
  * The turnaround sentence, kept until what it prints moves (ops batch 3 PR E): DescribeTurnaround reads the flight's contract and
  * Now, which it shows only as whole minutes left or late - so it is keyed on exactly those, computed from the flight each tick
- * for two subtractions instead of an FText::Format. The minutes recompute RoundToInt(Abs(Left) / 60) BECAUSE DescribeDuration
- * rounds that way (OfferViewModels.cpp), which is a coupling across two files - so MinutesShown is a function of its own,
+ * for two subtractions instead of an FText::Format. The minutes recompute RoundToInt(Abs(Left) / 60) BECAUSE GameTimeText::Duration
+ * rounds that way (GameTimeText.cpp), which is a coupling across two files - so MinutesShown is a function of its own,
  * and AirportMgr.Inspector.TurnaroundKeyMatchesItsSentence walks Now across a whole day asking that two times with one key say
- * one sentence: a rounding changed in DescribeDuration goes red there, not stale on screen.
+ * one sentence: a rounding changed in Duration goes red there, not stale on screen.
  */
 struct FInspectorTurnaround
 {
@@ -410,13 +408,6 @@ public:
 
 	/** The sentences and verbs of D, reading nothing else - see FAircraftDisplay. */
 	static void Compose(const FAircraftDisplay& D, FInspectorCardView& Out);
-
-	/**
-	 * A stall (FAgentHold::StalledSeconds - movement seconds, real x speed) as GAME seconds, the unit the turnaround line beside
-	 * it counts in: x the day's compression at Clock's time of day. UInspectorWidget::GameSecondsOfStall forwards here.
-	 * ENFORCED BY: AirportMgr.Inspector.HoldAndDeadlockLines (a known stall at 72x reads 1 h 36 min)
-	 */
-	static double GameSecondsOfStall(double StalledSeconds, const USimClock& Clock);
 
 	/**
 	 * How the card names another agent: its flight's registration, else its service vehicle as the depot card names it ("Bowser #7" -

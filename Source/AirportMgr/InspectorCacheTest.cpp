@@ -336,11 +336,38 @@ bool FInspectorCacheDepotBoardTest::RunTest(const FString&)
 	if (!TestTrue(TEXT("the rig, with a depot"), Rig.Ok() && Rig.Depot.IsSet())) { return false; }
 	const FSelection Sel = Rig.Select(ESelectionKind::Stand, Rig.Depot.Index);
 	Rig.Panel->RefreshWith(Rig.Runtime, Rig.Actor, Sel);
-	TestEqual(TEXT("no jobs to start"), Rig.Panel->StatusForTest(), FString(TEXT("No jobs")));
+	// THE STATUS IS THE BOARD'S (#447), through the card: a depot on a road with no vehicle says what to do - the sentence UJobBoard::DescribeDepot
+	// gives, which the card used to lay over the summary in a wording of its own - and the moment a vehicle joins it says its backlog instead.
+	TestEqual(TEXT("an empty depot on a road says to buy a vehicle"), Rig.Panel->StatusForTest(), FString(TEXT("No vehicles — buy one")));
 	FServiceVehicle& Bowser = Rig.Runtime->GetJobBoard()->AddVehicleForTest(TEXT("FUEL"), Rig.Depot, EServiceVehicleState::Idle, 9700.0);
 	Rig.Panel->RefreshWith(Rig.Runtime, Rig.Actor, Sel);
 	TestTrue(FString::Printf(TEXT("the vehicle is listed at once ('%s')"), *Rig.Panel->FactsForTest()),
 		Rig.Panel->FactsForTest().Contains(FString::Printf(TEXT("#%d"), Bowser.Id)));
+	TestEqual(TEXT("and with a vehicle and nothing to do, the status is its backlog's"), Rig.Panel->StatusForTest(), FString(TEXT("No jobs")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorCacheDepotOffRoadTest, "AirportMgr.Inspector.Cache.OffTheRoadTheRoadIsTheFix",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FInspectorCacheDepotOffRoadTest::RunTest(const FString&)
+{
+	// OFF THE ROAD, THE ROAD IS THE FIX (#447): a depot no service road reaches has no vehicle to buy yet - the card says "Cannot dispatch", which names
+	// what the player draws, and does not say "buy one" (which would send them to a shop that cannot help). The card asks the board for its status only
+	// when the depot is reachable; this was pinned when the widget worded "No vehicles" (FDepotCard::StatusWith) and went with it, so the gate is
+	// pinned here, at the card.
+	using namespace InspectorCacheTest;
+	FDepotRig Rig;
+	if (!TestTrue(TEXT("the rig, with a depot"), Rig.Ok() && Rig.Depot.IsSet())) { return false; }
+	UEntityDefinition* DepotDef = UEntityDefinition::MakeFuelDepotTransient();
+	const FEntityInstanceId OffRoad = Rig.Net->PlaceEntity(DepotDef, DepotDef->Anchors, FVector2D(-200000.0, -200000.0), 0.0, 0.0,
+		DepotDef->PoseRole, DepotDef->Trucks);
+	if (!TestTrue(TEXT("a second depot, joined to no road"), OffRoad.IsSet())) { return false; }
+	TestEqual(TEXT("and it has no vehicle"), Rig.Runtime->GetJobBoard()->VehiclesAt(OffRoad), 0);
+
+	Rig.Panel->RefreshWith(Rig.Runtime, Rig.Actor, Rig.Select(ESelectionKind::Stand, OffRoad.Index));
+	TestEqual(TEXT("off the road, the road is the fix it names - not 'buy one'"), Rig.Panel->StatusForTest(), FString(TEXT("Cannot dispatch")));
+	Rig.Panel->RefreshWith(Rig.Runtime, Rig.Actor, Rig.Select(ESelectionKind::Stand, Rig.Depot.Index));
+	TestEqual(TEXT("while the depot on a road, with no vehicle, says to buy one"), Rig.Panel->StatusForTest(), FString(TEXT("No vehicles — buy one")));
 	return true;
 }
 

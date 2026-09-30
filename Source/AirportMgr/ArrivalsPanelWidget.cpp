@@ -52,6 +52,11 @@ void UArrivalsPanelWidget::TickPanel(float DeltaTime)
 	Refresh();
 }
 
+FLinearColor UArrivalsPanelWidget::StatusColourForTest(int32 Row) const
+{
+	return Statuses.IsValidIndex(Row) && Statuses[Row] != nullptr ? Statuses[Row]->GetColorAndOpacity().GetSpecifiedColor() : FLinearColor::Transparent;
+}
+
 void UArrivalsPanelWidget::Refresh()
 {
 	UOpsRuntime* Runtime = OpsRuntime();
@@ -126,9 +131,9 @@ void UArrivalsPanelWidget::PaintRows(const UUIStyle& Style)
 		}
 		Titles[Index]->SetText(Row->GetTitle());
 		Statuses[Index]->SetText(Row->GetStatus());
-		// HOLDING IN ACCENT: the one state the player can do something about (a free runway).
-		Statuses[Index]->SetColorAndOpacity(FSlateColor(Row->GetStatus().EqualTo(
-			NSLOCTEXT("AirportMgr", "ArrivalHolding", "HOLDING")) ? Style.Accent : Style.InkMuted));
+		// HOLDING IN ACCENT: the one state the player can do something about (a free runway). The ROW says it is holding - this used to
+		// compare the status's localised text against a copy of the word (#447).
+		Statuses[Index]->SetColorAndOpacity(FSlateColor(Row->IsHolding() ? Style.Accent : Style.InkMuted));
 		Details[Index]->SetText(Row->GetDetail());
 		Details[Index]->SetColorAndOpacity(FSlateColor(Row->IsLate() ? Style.Warning : Style.InkMuted));
 		Details[Index]->SetVisibility(Row->GetDetail().IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
