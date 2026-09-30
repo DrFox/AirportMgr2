@@ -1089,4 +1089,113 @@ bool FInspectorSellTakesTwoClicksTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * WHAT IT WAITS FOR AND THE RING move with no board revision (the #423 lines on PR E's keyed card): the stall and the
+ * partner's wait are traffic state, re-read from InspectFacts::DescribeAgent every tick and gated only by FInspectorKey's
+ * Waited and Partners fields. Each step below moves ONE of them, the flight board untouched, and the card must follow.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorWaitingOnRefreshesTest,
+	"AirportMgr.Inspector.Cache.WaitingOnRefreshesTheCard",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorWaitingOnRefreshesTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	URoadNetwork& Net = *Actor->Network;
+	const FGuidelineNodeId A = Net.AddGuidelineNode(FVector2D(0.0, 0.0), false);
+	const FGuidelineNodeId B = Net.AddGuidelineNode(FVector2D(20000.0, 0.0), false);
+	FGuidelineEdgeId Lane;
+	{
+		FGuidelineEdge Edge;
+		Edge.A = A; Edge.B = B;
+		Edge.Control = FVector2D(10000.0, 0.0);
+		Edge.AllowedTraffic = FTrafficMask::All();
+		Edge.Direction = EGuidelineDir::Bidirectional;
+		Edge.bDerived = false;
+		Lane = Net.AddGuidelineEdge(MoveTemp(Edge));
+	}
+	int32 Ids[2] = {};
+	for (int32& Id : Ids)
+	{
+		if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(TestGraph::Probe(Net, A, B, ETraversalClass::Aircraft),
+			UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+		Id = Actor->GetTraffic()->GetNewestAgentId();
+	}
+	const int32 One = Ids[0], Two = Ids[1];
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	Clock->SetUniformDay(1200.0);
+	UFlightBoard* Board = NewObject<UFlightBoard>(GetTransientPackage());
+	auto Fly = [&](int32 AgentId, const TCHAR* Callsign)
+	{
+		UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+		Flight->AgentId = AgentId;
+		Flight->Callsign = Callsign;
+		Flight->Phase = EFlightPhase::TaxiIn;
+		Board->AddOffer(*Clock, Flight);
+	};
+	Fly(One, TEXT("G-SVBT"));
+	Fly(Two, TEXT("G-HDVK"));
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+	Panel->UseFlightBoardForTest(Board);
+	Panel->UseClockForTest(Clock);
+
+	UGroundTraffic& Traffic = *Actor->GetGroundTraffic();
+	const double Long = Traffic.Rules.StallSeconds * 2.0;
+	FGroundTrafficTestAccess Access(Traffic);
+	Access.ScriptWait(One, FTrafficResource::OfEdge(Lane), Two, Long);
+	Access.ScriptWait(Two, FTrafficResource::OfNode(B), One, Traffic.Rules.StallSeconds * 0.5);
+	FSelection Sel; Sel.Kind = ESelectionKind::Aircraft; Sel.Id = One;
+	Panel->Refresh(Actor, Sel);
+	const uint32 BoardRevision = Board->Revision();
+	TestEqual(TEXT("its partner is not yet stalled: no ring"), Panel->DeadlockForTest(), FString());
+	const FString WaitedBefore = Panel->StatusForTest();
+	TestTrue(FString::Printf(TEXT("the hold line names the blocker ('%s')"), *WaitedBefore), WaitedBefore.StartsWith(TEXT("Waiting behind G-HDVK")));
+
+	// THE PARTNER STALLS TOO: a ring, with this aircraft's own wait unchanged - only FInspectorKey::Partners moves.
+	Access.ScriptWait(Two, FTrafficResource::OfNode(B), One, Long);
+	Panel->Refresh(Actor, Sel);
+	TestTrue(FString::Printf(TEXT("the ring appears at once ('%s')"), *Panel->DeadlockForTest()),
+		Panel->DeadlockForTest().Contains(TEXT("Deadlocked with G-HDVK")));
+	TestEqual(TEXT("and its own wait line is as it was"), Panel->StatusForTest(), WaitedBefore);
+
+	// ITS OWN WAIT GROWS, the ring and the blocker unchanged - only FInspectorKey::Waited moves.
+	Access.ScriptWait(One, FTrafficResource::OfEdge(Lane), Two, Long * 4.0);
+	Panel->Refresh(Actor, Sel);
+	TestNotEqual(FString::Printf(TEXT("the wait line counts on ('%s')"), *Panel->StatusForTest()), Panel->StatusForTest(), WaitedBefore);
+	TestTrue(TEXT("naming the same blocker"), Panel->StatusForTest().StartsWith(TEXT("Waiting behind G-HDVK")));
+	TestEqual(TEXT("with no flight board revision moving - the card's own key saw both"), Board->Revision(), BoardRevision);
+	return true;
+}
+
+/**
+ * THE PURCHASE ROWS ARE ASKED EVERY TICK over a kept depot card (FInspectorCardKey's comment): the quote reads the
+ * balance, which moves no revision the card key holds. The money runs out with nothing else changing, the card is NOT
+ * described again, and Buy greys all the same.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorDepotQuoteFollowsBalanceTest,
+	"AirportMgr.Inspector.Cache.DepotQuoteFollowsTheBalance",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorDepotQuoteFollowsBalanceTest::RunTest(const FString& Parameters)
+{
+	FInspectorDepotRig Rig;
+	if (!TestTrue(TEXT("setup: depot, runtime, controller and panel"), Rig.Build())) { return false; }
+	Rig.Refresh();
+	if (!TestTrue(TEXT("setup: a second shed is affordable"), Rig.Panel->IsBuyModuleEnabledForTest())) { return false; }
+	const int32 Described = Rig.Panel->CardDescribeCountForTest();
+	ULedger* Ledger = Rig.Runtime->GetLedger();
+	if (!TestNotNull(TEXT("a ledger"), Ledger)) { return false; }
+	Ledger->Post(0.0, ELedgerCategory::Fleet, -(Ledger->Balance() + 1.0e9), FText::FromString(TEXT("test: spent")));
+	Rig.Refresh();
+	TestEqual(TEXT("the card itself is kept - nothing its key holds moved"), Rig.Panel->CardDescribeCountForTest(), Described);
+	TestFalse(TEXT("but Buy greys the tick the money is gone"), Rig.Panel->IsBuyModuleEnabledForTest());
+	return true;
+}
+
 #endif

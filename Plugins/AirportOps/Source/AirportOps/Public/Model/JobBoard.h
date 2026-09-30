@@ -300,7 +300,8 @@ public:
 
 	/**
 	 * Moves with every mutator of Jobs, Vehicles and Turnarounds - private, so every public door to them: Step,
-	 * OnAgentPhase, RecallVehicleOfAgent, OnBeforeRestore and the ForTest adders. The bumps in Serialize and
+	 * OnAgentPhase, RecallVehicleOfAgent, OnBeforeRestore, the player's fleet doors (AddPurchasedVehicle,
+	 * RemoveVehicle - #417, rebased under this counter) and the ForTest adders. The bumps in Serialize and
 	 * ResolveVehicles are REDUNDANT, kept as cheap insurance: a load's OnBeforeRestore runs immediately before the
 	 * blob's Serialize and has already moved it, and ResolveVehicles fills the letter table, which no Describe reads. The inspector's
 	 * depot card and fuel line key on it (ops batch 3 PR E). NOT StepCount, which the spec named: OnAgentPhase and

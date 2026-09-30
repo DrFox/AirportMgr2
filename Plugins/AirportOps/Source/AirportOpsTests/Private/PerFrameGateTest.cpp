@@ -79,6 +79,17 @@ bool FJobBoardRevisionTest::RunTest(const FString&)
 	Moved(TEXT("a vehicle added"));
 	Board->AddTurnaroundForTest(1, 600.0, 1);
 	Moved(TEXT("a turnaround added"));
+	// THE PLAYER'S FLEET DOORS (facility-upgrades, #417 - landed beside this counter, rebased onto it): a vehicle bought
+	// or sold changes the depot card's vehicle list, which the card keys on this number alone within a game minute.
+	FEntityInstanceId Depot;
+	Depot.Index = 3;
+	const int32 Bought = Board->AddPurchasedVehicle(TEXT("FUEL"), Depot);
+	if (TestTrue(TEXT("a vehicle bought"), Bought != 0))
+	{
+		Moved(TEXT("a vehicle bought"));
+		TestTrue(TEXT("and sold"), Board->RemoveVehicle(Bought));
+		Moved(TEXT("a vehicle sold"));
+	}
 	Board->OnBeforeRestore();
 	Moved(TEXT("a restore"));
 	return true;

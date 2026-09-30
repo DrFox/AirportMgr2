@@ -340,6 +340,30 @@ bool FInspectorCacheDepotBoardTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorCacheDepotBoughtTest, "AirportMgr.Inspector.Cache.DepotSeesAVehicleBoughtAndSold",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FInspectorCacheDepotBoughtTest::RunTest(const FString&)
+{
+	// THE PLAYER'S FLEET DOORS (#417's UJobBoard::AddPurchasedVehicle and RemoveVehicle) move UJobBoard::Revision like
+	// every other mutator: within one game minute the card's key holds nothing else that a purchase moves.
+	using namespace InspectorCacheTest;
+	FDepotRig Rig;
+	if (!TestTrue(TEXT("the rig, with a depot"), Rig.Ok() && Rig.Depot.IsSet())) { return false; }
+	const FSelection Sel = Rig.Select(ESelectionKind::Stand, Rig.Depot.Index);
+	Rig.Panel->RefreshWith(Rig.Runtime, Rig.Actor, Sel);
+	const int32 Bought = Rig.Runtime->GetJobBoard()->AddPurchasedVehicle(TEXT("FUEL"), Rig.Depot);
+	if (!TestTrue(TEXT("a vehicle bought"), Bought != 0)) { return false; }
+	Rig.Panel->RefreshWith(Rig.Runtime, Rig.Actor, Sel);
+	const FString Tag = FString::Printf(TEXT("#%d"), Bought);
+	TestTrue(FString::Printf(TEXT("the bought vehicle is listed at once ('%s')"), *Rig.Panel->FactsForTest()),
+		Rig.Panel->FactsForTest().Contains(Tag));
+	TestTrue(TEXT("sold"), Rig.Runtime->GetJobBoard()->RemoveVehicle(Bought));
+	Rig.Panel->RefreshWith(Rig.Runtime, Rig.Actor, Sel);
+	TestFalse(FString::Printf(TEXT("and gone from the card at once ('%s')"), *Rig.Panel->FactsForTest()),
+		Rig.Panel->FactsForTest().Contains(Tag));
+	return true;
+}
+
 namespace InspectorCacheTest
 {
 	/** An aircraft taxiing on a line of its own, and a runtime whose flight board owns a flight for it. */

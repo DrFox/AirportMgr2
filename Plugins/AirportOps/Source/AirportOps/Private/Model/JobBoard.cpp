@@ -373,6 +373,7 @@ int32 UJobBoard::AddPurchasedVehicle(FName TypeCode, FEntityInstanceId Home)
 	Vehicle.Cargo = FFuelRolePolicy::CapacityOf(Type);
 	const int32 Id = Vehicle.Id;
 	++FleetRevision;
+	++RevisionCount;   // See Revision: every public mutator.
 
 	// A NEW VEHICLE IS A CHANGE A REFUSED JOB CAN ANSWER DIFFERENTLY - see the header. Re-opened, not bid
 	// here: the next Step bids it, in its one sequence (the bus's FleetChanged wakes that pass).
@@ -409,6 +410,7 @@ bool UJobBoard::RemoveVehicle(int32 VehicleId)
 		VehicleId, *Vehicles[Index].TypeCode.ToString(), Vehicles[Index].Home.Index);
 	Vehicles.RemoveAt(Index);
 	++FleetRevision;
+	++RevisionCount;   // See Revision: every public mutator.
 	return true;
 }
 
