@@ -691,6 +691,8 @@ namespace
 		USimClock* Clock = nullptr;
 		UFlightBoard* Board = nullptr;
 		UJobBoard* Jobs = nullptr;
+		/** The airline the flight flies for, scoring TurnaroundEnded as the runtime wires it (whole-stack review M4). */
+		UAirlineRoster* Airlines = nullptr;
 		FOpsEventBus Bus;
 		TArray<FTurnaroundEndedEvent> Ended;
 		UFlight* Flight = nullptr;
@@ -710,6 +712,8 @@ namespace
 			Board->Allocator = NewObject<UStandAllocator>(GetTransientPackage());
 			Jobs = NewObject<UJobBoard>(GetTransientPackage());
 			Jobs->Bus = &Bus;
+			Airlines = NewObject<UAirlineRoster>(GetTransientPackage());
+			Airlines->Ensure(TEXT("FallbackTestAirline"));
 			URoadNetwork* Net = Field.Net;
 			UGroundTraffic* Model = Traffic;
 			Board->Dispatcher = [Model, Net](const FVector2D& Near, const FAirframe& Frame)
@@ -727,6 +731,8 @@ namespace
 				Board->OnAgentPhase(*Traffic, *Field.Net, *Clock, E.AgentId, E.From, E.To);
 			});
 			Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Reaction, TEXT("test"), [this](const FTurnaroundEndedEvent& E) { Ended.Add(E); });
+			Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Reaction, TEXT("Airlines"),
+				[this](const FTurnaroundEndedEvent& E) { Airlines->OnTurnaroundEnded(E, Board); });
 			Bus.EndWiring();
 			Traffic->OnAgentPhaseChanged.AddLambda([this](int32 Id, EAgentPhase From, EAgentPhase To)
 			{
@@ -736,6 +742,7 @@ namespace
 			Flight = NewObject<UFlight>(GetTransientPackage());
 			Flight->Airframe = Airframe;
 			Flight->ApproachFocus = Field.Threshold;
+			Flight->AirlineId = TEXT("FallbackTestAirline");
 			Board->AddOffer(*Clock, Flight);
 		}
 
@@ -861,6 +868,7 @@ bool FDepartFromFallbackTest::RunTest(const FString&)
 	if (!TestTrue(TEXT("the flight lands"), Rig.Land())) { return false; }
 	if (!TestTrue(TEXT("and parks on the fallback junction"), Rig.ParkOnFallback())) { return false; }
 	const int32 Before = Rig.Seen.Num();
+	const double Satisfaction = Rig.Airlines->Find(TEXT("FallbackTestAirline"))->Satisfaction;
 	const FRoadAgent* Parked = Rig.Aircraft();
 	const FDeparturePlan Plan = DeparturePlanner::PlanAny(*Rig.Field.Net, Parked->GoalNode, *Parked->AsAircraft(), Parked->Class,
 		&Rig.Traffic->GetOccupancy());
@@ -876,6 +884,21 @@ bool FDepartFromFallbackTest::RunTest(const FString&)
 		*FString::JoinBy(After, TEXT(", "), [](EFlightPhase P) { return UEnum::GetValueAsString(P); })));
 	TestFalse(TEXT("departing from the junction never reads TaxiIn"), After.Contains(EFlightPhase::TaxiIn));
 	TestEqual(TEXT("and it goes"), Rig.Flight->Phase, EFlightPhase::Departing);
+
+	// NEVER TURNED AROUND, SO NEVER FUELLED (whole-stack review M4, ruling 2026-09-30): it leaves Unfuelled, owed what
+	// its flight was offered at (UJobBoard::DefaultLitres here - the board has no LitresOwedFor wired), and its airline
+	// scores the shortfall - once, as a real turnaround's would be.
+	const double Owed = UJobBoard::DefaultLitres(Rig.Flight->Airframe);
+	if (!TestTrue(TEXT("the flight was owed fuel - or this measures nothing"), Owed > 0.0)) { return false; }
+	if (TestEqual(TEXT("one TurnaroundEnded for the departure"), Rig.Ended.Num(), 1))
+	{
+		TestEqual(TEXT("Unfuelled"), Rig.Ended[0].Outcome, EFuelOutcome::Unfuelled);
+		TestEqual(TEXT("nothing delivered"), Rig.Ended[0].Delivered, 0.0);
+		TestEqual(TEXT("owed what the flight was owed"), Rig.Ended[0].Wanted, Owed, 1e-6);
+		TestEqual(TEXT("for this aircraft"), Rig.Ended[0].AircraftAgentId, Rig.Agent);
+	}
+	TestEqual(TEXT("and its airline minds: the whole shortfall penalty"),
+		Rig.Airlines->Find(TEXT("FallbackTestAirline"))->Satisfaction, Satisfaction - Rig.Airlines->Tuning.ShortfallPenalty, 1e-9);
 	return true;
 }
 

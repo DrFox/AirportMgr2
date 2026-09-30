@@ -545,6 +545,15 @@ private:
 	 */
 	void DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
+	/**
+	 * A turnaround's end, announced - THE ONE PUBLISHER of FTurnaroundEndedEvent (and poster of the part-fuelled fee).
+	 * Two callers, one per way an aircraft can leave: DropAircraft for one that had a turnaround, and OnAgentPhase for
+	 * one that departed WITHOUT ever being turned around (whole-stack review M4) - which can never both be true of one
+	 * departure, since OnAgentPhase takes the second branch only when TurnaroundFor finds nothing.
+	 * ENFORCED BY: AirportOps.Model.Bus.DepartFromFallbackReadsTaxiOut ("one TurnaroundEnded"), AirportOps.Fuel.ManualDepartEndsTurnaroundOnce
+	 */
+	void EndTurnaround(int32 AircraftId, FEntityInstanceId Stand, double Delivered, double Wanted, const USimClock& Clock);
+
 	/** A trip's pumping is over: quantities move, the job is Done or re-opened with its remainder. */
 	void FinishServe(FServiceVehicle& Vehicle, const USimClock& Clock);
 

@@ -878,6 +878,24 @@ EFuelOutcome UJobBoard::FuelOutcomeOf(double Delivered, double Wanted)
 	return Delivered <= 0.0 ? EFuelOutcome::Unfuelled : EFuelOutcome::PartFuelled;
 }
 
+void UJobBoard::EndTurnaround(int32 AircraftId, FEntityInstanceId Stand, double Delivered, double Wanted, const USimClock& Clock)
+{
+	const EFuelOutcome Outcome = FuelOutcomeOf(Delivered, Wanted);
+	// PART-FUELLED PAYS FOR WHAT IT GOT (review, 2026-09-28), HERE AT THE ONE SITE: a job that became
+	// impossible after a trip, or one the player cut short with Depart, leaves with what it got and pays
+	// for it. Never twice: FinishServe pays only a job it calls Done, which FuelOutcomeOf calls Fuelled.
+	// What the shortfall costs the airline is the roster's to score, not the fee's.
+	// ENFORCED BY: AirportOps.Fuel.PartFuelledPaysForWhatItGot, AirportOps.Fuel.ManualDepartEndsTurnaroundOnce
+	if (Outcome == EFuelOutcome::PartFuelled)
+	{
+		PostServiceFee(Clock.Now(), Delivered);
+	}
+	if (Bus != nullptr)
+	{
+		Bus->Publish(FTurnaroundEndedEvent{ AircraftId, Stand, Outcome, Delivered, Wanted });
+	}
+}
+
 void UJobBoard::DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
 {
 	const FTurnaround* Turnaround = TurnaroundFor(AircraftId);
@@ -895,20 +913,7 @@ void UJobBoard::DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& T
 		const FServiceJob* Fuel = JobForAircraft(AircraftId, EServiceRole::Fuel);
 		const double Delivered = Fuel != nullptr ? Fuel->QuantityDelivered : 0.0;
 		const double Wanted = Fuel != nullptr ? Fuel->QuantityDelivered + Fuel->QuantityOwed : 0.0;
-		const EFuelOutcome Outcome = FuelOutcomeOf(Delivered, Wanted);
-		// PART-FUELLED PAYS FOR WHAT IT GOT (review, 2026-09-28), HERE AT THE ONE SITE: a job that became
-		// impossible after a trip, or one the player cut short with Depart, leaves with what it got and pays
-		// for it. Never twice: FinishServe pays only a job it calls Done, which FuelOutcomeOf calls Fuelled.
-		// What the shortfall costs the airline is the roster's to score, not the fee's.
-		// ENFORCED BY: AirportOps.Fuel.PartFuelledPaysForWhatItGot, AirportOps.Fuel.ManualDepartEndsTurnaroundOnce
-		if (Outcome == EFuelOutcome::PartFuelled)
-		{
-			PostServiceFee(Clock.Now(), Delivered);
-		}
-		if (Bus != nullptr)
-		{
-			Bus->Publish(FTurnaroundEndedEvent{ AircraftId, StandId, Outcome, Delivered, Wanted });
-		}
+		EndTurnaround(AircraftId, StandId, Delivered, Wanted, Clock);
 	}
 	Turnarounds.RemoveAll([AircraftId](const FTurnaround& Each) { return Each.AircraftId == AircraftId; });
 
@@ -960,6 +965,29 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 		const bool bDeparted = To == EAgentPhase::Manoeuvring || To == EAgentPhase::Reversing
 			|| To == EAgentPhase::Taxiing || To == EAgentPhase::Departing;
 		DropAircraft(AgentId, bDeparted, Traffic, Network, Clock);
+		return;
+	}
+
+	// A DEPARTURE THAT WAS NEVER TURNED AROUND (whole-stack review M4, ruling 2026-09-30): an aircraft parked on the
+	// fallback junction - no stand, so no turnaround and no fuel job - that the inspector's Depart sends off. It
+	// leaves Unfuelled, owed what its flight was offered at: LitresOwedFor, the same source a turnaround's fuel job
+	// takes its load from (OnAgentPhase's Parked branch below), so the two cannot be owed different amounts. ARMED FOR
+	// A RUNWAY, not merely moving: a Parked -> Taxiing that is the re-offer taking it to a stand (FallbackParkStaysTaxiIn)
+	// is not a departure, and its turnaround at the stand will end it properly. The Parked event is heard a step
+	// late, so the agent is asked as it is now - which is where a departure is still taxiing out, armed.
+	// ENFORCED BY: AirportOps.Model.Bus.DepartFromFallbackReadsTaxiOut, AirportOps.Model.Bus.FallbackParkStaysTaxiIn
+	if (From == EAgentPhase::Parked && (To == EAgentPhase::Manoeuvring || To == EAgentPhase::Reversing
+		|| To == EAgentPhase::Taxiing || To == EAgentPhase::Departing))
+	{
+		const FRoadAgent* Leaving = Traffic.FindAgent(AgentId);
+		const FAirframe* Airframe = Leaving != nullptr ? Leaving->AsAircraft() : nullptr;
+		if (Airframe != nullptr && Leaving->bDepartureArmed)
+		{
+			const double Wanted = FMath::Max(LitresOwedFor ? LitresOwedFor(AgentId, *Airframe) : DefaultLitres(*Airframe), 0.0);
+			UE_LOG(LogAirportOps, Log, TEXT("Fuel: aircraft %d departed without a turnaround - unfuelled, %.0f L owed"),
+				AgentId, Wanted);
+			EndTurnaround(AgentId, FEntityInstanceId(), 0.0, Wanted, Clock);
+		}
 		return;
 	}
 
