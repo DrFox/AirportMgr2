@@ -337,9 +337,11 @@ void URoadBuildEdMode::Enter()
 			 "buttons do the same job."),
 		*Banner);
 
-	// Roads first, because it is the one that needs no setup - an empty level can be drawn
-	// on immediately, where a stand wants somewhere to stand.
-	GetInteractiveToolsContext()->StartTool(MakeToolName(0));
+	// THE MODE OPENS ON SELECT (FBuildSession::SelectToolIndex), the session's default tool and the one a play session opens on too.
+	// This comment read "Roads first, because it needs no setup" above a StartTool(MakeToolName(0)) - and index 0 has been Select
+	// since the entity inspector (spec 2026-09-07 section 2) made it the default state, so the comment described a mode the code
+	// did not open. The behaviour is kept; whether the editor SHOULD open on Roads is the owner's call.
+	GetInteractiveToolsContext()->StartTool(MakeToolName(FBuildSession::SelectToolIndex));
 
 	// KEY 7 (land an aircraft) HAS NO EDITOR EQUIVALENT, ON PURPOSE - and this was a TODO naming #33 (closed 2026-09-05: it shared ONE
 	// tool table and left this out of scope, so nothing was ever left to do under that number) until #448. Landing goes through the flight board

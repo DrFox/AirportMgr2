@@ -12,6 +12,10 @@
 #include "Model/FlightBoard.h"
 #include "Model/Flight.h"
 #include "Model/Airport.h"
+#include "Model/DeparturePlanner.h"
+#include "Model/InspectFacts.h"
+#include "Model/RoadGuideline.h"
+#include "Model/RunwayFacts.h"
 #include "Entities/EntityDefinition.h"
 #include "AlertsPanelWidget.h"
 #include "BuildActions.h"
@@ -699,6 +703,142 @@ bool FOneResolverForTheOpsRuntimeTest::RunTest(const FString& Parameters)
 	OpsRuntimeResolver::SetOverrideForTest(TestWorld.World, nullptr);
 	TestNull(TEXT("clearing the override gives the world its own answer back"), OpsRuntimeResolver::Resolve(TestWorld.World));
 	TestNull(TEXT("a null world resolves none"), OpsRuntimeResolver::Resolve(nullptr));
+	return true;
+}
+
+/**
+ * #448 (PR review): THE MOVED SELECTION VERBS ACT ON THEIR OWNERS THROUGH THE CONTEXT. Depart, the runway flip, the runway mode and the
+ * unstick gate left the controller for BuildActions.cpp, where each reads Ctx.Selection and acts on Ctx.Target / Ctx.Runtime; the
+ * controller's own tests of them went with the forwarders, and nothing else ran them through a row. Each is driven here by TryRun against
+ * a selection set the way a click sets it, and the EFFECT is read off the owner - the actor's runway facts, the agent's phase - not off a
+ * log line. Two worlds: a runway field for the runway verbs, and a parked aircraft for depart and unstick.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSelectionVerbsActOnTheirOwnersTest, "AirportMgr.Actions.SelectionVerbsActOnTheirOwners",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSelectionVerbsActOnTheirOwnersTest::RunTest(const FString& Parameters)
+{
+	const FBuildAction* Flip = FindAction(FName(TEXT("selection.runway_in_use")));
+	const FBuildAction* Mode = FindAction(FName(TEXT("selection.runway_use")));
+	const FBuildAction* Unstick = FindAction(FName(TEXT("selection.unstick")));
+	const FBuildAction* Depart = FindAction(FName(TEXT("selection.depart")));
+	if (!TestTrue(TEXT("setup: the four rows are registered"), Flip != nullptr && Mode != nullptr && Unstick != nullptr && Depart != nullptr)) { return false; }
+
+	// --- THE RUNWAY VERBS, on a field with one runway ---
+	{
+		FAirsideTestWorld TestWorld;
+		ARoadNetworkActor* Actor = TestWorld.Actor;
+		if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+		Actor->PlaceNode(FVector2D(-300000.0, -300000.0));
+		FTestAirport::Build(UAirsideSettings::ResolveDefaultAirframe(), FTestAirportOptions(), Actor->Network);
+		URoadNetwork& Net = *Actor->Network;
+		int32 Segment = INDEX_NONE;
+		for (int32 Index = 0; Index < Net.GetSegments().Num() && Segment == INDEX_NONE; ++Index)
+		{
+			const FRoadSegmentId Id = Net.SegmentIdAt(Index);
+			Segment = Id.IsSet() && Net.IsRunwaySegment(Id) ? Index : INDEX_NONE;
+		}
+		if (!TestTrue(TEXT("setup: a runway segment"), Segment != INDEX_NONE)) { return false; }
+		ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+		if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+		C->SetTargetForTest(Actor);
+		FSelection Selected;
+		Selected.Kind = ESelectionKind::Runway;
+		Selected.Id = Segment;
+		C->SelectForTest(Selected);
+		const FBuildActionContext Ctx(*C);
+
+		FRunwayCardFacts Before;
+		if (!TestTrue(TEXT("setup: the runway describes"), InspectFacts::DescribeRunway(Net, Segment, Before))) { return false; }
+		TestTrue(TEXT("the flip and the mode are enabled with a runway selected"), Flip->IsEnabled(Ctx) && Mode->IsEnabled(Ctx));
+		TestEqual(TEXT("the flip is captioned with the end it would change TO"), Flip->DynamicLabel(Ctx).ToString(), FString::Printf(TEXT("Use %02d"), Before.Other));
+		TestEqual(TEXT("the mode is captioned with the current one"), Mode->DynamicLabel(Ctx).ToString(), FString(TEXT("Mixed ops")));
+
+		// THE FLIP: the runway in use becomes the end it was not.
+		TestTrue(TEXT("the flip runs"), Flip->TryRun(*C, TEXT("Test")));
+		FRunwayCardFacts AfterFlip;
+		if (!TestTrue(TEXT("the runway still describes"), InspectFacts::DescribeRunway(Net, Segment, AfterFlip))) { return false; }
+		TestEqual(TEXT("the flip put the OTHER end in use"), AfterFlip.InUse, Before.Other);
+		TestEqual(TEXT("and the old end is now the other"), AfterFlip.Other, Before.InUse);
+		TestEqual(TEXT("the flip left the mode alone"), AfterFlip.Use, Before.Use);
+		TestEqual(TEXT("the caption follows to the end it would now change to"), Flip->DynamicLabel(Ctx).ToString(), FString::Printf(TEXT("Use %02d"), AfterFlip.Other));
+
+		// THE MODE: mixed -> arrivals only (RunwayUse::Next), and the flip untouched by it.
+		TestTrue(TEXT("the mode runs"), Mode->TryRun(*C, TEXT("Test")));
+		FRunwayCardFacts AfterMode;
+		if (!TestTrue(TEXT("the runway still describes, again"), InspectFacts::DescribeRunway(Net, Segment, AfterMode))) { return false; }
+		TestTrue(TEXT("the mode stepped to RunwayUse::Next"), AfterMode.Use == RunwayUse::Next(AfterFlip.Use));
+		TestEqual(TEXT("the mode left the end in use alone"), AfterMode.InUse, AfterFlip.InUse);
+		TestEqual(TEXT("and its caption is the new mode"), Mode->DynamicLabel(Ctx).ToString(), FString(TEXT("Arrivals only")));
+
+		// A SELECTION THAT IS NO RUNWAY: both refused, nothing changed.
+		Selected.Kind = ESelectionKind::Stand;
+		C->SelectForTest(Selected);
+		TestFalse(TEXT("a stand is selected: the flip is refused"), Flip->TryRun(*C, TEXT("Test")));
+		TestFalse(TEXT("and the mode"), Mode->TryRun(*C, TEXT("Test")));
+	}
+
+	// --- DEPART AND UNSTICK, on a parked aircraft ---
+	{
+		FAirsideTestWorld TestWorld;
+		ARoadNetworkActor* Actor = TestWorld.Actor;
+		if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+		Actor->PlaceNode(FVector2D(-400000.0, -400000.0));
+		// DepartAgentTest's graph, its runway lengthened for the content airframe: a runway split at (0,0), a stand A, a junction J where the
+		// lead-in meets a taxiway, and the far arm E the pushback needs.
+		URoadNetwork& Net = *Actor->Network;
+		URoadProfile* Runway = TestProfiles::Runway();
+		const FRoadNodeId RA = Net.AddNode(FVector2D(-300000.0, 0.0));
+		const FRoadNodeId RM = Net.AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId RB = Net.AddNode(FVector2D(300000.0, 0.0));
+		Net.AddStraightSegment(RA, RM, Runway);
+		Net.AddStraightSegment(RM, RB, Runway);
+		const FGuidelineNodeId Stand = TestGraph::Node(Net, 0.0, -20000.0);
+		const FGuidelineNodeId Junction = TestGraph::Node(Net, 0.0, -10000.0);
+		const FGuidelineNodeId OnStrip = TestGraph::Node(Net, 0.0, 0.0);
+		const FGuidelineNodeId FarArm = TestGraph::Node(Net, 20000.0, -10000.0);
+		TestGraph::FJoinOptions Authored;
+		Authored.bDerived = false;
+		TestGraph::Join(Net, Stand, Junction, Authored);
+		TestGraph::Join(Net, Junction, OnStrip, Authored);
+		TestGraph::Join(Net, Junction, FarArm, Authored);
+		// The hand-authored graph is this fixture's graph (DepartAgentForwardersTest's reason): stamped current, or the planners wait for a release that never comes.
+		Net.MarkGuidelinesDerived();
+		if (!TestTrue(TEXT("setup: an aircraft dispatched to the stand"),
+			Actor->DispatchAgent(TestGraph::Probe(Net, OnStrip, Stand, ETraversalClass::Aircraft), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+		const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
+		for (int32 I = 0; I < 20000 && Actor->GetTraffic()->LastAgentPhaseForTest() != EAgentPhase::Parked; ++I) { Actor->Tick(1.0f / 30.0f); }
+		if (!TestEqual(TEXT("setup: it parks"), Actor->GetTraffic()->LastAgentPhaseForTest(), EAgentPhase::Parked)) { return false; }
+
+		// THE RUNTIME, stood in for this world: the unstick gate asks it.
+		UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+		Runtime->Attach(Actor);
+		OpsRuntimeResolver::SetOverrideForTest(TestWorld.World, Runtime);
+
+		ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+		ARoadBuildController* Other = TestWorld.World->SpawnActor<ARoadBuildController>();
+		if (!TestTrue(TEXT("controllers spawned"), C != nullptr && Other != nullptr)) { return false; }
+		C->SetTargetForTest(Actor);
+		Other->SetTargetForTest(Actor);
+		FSelection Aircraft;
+		Aircraft.Kind = ESelectionKind::Aircraft;
+		Aircraft.Id = Id;
+		FSelection AStand = Aircraft;
+		AStand.Kind = ESelectionKind::Stand;   // the SAME id, read as a stand's entity index: the kind decides, not the number
+		C->SelectForTest(Aircraft);
+		Other->SelectForTest(AStand);
+
+		// UNSTICK'S GATE: an agent is selected and the runtime allows despawn.
+		TestTrue(TEXT("unstick is enabled with an aircraft selected"), Unstick->IsEnabled(FBuildActionContext(*C)));
+		TestFalse(TEXT("and not with a stand selected, whatever its index"), Unstick->IsEnabled(FBuildActionContext(*Other)));
+		TestFalse(TEXT("depart is not enabled with a stand selected"), Depart->IsEnabled(FBuildActionContext(*Other)));
+
+		// DEPART: the actor's own DepartAgent runs with the selected id. (The facts cache is per controller per frame, and C is asked first here.)
+		TestTrue(TEXT("depart runs with a parked aircraft selected"), Depart->TryRun(*C, TEXT("Test")));
+		const FRoadAgent* Agent = Actor->GetTraffic()->GetModel()->FindAgent(Id);
+		if (!TestNotNull(TEXT("the aircraft is still there"), Agent)) { return false; }
+		TestTrue(TEXT("and it left its stand"), Agent->Phase != EAgentPhase::Parked);
+	}
 	return true;
 }
 

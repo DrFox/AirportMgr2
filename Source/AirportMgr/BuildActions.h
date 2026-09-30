@@ -62,7 +62,7 @@ struct FBuildActionArg
 struct FBuildActionContext
 {
 	ARoadBuildController& Controller;
-	/** The world's ops runtime (OpsRuntimeResolver::Resolve - the ONE door to it; ENFORCED BY: Check-Architecture rule 52), or null in a world with none (a headless test). */
+	/** The world's ops runtime (OpsRuntimeResolver::Resolve - the ONE door to it; ENFORCED BY: Check-Architecture rule 55), or null in a world with none (a headless test). */
 	UOpsRuntime* Runtime = nullptr;
 	/** The road actor being built into, or null when the level has none. */
 	ARoadNetworkActor* Target = nullptr;

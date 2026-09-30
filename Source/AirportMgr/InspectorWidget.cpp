@@ -485,8 +485,14 @@ void UInspectorWidget::RunActionWith(int32 ActionIndex, const FBuildActionArg& A
 		UE_LOG(LogInspector, Warning, TEXT("Inspector click %d ignored: no such action"), ActionIndex);
 		return;
 	}
-	// TryRunWith for every run, an empty Arg included: a plain click is a run with no argument.
-	Actions[ActionIndex].TryRunWith(*C, Arg, TEXT("Inspector"));
+	// TryRunWith for every run, an empty Arg included: a plain click is a run with no argument. A REFUSED RUN IS SAID: TryRun logs only
+	// the runs that go ahead, so a click the gate turned away - a sale of a vehicle that just went busy, a buy the purse cannot cover -
+	// would leave nothing in the log to grep, and "the button did nothing" is the report this project diagnoses from a log.
+	if (!Actions[ActionIndex].TryRunWith(*C, Arg, TEXT("Inspector")))
+	{
+		UE_LOG(LogInspector, Log, TEXT("Inspector: %s refused%s"), *Actions[ActionIndex].Id.ToString(),
+			Arg.IsSet() ? *(TEXT(" ") + Arg.Describe()) : TEXT(""));
+	}
 }
 
 TArray<FUiMenuItem> UInspectorWidget::UnstickItems() const

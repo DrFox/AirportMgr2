@@ -1072,6 +1072,18 @@ bool FInspectorSellTakesTwoClicksTest::RunTest(const FString& Parameters)
 	Rig.Refresh();
 	TestTrue(TEXT("the caption asks again"), Rig.Panel->FacilityRows->SellCaptionForTest(0).Contains(TEXT("click again")));
 
+	// A DIFFERENT CARD disarms too, not only a cleared selection: the armed row belonged to THIS depot's card, and a sale surviving a
+	// jump to another selection would be a one-click sale the next time the depot is picked. Refreshed straight onto the other selection,
+	// BEFORE the depot is reselected - a card with no purchase rows never reaches the rows' own rebuild, so only OnNewCard's disarm can
+	// clear it (#448 review: nothing pinned it once the controller stopped holding the id).
+	FSelection Other = Rig.DepotSelection;
+	Other.Id += 1;
+	Rig.Panel->Refresh(Rig.World.Actor, Other);
+	TestFalse(TEXT("a different selection disarms the sale"), Rig.Panel->FacilityRows->IsArmedForTest(0));
+	Rig.Refresh();
+	Rig.Panel->FacilityRows->ClickSellForTest(0);
+	if (!TestTrue(TEXT("setup: back on the depot and armed again"), Rig.Panel->FacilityRows->IsArmedForTest(0))) { return false; }
+
 	// CLICK AWAY AND BACK: disarmed.
 	Rig.Controller->SelectForTest(FSelection());
 	Rig.Refresh();

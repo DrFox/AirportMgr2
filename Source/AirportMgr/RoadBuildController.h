@@ -48,7 +48,7 @@ class URoadEditFacade;
  * was forced back through a forwarder here. The context carries both now (Selection, Arg), plus the HUD and the runtime, and
  * those verbs bind straight to what they act on (BuildActions.cpp). What stays here is what needs the DRIVER: the session, the
  * target, the gesture, the camera's preference, the per-frame caches. THE PUBLIC SURFACE IS A CLOSED LIST: Check-Architecture
- * rule 51 names every public method this header may declare and fails a new one, and fails an AirportOps Model/ include - the
+ * rule 54 names every public method this header may declare and fails a new one, and fails an AirportOps Model/ include - the
  * controller is game-framework glue over Airside's model, not over the ops layer, whose runtime it reaches through
  * OpsRuntimeResolver.
  *
@@ -673,7 +673,7 @@ private:
 
 	/**
 	 * Every held key and the cursor's pick, read ONCE into the session's FBuildInputState (#448) - the one place this driver reads them,
-	 * for MakeToolContext and PlayerTick's frame context both. A pin: Check-Architecture rule 53 counts IsInputKeyDown(EKeys::LeftShift).
+	 * for MakeToolContext and PlayerTick's frame context both. A pin: Check-Architecture rule 56 counts IsInputKeyDown(EKeys::LeftShift).
 	 */
 	FBuildInputState ReadInputState() const;
 
@@ -944,6 +944,6 @@ private:
 
 	// ChosenVehicleType, ArmedSellVehicle and OpsRuntimeOverride WERE HERE until #448. The first two were the inspector's card state
 	// parked on the PlayerController because a BuildActions row could not carry an argument (FBuildAction::TryRunWith carries it
-	// now, so the row holds what is armed and nothing else does); the third was one of five ways to reach the runway
+	// now, so the row holds what is armed and nothing else does); the third was one of five ways to reach the runtime
 	// (OpsRuntimeResolver is the one).
 };

@@ -31,7 +31,7 @@ FString FBuildActionArg::Describe() const
 
 FBuildActionContext::FBuildActionContext(ARoadBuildController& InController)
 	: Controller(InController)
-	// THE RESOLVER'S ANSWER (#448), the one door to the runtime (ENFORCED BY: Check-Architecture rule 52) - what TryRun always looked up inline, moved here so every
+	// THE RESOLVER'S ANSWER (#448), the one door to the runtime (ENFORCED BY: Check-Architecture rule 55) - what TryRun always looked up inline, moved here so every
 	// verb reads it from the context rather than repeating the call, the way HasRuntime and (before issue #191)
 	// StepLandingFee/LandAircraftNearViewFocus each did. It honours a test's stand-in, so the depot verbs, the bar and the
 	// inspector all see the one runtime a headless test handed the world.

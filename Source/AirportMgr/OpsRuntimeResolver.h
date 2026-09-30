@@ -6,7 +6,7 @@ class UOpsRuntime;
 class UWorld;
 
 /**
- * THE ONE DOOR TO THE OPS RUNTIME for the game module (#448): "which runtime does this world play?" is answered here. ENFORCED BY: Check-Architecture rule 52.
+ * THE ONE DOOR TO THE OPS RUNTIME for the game module (#448): "which runtime does this world play?" is answered here. ENFORCED BY: Check-Architecture rule 55.
  *
  * It was answered in five places that did not see each other - the controller's GetOpsRuntime (with its own test override), a
  * handful of controller bypasses that skipped that override, FBuildActionContext's constructor, the bar's UseForTest runtime,
@@ -17,7 +17,7 @@ class UWorld;
  * or a controller or a verb all know their world. A test world has no game instance, so SetOverrideForTest stands a runtime in
  * for it - for that one world, for every reader at once.
  *
- * ENFORCED BY: Check-Architecture rule 52 (UOpsRuntimeSubsystem::Get is called in OpsRuntimeResolver.cpp alone);
+ * ENFORCED BY: Check-Architecture rule 55 (UOpsRuntimeSubsystem::Get is called in OpsRuntimeResolver.cpp alone);
  * AirportMgr.Actions.OneResolverForTheOpsRuntime (an override reaches the context and the bar), AirportMgr.Inspector.DepotCardBuysThroughTheController
  * (and the inspector, whose panel finds the depot's runtime there and nowhere else)
  */
