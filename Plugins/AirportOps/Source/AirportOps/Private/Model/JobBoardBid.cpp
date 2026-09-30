@@ -86,6 +86,15 @@ TArray<UJobBoard::FCandidate> UJobBoard::Judge(const URoadNetwork& Network, ESer
 		Out.DepotsOnRoad += Network.IsDepotJoined(Instance) ? 1 : 0;
 	}
 
+	// THE FLEET COUNTS TOO, off the board's own vehicles and not the candidates: a stranded vehicle is
+	// left out of the bidding (AssignOpenJobs) but is still a vehicle, and its job must keep saying what
+	// it said before - only a depot with NOTHING in it is NoVehicles.
+	for (const FServiceVehicle& Vehicle : Vehicles)
+	{
+		const FEntityInstance* Home = Network.GetEntity(Vehicle.Home);
+		Out.FleetOnRoad += (Vehicle.Role == Role && Home != nullptr && Home->bAlive && Network.IsDepotJoined(*Home)) ? 1 : 0;
+	}
+
 	// JOINED, NOT MERELY RESOLVED - and since the service loop, not merely INCIDENT either.
 	//
 	// This tested the anchor's IsSet() alone, which is a fact about PLACEMENT and not about the
@@ -174,6 +183,12 @@ EServiceRefusal UJobBoard::RefusalOf(const FJudgement& Out)
 	if (Out.DepotsOnRoad == 0)
 	{
 		return EServiceRefusal::NoRoad;
+	}
+	if (Out.FleetOnRoad == 0)
+	{
+		// A DEPOT ON A ROAD WITH NOTHING IN IT: the next thing in the player's hand is the buy button on
+		// its card, before anything about the stand or the graph.
+		return EServiceRefusal::NoVehicles;
 	}
 	if (!Out.bStandJoined)
 	{
@@ -570,7 +585,9 @@ void UJobBoard::RebidQueued(UGroundTraffic& Traffic, const URoadNetwork& Network
 bool UJobBoard::CouldServe(const URoadNetwork& Network, const FAirframe& Airframe) const
 {
 	// THE CANDIDATES A DEPOT HAS OR WILL HAVE: its vehicles once SyncFleet has seeded it, else the
-	// placeholder fleet its Trucks would give it - an offer can be asked before the first tick.
+	// STARTER fleet its Trucks would give it - an offer can be asked before the first tick. A depot the
+	// player drew has Trucks 0 and, until a vehicle is bought, no candidate: its offers say "no fuel";
+	// so has a seeded depot whose fleet was sold.
 	TArray<FCandidate> Candidates;
 	const TArray<FEntityInstance>& Entities = Network.GetEntities();
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)
@@ -590,7 +607,11 @@ bool UJobBoard::CouldServe(const URoadNetwork& Network, const FAirframe& Airfram
 				Candidates.Add({ DepotId, Vehicle.TypeCode, Vehicle.Id });
 			}
 		}
-		if (!bHasVehicles && Depot.Trucks > 0)
+		// SEEDED IS NOT "NOT YET SEEDED": a starter depot whose fleet the player sold has Trucks > 0 and
+		// no vehicles, and inventing its starter fleet here said "fuel OK" on the offer while the board
+		// refused the aircraft NoVehicles (final review 2026-09-30).
+		// ENFORCED BY: AirportOps.Fuel.CouldServe.SoldOutStarterDepotCannot
+		if (!bHasVehicles && Depot.Trucks > 0 && !SeededDepots.Contains(DepotId))
 		{
 			for (const FName TypeCode : FleetTypes())
 			{

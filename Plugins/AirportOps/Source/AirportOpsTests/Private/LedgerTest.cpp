@@ -143,4 +143,27 @@ bool FLedgerPostDailyUpkeepTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLedgerUpkeepLinesTest,
+	"AirportOps.Model.LedgerUpkeepLines",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLedgerUpkeepLinesTest::RunTest(const FString& Parameters)
+{
+	// ONE ENTRY PER DESCRIBED LINE (facility-upgrades spec §3): the finance screen shows where the money
+	// went, so "Fleet upkeep" is its own row, not folded into "Upkeep". A zero line writes nothing.
+	ULedger* Ledger = NewObject<ULedger>();
+	Ledger->Open(10000.0);
+	const FUpkeepLine Lines[] = {
+		{ 50.0, FText::FromString(TEXT("Upkeep")) },
+		{ 0.0, FText::FromString(TEXT("Facility upkeep")) },
+		{ 650.0, FText::FromString(TEXT("Fleet upkeep")) } };
+	Ledger->PostDailyUpkeep(Lines, 86400.0);
+	TestEqual(TEXT("two entries - the zero line wrote nothing"), Ledger->Entries().Num(), 2);
+	TestEqual(TEXT("both are Upkeep"), static_cast<int32>(Ledger->Entries().Last().Category), static_cast<int32>(ELedgerCategory::Upkeep));
+	TestEqual(TEXT("each described"), Ledger->Entries().Last().What.ToString(), FString(TEXT("Fleet upkeep")));
+	TestEqual(TEXT("and charged"), Ledger->Balance(), 10000.0 - 700.0, 1e-6);
+	return true;
+}
+
 #endif

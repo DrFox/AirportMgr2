@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Misc/Optional.h"
 #include "Model/RoadEntity.h"
 #include "Solve/PlotYard.h"
 
@@ -38,6 +39,7 @@ AIRSIDE_API PlotYard::FFootprint DepotFootprint(EDepotModule Module,
  * to get back. Built by WALKING the enum rather than from a list written here: a list would
  * answer only for the modules somebody remembered to add, which is the failure
  * AircraftLookTest exists for.
+ * ENFORCED BY: Airside.Build.DepotKitSpecsCoverEveryModule (count and per-index footprint)
  */
 AIRSIDE_API TArray<PlotYard::FKitSpec> DepotKitSpecs(const UAirsideContent* Content);
 
@@ -90,4 +92,24 @@ namespace DepotKit
 	 * which calls it after every rebuild, for where "again" means.
 	 */
 	AIRSIDE_API void ReportIncomplete(const URoadNetwork& Network);
+
+	/**
+	 * Which edge of a placed plot is its frontage, recovered from the entity alone. MOVED FROM
+	 * PlotPresenter.cpp's anonymous namespace (facility-upgrades spec) with its WHY comment in the .cpp:
+	 * the purchase rules need the same answer the presenter draws with.
+	 */
+	AIRSIDE_API bool RecoverFrontage(const FEntityInstance& Entity, FVector2D& OutA, FVector2D& OutB);
+
+	/**
+	 * Everything a PLACED plotted depot's plot has room for - the SAME solve UPlotPresenter::RebuildFrom
+	 * draws from (its definition's layout, the recovered frontage, the pose as gate and seed). Unset for
+	 * anything that is not a live plotted depot, or whose frontage cannot be recovered.
+	 *
+	 * ONE SOLVE, TWO READERS: the presenter's lit/ghosted bays and UFacilityPurchases' "free reserved
+	 * slot" (R9) are one fact, so a Buy shed that lights nothing cannot happen. Modules play no part -
+	 * what a plot HOLDS does not depend on what was bought.
+	 * ENFORCED BY: Check-Architecture rule 4 row 'PlotLayoutFor'; Airside.Build.DepotKit.ReservationOfIsThePresentersSolve
+	 */
+	AIRSIDE_API TOptional<PlotYard::FReservation> ReservationOf(const FEntityInstance& Depot,
+		TArrayView<const PlotYard::FKitSpec> Specs);
 }

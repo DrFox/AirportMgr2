@@ -50,8 +50,7 @@ void UJobBoard::OnBeforeRestore()
 	Jobs.Reset();
 	Turnarounds.Reset();
 	Vehicles.Reset();
-	// RE-SEEDED on the next tick: the depots are restored with the network, and each gets its
-	// placeholder fleet back, Idle at home.
+	// CLEARED, THEN RESTORED FROM THE BLOB (it is saved): a snapshot without it re-seeds each depot once, which is the old behaviour.
 	SeededDepots.Reset();
 	++FleetRevision;
 }
@@ -102,6 +101,8 @@ const TCHAR* UJobBoard::RefusalText(EServiceRefusal Why)
 	// THE VEHICLE, NOT THE ROAD OR THE STAND: the fix is a depot with a smaller vehicle, which is why
 	// this does not share TooNarrow's text.
 	case EServiceRefusal::VehicleTooLarge: return TEXT("the depot's vehicle is too large for this stand");
+	// THE FIX, NAMED: the depot card has the buy button (facility-upgrades spec §4).
+	case EServiceRefusal::NoVehicles:    return TEXT("depot has no vehicles - buy one");
 	default:                             return TEXT("unserviceable");
 	}
 }
@@ -346,6 +347,86 @@ FServiceVehicle& UJobBoard::AddVehicleForTest(FName TypeCode, FEntityInstanceId 
 	return Vehicle;
 }
 
+void UJobBoard::ReopenRefusedJob(FServiceJob& Job)
+{
+	Job.State = EServiceJobState::Open;
+	Job.Why = EServiceRefusal::None;
+}
+
+int32 UJobBoard::AddPurchasedVehicle(FName TypeCode, FEntityInstanceId Home)
+{
+	if (!Home.IsSet() || TypeCode.IsNone())
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Fleet: purchase of '%s' for depot %d refused - no depot or no type"),
+			*TypeCode.ToString(), Home.Index);
+		return 0;
+	}
+	const FServiceVehicleType Type = TypeFor(TypeCode);
+	FServiceVehicle& Vehicle = Vehicles.AddDefaulted_GetRef();
+	Vehicle.Id = NextVehicleId++;
+	Vehicle.TypeCode = TypeCode;
+	Vehicle.Role = Type.Role;
+	Vehicle.Home = Home;
+	Vehicle.State = EServiceVehicleState::Idle;
+	Vehicle.Cargo = FFuelRolePolicy::CapacityOf(Type);
+	const int32 Id = Vehicle.Id;
+	++FleetRevision;
+
+	// A NEW VEHICLE IS A CHANGE A REFUSED JOB CAN ANSWER DIFFERENTLY - see the header. Re-opened, not bid
+	// here: the next Step bids it, in its one sequence (the bus's FleetChanged wakes that pass).
+	// ENFORCED BY: AirportOps.Present.Facility.PurchaseWakesTheBoard
+	int32 Reopened = 0;
+	for (FServiceJob& Job : Jobs)
+	{
+		if (Job.State == EServiceJobState::Unserviceable && Job.Role == Type.Role)
+		{
+			ReopenRefusedJob(Job);
+			++Reopened;
+		}
+	}
+	UE_LOG(LogAirportOps, Log, TEXT("Fleet: depot %d gains bought vehicle %d %s (%.0f L at %.0f L/min); %d refused job(s) ask again"),
+		Home.Index, Id, *TypeCode.ToString(), FFuelRolePolicy::CapacityOf(Type), Type.RatePerMinute, Reopened);
+	return Id;
+}
+
+bool UJobBoard::CanRemoveVehicle(int32 VehicleId) const
+{
+	const FServiceVehicle* Vehicle = FindVehicle(VehicleId);
+	return Vehicle != nullptr && Vehicle->State == EServiceVehicleState::Idle && Vehicle->AgentId == 0
+		&& Vehicle->CurrentJob == 0 && Vehicle->Queue.Num() == 0;
+}
+
+bool UJobBoard::RemoveVehicle(int32 VehicleId)
+{
+	if (!CanRemoveVehicle(VehicleId))
+	{
+		return false;
+	}
+	const int32 Index = Vehicles.IndexOfByPredicate([VehicleId](const FServiceVehicle& V) { return V.Id == VehicleId; });
+	UE_LOG(LogAirportOps, Log, TEXT("Fleet: vehicle %d %s leaves depot %d"),
+		VehicleId, *Vehicles[Index].TypeCode.ToString(), Vehicles[Index].Home.Index);
+	Vehicles.RemoveAt(Index);
+	++FleetRevision;
+	return true;
+}
+
+int32 UJobBoard::VehiclesAt(FEntityInstanceId Depot) const
+{
+	int32 Count = 0;
+	for (const FServiceVehicle& Vehicle : Vehicles)
+	{
+		Count += Vehicle.Home == Depot ? 1 : 0;
+	}
+	return Count;
+}
+
+FString UJobBoard::VehicleLine(const FServiceVehicle& Vehicle) const
+{
+	const FString Dot = TEXT(" · ");
+	return FString::Printf(TEXT("%s #%d"), *Vehicle.TypeCode.ToString(), Vehicle.Id) + Dot + VehicleDoing(Vehicle)
+		+ Dot + FText::AsNumber(FMath::RoundToInt(Vehicle.Cargo)).ToString() + TEXT(" L");
+}
+
 FServiceJob& UJobBoard::AddJobForTest(int32 AircraftId, EServiceJobState State, EServiceRefusal Why, uint32 RefusedAtRevision)
 {
 	FServiceJob& Job = Jobs.AddDefaulted_GetRef();
@@ -440,7 +521,7 @@ bool UJobBoard::RecallVehicleOfAgent(int32 AgentId, bool bRetire, UGroundTraffic
 	return true;
 }
 
-void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network)
+void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
 {
 	// NEW DEPOTS GET THEIR PLACEHOLDER FLEET (spec §3.4): Trucks of every kind in FleetTypes, Idle and
 	// full. Once per depot, so a vehicle that is out never gets a twin at home.
@@ -517,6 +598,21 @@ void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network)
 		}
 		UE_LOG(LogAirportOps, Log, TEXT("Fleet: depot %d removed; vehicle %d %s withdrawn, %d job(s) back to the board"),
 			Vehicle.Home.Index, Vehicle.Id, *Vehicle.TypeCode.ToString(), Reopened);
+		// PAID FOR, AS A SALE WOULD BE (ruled 2026-09-30): the player bought it, and removing its depot
+		// - a bulldoze, an undo of the placement - is not a reason to lose its value. Resale, not the
+		// price: a vehicle that leaves for money leaves at one rate (FFuelVehicleSpec::ResaleValue).
+		// Undo never touches this (R8): a re-placed depot does not buy the vehicle back.
+		// ENFORCED BY: AirportOps.Model.Facility.DepotRemovalCreditsItsVehicles
+		const FFuelVehicleSpec Spec = SpecFor(Vehicle.TypeCode);
+		const double Credit = Spec.ResaleValue();
+		if (Ledger != nullptr && Credit > 0.0)
+		{
+			const FText Name = Spec.DisplayName.IsEmpty() ? FText::FromName(Vehicle.TypeCode) : Spec.DisplayName;
+			Ledger->Post(Clock.Now(), ELedgerCategory::Fleet, Credit,
+				FText::Format(NSLOCTEXT("Ledger", "DepotRemovedVehicle", "{0} #{1} - depot removed"), Name, FText::AsNumber(Vehicle.Id)));
+			UE_LOG(LogAirportOps, Log, TEXT("Purchase: depot %d removed; vehicle %d %s credited %.0f"),
+				Vehicle.Home.Index, Vehicle.Id, *Vehicle.TypeCode.ToString(), Credit);
+		}
 		Vehicles.RemoveAt(Index);
 		++FleetRevision;
 	}
@@ -963,7 +1059,7 @@ double UJobBoard::NextDeadline(double Now) const
 bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
 {
 	++StepCount;
-	SyncFleet(Traffic, Network);
+	SyncFleet(Traffic, Network, Clock);
 
 	// TIMED STEPS THAT ARE DUE: a trip's pumping, a refill. GAME TIME - a pause stops both. The vehicle
 	// is left parked and jobless, and decides where next below, AFTER the bids: a trip's remainder is
@@ -1036,8 +1132,7 @@ bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 	{
 		if (Job.State == EServiceJobState::Unserviceable && Revision != Job.RefusedAtRevision)
 		{
-			Job.State = EServiceJobState::Open;
-			Job.Why = EServiceRefusal::None;
+			ReopenRefusedJob(Job);
 			UE_LOG(LogAirportOps, Log, TEXT("Fuel: the airport changed; aircraft %d asks again"), Job.AircraftId);
 		}
 	}
@@ -1182,8 +1277,7 @@ FDepotBacklog UJobBoard::DescribeDepot(FEntityInstanceId Depot, double Now) cons
 		{
 			continue;
 		}
-		Lines.Add(FString::Printf(TEXT("%s #%d"), *Vehicle.TypeCode.ToString(), Vehicle.Id) + Dot + VehicleDoing(Vehicle)
-			+ Dot + Litres(Vehicle.Cargo));
+		Lines.Add(VehicleLine(Vehicle));
 
 		// ITS JOBS IN THE ORDER IT WILL DO THEM: the one it is on, then its queue.
 		TArray<int32> Order;

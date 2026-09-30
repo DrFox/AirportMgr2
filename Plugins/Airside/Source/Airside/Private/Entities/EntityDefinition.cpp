@@ -830,16 +830,10 @@ void UEntityDefinition::BuildFuelDepot(UEntityDefinition* Definition)
 	// pump. See Solve/PlotFit.h.
 	Definition->FootprintExtent = FVector2D(200.0, 400.0);
 
-	// ONE truck, and this is now the PLOTLESS default rather than the whole story. A depot
-	// DRAWN as a plot takes its count from the sheds the player built in it - see
-	// URoadNetwork::PlaceEntity(const FEntityPlacement&), where a non-empty module list
-	// overrides this outright. A depot placed without a plot still needs a number from
-	// somewhere, and this is it.
-	//
-	// It was briefly zeroed when the derivation landed, on the reasoning that a definition
-	// cannot know how many bays a plot holds. True, but it does not follow: the plotless
-	// path never asks about bays, and zeroing this silently gave every pre-plot caller a
-	// depot that could not dispatch. Six fuel tests said so immediately.
+	// ONE STARTER TRUCK OF EACH KIND for a PLOTLESS placement - every pre-plot caller and the fuel
+	// tests. A depot the player draws ignores it and starts with none (facility-upgrades spec R3,
+	// URoadEditFacade::PlaceEntityInPlot). Zeroing this silently gave every plotless caller a depot
+	// that could not dispatch once already; six fuel tests said so.
 	Definition->Trucks = 1;
 
 	// What this installation can provide. Fuel and nothing else, which is the whole slice.

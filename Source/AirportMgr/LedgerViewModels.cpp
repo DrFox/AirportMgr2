@@ -27,6 +27,7 @@ namespace
 		case ELedgerCategory::Refund:         return LOCTEXT("CatRefund", "Refund");
 		case ELedgerCategory::Upkeep:         return LOCTEXT("CatUpkeep", "Upkeep");
 		case ELedgerCategory::BroughtForward: return LOCTEXT("CatBrought", "Brought fwd");
+		case ELedgerCategory::Fleet:          return LOCTEXT("CatFleet", "Fleet");
 		}
 		return FText::GetEmpty();
 	}

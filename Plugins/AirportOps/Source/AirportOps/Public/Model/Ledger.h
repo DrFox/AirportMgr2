@@ -30,7 +30,9 @@ enum class ELedgerCategory : uint8
 	Refund,
 	Upkeep,
 	/** RollUp's summary of everything older than MaxDays. Never posted directly. */
-	BroughtForward
+	BroughtForward,
+	/** A vehicle bought (negative) or sold (positive) - UFacilityPurchases. Appended, not inserted. */
+	Fleet
 };
 
 /** One movement of money. Append-only: entries are never edited, only followed by more. */
@@ -58,6 +60,14 @@ struct AIRPORTOPS_API FLedgerEntry
 
 	/** The id this entry reverses, or INDEX_NONE. What stops a charge being reversed twice. */
 	UPROPERTY() int32 Reverses = INDEX_NONE;
+};
+
+/** One described upkeep entry. A plain struct: it lives for one PostDailyUpkeep call. */
+struct FUpkeepLine
+{
+	/** Positive: what the day costs. <= 0 posts nothing. */
+	double Amount = 0.0;
+	FText What;
 };
 
 /**
@@ -108,6 +118,13 @@ public:
 	virtual void Reverse(int32 ChargeId) override;
 	virtual void Credit(const FBuildQuote& Quote) override;
 	virtual FText Describe(const FBuildQuote& Quote) const override;
+
+	/**
+	 * The ONE affordability rule, for a price already known: free is always allowed, else Price <= Balance.
+	 * CanAfford prices a quote and asks this; UFacilityPurchases asks it directly for a catalogue price -
+	 * so a shed and a taxiway are refused under water by the same line.
+	 */
+	bool CanPay(double Price) const;
 
 	/**
 	 * What things cost, and what dates an entry. Both set by the ops runtime at attach.
@@ -175,6 +192,14 @@ public:
 	 * ledger stayed unbounded for exactly the games with the least happening in them.
 	 */
 	void PostDailyUpkeep(double Base, double Now);
+
+	/**
+	 * The same beat with DESCRIBED lines - the airport's base upkeep, "Facility upkeep", "Fleet upkeep"
+	 * (facility-upgrades spec §3) - one Upkeep entry per positive line, then the RollUp, unconditional for
+	 * the reason above. The Base overload forwards here with one line, so the skip-if-zero rule is written
+	 * once. ENFORCED BY: AirportOps.Model.LedgerUpkeepLines, AirportOps.Model.LedgerPostDailyUpkeep
+	 */
+	void PostDailyUpkeep(TConstArrayView<FUpkeepLine> Lines, double Now);
 
 	/**
 	 * The balance computed from the entries.

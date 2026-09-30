@@ -789,6 +789,124 @@ void ARoadBuildController::UnstickSelected(EUnstickAction Action)
 	Runtime->Unstick(Id, Action);
 }
 
+FEntityInstanceId ARoadBuildController::DepotForSelection(const ARoadNetworkActor* InTarget, const FSelection& Selection)
+{
+	// A Stand-kind selection's Id is an ENTITY index (a depot is selected as a stand - FStandFacts::PoseRole);
+	// any other kind's Id is an agent or segment, and must not be read as one.
+	const URoadNetwork* Net = InTarget != nullptr ? InTarget->GetNetwork() : nullptr;
+	if (Net == nullptr || Selection.Kind != ESelectionKind::Stand)
+	{
+		return FEntityInstanceId();
+	}
+	const FEntityInstanceId Id = Net->EntityIdAt(Selection.Id);
+	const FEntityInstance* Entity = Net->GetEntity(Id);
+	return Entity != nullptr && Entity->bAlive && Entity->IsDepot() ? Id : FEntityInstanceId();
+}
+
+FEntityInstanceId ARoadBuildController::RevealedDepotFor(const ARoadNetworkActor* InTarget, const FSelection& Selection)
+{
+	// NARROWS DepotForSelection (ruling C4), never re-walks the selection: an unplotted depot has no yard,
+	// so nothing to reveal.
+	const FEntityInstanceId Id = DepotForSelection(InTarget, Selection);
+	const FEntityInstance* Entity = Id.IsSet() ? InTarget->GetNetwork()->GetEntity(Id) : nullptr;
+	return Entity != nullptr && Entity->IsDepot() && Entity->IsPlotted() ? Id : FEntityInstanceId();
+}
+
+FEntityInstanceId ARoadBuildController::SelectedFacility() const
+{
+	return DepotForSelection(Target, GetSelection());
+}
+
+UOpsRuntime* ARoadBuildController::GetOpsRuntime() const
+{
+	return OpsRuntimeOverride != nullptr ? OpsRuntimeOverride.Get() : UOpsRuntimeSubsystem::Get(GetWorld());
+}
+
+void ARoadBuildController::SelectForTest(const FSelection& InSelection)
+{
+	// THROUGH THE CONTEXT'S POINTER, the way the Select tool writes it (FBuildSession::GetSelection's own
+	// comment) - not a second setter on the session.
+	const FToolContext Context = Session.MakeContext(Target, FVector2D::ZeroVector, FBuildSessionTunables(), false, false);
+	if (Context.Selection != nullptr)
+	{
+		*Context.Selection = InSelection;
+	}
+}
+
+FFacilityQuote ARoadBuildController::QuoteSelectedFacility() const
+{
+	const UOpsRuntime* Runtime = GetOpsRuntime();
+	const FEntityInstanceId Id = SelectedFacility();
+	return Runtime != nullptr && Id.IsSet() ? Runtime->QuoteFacility(Id) : FFacilityQuote();
+}
+
+bool ARoadBuildController::CanBuySelectedModule() const
+{
+	const FFacilityQuote Quote = QuoteSelectedFacility();
+	return Quote.Modules.Num() > 0 && Quote.Modules[0].Refusal == EPurchaseRefusal::None;
+}
+
+void ARoadBuildController::BuySelectedModule()
+{
+	UOpsRuntime* Runtime = GetOpsRuntime();
+	const FFacilityQuote Quote = QuoteSelectedFacility();
+	if (Runtime == nullptr || Quote.Modules.Num() == 0)
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("Buy module: no depot selected, or no ops runtime."));
+		return;
+	}
+	// UFacilityPurchases logs the "Purchase: ..." line; this one says the click arrived.
+	const FEntityInstanceId Depot = SelectedFacility();
+	UE_LOG(LogRoadBuild, Log, TEXT("Buy module %s: depot %d"), *UEnum::GetValueAsString(Quote.Modules[0].Module), Depot.Index);
+	Runtime->BuyModule(Depot, Quote.Modules[0].Module);
+}
+
+bool ARoadBuildController::CanBuyChosenVehicle() const
+{
+	const FFacilityQuote Quote = QuoteSelectedFacility();
+	const FName Chosen = ChosenVehicleType;
+	const FVehicleOfferQuote* Offer = Quote.VehicleOffers.FindByPredicate([Chosen](const FVehicleOfferQuote& O) { return O.TypeCode == Chosen; });
+	return Offer != nullptr && Offer->Refusal == EPurchaseRefusal::None;
+}
+
+void ARoadBuildController::BuyChosenVehicle()
+{
+	UOpsRuntime* Runtime = GetOpsRuntime();
+	const FEntityInstanceId Depot = SelectedFacility();
+	if (Runtime == nullptr || !Depot.IsSet() || ChosenVehicleType.IsNone())
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("Buy vehicle: no depot selected, no type chosen, or no ops runtime."));
+		return;
+	}
+	UE_LOG(LogRoadBuild, Log, TEXT("Buy vehicle %s: depot %d"), *ChosenVehicleType.ToString(), Depot.Index);
+	Runtime->BuyVehicle(Depot, ChosenVehicleType);
+	// SPENT: a choice is one purchase, so a stray later run of the row cannot buy a second of it.
+	ChosenVehicleType = NAME_None;
+}
+
+bool ARoadBuildController::CanSellArmedVehicle() const
+{
+	// Asked of the SELECTED depot's fleet, not the board at large: an armed id left over from another
+	// card cannot sell a vehicle the player is not looking at.
+	const FFacilityQuote Quote = QuoteSelectedFacility();
+	const int32 Armed = ArmedSellVehicle;
+	const FFleetRowQuote* Row = Quote.Fleet.FindByPredicate([Armed](const FFleetRowQuote& R) { return R.VehicleId == Armed; });
+	return Row != nullptr && Row->Refusal == EPurchaseRefusal::None;
+}
+
+void ARoadBuildController::SellArmedVehicle()
+{
+	UOpsRuntime* Runtime = GetOpsRuntime();
+	if (Runtime == nullptr || ArmedSellVehicle == 0)
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("Sell vehicle: nothing armed, or no ops runtime."));
+		return;
+	}
+	UE_LOG(LogRoadBuild, Log, TEXT("Sell vehicle %d"), ArmedSellVehicle);
+	Runtime->SellVehicle(ArmedSellVehicle);
+	ArmedSellVehicle = 0;
+}
+
 bool ARoadBuildController::CanDepartSelected() const
 {
 	// THROUGH THE PER-FRAME CACHE (issue #187): the bar polls this every tick, and
@@ -1387,13 +1505,15 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 	// GHOST BAYS FOLLOW THE LIT TOOL. Polled once a frame rather than pushed from SelectTool
 	// and each mode change: the node rings are asked every frame by the HUD, and a push at
 	// each change site is the "every list must agree" shape this project keeps shipping one
-	// site short. SetGhostsVisible is a no-op unless the answer changed.
+	// site short. ShowPlotGhosts is two compares unless the answer changed.
 	if (AAirsideBuildingsActor* Found = Buildings.Get())
 	{
-		if (UPlotPresenter* Plots = Found->GetPlotPresenter())
-		{
-			Plots->SetGhostsVisible(Session.WantsPlotGhostsDrawn());
-		}
+		// R10 (facility-upgrades spec): EDIT MODE shows every yard's ghosts, as before; outside it the
+		// SELECTED depot's card reveals its own - read off the selection here, the one per-frame gate, rather
+		// than pushed by the inspector (a push per change site is the shape this comment already refuses).
+		const FEntityInstanceId Reveal = RevealedDepotFor(Target, GetSelection());
+		const bool bEditing = Session.WantsPlotGhostsDrawn();
+		Found->ShowPlotGhosts(bEditing || Reveal.IsSet(), bEditing ? FEntityInstanceId() : Reveal);
 	}
 
 	if (Target == nullptr)

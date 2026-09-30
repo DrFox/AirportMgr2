@@ -96,13 +96,14 @@ public:
 	virtual UObject& AsPersistentObject() override { return *this; }
 
 	/**
-	 * Jobs, turnarounds AND vehicles are cleared, not restored from a blob: all three name agents
-	 * (AircraftId, a vehicle's AgentId), and UOpsRuntime::LoadFromSlot always clears every agent
-	 * before calling OpsSave::Restore - so any id they held is stale the instant a load happens,
-	 * whether or not this snapshot even has a Fuel blob. The vehicles come back from the placeholder
-	 * fleet on the next tick (SyncFleet), Idle at home, which is exactly where a truck that was out
-	 * at save time should reappear. Before the fix this descends from, a truck sent home, then a load,
-	 * left its entry in GoingHome forever and its depot one truck short for the rest of the session.
+	 * Jobs, turnarounds AND vehicles are CLEARED here: all three name agents (AircraftId, a
+	 * vehicle's AgentId), and UOpsRuntime::LoadFromSlot always clears every agent before calling
+	 * OpsSave::Restore - so any id they held is stale the instant a load happens, whether or not
+	 * this snapshot even has a Fuel blob. Jobs and turnarounds (Transient) stay cleared. Vehicles
+	 * and SeededDepots are saved, so a snapshot WITH a Fuel blob then restores them, and Serialize
+	 * normalises each vehicle Idle at home with its agent forgotten. Before the fix this descends
+	 * from, a truck sent home, then a load, left its entry in GoingHome forever and its depot one
+	 * truck short for the rest of the session.
 	 */
 	virtual void OnBeforeRestore() override;
 
@@ -207,11 +208,9 @@ public:
 	static const TCHAR* RefusalText(EServiceRefusal Why);
 
 	/**
-	 * The kinds of vehicle the PLACEHOLDER FLEET gives a depot (spec §3.4): DefaultFleetTypes if set,
-	 * else every distinct TypeCode in the letter table (today the utility tow and the bowser).
-	 *
-	 * A PLACEHOLDER BECAUSE THE PLAYER WILL BUY THE FLEET (user, 2026-09-28) and that is not in the
-	 * game yet. A depot with Trucks = N gets N of each; purchase will add to the same list.
+	 * The kinds of vehicle a STARTER fleet gives a depot (spec §3.4): DefaultFleetTypes if set, else every
+	 * distinct TypeCode in the letter table. A depot with Trucks = N gets N of each, once; the player's
+	 * depot has Trucks 0 and buys its fleet instead (UFacilityPurchases, facility-upgrades spec).
 	 */
 	TArray<FName> FleetTypes() const;
 
@@ -325,6 +324,33 @@ public:
 	 */
 	FDepotBacklog DescribeDepot(FEntityInstanceId Depot, double Now) const;
 
+	/**
+	 * THE DOOR A BOUGHT VEHICLE ENTERS BY (facility-upgrades spec §3): Idle at Home and full, its row
+	 * resolved through TypeFor like a seeded one. Bumps FleetRevision and RE-OPENS every refused job of its
+	 * role - a refused job is terminal until something changes, and a vehicle that did not exist is the
+	 * change (see the re-offer pass in Step, which watches the guideline revision only). Returns the new
+	 * id, or 0 (logged) for an unset Home or a None type. Money and bays are UFacilityPurchases', not this.
+	 * ENFORCED BY: AirportOps.Model.Fleet.PurchasedVehicleIsIdleAndFull, .PurchaseReopensRefusedJobs
+	 */
+	int32 AddPurchasedVehicle(FName TypeCode, FEntityInstanceId Home);
+
+	/** True when VehicleId is Idle, has no agent, no current job and an empty queue - the only vehicle
+	 *  that may leave (R5). RemoveVehicle asks exactly this. */
+	bool CanRemoveVehicle(int32 VehicleId) const;
+
+	/**
+	 * THE DOOR A SOLD VEHICLE LEAVES BY. False, nothing changed, unless CanRemoveVehicle. Bumps
+	 * FleetRevision; leaves SeededDepots alone, so a sold starter fleet stays sold.
+	 * ENFORCED BY: AirportOps.Model.Fleet.OnlyAnIdleVehicleLeaves
+	 */
+	bool RemoveVehicle(int32 VehicleId);
+
+	/** Vehicles whose Home is Depot - counted off the vehicles, never stored on the depot. */
+	int32 VehiclesAt(FEntityInstanceId Depot) const;
+
+	/** "FUEL #7 · at depot 1 · 10,000 L" - the one line the depot card's backlog and its fleet rows share. */
+	FString VehicleLine(const FServiceVehicle& Vehicle) const;
+
 	/** A turnaround with a deadline and one job, bypassing OnAgentPhase - for the backlog's lateness. */
 	void AddTurnaroundForTest(int32 AircraftId, double TurnaroundEndsAt, int32 JobId);
 
@@ -392,8 +418,9 @@ public:
 	ServiceBid::FResult BidForTest(const UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock,
 		int32 VehicleId, int32 JobId) const;
 
-	/** See FleetRevision. */
-	uint32 GetFleetRevisionForTest() const { return FleetRevision; }
+	/** See FleetRevision. Public since the offer verdict is dated by it (UFlightBoard::VerdictFor). */
+	uint32 GetFleetRevision() const { return FleetRevision; }
+	uint32 GetFleetRevisionForTest() const { return GetFleetRevision(); }
 
 	/**
 	 * How much better, in GAME seconds, a re-bid must be before a queued job moves to another
@@ -439,10 +466,11 @@ private:
 	/**
 	 * The placeholder fleet brought in line with the depots (spec §3.4): a live depot seen for the
 	 * first time gets Trucks x FleetTypes() vehicles, Idle at home and full; a vehicle whose depot is
-	 * gone is withdrawn (its agent retired, its jobs back to the board); a vehicle whose agent vanished
-	 * under it (retired by somebody else) is put back Idle at home, its job re-opened.
+	 * gone is withdrawn (its agent retired, its jobs back to the board) and credited its resale value
+	 * to Ledger, dated by Clock; a vehicle whose agent vanished under it (retired by somebody else) is
+	 * put back Idle at home, its job re-opened.
 	 */
-	void SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network);
+	void SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
 	/** Every Open job bid and assigned, or refused. See BidFor and Judge. */
 	void AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
@@ -498,6 +526,8 @@ private:
 	{
 		int32 Depots = 0;
 		int32 DepotsOnRoad = 0;
+		/** Real vehicles whose home depot is alive and on a road - NoVehicles when zero. */
+		int32 FleetOnRoad = 0;
 		bool bStandJoined = false;
 		bool bAnyPumpless = false;
 		bool bAnyTooLarge = false;
@@ -595,9 +625,17 @@ private:
 	 */
 	UPROPERTY() TArray<FServiceVehicle> Vehicles;
 
-	/** Depots SyncFleet has already given their placeholder fleet, so a depot is seeded once and a
-	 *  vehicle that is out does not get a twin at home. */
-	UPROPERTY(Transient) TSet<FEntityInstanceId> SeededDepots;
+	/**
+	 * Depots whose STARTER fleet has been seeded, so a depot is seeded once and a vehicle that is out
+	 * does not get a twin at home. SAVED since 2026-09-29 (facility-upgrades spec): a starter fleet the
+	 * player sold must stay sold across a load, and a transient set came back empty and re-seeded it.
+	 * ENFORCED BY: AirportOps.Model.Fleet.SoldStarterFleetIsNotReseededAfterLoad
+	 */
+	UPROPERTY() TSet<FEntityInstanceId> SeededDepots;
+
+	/** Terminal -> Open for one refused job. The ONE body of "ask again", shared by the guideline-revision
+	 *  pass in Step and AddPurchasedVehicle (ruling C2: two hand copies drift); each caller logs its own reason. */
+	static void ReopenRefusedJob(FServiceJob& Job);
 
 	int32 NextJobId = 1;
 	UPROPERTY() int32 NextVehicleId = 1;

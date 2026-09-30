@@ -1,6 +1,7 @@
 #include "Present/OpsRuntime.h"
 #include "AirportOpsLog.h"
 #include "Build/BuildCost.h"
+#include "Build/DepotKit.h"
 #include "Content/AirportOpsSettings.h"
 #include "Content/AirsideSettings.h"
 #include "Model/ArrivalPlanner.h"
@@ -56,6 +57,15 @@ UOpsRuntime::UOpsRuntime()
 	AgentRescue = CreateDefaultSubobject<UAgentRescue>(TEXT("AgentRescue"));
 	AgentRescue->JobBoard = JobBoard;
 	AgentRescue->FlightBoard = FlightBoard;
+
+	// PURCHASES, the same shape: a pointer, and the owners it commands - the board owns the fleet, the
+	// ledger the money. The world hooks are Attach's (they need the actor).
+	FacilityPurchases = CreateDefaultSubobject<UFacilityPurchases>(TEXT("FacilityPurchases"));
+	FacilityPurchases->JobBoard = JobBoard;
+	FacilityPurchases->Ledger = Ledger;
+	FacilityPurchases->Pricing = Pricing;
+	FacilityPurchases->Clock = Clock;
+	FacilityPurchases->Bus = &Bus;
 }
 
 void UOpsRuntime::SeedAirlines()
@@ -94,6 +104,64 @@ FUnstickVerdict UOpsRuntime::Unstick(int32 AgentId, EUnstickAction Action)
 	// command is not an event, so it says so itself rather than leaning on that.
 	Bus.MarkDirty(TEXT("JobBoard"));
 	return Verdict;
+}
+
+FFacilityQuote UOpsRuntime::QuoteFacility(FEntityInstanceId Entity) const
+{
+	return Target != nullptr && Target->Network != nullptr ? FacilityPurchases->Quote(*Target->Network, Entity) : FFacilityQuote();
+}
+
+FPurchaseResult UOpsRuntime::BuyModule(FEntityInstanceId Entity, EDepotModule Module)
+{
+	if (Target == nullptr || Target->Network == nullptr)
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Purchase refused: depot %d - no airport attached"), Entity.Index);
+		return FPurchaseResult{ EPurchaseRefusal::NotAFacility };
+	}
+	return FacilityPurchases->BuyModule(*Target->Network, Entity, Module);
+}
+
+FPurchaseResult UOpsRuntime::BuyVehicle(FEntityInstanceId Entity, FName TypeCode)
+{
+	if (Target == nullptr || Target->Network == nullptr)
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Purchase refused: depot %d - no airport attached"), Entity.Index);
+		return FPurchaseResult{ EPurchaseRefusal::NotAFacility };
+	}
+	return FacilityPurchases->BuyVehicle(*Target->Network, Entity, TypeCode);
+}
+
+FPurchaseResult UOpsRuntime::SellVehicle(int32 VehicleId)
+{
+	return FacilityPurchases->SellVehicle(VehicleId);
+}
+
+int32 UOpsRuntime::ReservedSlotsOf(FEntityInstanceId Id, const FEntityInstance& Depot, EDepotModule Module)
+{
+	if (Target == nullptr)
+	{
+		return 0;
+	}
+	if (ReservationMemoNetwork.Get() != Target->Network)
+	{
+		ReservationMemo.Reset();
+		ReservationMemoNetwork = Target->Network;
+	}
+	TArray<int32>* Ceilings = ReservationMemo.Find(Id);
+	if (Ceilings == nullptr)
+	{
+		++ReservationSolves;
+		Ceilings = &ReservationMemo.Add(Id);
+		const TArray<PlotYard::FKitSpec> Specs = Target->ResolveDepotKits();
+		const TOptional<PlotYard::FReservation> Reserved = DepotKit::ReservationOf(Depot, Specs);
+		// INDEXED BY EDepotModule: DepotKitSpecs walks the enum, so a spec's index IS its module (its header).
+		for (int32 Kit = 0; Kit < Specs.Num(); ++Kit)
+		{
+			Ceilings->Add(Reserved.IsSet() ? Reserved->CeilingFor(Kit) : 0);
+		}
+	}
+	const int32 Kit = static_cast<int32>(Module);
+	return Ceilings->IsValidIndex(Kit) ? (*Ceilings)[Kit] : 0;
 }
 
 TArray<FAirlineOffers> UOpsRuntime::AirlineOffersFromCatalog() const
@@ -207,6 +275,13 @@ void UOpsRuntime::WireBus()
 	// THE PLAYER DREW SOMETHING: a new depot seeds its fleet, a refused job may be servable now.
 	Bus.Subscribe<FNetworkChangedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
 		[this](const FNetworkChangedEvent&) { Bus.MarkDirty(TEXT("JobBoard")); });
+	// A VEHICLE BOUGHT OR SOLD, A MODULE BOUGHT: the board's candidates changed, and a job waiting on an
+	// empty depot meets the new vehicle on this drain's pass - nothing polls (facility-upgrades spec §3).
+	// ENFORCED BY: AirportOps.Present.Facility.PurchaseWakesTheBoard
+	Bus.Subscribe<FFleetChangedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
+		[this](const FFleetChangedEvent&) { Bus.MarkDirty(TEXT("JobBoard")); });
+	Bus.Subscribe<FFacilityUpgradedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
+		[this](const FFacilityUpgradedEvent&) { Bus.MarkDirty(TEXT("JobBoard")); });
 
 	// THE JOB BOARD'S WHOLE SEQUENCE, as one pass (stage 3 - see UJobBoard::Step for why it stays one
 	// sequence). It runs when something above marked it, when its deadline comes due, or - while it
@@ -298,6 +373,22 @@ void UOpsRuntime::WireBus()
 	Bus.Subscribe<FBalanceSignChangedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FBalanceSignChangedEvent& E) { Events->OnBalanceSignChanged.Broadcast(E.bOverdrawn); });
 
+	// THE PURCHASE TOASTS - through the notification face every other toast uses, not a delegate of their
+	// own (§6 deviation 4: nothing would bind one; the inspector re-reads the quote anyway).
+	Bus.Subscribe<FFleetChangedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"), [this](const FFleetChangedEvent& E)
+	{
+		const FFuelVehicleSpec Spec = JobBoard->SpecFor(E.TypeCode);
+		const FString Name = Spec.DisplayName.IsEmpty() ? E.TypeCode.ToString() : Spec.DisplayName.ToString();
+		Events->NotifyNotification(FString::Printf(TEXT("%s %s \u2014 %s"),
+			E.Change == EFleetChange::Bought ? TEXT("Bought") : TEXT("Sold"), *Name, *Pricing->Format(E.Amount).ToString()));
+	});
+	Bus.Subscribe<FFacilityUpgradedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"), [this](const FFacilityUpgradedEvent& E)
+	{
+		const FModuleOffer* Offer = FacilityPurchases->ModuleOffers.Find(E.Module);
+		const FString Name = Offer != nullptr ? Offer->DisplayName.ToString() : UEnum::GetValueAsString(E.Module);
+		Events->NotifyNotification(FString::Printf(TEXT("Bought %s \u2014 %s"), *Name, *Pricing->Format(E.Amount).ToString()));
+	});
+
 	Bus.EndWiring();
 }
 
@@ -380,6 +471,7 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		// is the one somebody forgot to copy.
 		JobBoard->VehicleSpecs = Scenario->FuelVehicles;
 		JobBoard->RefillLitresPerMinutePerPump = Scenario->DepotRefillLitresPerMinutePerPump;
+		FacilityPurchases->ModuleOffers = Scenario->ModuleOffers;
 		OfferGenerator->MaxPendingOffers = Scenario->MaxPendingOffers;
 		Airlines->Tuning = Scenario->AirlineSatisfaction;
 		// A NEW GAME, like the ledger's Open below: an airport attached afresh starts every airline at
@@ -411,6 +503,25 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// UJobBoard::DesignVehicleOf for why the read is handed down rather than made there.
 	// ENFORCED BY: AirportOps.Fuel.RuntimeResolvesPerStand (A sent the truck still reads as tow-built)
 	JobBoard->DesignVehicleOf = &UOpsRuntime::StandDesignVehicleOf;
+
+	// THE PURCHASE SERVICE'S TWO WORLD HOOKS (facility-upgrades spec §3; UJobBoard::DesignVehicleOf's
+	// pattern): the plot's ceiling from Airside's one solve, and the module write through the facade's one
+	// door - which rebuilds the yard and checkpoints undo. `this` for the ceiling, which the runtime memoises
+	// and outlives nothing; weak for the actor, the dispatcher's reason below.
+	// ENFORCED BY: AirportOps.Present.Facility.ShedPurchaseRelightsASlot
+	FacilityPurchases->ReservedSlotsOf = [this](FEntityInstanceId Id, const FEntityInstance& Depot, EDepotModule Module)
+	{
+		return ReservedSlotsOf(Id, Depot, Module);
+	};
+	{
+		TWeakObjectPtr<ARoadNetworkActor> WeakActor = Target;
+		FacilityPurchases->ApplyModulePurchase = [WeakActor](FEntityInstanceId Id, EDepotModule Module)
+		{
+			ARoadNetworkActor* Actor = WeakActor.Get();
+			URoadEditFacade* Facade = Actor != nullptr ? Actor->GetEditFacade() : nullptr;
+			return Facade != nullptr && Facade->AddEntityModule(Id, Module);
+		};
+	}
 
 	// THE LITRES A FLIGHT WAS OFFERED AT reach its fuel demand through the board - see
 	// UJobBoard::LitresOwedFor. Weak, for the dispatcher's reason below.
@@ -596,6 +707,12 @@ void UOpsRuntime::Detach()
 	// Cleared rather than left pointing at the old actor: a dispatcher that still answers
 	// after a detach would put an aeroplane on a field this runtime no longer drives.
 	FlightBoard->Dispatcher = nullptr;
+	// THE PURCHASE HOOKS GO WITH THE ACTOR, the dispatcher's reason: a hook that still answered after a
+	// detach would build into a field this runtime no longer drives.
+	FacilityPurchases->ReservedSlotsOf = nullptr;
+	FacilityPurchases->ApplyModulePurchase = nullptr;
+	ReservationMemo.Reset();
+	ReservationMemoNetwork.Reset();
 	Target = nullptr;
 }
 
@@ -716,7 +833,14 @@ void UOpsRuntime::PostDailyUpkeep()
 	const UAirsideSettings* Settings = GetDefault<UAirsideSettings>();
 	const double Base = BuildCost::DailyUpkeep(*Target->Network,
 		Settings != nullptr ? Settings->ApronUpkeepPerSquareMetrePerDay : 0.0);
-	Ledger->PostDailyUpkeep(Base, Clock->Now());
+	// THE FACILITIES' SHARE, from the one service that knows what a module and a vehicle cost to keep
+	// (facility-upgrades spec R6), as lines of their own so the finance screen can say where it went.
+	const FFacilityUpkeep Facilities = FacilityPurchases->DailyUpkeep(*Target->Network);
+	const FUpkeepLine Lines[] = {
+		{ Base, NSLOCTEXT("Ledger", "DailyUpkeep", "Upkeep") },
+		{ Facilities.Modules, NSLOCTEXT("Ledger", "FacilityUpkeep", "Facility upkeep") },
+		{ Facilities.Fleet, NSLOCTEXT("Ledger", "FleetUpkeep", "Fleet upkeep") } };
+	Ledger->PostDailyUpkeep(Lines, Clock->Now());
 
 	// SAME BEAT, SAME REASON (issue #188): FlightBoard's own History needs no schedule of its
 	// own either, and a second daily timer here would just be a second place for the two to
@@ -730,8 +854,8 @@ void UOpsRuntime::PostDailyUpkeep()
 	// reason RollUp rides it (issue #188). The airlines forgive a little on it.
 	Bus.Publish(FDayEndedEvent{ Clock->Day() });
 
-	UE_LOG(LogAirportOps, Log, TEXT("Upkeep day %d: %.0f; balance %.0f"),
-		Clock->Day(), Base, Ledger->Balance());
+	UE_LOG(LogAirportOps, Log, TEXT("Upkeep day %d: %.0f (+%.0f facilities, +%.0f fleet); balance %.0f"),
+		Clock->Day(), Base, Facilities.Modules, Facilities.Fleet, Ledger->Balance());
 }
 
 TArray<IOpsPersistent*> UOpsRuntime::Persistents() const

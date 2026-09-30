@@ -1675,32 +1675,13 @@ FEntityInstanceId URoadNetwork::PlaceEntity(const FEntityPlacement& Placement, c
 	// path, which read the same resolved figure. See PlaceEntity's own header comment.
 	GiveStandOutlineIfMissing(Instance, CodeCEnvelope);
 
-	// DERIVED FROM THE SHEDS, not captured, whenever there are modules at all. A shed is a
-	// truck: the player's mix IS the fleet size, so a separately-stated count could only
-	// ever disagree with the sheds they actually built.
-	//
-	// UJobBoard is untouched by this and always will be - it seeds its fleet from Instance.Trucks, and
-	// that a module system landed without its consumer changing is the sign the seam was
-	// already in the right place.
-	//
-	// A PLOTLESS caller keeps its own number: it has no modules to derive one from. Exactly
-	// one of the two branches applies to any placement, so the two cannot both be true.
-	if (Placement.Modules.Num() > 0)
-	{
-		int32 Sheds = 0;
-		for (const EDepotModule Module : Placement.Modules)
-		{
-			if (Module == EDepotModule::Shed)
-			{
-				++Sheds;
-			}
-		}
-		Instance.Trucks = Sheds;
-	}
-	else
-	{
-		Instance.Trucks = Placement.Trucks;
-	}
+	// THE STARTER FLEET, AS STATED - never derived from the sheds since 2026-09-29 (facility-upgrades
+	// spec §6): a shed is a BAY the player fills by buying a vehicle (R2), so a count derived from the
+	// sheds would hand out the vehicles the player is meant to buy. The player's plotted depot states 0
+	// (URoadEditFacade::PlaceEntityInPlot, R3); plotless callers state their definition's count, which
+	// UJobBoard's placeholder seeding turns into vehicles once.
+	// ENFORCED BY: Airside.Entities.StarterTrucksAreStated, Airside.Present.PlayerDepotStartsWithNoTrucks
+	Instance.Trucks = Placement.Trucks;
 
 	Instance.ResolvedAnchors.Reserve(Placement.Anchors.Num());
 
@@ -2020,5 +2001,16 @@ bool URoadNetwork::SetEntityPoseRole(FEntityInstanceId Entity, EServiceRole Pose
 	}
 
 	Instance->PoseRole = PoseRole;
+	return true;
+}
+
+bool URoadNetwork::AddEntityModule(FEntityInstanceId Entity, EDepotModule Module)
+{
+	FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Instance == nullptr || !Instance->bAlive || !Instance->IsDepot())
+	{
+		return false;
+	}
+	Instance->Modules.Add(Module);
 	return true;
 }

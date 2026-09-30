@@ -199,7 +199,16 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 		if (D == nullptr) { bDepGone = true; }
 		if (A == nullptr) { break; }
 		if (D != nullptr && D->GetWaitingOn() == Arrival && D->Follower.Speed < 1e-6) { bDepHeldAtBar = true; }
-		if (A->GetWaitingOn() == Dep1 && A->GetBlockedResource().Kind == ETrafficResourceKind::Node && A->GetBlockedResource().Node == H)
+		// NODE H, OR THE LINE PAST IT THE DEPARTURE STANDS ON (2026-09-30): a crossing agent - which
+		// the just-vacated arrival is - now keeps its EXIT ROOM claimed, a footprint and a gap past the
+		// first node off the strip (TrafficClaims.cpp, BuildPending's step 0'''), so the first thing
+		// it is refused is the departure's body on the taxiway beyond H rather than H itself. The same
+		// head-on, measured one claim further along; the cycle and its resolution below are unchanged.
+		const FTrafficResource Refused = A->GetBlockedResource();
+		const bool bRefusedH = Refused.Kind == ETrafficResourceKind::Node && Refused.Node == H;
+		const bool bRefusedPastH = Refused.Kind == ETrafficResourceKind::Edge && TaxiIn.Steps.Num() > 1
+			&& Refused.Edge == TaxiIn.Steps[1].Edge;
+		if (A->GetWaitingOn() == Dep1 && (bRefusedH || bRefusedPastH))
 		{
 			bArrivalRefusedH = true;
 		}
@@ -236,7 +245,7 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 		Traffic->GetCyclesDetectedForTest(), Traffic->GetDeadlockLogLinesForTest());
 
 	TestTrue(TEXT("the departure held at the bar while the arrival was on the strip"), bDepHeldAtBar);
-	TestTrue(TEXT("the arrival was refused node H, the bar the departure stands on"), bArrivalRefusedH);
+	TestTrue(TEXT("the arrival was refused node H, the bar the departure stands on, or the line past it the departure's body is on"), bArrivalRefusedH);
 	TestEqual(TEXT("one cycle, detected once"), Traffic->GetCyclesDetectedForTest(), 1);
 	TestEqual(TEXT("resolved by the ARRIVAL replanning - the bar-holder has one way out and the arrival has two"),
 		Traffic->GetLastResolvedAgentForTest(), Arrival);

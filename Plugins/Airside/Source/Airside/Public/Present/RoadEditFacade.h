@@ -224,6 +224,17 @@ public:
 	 * IRoadEditTarget: no tool sets it - the bar does, through the actor.
 	 */
 	bool SetDriveSide(EDriveSide Side);
+
+	/**
+	 * A module bought for a depot (facility-upgrades spec §3): the network write, a Topology rebuild so
+	 * AAirsideBuildingsActor relights the slot, then the undo history CLEARED (R8). Undo is a whole-network
+	 * Memento; an undo past this would drop the shed and keep the money, so a purchase is a checkpoint.
+	 * NOT ON IRoadEditTarget: no tool buys - the ops runtime's purchase hook does (named loosely:
+	 * Airside may not reference AirportOps, Check-Architecture's cross-plugin rule). NOT PRICED here: money is
+	 * UFacilityPurchases', posted after this returns true. False, nothing changed, for a non-depot.
+	 * ENFORCED BY: Airside.Present.Facility.ModulePurchaseRelightsAndClearsUndo
+	 */
+	bool AddEntityModule(FEntityInstanceId Entity, EDepotModule Module);
 	virtual int32 SplitSegment(int32 SegmentIndex, FVector2D At) override;
 	virtual bool DeleteNode(int32 NodeIndex) override;
 	virtual bool DeleteSegment(int32 SegmentIndex) override;

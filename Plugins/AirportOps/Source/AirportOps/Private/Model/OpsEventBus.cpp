@@ -108,6 +108,17 @@ FString FLandRefusedEvent::Describe() const
 	return UEnum::GetValueAsString(Why);
 }
 
+FString FFacilityUpgradedEvent::Describe() const
+{
+	return FString::Printf(TEXT("depot %d, %s, %.0f"), Entity, *UEnum::GetValueAsString(Module), Amount);
+}
+
+FString FFleetChangedEvent::Describe() const
+{
+	return FString::Printf(TEXT("depot %d, vehicle %d %s, %s for %.0f"), Depot, VehicleId, *TypeCode.ToString(),
+		Change == EFleetChange::Bought ? TEXT("bought") : TEXT("sold"), Amount);
+}
+
 FString FOpsEventBus::Describe(const FOpsEvent& Event)
 {
 	return Visit([](const auto& Each) { return Each.Describe(); }, Event);
