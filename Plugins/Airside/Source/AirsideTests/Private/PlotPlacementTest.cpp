@@ -7,6 +7,8 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Solve/RoadGeom.h"
+#include "Build/DepotKit.h"
+#include "YardAgreement.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -266,6 +268,67 @@ bool FPlotPlacementStoresFrontageEdgeTest::RunTest(const FString& Parameters)
 		Actor->PlaceEntityInPlot(Rect, Rect[0], Rect[2], TArray<EDepotModule>(), EPlaceableEntity::FuelDepot), static_cast<int32>(INDEX_NONE));
 	TestEqual(TEXT("and places nothing"), Actor->Network->GetEntities().Num(), LiveBefore);
 	return true;
+}
+
+/**
+ * A PLOTTED DEPOT'S FRONTAGE EDGE SURVIVES UNDO AND REDO (#450, PR #491 review).
+ *
+ * Entities ride in the undo Memento whole, so FrontageEdge should travel with them - but the only undo test in this area used a plotless
+ * depot, which has no frontage to lose. A depot placed on its FAR edge (so nothing passes by reading edge 0) is placed, undone, redone,
+ * and then bulldozed and the bulldoze undone: each time the entity that comes back stores the same edge, reads back the same two ends, and
+ * solves the same yard as before.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotFrontageEdgeSurvivesUndoRedoTest,
+	"Airside.Entities.PlotFrontageEdgeSurvivesUndoAndRedo",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotFrontageEdgeSurvivesUndoRedoTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	const TArray<PlotYard::FKitSpec> Specs = Actor->ResolveDepotKits();
+
+	const FVector2D Origin(20000.0, 20000.0);
+	const TArray<FVector2D> Plot = { Origin, Origin + FVector2D(4000.0, 0.0), Origin + FVector2D(4000.0, 3000.0), Origin + FVector2D(0.0, 3000.0) };
+	const int32 Index = Actor->PlaceEntityInPlot(Plot, Plot[2], Plot[3], TArray<EDepotModule>(), EPlaceableEntity::FuelDepot);
+	if (!TestTrue(TEXT("the depot is placed on its far edge"), Index != INDEX_NONE)) { return false; }
+	const FEntityInstanceId Depot = Actor->Network->EntityIdAt(Index);
+	const FEntityInstance* Placed = Actor->Network->GetEntity(Depot);
+	if (!TestNotNull(TEXT("and reads back"), Placed)) { return false; }
+	if (!TestEqual(TEXT("storing edge 2"), Placed->FrontageEdge, 2)) { return false; }
+	const TOptional<PlotYard::FReservation> Yard = DepotKit::ReservationOf(*Placed, Specs);
+	if (!TestTrue(TEXT("and solving a yard"), Yard.IsSet() && Yard->Stands.Num() > 0)) { return false; }
+
+	// EACH RETURN OF THE DEPOT: the same entity, the same stored edge, the same ends, the same yard.
+	const auto ExpectBack = [&](const TCHAR* When)
+	{
+		const FEntityInstance* Back = Actor->Network->GetEntity(Depot);
+		if (!TestNotNull(*FString::Printf(TEXT("%s: the depot is back under the same id"), When), Back)) { return false; }
+		TestEqual(*FString::Printf(TEXT("%s: it stores the same frontage edge"), When), Back->FrontageEdge, 2);
+		FVector2D A, B;
+		if (!TestTrue(*FString::Printf(TEXT("%s: and the edge still names two ends"), When), Back->GetFrontage(A, B))) { return false; }
+		TestEqual(*FString::Printf(TEXT("%s: start"), When), A, Plot[2]);
+		TestEqual(*FString::Printf(TEXT("%s: end"), When), B, Plot[3]);
+		const TOptional<PlotYard::FReservation> Again = DepotKit::ReservationOf(*Back, Specs);
+		if (!TestTrue(*FString::Printf(TEXT("%s: and it solves"), When), Again.IsSet())) { return false; }
+		TestEqual(*FString::Printf(TEXT("%s: the very yard it had before"), When), YardAgreement::Difference(*Yard, *Again), FString());
+		return true;
+	};
+
+	if (!TestTrue(TEXT("the placement undoes"), Actor->Undo())) { return false; }
+	TestNull(TEXT("and the depot is gone"), Actor->Network->GetEntity(Depot));
+	if (!TestTrue(TEXT("and redoes"), Actor->Redo())) { return false; }
+	if (!ExpectBack(TEXT("after undo then redo"))) { return false; }
+
+	if (!TestTrue(TEXT("the depot is bulldozed"), Actor->DeleteEntity(Index))) { return false; }
+	TestNull(TEXT("and gone"), Actor->Network->GetEntity(Depot));
+	if (!TestTrue(TEXT("the bulldoze undoes"), Actor->Undo())) { return false; }
+	return ExpectBack(TEXT("after a bulldoze is undone"));
 }
 
 #endif

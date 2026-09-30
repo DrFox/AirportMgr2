@@ -163,8 +163,11 @@ struct AIRPORTOPS_API FServiceVehicle
 	UPROPERTY() FEntityInstanceId Home;
 
 	/**
-	 * HOW IT CAME (#487), set once by FServiceFleet::Add and read by FServiceFleet::RefundOf alone: only a vehicle the player
-	 * BOUGHT is worth resale. A removed depot used to credit the resale of every vehicle it held whatever its origin, so a
+	 * HOW IT CAME (#487): only a vehicle the player BOUGHT is worth resale, which is what FServiceFleet::RefundOf reads it for.
+	 * SET WHERE THE VEHICLE IS MADE, FServiceFleet::Create - Add (the two ways in) and the test door AddForTest both make a vehicle
+	 * through it - so a writer anywhere else would be a second opinion on how a vehicle came.
+	 * ENFORCED BY: Check-Architecture rule 4 row 'FServiceVehicle::Origin write'
+	 * A removed depot used to credit the resale of every vehicle it held whatever its origin, so a
 	 * starter depot's free fleet paid out when it was bulldozed - and bulldozing then re-placing a plotless starter depot was a
 	 * repeatable money source.
 	 *

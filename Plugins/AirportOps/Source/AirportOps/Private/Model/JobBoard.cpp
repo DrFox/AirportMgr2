@@ -523,6 +523,12 @@ void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, 
 			UE_LOG(LogAirportOps, Warning, TEXT("Fleet: vehicle %d of a removed depot could not be withdrawn"), WithdrawnId);
 		}
 	}
+
+	// THE REMOVED DEPOTS THEMSELVES ARE FORGOTTEN, whatever they held (#487): after the loop, so a depot that went with vehicles has had
+	// them withdrawn first, and a sold-out one, which the loop never saw, is reached too. An undo that restores the depot's exact id
+	// then finds it unseeded and the FleetSeed pass gives it its starter fleet again.
+	// ENFORCED BY: AirportOps.Present.Fleet.ABulldozedStarterDepotIsSeededAgainWhateverItHeld
+	Fleet().ForgetRemovedDepots(Network);
 }
 
 void UJobBoard::BeginFacility(FServiceVehicle& Vehicle, const URoadNetwork& Network, const USimClock& Clock)

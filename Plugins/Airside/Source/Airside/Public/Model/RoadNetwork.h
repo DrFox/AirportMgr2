@@ -867,11 +867,12 @@ public:
 	 *
 	 * THE OLD HEURISTIC, RUN ONCE HERE AT LOAD, which is the point: PlaceEntityInPlot stored Position as the midpoint of the
 	 * frontage edge, so the edge whose midpoint IS Position is that edge by construction - exact for every depot the facade ever
-	 * placed, and the only fact a pre-#450 depot kept. Readers (DepotKit::ReservationOf) never search; they read the stored edge.
-	 * It leaves an edge already stored alone, so it is idempotent, and it never touches a stand or a plotless depot.
-	 * Public beside its siblings so a test can drive the exact PostLoad path.
-	 * ENFORCED BY: Airside.Model.DepotFrontageMigration (the migration and its two load paths);
-	 * Airside.Build.DepotKit.ReservationOfReadsTheStoredFrontage (a reader that searched would solve the wrong edge there)
+	 * placed, and the only fact a pre-#450 depot kept. The reader, DepotKit::ReservationOf, reads the stored edge instead of searching.
+	 * ENFORCED BY: Airside.Build.DepotKit.ReservationOfReadsTheStoredFrontage (a reader that searched would solve the wrong edge there)
+	 *
+	 * It leaves an edge already stored alone, so it is idempotent, and it never touches a stand or a plotless depot. Public beside its
+	 * siblings so a test can drive the exact PostLoad path.
+	 * ENFORCED BY: Airside.Model.DepotFrontageMigration (the migration and its two load paths)
 	 */
 	int32 EnsureDepotFrontages();
 

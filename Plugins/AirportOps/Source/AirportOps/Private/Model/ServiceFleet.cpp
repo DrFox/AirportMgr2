@@ -189,17 +189,6 @@ bool FServiceFleet::Withdraw(int32 VehicleId, EFleetReason Reason, double Now)
 	++Board.FleetRevision;
 	++Board.FleetCompositionRevision;
 
-	// A REMOVED DEPOT IS FORGOTTEN (#487): Entities and EntityFreeList ride in the undo Memento, so placing a depot, undoing it
-	// and redoing it gives the undone depot's exact {Index, Generation} back - an id SeededDepots still held, so the depot
-	// came back with no starter fleet. Bulldozing then placing is fine, because RoadSlot::Remove bumps the generation; it is
-	// the restore that re-uses an id. A SOLD vehicle leaves the set alone (see Withdraw's header): selling is the player's
-	// choice about a depot that still stands.
-	// ENFORCED BY: AirportOps.Present.Fleet.UndoThenRedoOfAStarterDepotSeedsItAgain
-	if (Reason == EFleetReason::DepotRemoved)
-	{
-		Board.SeededDepots.Remove(Home);
-	}
-
 	// PAID FOR, AS A SALE IS (ruled 2026-09-30): the player bought it, and removing its depot - a bulldoze, an undo of
 	// the placement - is not a reason to lose its value. Resale, not the price: a vehicle that leaves for money leaves at
 	// one rate (FFuelVehicleSpec::ResaleValue). Undo never touches this (R8): a re-placed depot does not buy the vehicle
@@ -227,6 +216,31 @@ bool FServiceFleet::Withdraw(int32 VehicleId, EFleetReason Reason, double Now)
 			Reason == EFleetReason::Sold ? EFleetChange::Sold : EFleetChange::Withdrawn, Credit });
 	}
 	return true;
+}
+
+int32 FServiceFleet::ForgetRemovedDepots(const URoadNetwork& Network)
+{
+	// BY THE DEPOT, NOT BY ITS VEHICLES (#487, PR #491 review) - see the declaration. A sold-out starter depot has no vehicle to
+	// withdraw, so a forget keyed on withdrawals never reached it; asking the network which depots still stand reaches them all.
+	// A stale id (the slot's generation moved on) is null here too, so ids of depots bulldozed long ago are pruned as well.
+	TArray<FEntityInstanceId> Gone;
+	for (const FEntityInstanceId DepotId : Board.SeededDepots)
+	{
+		const FEntityInstance* Depot = Network.GetEntity(DepotId);
+		if (Depot == nullptr || !Depot->bAlive)
+		{
+			Gone.Add(DepotId);
+		}
+	}
+	for (const FEntityInstanceId DepotId : Gone)
+	{
+		Board.SeededDepots.Remove(DepotId);
+	}
+	if (Gone.Num() > 0)
+	{
+		UE_LOG(LogAirportOps, Log, TEXT("Fleet: %d removed depot(s) forgotten - one restored by an undo is seeded again"), Gone.Num());
+	}
+	return Gone.Num();
 }
 
 int32 FServiceFleet::SeedStarterFleets(const URoadNetwork& Network, double Now)

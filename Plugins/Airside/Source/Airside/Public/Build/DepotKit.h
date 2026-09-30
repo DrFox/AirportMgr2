@@ -60,6 +60,7 @@ AIRSIDE_API FString DepotKitLabel(EDepotModule Module);
  * is given, which is the value URoadEditFacade::PlaceEntityInPlot stores as the entity's Position. Same
  * seed, same yard, so the count previewed is the count built. Two copies of this arithmetic would be a
  * preview quietly describing a different depot.
+ * ENFORCED BY: Check-Architecture rule 4 row 'DepotYardSeed' (DepotKit.cpp, SolveYard's own call, is the one production caller)
  *
  * QUANTISED to whole uu: a float that came back from a save one bit different would re-roll
  * that depot and only that depot, which is the kind of bug that takes a day.
@@ -106,8 +107,11 @@ namespace DepotKit
 	AIRSIDE_API void ReportIncomplete(const URoadNetwork& Network, TArrayView<const PlotYard::FKitSpec> Specs = {});
 
 	/**
-	 * The layout a depot definition asks for; the scatter when there is none. THE ONE PLACE THAT FALLBACK IS
-	 * TYPED: it was a ternary in the tool, another in the facade and a third in ReservationOf, and the tool's
+	 * The layout a depot definition asks for; the scatter when there is none. THE FALLBACK IS TYPED HERE, AND IN NO OTHER
+	 * PRODUCTION FILE.
+	 * ENFORCED BY: Check-Architecture rule 4 row 'EPlotLayout fallback ternary'
+	 *
+	 * It was a ternary in the tool, another in the facade and a third in ReservationOf, and the tool's
 	 * copy drifted once already (DA_FuelDepot was authored before EPlotLayout existed, so it carried the
 	 * Scatter default while the tool's own Kind map said FuelYardBands: the player dragged out a banded ghost
 	 * and got a scattered depot). The tool reads it too, as the extra key of its memo, which is why it is

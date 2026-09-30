@@ -809,7 +809,8 @@ public:
 	 *
 	 * PUBLIC since #450, in this private tail, so Airside.Tool.PlotPlace.ToolFacadeAndBuiltDepotSolveOneYard can ask the commit's own
 	 * judgement and compare it AS A VALUE with the tool's preview and the built depot's. A const query with no side effect but its
-	 * evaluator count; nothing outside this class and that test calls it.
+	 * evaluator count. Its production callers are this class's own commit (RoadEditFacadeSurfaces.cpp) and nobody else's.
+	 * ENFORCED BY: Check-Architecture rule 4 row 'URoadEditFacade::ReserveForPlot'
 	 *
 	 * TAKES Outline/FrontageA/FrontageB AS GIVEN, not corrected for winding: PlotYard's own
 	 * functions read the interior side off the outline's signed area (PlotYard::InwardOf), so

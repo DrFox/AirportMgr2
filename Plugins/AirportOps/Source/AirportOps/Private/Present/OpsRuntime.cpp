@@ -644,6 +644,13 @@ void UOpsRuntime::WireBus()
 				: FString::Printf(TEXT("Depot removed \u2014 %s withdrawn"), *Name));
 			return;
 		}
+		// A SALE WORTH NOTHING SAYS NO MONEY (#487: a seeded vehicle fetches no resale), the way a removal that credited nothing says
+		// "withdrawn" rather than "credited $0".
+		if (E.Change == EFleetChange::Sold && E.Amount <= 0.0)
+		{
+			Events->NotifyNotification(FString::Printf(TEXT("Sold %s"), *Name));
+			return;
+		}
 		Events->NotifyNotification(FString::Printf(TEXT("%s %s \u2014 %s"),
 			E.Change == EFleetChange::Bought ? TEXT("Bought") : TEXT("Sold"), *Name, *Money));
 	});

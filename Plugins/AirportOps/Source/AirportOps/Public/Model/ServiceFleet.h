@@ -70,14 +70,26 @@ public:
 	 * (UJobBoard::CanRemoveVehicle: R5, idle at home with nothing promised). DepotRemoved has no such precondition: the
 	 * caller (SyncFleet) has already released its jobs and retired its agent, and a vehicle mid-refill whose depot is
 	 * gone must still go. Credits RefundOf the vehicle to Fleet (a zero value posts no line - and a SEEDED vehicle's is zero,
-	 * #487), publishes FleetChanged{Sold or Withdrawn}. A Sold vehicle leaves SeededDepots alone, so a sold starter fleet
-	 * stays sold; a DepotRemoved one forgets its depot (#487), so an undo then redo of the placement, which restores the
-	 * depot's exact {Index, Generation}, seeds the starter fleet again instead of finding the id already seen.
+	 * #487), publishes FleetChanged{Sold or Withdrawn}. Leaves SeededDepots alone, so a sold starter fleet stays sold; a removed
+	 * DEPOT is forgotten by ForgetRemovedDepots, never as a side effect of a vehicle leaving.
 	 * [[nodiscard]]: false means nothing left the fleet, and a caller that assumed otherwise would credit or forget a vehicle.
 	 * ENFORCED BY: AirportOps.Model.Fleet.OnlyAnIdleVehicleLeaves, AirportOps.Model.Facility.DepotRemovalCreditsItsVehicles,
 	 * AirportOps.Model.Fleet.DepotRemovalPublishesFleetChanged
 	 */
 	[[nodiscard]] bool Withdraw(int32 VehicleId, EFleetReason Reason, double Now);
+
+	/**
+	 * Drop from SeededDepots every depot Network no longer holds alive; returns how many. THE DEPOT'S REMOVAL, NOT ITS VEHICLES' (#487,
+	 * PR #491 review): Entities and EntityFreeList ride in the undo Memento, so placing a starter depot, undoing it and redoing it - or
+	 * bulldozing it and undoing that - hands back the exact {Index, Generation} SeededDepots still held, and the depot returned with no
+	 * starter fleet. Forgetting as each vehicle was withdrawn made the answer depend on what the depot held when it went: a partly
+	 * sold one got its whole fleet back, a sold-out one (no vehicle to withdraw) stayed unseeded. By the depot, both are seeded again.
+	 * Bulldozing then placing was always fine: RoadSlot::Remove bumps the generation, so the new depot is a new id.
+	 * UJobBoard::SyncFleet calls it after it has withdrawn the vehicles of the depots that went.
+	 * ENFORCED BY: AirportOps.Present.Fleet.UndoThenRedoOfAStarterDepotSeedsItAgain,
+	 * AirportOps.Present.Fleet.ABulldozedStarterDepotIsSeededAgainWhateverItHeld
+	 */
+	int32 ForgetRemovedDepots(const URoadNetwork& Network);
 
 	/** What buying TypeCode costs: its row's Price. THE ONE READ - the quote's label, the purchase's judgement and charge and
 	 *  the ledger line cannot differ, because none of them reads the row's Price but through here (and ResaleOf).

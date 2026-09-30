@@ -334,15 +334,17 @@ struct AIRSIDE_API FEntityInstance
 	 * rearmost corner) and agreed only while a comment said they would. The facade writes the edge it was
 	 * GIVEN (URoadEditFacade::PlaceEntityInPlot), so DepotKit::ReservationOf hands the solve exactly what
 	 * the tool's preview and the commit handed it.
+	 * ENFORCED BY: Check-Architecture rule 4 row 'FEntityInstance::FrontageEdge write' (the facade, PlaceEntity's copy and
+	 * EnsureDepotFrontages are the only production writers)
 	 *
 	 * ASKING FAnchorLink AGAIN WAS REJECTED, as the old recovery's comment said: it would search the live
 	 * graph, so a road laid or deleted after the depot was built could move the frontage, and every shed
 	 * in the yard would jump to a new edge without the player touching the depot. Where the thing faces
 	 * was decided when it was placed, and it stays decided.
 	 *
-	 * An INDEX INTO Outline, so anything that rewrites Outline (there is nothing today: a placed plot is
-	 * immutable) must rewrite this with it; FEntityInstance::GetFrontage is the one reader that checks
-	 * the index is still in range. A level or a save written before this field loads every plotted depot at
+	 * An INDEX INTO Outline, so a rewrite of Outline must rewrite this with it (a placed plot is not edited
+	 * today, and the day one is, this is what to move); FEntityInstance::GetFrontage checks the index is still
+	 * in range before it reads. A level or a save written before this field loads every plotted depot at
 	 * INDEX_NONE; URoadNetwork::EnsureDepotFrontages (PostLoad, and ARoadNetworkActor::RepairLoadedNetwork for a
 	 * save game) stores the edge once, so the authored maps keep their yards. Until then, unsolvable - the same
 	 * answer a plotless depot gives.
@@ -476,8 +478,9 @@ struct AIRSIDE_API FEntityPlacement
 	 * How far along Heading the pose NODE stands from Position, uu. Zero - on Position - for
 	 * everything but a drawn depot.
 	 *
-	 * A DEPOT'S Position IS ITS GATE and stays its gate: the fence's gap and the yard's seed
-	 * (the midpoint of the stored frontage, FrontageEdge) are read off it. Its NODE is where its trucks
+	 * A DEPOT'S Position IS ITS GATE and stays its gate: the fence's gap reads Position, and the yard's seed
+	 * reads the midpoint of the stored frontage (FrontageEdge), which PlaceEntityInPlot makes equal to Position
+	 * - two reads that agree because the facade stored them so, not one read of one value. Its NODE is where its trucks
 	 * live and leave from, and on the gate that was on the kerb - too close to the road for the
 	 * truck to turn out onto it (FAnchorLink::PoseSetbackFor). So the two part company here, and
 	 * only here.
