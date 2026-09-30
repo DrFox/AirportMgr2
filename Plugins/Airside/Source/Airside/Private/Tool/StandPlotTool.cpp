@@ -429,10 +429,12 @@ void FStandPlotTool::DescribeReadout(const FToolContext& Context, TConstArrayVie
 	// an F taxiway pays F's 34.5 m, and the readout is where the player learns why.
 	if (FrontGap > 0.0 && Context.Network() != nullptr)
 	{
-		if (const FRoadSegment* Road = Context.Network()->GetSegment(FrontRoad); Road != nullptr && Road->Profile != nullptr)
+		// THROUGH ProfileFor (#459): read raw, a taxiway with no profile of its own showed no strip fact at all.
+		const FRoadSegment* Road = Context.Network()->GetSegment(FrontRoad);
+		if (const URoadProfile* Profile = Road != nullptr ? Context.Network()->ProfileFor(*Road) : nullptr)
 		{
 			Sink.Fact(TEXT("Strip"), FString::Printf(TEXT("%.1f m (Code %s taxiway)"), FrontGap / 100.0,
-				IcaoCode::ToLetter(IcaoCode::TaxiwayLetterForWidth(Road->Profile->GetTotalWidth()))));
+				IcaoCode::ToLetter(IcaoCode::TaxiwayLetterForWidth(Profile->GetTotalWidth()))));
 		}
 	}
 

@@ -226,8 +226,10 @@ bool FRoadSegmentSnapRule::Resolve(const URoadNetwork& Network, const FRoadSnapQ
 		// Asked of the PROFILE, which is what actually decides how wide the ribbon is drawn -
 		// the same source URoadSurfacePresenter builds the mesh from, so "on the pavement"
 		// here and "on the pavement" on screen cannot mean two different things.
-		const double Reach = FMath::Max(Settings.SegmentRadius,
-			Segment.Profile != nullptr ? Segment.Profile->GetMaxHalfWidth() : 0.0);
+		// THROUGH ProfileFor (#459), which is also what the presenter builds with: read raw, a road with no profile
+		// of its own was snapped to as if it had no width.
+		const URoadProfile* Profile = Network.ProfileFor(Segment);
+		const double Reach = FMath::Max(Settings.SegmentRadius, Profile != nullptr ? Profile->GetMaxHalfWidth() : 0.0);
 		if (DistanceSquared > Reach * Reach || DistanceSquared > BestSquared)
 		{
 			continue;

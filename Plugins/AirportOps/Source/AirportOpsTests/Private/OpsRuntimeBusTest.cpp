@@ -16,6 +16,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
+#include "Model/TaxiwayStrip.h"
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Model/SimClock.h"
@@ -1070,6 +1071,66 @@ bool FOpsRuntimeFleetToastsTest::RunTest(const FString&)
 	Runtime->GetBus().Publish(FFleetChangedEvent{ 1, 9, TEXT("FUEL"), EFleetChange::Sold, 45000.0 });
 	Runtime->Tick(0.0);
 	TestEqual(TEXT("and a purchase and a sale still toast, as before"), Listener->CountOf(TEXT("note:")), Before + 3);
+	return true;
+}
+
+/**
+ * #459 PIN: A SAVE WHOSE TAXIWAYS USE THE FALLBACK PROFILE, LOADED IN A NEW PROCESS. The fallback lives in the transient
+ * package, so a new process cannot re-find it by path: the roads came back with no profile of their own, and the first
+ * rebuild - StandTurnOffMarkingBuilder, which reads every taxiway's width and runs whenever a taxiway has a strip -
+ * dereferenced the null. SIMULATED by renaming the fallback after the save, so its old path names nothing, exactly as
+ * in a fresh process. Then: no crash, and every road's profile live and this actor's own default.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRuntimeLoadFallbackNewProcessTest, "AirportOps.Present.RuntimeLoad.FallbackProfileSurvivesANewProcess",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FRuntimeLoadFallbackNewProcessTest::RunTest(const FString&)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor to attach to"), Actor)) { return false; }
+	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(20000.0, 0.0));
+	const int32 C = Actor->PlaceNode(FVector2D(20000.0, 20000.0));
+	Actor->ConnectNodes(A, B);
+	Actor->ConnectNodes(B, C);
+	URoadProfile* Fallback = Actor->ResolveProfile();
+	const URoadNetwork* Net = Actor->Network;
+	int32 Taxiways = 0;
+	for (int32 Index = 0; Index < Net->GetSegments().Num(); ++Index)
+	{
+		const FRoadSegmentId Id = Net->SegmentIdAt(Index);
+		Taxiways += Id.IsSet() && Net->GetSegments()[Index].Profile == Fallback && TaxiwayStrip::HasStrip(*Net, Id);
+	}
+	if (!TestTrue(TEXT("the actor lays with its transient fallback"), Fallback != nullptr && Fallback->IsIn(GetTransientPackage()))
+		|| !TestEqual(TEXT("and both taxiways use it and have a strip - or the rebuild below reads nothing"), Taxiways, 2))
+	{
+		return false;
+	}
+
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	const FString Slot = TEXT("AirportOpsTest_FallbackNewProcess");
+	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
+
+	// A NEW PROCESS, AS FAR AS A PATH CAN TELL: the fallback keeps being the actor's (same object), under a name the
+	// saved path does not have.
+	Fallback->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
+	if (!TestTrue(TEXT("load reads - and the rebuild it runs does not crash"), Runtime->LoadFromSlot(Slot))) { return false; }
+
+	int32 Live = 0;
+	int32 OnTheDefault = 0;
+	for (int32 Index = 0; Index < Actor->Network->GetSegments().Num(); ++Index)
+	{
+		if (!Actor->Network->SegmentIdAt(Index).IsSet())
+		{
+			continue;
+		}
+		++Live;
+		OnTheDefault += Actor->Network->ProfileFor(Actor->Network->GetSegments()[Index]) == Actor->ResolveProfile();
+	}
+	TestEqual(TEXT("both taxiways came back"), Live, 2);
+	TestEqual(TEXT("and every one's profile is live and this actor's own default"), OnTheDefault, Live);
+	TestTrue(TEXT("DefaultProfile is live - re-resolved from the loading actor"), Actor->Network->DefaultProfile == Actor->ResolveProfile());
 	return true;
 }
 

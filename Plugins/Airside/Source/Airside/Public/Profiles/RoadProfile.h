@@ -345,6 +345,21 @@ public:
 	static URoadProfile* MakeTransient(double TotalWidth, double FilletRadius, double ShoulderWidth = 0.0);
 
 	/**
+	 * THIS PROFILE IS AN ACTOR'S FALLBACK (#459): set by ARoadNetworkActor::ResolveProfile on the profile it makes
+	 * from its own FallbackWidth when no Profile is authored, and by nothing else in production. Such a profile lives in
+	 * the transient package, so no other process can re-find it by path; OpsSave writes every reference to one as none,
+	 * which a road reads as "no profile of its own - the network's default" (URoadNetwork::ProfileFor), re-resolved by
+	 * whichever actor loads it.
+	 *
+	 * A MARKER ON THE OBJECT, not "whatever the network's DefaultProfile is now": a road laid in the EDITOR names the
+	 * editor actor's fallback, and a PIE copy of that network keeps naming it while its DefaultProfile becomes the PIE
+	 * actor's own (RuntimeProfile is Transient, so PIE makes a new one) - keyed on DefaultProfile, a PIE save wrote the
+	 * editor's fallback as a path. Transient: a fact about this process's object, never saved.
+	 * ENFORCED BY: AirportOps.Model.Save.FallbackProfileIsSavedAsTheDefault
+	 */
+	UPROPERTY(Transient) bool bActorFallback = false;
+
+	/**
 	 * Fills Profile with the standard taxiway cross-section, replacing whatever it held.
 	 *
 	 * Exposed to script for the same reason UEntityDefinition::BuildCodeCStand is: the

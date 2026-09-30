@@ -19,8 +19,10 @@ namespace PlotGesture
 	 */
 	bool IsServiceRoad(const URoadNetwork& Network, FRoadSegmentId Id)
 	{
+		// THROUGH ProfileFor (#459): a road with no profile of its own is the network's default, not "no road".
 		const FRoadSegment* Segment = Network.GetSegment(Id);
-		if (Segment == nullptr || Segment->Profile == nullptr)
+		const URoadProfile* Profile = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
+		if (Profile == nullptr)
 		{
 			return false;
 		}
@@ -29,7 +31,7 @@ namespace PlotGesture
 		// exactly what a GroundVehicle guideline means - and it is the same question
 		// FAnchorLink asks of the graph when it joins a depot's pose. A cross-section with
 		// no such line is a taxiway however it is labelled.
-		for (const FProfileGuideline& Guideline : Segment->Profile->Guidelines)
+		for (const FProfileGuideline& Guideline : Profile->Guidelines)
 		{
 			if (Guideline.Class == ETraversalClass::GroundVehicle)
 			{
@@ -60,13 +62,15 @@ namespace PlotGesture
 	 */
 	double KerbOffset(const URoadNetwork& Network, FRoadSegmentId Id, bool bLeftOfSegment)
 	{
+		// THROUGH ProfileFor (#459): read raw, a road with no profile of its own had no kerb, and the plot
+		// was built over half the carriageway - the very thing this function exists to stop.
 		const FRoadSegment* Segment = Network.GetSegment(Id);
-		if (Segment == nullptr || Segment->Profile == nullptr)
+		const URoadProfile* Profile = Segment != nullptr ? Network.ProfileFor(*Segment) : nullptr;
+		if (Profile == nullptr)
 		{
 			return 0.0;
 		}
-		return bLeftOfSegment ? Segment->Profile->GetHalfWidthLeft()
-			: Segment->Profile->GetHalfWidthRight();
+		return bLeftOfSegment ? Profile->GetHalfWidthLeft() : Profile->GetHalfWidthRight();
 	}
 
 	/**

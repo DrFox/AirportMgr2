@@ -101,7 +101,6 @@ enum class ELoadedFrom : uint8
  * UpdateGhost/HideGhost/RebuildMesh going to the presenter and DispatchAgent to traffic; see
  * each forwarder's own one-line comment for which.
  */
-
 UCLASS()
 class AIRSIDE_API ARoadNetworkActor : public AActor, public IRoadEditTarget
 {
