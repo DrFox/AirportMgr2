@@ -38,7 +38,12 @@ struct FAgentHold
 	EHoldAt At = EHoldAt::None;
 	/** "09/27" when At is Runway and a network was given to name the strip; empty otherwise. */
 	FString RunwayPair;
-	/** FRoadAgent::GetStalledSeconds - how long it has stood waiting. */
+	/**
+	 * FRoadAgent::GetStalledSeconds - how long it has stood waiting, in MOVEMENT seconds: real
+	 * time x the speed multiplier, what agents run on (USimClock's header). NOT game time - the
+	 * clock also compresses the day (~72x at the default daylight rate), and a reader showing
+	 * this beside game-time figures must convert it (UInspectorWidget::GameSecondsOfStall).
+	 */
 	double StalledSeconds = 0.0;
 
 	bool IsSet() const { return WaitingOn != 0; }
@@ -252,12 +257,19 @@ namespace InspectFacts
 	AIRSIDE_API FAgentHold HoldOf(const FRoadAgent& Agent, const URoadNetwork* Network);
 
 	/**
-	 * THE hold sentence - "Holding short of runway 09/27 for G-HDVK · 1:20", "Waiting behind
-	 * G-HDVK · 0:12", "Waiting at crossing for G-HDVK · 0:05" - with the blocker called
-	 * BlockerName. Empty when Hold is not set. The one wording StatusOf and the inspector share.
-	 * ENFORCED BY: Airside.Model.InspectFacts.HoldLine
+	 * THE hold sentence - "Holding short of runway 09/27 for G-HDVK · 12 min", "Waiting behind
+	 * G-HDVK · 1 h 36 min", "Waiting at crossing for G-HDVK" - with the blocker called BlockerName
+	 * and " · Duration" appended when Duration is not empty. Empty when Hold is not set. The one
+	 * wording StatusOf and the inspector share.
+	 *
+	 * DURATION IS THE CALLER'S WORDS, IN GAME TIME (ruled 2026-09-30): Hold.StalledSeconds is
+	 * movement time, and only a layer with the game clock can say how much GAME time that was - so
+	 * Airside, which has none, passes nothing and the inspector passes its game-time duration in
+	 * the turnaround line's own format. A figure formatted here would be in the wrong unit.
+	 * ENFORCED BY: Airside.Model.InspectFacts.HoldLine; AirportMgr.Inspector.HoldAndDeadlockLines
+	 * (a known stall at a known day rate reads as the expected game minutes)
 	 */
-	AIRSIDE_API FString HoldLine(const FAgentHold& Hold, const FString& BlockerName);
+	AIRSIDE_API FString HoldLine(const FAgentHold& Hold, const FString& BlockerName, const FString& Duration);
 
 	/**
 	 * FAgentFacts::TypeName's rule for any agent - the airframe or vehicle type code, else the
@@ -265,9 +277,6 @@ namespace InspectFacts
 	 * card title uses, without describing the blocker whole.
 	 */
 	AIRSIDE_API FString TypeNameOf(const FRoadAgent& Agent);
-
-	/** Seconds as m:ss - "1:20". Negative reads as 0:00. */
-	AIRSIDE_API FString MinutesSeconds(double Seconds);
 
 	/** The card's pushback words for a need. */
 	AIRSIDE_API FString PushbackText(EPushbackNeed Need);

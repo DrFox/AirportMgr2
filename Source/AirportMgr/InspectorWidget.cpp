@@ -20,6 +20,8 @@
 #include "ArrivalViewModels.h"
 #include "Model/InspectFacts.h"
 #include "Model/OpsAlerts.h"
+#include "Model/SimClock.h"
+#include "OfferViewModels.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
 #include "Present/OpsRuntime.h"
@@ -253,12 +255,14 @@ FString UInspectorWidget::FollowCaptionForTest() const
 void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection& Selection,
 	const FAgentFacts* PrecomputedAgentFacts)
 {
+	// ONE RESET, before any early return: only the aircraft branch sets it again, so every other
+	// path - no selection, a gone agent, another kind of card - leaves Show with nothing to select.
+	WaitedForId = 0;
 	if (Target == nullptr || !Selection.IsSet())
 	{
 		SetShown(false);
 		bDepartEnabled = false;
 		LastSelection = FSelection();
-		WaitedForId = 0;
 		return;
 	}
 	// A NEW SELECTION REOPENS A WINDOW THE PLAYER CLOSED: the close meant "not this one", and
@@ -303,7 +307,6 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		{
 			SetShown(false);
 			bDepartEnabled = false;
-			WaitedForId = 0;
 			return;
 		}
 		bAircraft = true;
@@ -355,6 +358,14 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			PartnerNames.Add(NameOfAgent(Traffic, Partner));
 		}
 		const FString Partners = FString::Join(PartnerNames, TEXT(", "));
+		// HOW LONG, IN GAME TIME and the turnaround line's words (ruled 2026-09-30): the stall clock
+		// is movement time, which the day's compression leaves ~72x behind the clock the rest of the
+		// card counts in. No clock, no figure - never movement seconds dressed as game minutes.
+		FString Waited;
+		if (const USimClock* Clock = GameClock(); Clock != nullptr && F.Hold.IsSet())
+		{
+			Waited = UOfferViewModel::DescribeDuration(GameSecondsOfStall(F.Hold.StalledSeconds, *Clock)).ToString();
+		}
 
 		// MAGNITUDE. FAgentMotion::GroundSpeed became signed on 2026-09-20 so the view could
 		// roll a reversing vehicle's wheels backwards, and a readout is not that view: an
@@ -384,6 +395,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		Key.Airline = Airline;
 		Key.Blocker = Blocker;
 		Key.Partners = Partners;
+		Key.Waited = Waited;
 
 		if (Key != LastComposedKey)
 		{
@@ -450,7 +462,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			}
 			// THE HOLD LINE RE-SAID WITH A NAME - only where StatusOf's precedence chose it
 			// (bStatusIsHold), so "Departure armed" still outranks it as before.
-			LastComposedStatus = F.bStatusIsHold ? InspectFacts::HoldLine(F.Hold, Blocker) : F.Status;
+			LastComposedStatus = F.bStatusIsHold ? InspectFacts::HoldLine(F.Hold, Blocker, Waited) : F.Status;
 		}
 		Title = LastComposedTitle;
 		Facts = LastComposedFacts;
@@ -486,7 +498,6 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			"Landing and taking off {0}. A change reaches the next flight planned.").ToString(), { InUse });
 		RunwayCaption = FText::Format(NSLOCTEXT("AirportMgr", "InspectorRunwayUse", "Use {0}"), FText::FromString(Other));
 		// The CURRENT mode, selection.runway_use's own caption rule - see its row in BuildActions.
-		WaitedForId = 0;
 		RunwayUseCaption = R.Use == ERunwayUse::ArrivalsOnly ? NSLOCTEXT("AirportMgr", "InspectorRunwayArrivals", "Arrivals only")
 			: R.Use == ERunwayUse::DeparturesOnly ? NSLOCTEXT("AirportMgr", "InspectorRunwayDepartures", "Departures only")
 			: NSLOCTEXT("AirportMgr", "InspectorRunwayMixed", "Mixed ops");
@@ -505,7 +516,6 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		// every taxiway limits wingspan to its letter (user 2026-09-29) - and, restricted, what
 		// restricts it (spec: "max span 65 m - restricted by building at ..."). Composed every
 		// tick like the runway card; the SetText gate below makes an unchanged one free.
-		WaitedForId = 0;
 		Title = FString::Format(*NSLOCTEXT("AirportMgr", "InspectorTaxiwayTitle", "Taxiway {0}").ToString(), { T.Index });
 		Facts = FString::Format(
 			*NSLOCTEXT("AirportMgr", "InspectorTaxiwayFacts", "Code {0}, {1} m wide, {2}\nStrip {3} m each side\nMax span {4} m").ToString(),
@@ -531,7 +541,6 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			bDepartEnabled = false;
 			return;
 		}
-		WaitedForId = 0;
 		// AN ENTITY, NOT ALWAYS A STAND, since the fuel slice. PoseRole is what tells the two
 		// apart (see FStandFacts::PoseRole); a stand's own card is unchanged.
 		if (S.PoseRole == EServiceRole::Aircraft)
@@ -623,7 +632,6 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		}
 		SetShown(false);
 		bDepartEnabled = false;
-		WaitedForId = 0;
 		return;
 	}
 
@@ -791,6 +799,9 @@ bool UInspectorWidget::ShowWaitedFor(ARoadBuildController& InController)
 		UE_LOG(LogInspector, Warning, TEXT("Inspector Show ignored: the card waits for nobody"));
 		return false;
 	}
+	// THE CARD'S OWN LINE FIRST: SelectAndFocus logs as "Alert Go", and a grep for what the player
+	// clicked must find the inspector, not an alert nobody pressed.
+	UE_LOG(LogInspector, Log, TEXT("Inspector Show: agent %d waits for %d"), LastSelection.Id, WaitedForId);
 	// THE ALERT GO'S PATH, not a second selection mechanism: it leaves a build tool, moves the
 	// camera, selects as the select tool would, and logs "Alert Go: ... -> ..." either way.
 	FAlertFocus Focus;
@@ -810,6 +821,27 @@ void UInspectorWidget::HandleWaitingFor()
 }
 
 void UInspectorWidget::UseFlightBoardForTest(const UFlightBoard* Board) { FlightBoardForTest = Board; }
+
+void UInspectorWidget::UseClockForTest(const USimClock* Clock) { ClockForTest = Clock; }
+
+const USimClock* UInspectorWidget::GameClock() const
+{
+	if (const USimClock* Clock = ClockForTest.Get())
+	{
+		return Clock;
+	}
+	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	return Runtime != nullptr ? Runtime->GetClock() : nullptr;
+}
+
+double UInspectorWidget::GameSecondsOfStall(double StalledSeconds, const USimClock& Clock)
+{
+	// NOT TimeScale(): that is Multiplier x day rate, and the stall already carries the
+	// multiplier (agents run on it). Only the day's compression is missing. The rate NOW, not
+	// integrated over the wait - a stall that straddles dawn or dusk reads at the current band's
+	// rate, an error of one band change against a figure shown to the minute.
+	return StalledSeconds * Clock.GameSecondsPerRealSecond(Clock.TimeOfDay());
+}
 
 const UFlightBoard* UInspectorWidget::Flights() const
 {

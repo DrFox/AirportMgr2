@@ -789,7 +789,10 @@ bool FInspectorHoldAndDeadlockTest::RunTest(const FString& Parameters)
 	Fly(Two, TEXT("G-HDVK"));
 
 	UGroundTraffic& Traffic = *Actor->GetGroundTraffic();
-	const double Stalled = Traffic.Rules.StallSeconds + 77.0;   // 1:20 and change
+	// 80 MOVEMENT SECONDS at a 1200 s day (72 game s per real s): 5760 game s, 96 game minutes.
+	const double Stalled = 80.0;
+	if (!TestTrue(TEXT("the stall is past StallSeconds, or no ring is reported"), Stalled > Traffic.Rules.StallSeconds)) { return false; }
+	Clock->SetUniformDay(1200.0);
 	FGroundTrafficTestAccess Access(Traffic);
 	Access.ScriptWait(One, FTrafficResource::OfEdge(Lane), Two, Stalled);
 	Access.ScriptWait(Two, FTrafficResource::OfNode(B), One, Stalled);
@@ -797,6 +800,7 @@ bool FInspectorHoldAndDeadlockTest::RunTest(const FString& Parameters)
 	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
 	if (!TestNotNull(TEXT("the panel is created with no asset"), Panel)) { return false; }
 	Panel->UseFlightBoardForTest(Board);
+	Panel->UseClockForTest(Clock);
 
 	FAgentFacts Facts;
 	InspectFacts::DescribeAgent(Traffic, &Net, One, Facts);
@@ -807,8 +811,8 @@ bool FInspectorHoldAndDeadlockTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the deadlock line names the partner by registration"), Panel->DeadlockForTest().Contains(TEXT("Deadlocked with G-HDVK")));
 	TestTrue(TEXT("and asks for the fix in the alert's own words"),
 		Panel->DeadlockForTest().Contains(UOpsAlerts::DeadlockRemedy().ToString()));
-	TestEqual(TEXT("the hold line names the blocker by registration, with the stall clock"), Panel->StatusForTest(),
-		FString::Printf(TEXT("Waiting behind G-HDVK · %s"), *InspectFacts::MinutesSeconds(Stalled)));
+	TestEqual(TEXT("the hold line names the blocker by registration, and the wait in GAME time - the turnaround line's unit and words, not 80 movement seconds"),
+		Panel->StatusForTest(), FString(TEXT("Waiting behind G-HDVK · 1 h 36 min")));
 	TestEqual(TEXT("the button offers to show it"), Panel->WaitingForCaptionForTest(), FString(TEXT("Show G-HDVK")));
 
 	// THE OTHER CARD SAYS THE SAME RING from its end.
@@ -835,6 +839,27 @@ bool FInspectorHoldAndDeadlockTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Show goes somewhere"), Panel->ShowWaitedFor(*C));
 	TestEqual(TEXT("an agent is selected"), C->GetSelection().Kind, ESelectionKind::Aircraft);
 	TestEqual(TEXT("the one this card waits for"), C->GetSelection().Id, One);
+
+	// BELOW StallSeconds IT IS TRAFFIC, NOT A JAM: the card drops its deadlock line exactly when the
+	// alert would not raise one - both read CurrentDeadlocks.
+	Access.ScriptWait(One, FTrafficResource::OfEdge(Lane), Two, Traffic.Rules.StallSeconds * 0.5);
+	Access.ScriptWait(Two, FTrafficResource::OfNode(B), One, Traffic.Rules.StallSeconds * 0.5);
+	Sel.Id = One;
+	Panel->Refresh(Actor, Sel);
+	TestEqual(TEXT("a short wait shows no deadlock line"), Panel->DeadlockForTest(), FString());
+	TestEqual(TEXT("but still the hold and its Show"), Panel->WaitingForCaptionForTest(), FString(TEXT("Show G-HDVK")));
+	UOpsAlerts* Quiet = NewObject<UOpsAlerts>(GetTransientPackage());
+	Quiet->Recompute(Sources, 0.0);
+	TestFalse(TEXT("and the alert raises none either"), Quiet->GetAlerts().ContainsByPredicate(
+		[](const FOpsAlert& Each) { return Each.Key.Kind == EAlertKind::Deadlock; }));
+
+	// THE BLOCKER GONE: Show refuses and moves no selection.
+	Traffic.RetireAgent(Two);
+	Panel->Refresh(Actor, Sel);
+	TestEqual(TEXT("still waiting on it, so this is the gone path and not the no-wait one"),
+		Panel->WaitingForCaptionForTest(), FString(TEXT("Show G-HDVK")));
+	TestFalse(TEXT("Show on a blocker that has gone goes nowhere"), Panel->ShowWaitedFor(*C));
+	TestEqual(TEXT("and the selection stays where it was"), C->GetSelection().Id, One);
 
 	// NO FLIGHT, NO WAIT: the id title, no deadlock line, no button.
 	Sel.Id = Loner;

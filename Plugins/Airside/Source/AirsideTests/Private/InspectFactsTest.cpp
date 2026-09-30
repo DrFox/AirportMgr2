@@ -154,7 +154,7 @@ bool FInspectFactsTest::RunTest(const FString& Parameters)
 		// traffic to ask what agent 7 is, nor a flight board for its registration. A default
 		// FTrafficResource is a Node - a crossing.
 		TestEqual(TEXT("holding for another, in the hold line's words"), InspectFacts::StatusOf(Scripted),
-			FString(TEXT("Waiting at crossing for aircraft 7 · 0:00")));
+			FString(TEXT("Waiting at crossing for aircraft 7")));
 		Scripted.bDepartureArmed = true;
 		TestEqual(TEXT("armed departure outranks holding"), InspectFacts::StatusOf(Scripted), FString(TEXT("Departure armed")));
 		Scripted.bDepartureArmed = false; Scripted.ClearArbitration();
@@ -377,30 +377,26 @@ bool FInspectFactsHoldLineTest::RunTest(const FString& Parameters)
 	// player reads.
 	FAgentHold Hold;
 	TestEqual(TEXT("no hold, no line - a card must not say 'waiting' for a mover"),
-		InspectFacts::HoldLine(Hold, TEXT("G-HDVK")), FString());
+		InspectFacts::HoldLine(Hold, TEXT("G-HDVK"), TEXT("12 min")), FString());
 
 	Hold.WaitingOn = 9;
 	Hold.StalledSeconds = 80.4;
 	Hold.At = EHoldAt::Runway;
 	Hold.RunwayPair = TEXT("09/27");
-	TestEqual(TEXT("a runway refusal names the strip by its pair"), InspectFacts::HoldLine(Hold, TEXT("G-HDVK")),
-		FString(TEXT("Holding short of runway 09/27 for G-HDVK · 1:20")));
+	TestEqual(TEXT("a runway refusal names the strip by its pair, then the caller's duration"),
+		InspectFacts::HoldLine(Hold, TEXT("G-HDVK"), TEXT("1 h 36 min")),
+		FString(TEXT("Holding short of runway 09/27 for G-HDVK · 1 h 36 min")));
 	Hold.RunwayPair.Reset();
-	TestEqual(TEXT("with no network to name it, still a runway"), InspectFacts::HoldLine(Hold, TEXT("G-HDVK")),
-		FString(TEXT("Holding short of runway for G-HDVK · 1:20")));
+	TestEqual(TEXT("with no network to name it, still a runway"), InspectFacts::HoldLine(Hold, TEXT("G-HDVK"), TEXT("12 min")),
+		FString(TEXT("Holding short of runway for G-HDVK · 12 min")));
 
 	Hold.At = EHoldAt::Behind;
-	Hold.StalledSeconds = 12.9;
-	TestEqual(TEXT("an edge is a queue - the clock truncates, never rounds up to a second not yet waited"),
-		InspectFacts::HoldLine(Hold, TEXT("G-HDVK")), FString(TEXT("Waiting behind G-HDVK · 0:12")));
+	TestEqual(TEXT("an edge is a queue"), InspectFacts::HoldLine(Hold, TEXT("G-HDVK"), TEXT("12 min")),
+		FString(TEXT("Waiting behind G-HDVK · 12 min")));
 
 	Hold.At = EHoldAt::Crossing;
-	Hold.StalledSeconds = 5.0;
-	TestEqual(TEXT("a node is a crossing"), InspectFacts::HoldLine(Hold, TEXT("Bowser #7")),
-		FString(TEXT("Waiting at crossing for Bowser #7 · 0:05")));
-
-	TestEqual(TEXT("an hour of waiting stays m:ss, not a wrapped 0:00"), InspectFacts::MinutesSeconds(3725.0), FString(TEXT("62:05")));
-	TestEqual(TEXT("a negative clock reads zero"), InspectFacts::MinutesSeconds(-3.0), FString(TEXT("0:00")));
+	TestEqual(TEXT("a node is a crossing - and with no game clock to convert the stall, no figure at all, never movement seconds"),
+		InspectFacts::HoldLine(Hold, TEXT("Bowser #7"), FString()), FString(TEXT("Waiting at crossing for Bowser #7")));
 	return true;
 }
 
@@ -442,7 +438,7 @@ bool FInspectFactsDeadlockTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("for as long as its stall clock says"), Facts.Hold.StalledSeconds, Stalled);
 	TestTrue(TEXT("the status IS the hold line, so the game may re-say it with a registration"), Facts.bStatusIsHold);
 	TestEqual(TEXT("which names the blocker by id here"), Facts.Status,
-		InspectFacts::HoldLine(Facts.Hold, FString::Printf(TEXT("aircraft %d"), Two)));
+		InspectFacts::HoldLine(Facts.Hold, FString::Printf(TEXT("aircraft %d"), Two), FString()));
 	TestEqual(TEXT("deadlocked with the other member"), Facts.DeadlockedWith, TArray<int32>{ Two });
 
 	InspectFacts::DescribeAgent(*Traffic, Net, Two, Facts);
@@ -495,7 +491,7 @@ bool FInspectFactsHoldRunwayTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("held at the runway"), Facts.Hold.At == EHoldAt::Runway);
 	TestEqual(TEXT("named by the runway card's own pair"), Facts.Hold.RunwayPair, Card.Pair);
 	TestEqual(TEXT("an unknown blocker is still named - as an aircraft, today's word"), Facts.Status,
-		FString::Printf(TEXT("Holding short of runway %s for aircraft 42 · 0:20"), *Card.Pair));
+		FString::Printf(TEXT("Holding short of runway %s for aircraft 42"), *Card.Pair));
 	return true;
 }
 

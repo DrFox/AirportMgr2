@@ -12,6 +12,7 @@ class ARoadNetworkActor;
 class UBuildBarWidget;
 class UFlightBoard;
 class UGroundTraffic;
+class USimClock;
 class UButton;
 class UUiButton;
 class UTextBlock;
@@ -67,12 +68,15 @@ struct FInspectorKey
 	/**
 	 * The NAMES the title, hold and deadlock lines print (2026-09-30) - the registration and airline
 	 * off the flight board, the blocker's and ring partners' names. Keyed RAW, like Fuel: looked up
-	 * before the gate, composed behind it. Phase (F.Status) already carries the stall clock.
+	 * before the gate, composed behind it. The stall clock is Waited, below.
 	 */
 	FString Registration;
 	FString Airline;
 	FString Blocker;
 	FString Partners;
+	/** The hold's game-time duration as printed ("12 min") - it moves while Phase, since the hold
+	 *  line left Airside without a figure, does not. */
+	FString Waited;
 
 	bool operator==(const FInspectorKey& Other) const
 	{
@@ -81,7 +85,7 @@ struct FInspectorKey
 			&& Destination == Other.Destination && bEngineRunning == Other.bEngineRunning
 			&& Fuel == Other.Fuel && Pushback == Other.Pushback && Turnaround == Other.Turnaround
 			&& Registration == Other.Registration && Airline == Other.Airline && Blocker == Other.Blocker
-			&& Partners == Other.Partners;
+			&& Partners == Other.Partners && Waited == Other.Waited;
 	}
 	bool operator!=(const FInspectorKey& Other) const { return !(*this == Other); }
 };
@@ -187,6 +191,15 @@ public:
 	 * has no game instance and so no UOpsRuntimeSubsystem. Weak: the test owns the board.
 	 */
 	void UseFlightBoardForTest(const UFlightBoard* Board);
+	/** The game clock the hold duration converts by, in place of the ops runtime's - UseFlightBoardForTest's reason. */
+	void UseClockForTest(const USimClock* Clock);
+
+	/**
+	 * A stall (FAgentHold::StalledSeconds - movement seconds, real x speed) as GAME seconds, the
+	 * unit the turnaround line beside it counts in: x the day's compression at Clock's time of day.
+	 * ENFORCED BY: AirportMgr.Inspector.HoldAndDeadlockLines (a known stall at 72x reads 1 h 36 min)
+	 */
+	static double GameSecondsOfStall(double StalledSeconds, const USimClock& Clock);
 
 	FString StatusForTest() const;
 	/** The deadlock line, or empty while it is collapsed. */
@@ -306,6 +319,12 @@ private:
 
 	/** UseFlightBoardForTest's board, else the ops runtime's; null when neither exists. */
 	const UFlightBoard* Flights() const;
+
+	/** See UseClockForTest. */
+	TWeakObjectPtr<const USimClock> ClockForTest;
+
+	/** UseClockForTest's clock, else the ops runtime's; null when neither exists. */
+	const USimClock* GameClock() const;
 
 	/**
 	 * How the card names another agent: its flight's registration, else "<type> #<id>" (the title's

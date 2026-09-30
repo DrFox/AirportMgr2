@@ -86,8 +86,14 @@ namespace InspectFacts
 			if (Hold.IsSet())
 			{
 				bOutIsHold = true;
-				return HoldLine(Hold, BlockerName);
+				// NO DURATION: the stall clock is movement time and Airside has no game clock to turn
+				// it into the card's units - see HoldLine. The inspector re-says it with one.
+				return HoldLine(Hold, BlockerName, FString());
 			}
+			// NO RECURSION BACK: StatusOf only calls here when one of the three branches above will
+			// return - awaiting a stand, armed, or waiting (HoldOf sets the hold from GetWaitingOn,
+			// the very test StatusOf made). The check() pins that the fall-through cannot re-enter.
+			check(!Agent.bAwaitingStand && !(Agent.bDepartureArmed && Agent.Phase == EAgentPhase::Taxiing) && Agent.GetWaitingOn() == 0);
 			return StatusOf(Agent);
 		}
 
@@ -225,42 +231,36 @@ namespace InspectFacts
 		return Hold;
 	}
 
-	FString MinutesSeconds(double Seconds)
-	{
-		// TRUNCATED, never rounded: a clock that reads 0:13 at 12.6 s has claimed a second nobody
-		// has waited yet, and the line would tick over early.
-		const int32 Whole = FMath::Max(0, FMath::FloorToInt32(Seconds));
-		return FString::Printf(TEXT("%d:%02d"), Whole / 60, Whole % 60);
-	}
-
-	FString HoldLine(const FAgentHold& Hold, const FString& BlockerName)
+	FString HoldLine(const FAgentHold& Hold, const FString& BlockerName, const FString& Duration)
 	{
 		if (!Hold.IsSet())
 		{
 			return FString();
 		}
-		const FString Clock = MinutesSeconds(Hold.StalledSeconds);
 		// FString::Format over NSLOCTEXT, not Printf - the aircraft card's own reason (issue #192):
 		// UE 5.8's Printf wants a literal format, and these words are translatable.
+		FString Line;
 		switch (Hold.At)
 		{
 		case EHoldAt::Runway:
-			return Hold.RunwayPair.IsEmpty()
-				? FString::Format(*NSLOCTEXT("Airside", "HoldRunwayBare", "Holding short of runway for {0} · {1}").ToString(),
-					{ BlockerName, Clock })
-				: FString::Format(*NSLOCTEXT("Airside", "HoldRunway", "Holding short of runway {0} for {1} · {2}").ToString(),
-					{ Hold.RunwayPair, BlockerName, Clock });
+			Line = Hold.RunwayPair.IsEmpty()
+				? FString::Format(*NSLOCTEXT("Airside", "HoldRunwayBare", "Holding short of runway for {0}").ToString(), { BlockerName })
+				: FString::Format(*NSLOCTEXT("Airside", "HoldRunway", "Holding short of runway {0} for {1}").ToString(),
+					{ Hold.RunwayPair, BlockerName });
+			break;
 		case EHoldAt::Behind:
-			return FString::Format(*NSLOCTEXT("Airside", "HoldBehind", "Waiting behind {0} · {1}").ToString(),
-				{ BlockerName, Clock });
+			Line = FString::Format(*NSLOCTEXT("Airside", "HoldBehind", "Waiting behind {0}").ToString(), { BlockerName });
+			break;
 		case EHoldAt::Crossing:
 		case EHoldAt::None:
 		default:
 			// NONE READS AS A CROSSING: HoldOf only leaves it None for an unset hold, returned above;
 			// a node is also what a default FTrafficResource is.
-			return FString::Format(*NSLOCTEXT("Airside", "HoldCrossing", "Waiting at crossing for {0} · {1}").ToString(),
-				{ BlockerName, Clock });
+			Line = FString::Format(*NSLOCTEXT("Airside", "HoldCrossing", "Waiting at crossing for {0}").ToString(), { BlockerName });
+			break;
 		}
+		// The turnaround line's separator (UArrivalRowViewModel::DescribeTurnaround), so the card reads as one voice.
+		return Duration.IsEmpty() ? Line : Line + TEXT(" · ") + Duration;
 	}
 
 	FString TypeNameOf(const FRoadAgent& Agent)
