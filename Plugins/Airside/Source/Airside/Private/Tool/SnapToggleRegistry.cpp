@@ -101,24 +101,22 @@ namespace
 		// WHICH WAY THE GRID LIES: Follow turns it to what is snapped to, World keeps it square
 		// to the map (grid-follows-snap design, 2026-09-28). Lit while following.
 		//
-		// THE ONE SNAP TOGGLE WITH A KEY - H, a dated exception to the NO KEYS rule above. That
-		// rule's own reason is that a toggle "is set once rather than reached for mid-drag"; this
-		// one is reached for mid-drag (lay a stand square to the map beside a diagonal taxiway),
-		// and the player asked for a key. H was unbound in PIE on 2026-09-28 - NOT in the editor,
-		// where the level editor binds it to Toggle Selected Hierarchy Visibility. Since #440 the
-		// editor mode registers H too, and while the mode is active its toolkit sees the key
-		// first (FEditorModeTools::InputKey offers the mode's toolkit commands a viewport key
-		// before it bubbles up to SEditorViewport's command list) - traced in the engine source,
-		// not measured in a running editor.
-		// ENFORCED BY: AirportMgr.Actions.GridOrientButtonIsOnH, and the one-list check's
-		// duplicate-chord assertion for a clash in PIE.
+		// NO KEY SINCE 2026-09-30 (owner ruling), like every other row here. It had one - H, from
+		// 2026-09-28, a dated exception to the NO KEYS rule above because this toggle is reached for
+		// mid-drag (lay a stand square to the map beside a diagonal taxiway) and a player asked. But
+		// H was only unbound in PIE: the level editor binds it to Toggle Selected Hierarchy
+		// Visibility, and once this table became both drivers' one list (#440) the Road Build mode's
+		// toolkit would have taken H from the editor while the mode was active. The PIE bar button
+		// and the editor's Snap palette both reach it; H is free again in both drivers.
+		// ENFORCED BY: AirportMgr.Actions.GridOrientButtonHasNoKey, and
+		// Airside.Editor.EveryCommandIsReachable (keyless, so it must be drawn in a palette).
 		{
 			FSnapToggleRegistration Orient;
 			Orient.Id = FName(TEXT("snap.gridorient"));
 			Orient.Group = ESnapToggleGroup::AlignBy;
 			Orient.Name = LOCTEXT("SnapGridOrient", "Grid follows");
 			Orient.Tooltip = LOCTEXT("SnapGridOrientTooltip", "Turn the grid to what is snapped to, or keep it square to the map.");
-			Orient.Key = EKeys::H;
+			Orient.Key = EKeys::Invalid;
 			Orient.Apply = [](FSnapGuideSettings& S) { S.ToggleGridOrientation(); };
 			Orient.IsActive = [](const FSnapGuideSettings& S) { return S.GridOrientation == EGridOrientation::Follow; };
 			Orient.DynamicLabel = [](const FSnapGuideSettings& S)

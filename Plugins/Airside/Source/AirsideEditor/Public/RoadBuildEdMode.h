@@ -244,7 +244,7 @@ private:
 	bool IsVerbEnabled(int32 VerbIndex) const;
 
 	/**
-	 * A Snap / Snap to palette button, or H (issue #440): applies SnapToggleRegistry()[Index] to
+	 * A Snap / Snap to palette button (issue #440): applies SnapToggleRegistry()[Index] to
 	 * this level's airport - ARoadBuildController::ApplySnapToggle's twin, from the same table.
 	 *
 	 * A TRANSACTION, unlike PIE: GuideSources is a UPROPERTY on the level's ARoadNetworkActor, so

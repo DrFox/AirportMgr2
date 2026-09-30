@@ -93,7 +93,8 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 	// Airside.Editor.EveryCommandIsReachable measures. Overriding it to caption one button would
 	// swap the engine's consumer for ours under the pin. The step it moved to is in the log line
 	// URoadBuildEdMode::ApplySnapToggle writes, and the Grid button's check says whether it is on.
-	// The registry's Key comes along, so H is the grid's orientation in both drivers.
+	// The registry's Key comes along, so a toggle given a key has it in both drivers - none has
+	// one since the owner dropped the grid orientation's H (2026-09-30): the editor's H is its own.
 	for (const FSnapToggleRegistration& Toggle : SnapToggleRegistry())
 	{
 		TSharedPtr<FUICommandInfo> Command;

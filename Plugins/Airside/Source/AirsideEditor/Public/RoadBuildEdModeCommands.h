@@ -78,7 +78,7 @@ public:
 	/**
 	 * One command per SnapToggleRegistry() entry, in registry order - the same MakeCommandInfo
 	 * loop again (issue #440). The guide grid's switches, the Grid step and the grid's orientation
-	 * (H) were BuildActions rows in the game module, which this module cannot read, so the editor
+	 * (then on H, keyless since 2026-09-30) were BuildActions rows in the game module, which this module cannot read, so the editor
 	 * reached FSnapGuideSettings only through the Details panel. Each command's name IS the
 	 * registry Id ("snap.extending"), the same string the PIE bar row carries.
 	 */

@@ -420,8 +420,9 @@ namespace
 		// THE GUIDE GRID'S SWITCHES, GENERATED FROM Airside's SnapToggleRegistry() (issue #440) - the
 		// move BuildVerbRegistry() made for the sticky verbs above, and for the same reason: these
 		// were fourteen rows typed HERE, in the game module, which the editor mode cannot read, so
-		// the editor reached them only through the Details panel and H existed in PIE alone. The
-		// WHY of each row (no keys but H, "Direction" not "Parallel", one cycling Grid button, the
+		// the editor reached them only through the Details panel and H (keyless since 2026-09-30)
+		// existed in PIE alone. The
+		// WHY of each row (no keys, "Direction" not "Parallel", one cycling Grid button, the
 		// Taxiway/Service road split) travelled with it to SnapToggleRegistry.cpp.
 		//
 		// ENABLED ALWAYS, as the hand-typed rows were: a toggle with no airport is inert, not

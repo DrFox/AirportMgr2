@@ -529,12 +529,14 @@ bool FBuildActionsModalChordTest::RunTest(const FString& Parameters)
 }
 
 /**
- * THE GRID'S ORIENTATION TOGGLE, ON H - the one snap toggle with a key, by the player's request
- * (grid-follows-snap design): it is switched mid-gesture, which is the NO KEYS rule's own test.
+ * THE GRID'S ORIENTATION TOGGLE, BAR-ONLY SINCE 2026-09-30. It was on H (grid-follows-snap design,
+ * 2026-09-28, the one snap toggle with a key); the owner dropped the key once the snap rows became
+ * both drivers' one table (#440), because the level editor's H is Toggle Selected Hierarchy
+ * Visibility and the Road Build mode would have taken it. H must now run nothing at all in PIE.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FGridOrientButtonIsInTheRegistryTest,
-	"AirportMgr.Actions.GridOrientButtonIsOnH",
+	"AirportMgr.Actions.GridOrientButtonHasNoKey",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FGridOrientButtonIsInTheRegistryTest::RunTest(const FString& Parameters)
@@ -542,10 +544,10 @@ bool FGridOrientButtonIsInTheRegistryTest::RunTest(const FString& Parameters)
 	const FBuildAction* Action = FindAction(FName(TEXT("snap.gridorient")));
 	if (!TestNotNull(TEXT("snap.gridorient is registered"), Action)) { return false; }
 	TestEqual(TEXT("in the Snap section"), Action->Section, EActionSection::Snap);
-	TestTrue(TEXT("on H"), Action->Key == EKeys::H);
+	TestFalse(TEXT("bar-only: no key, by the owner's 2026-09-30 ruling"), Action->Key.IsValid());
 	TestFalse(TEXT("no Ctrl"), Action->bRequiresCtrl);
-	TestTrue(TEXT("FindAction(H) is this action - the binding loop reads the same table"),
-		FindAction(EKeys::H, false) == Action);
+	TestNull(TEXT("H runs no action in PIE - the binding loop reads the same table, so no row claims it"),
+		FindAction(EKeys::H, false));
 	TestTrue(TEXT("can be executed"), static_cast<bool>(Action->Execute));
 	TestTrue(TEXT("reports whether it is lit"), static_cast<bool>(Action->IsActive));
 	TestTrue(TEXT("has a caption that follows the orientation"), static_cast<bool>(Action->DynamicLabel));

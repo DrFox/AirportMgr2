@@ -24,7 +24,8 @@ enum class ESnapToggleGroup : uint8
  *
  * ISSUE #440: these were fourteen hand-written BuildActions rows in the GAME module, run through
  * eight ARoadBuildController proxies - so the editor mode, which cannot depend on the game module,
- * reached FSnapGuideSettings only through the Details panel, and H (grid orientation) existed in
+ * reached FSnapGuideSettings only through the Details panel, and H (grid orientation, keyless since
+ * 2026-09-30) existed in
  * PIE alone. This table lives in Airside, where both drivers can read it: BuildActions.cpp builds
  * one bar row per entry, and FRoadBuildEdModeCommands::RegisterCommands one palette command per
  * entry, so a fifteenth toggle added here reaches both or neither.
@@ -54,7 +55,8 @@ struct FSnapToggleRegistration
 	FText Name;
 	FText Tooltip;
 
-	/** EKeys::Invalid for a button-only toggle - every one but the grid's orientation (H). */
+	/** EKeys::Invalid for a button-only toggle - every one today: the grid orientation's H was
+	 *  dropped by owner ruling on 2026-09-30 (see its row). A key here is bound in BOTH drivers. */
 	FKey Key;
 
 	/** Flips (or, for the grid step, cycles) this toggle on an airport's settings. */

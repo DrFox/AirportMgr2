@@ -183,7 +183,7 @@ public:
 
 	/**
 	 * Applies one SnapToggleRegistry() entry - a guide relation (ALIGN BY), a reference (SNAP TO),
-	 * the Grid button's Off -> 1 m -> 5 m -> 10 m cycle, or the grid's Follow <-> World (H) - to the
+	 * the Grid button's Off -> 1 m -> 5 m -> 10 m cycle, or the grid's Follow <-> World - to the
 	 * airport this controller drives. The bar's snap rows all call this. Logs
 	 * "Snap toggle <id> -> <state>" ("snap.grid -> Grid: 5 m"), or that it was ignored with no airport.
 	 *
@@ -892,7 +892,7 @@ private:
 
 		/** The grid: pressing Grid changes the readout (a plot's frontage, its letter)
 		 *  with the cursor sitting still - review, 2026-09-27. The whole FRAME since
-		 *  2026-09-28: pressing H, or the grid turning to a new road, does the same. */
+		 *  2026-09-28: Grid follows (H until 2026-09-30), or the grid turning to a new road, does the same. */
 		GridSnap::FGridFrame Grid;
 
 		/**

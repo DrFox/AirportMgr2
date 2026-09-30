@@ -516,7 +516,7 @@ void ARoadBuildController::ApplySnapToggle(const FSnapToggleRegistration& Toggle
 	ARoadNetworkActor* Actor = GetTarget();
 	if (Actor == nullptr)
 	{
-		// SAID, not silent: before #440 a snap button or H with no airport returned without a word,
+		// SAID, not silent: before #440 a snap button with no airport returned without a word,
 		// and "the key does nothing" is diagnosed from this log.
 		UE_LOG(LogRoadBuild, Warning, TEXT("Snap toggle %s ignored: no airport (road network) to set it on"),
 			*Toggle.Id.ToString());

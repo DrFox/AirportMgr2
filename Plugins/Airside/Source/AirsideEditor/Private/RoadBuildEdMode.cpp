@@ -410,7 +410,7 @@ void URoadBuildEdMode::BindCommands()
 		}
 
 		// ONE PER SnapToggleRegistry() ENTRY (issue #440), the verbs' loop again: the same table
-		// PIE's bar rows are built from, so the guide switches, the Grid step and H cannot be
+		// PIE's bar rows are built from, so the guide switches and the Grid step cannot be
 		// reachable in one driver and not the other.
 		const TArray<TSharedPtr<FUICommandInfo>> SnapCommands = Commands.SnapCommandsInOrder();
 		for (int32 Index = 0; Index < SnapCommands.Num(); ++Index)
