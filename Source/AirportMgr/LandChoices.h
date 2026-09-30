@@ -17,7 +17,8 @@ class URoadNetwork;
  *  - the network object: a clear or a load is a new one, counting from zero.
  * NOT the occupancy, and not RunwayFreedCount, which the spec named: Build asks what the runway ADMITS, never whether
  * it is busy. NOT the airport status (PR B): the status greys aircraft.land's button, not these rows.
- * ENFORCED BY: AirportMgr.UI.LandPanelBuildsOnlyOnChange (one step per input)
+ * ENFORCED BY: AirportMgr.UI.LandPanelBuildsOnlyOnChange (one step per input, each red when its field is left out of ==;
+ * the network object's step is not - a new network also moves both revisions)
  */
 struct FLandChoicesKey
 {

@@ -369,6 +369,16 @@ namespace InspectorCacheTest
 		bool Ok() const { return Panel != nullptr && Flight != nullptr && Id > 0; }
 		FSelection Sel() const { FSelection S; S.Kind = ESelectionKind::Aircraft; S.Id = Id; return S; }
 		void Frame() { Actor->Tick(1.0f / 30.0f); Panel->RefreshWith(Runtime, Actor, Sel()); }
+
+		/** The card's line that starts with Prefix, or empty - the one line under test, since the rest of a taxiing
+		 *  aircraft's card (its speed, its heading) moves every frame whatever the line does. */
+		FString Line(const TCHAR* Prefix) const
+		{
+			TArray<FString> Lines;
+			Panel->FactsForTest().ParseIntoArrayLines(Lines);
+			const FString* Found = Lines.FindByPredicate([Prefix](const FString& Each) { return Each.StartsWith(Prefix); });
+			return Found != nullptr ? *Found : FString();
+		}
 	};
 }
 
@@ -413,13 +423,15 @@ bool FInspectorCacheTurnaroundTest::RunTest(const FString&)
 	FAircraftRig Rig;
 	if (!TestTrue(TEXT("the rig"), Rig.Ok())) { return false; }
 	Rig.Frame();
-	const FString Was = Rig.Panel->FactsForTest();
+	const FString Was = Rig.Line(TEXT("Turnaround"));
+	if (!TestFalse(TEXT("a turnaround line"), Was.IsEmpty())) { return false; }
 	USimClock& Clock = *Rig.Runtime->GetClock();
 	const double Until = Clock.Now() + 90.0;
 	for (int32 Step = 0; Step < 100000 && Clock.Now() < Until; ++Step) { Clock.Advance(0.5 / FMath::Max(Clock.TimeScale(), 1e-6)); }
 	Rig.Frame();
 	TestEqual(TEXT("a minute and a half: composed again"), Rig.Panel->TurnaroundComposeCountForTest(), 2);
-	TestNotEqual(FString::Printf(TEXT("and the minutes left moved ('%s')"), *Rig.Panel->FactsForTest()), Rig.Panel->FactsForTest(), Was);
+	TestNotEqual(FString::Printf(TEXT("and the minutes left moved ('%s' was '%s')"), *Rig.Line(TEXT("Turnaround")), *Was),
+		Rig.Line(TEXT("Turnaround")), Was);
 	return true;
 }
 
@@ -440,12 +452,13 @@ bool FInspectorCacheFuelLiveTest::RunTest(const FString&)
 	Job.TripStartedAt = Clock.Now();
 	Job.TripEndsAt = Clock.Now() + 800.0;
 	Rig.Frame();
-	const FString Was = Rig.Panel->FactsForTest();
+	TestTrue(FString::Printf(TEXT("the pump has not moved: nothing delivered ('%s')"), *Rig.Line(TEXT("Fuel"))),
+		Rig.Line(TEXT("Fuel")).Contains(TEXT("2,900 L left")));
 	const double Until = Clock.Now() + 400.0;
 	for (int32 Step = 0; Step < 100000 && Clock.Now() < Until; ++Step) { Clock.Advance(0.5 / FMath::Max(Clock.TimeScale(), 1e-6)); }
 	Rig.Frame();
-	TestNotEqual(FString::Printf(TEXT("halfway through the trip, fewer litres are left ('%s')"), *Rig.Panel->FactsForTest()),
-		Rig.Panel->FactsForTest(), Was);
+	TestTrue(FString::Printf(TEXT("halfway through the trip, 500 L are in ('%s')"), *Rig.Line(TEXT("Fuel"))),
+		Rig.Line(TEXT("Fuel")).Contains(TEXT("2,400 L left")));
 	return true;
 }
 

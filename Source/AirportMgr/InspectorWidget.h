@@ -135,7 +135,8 @@ public:
  *    from Now, and a key on the minute alone would have held a figure that moved mid-minute. Its PURCHASE ROWS
  *    and "No vehicles" (UOpsRuntime::QuoteFacility - the balance, the fleet, the sheds) are NOT keyed: they are
  *    asked every tick and laid over the kept card, since the balance moves with no revision this key holds.
- * ENFORCED BY: AirportMgr.Inspector.Cache.* - one test per input, each red when its field is left out of ==.
+ * ENFORCED BY: AirportMgr.Inspector.Cache.* - one test per revision and the minute, each red when its field is left
+ * out of == (2026-09-30). The three object pointers are not pinned: no test holds every revision equal across two objects.
  */
 struct FInspectorCardKey
 {
