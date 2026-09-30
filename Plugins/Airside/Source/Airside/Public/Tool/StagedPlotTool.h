@@ -224,8 +224,9 @@ protected:
 	 * the "solve done twice a frame" #180 already named for the depot's own packer call. Two
 	 * structs copying {bValid, Outline[4]} into two sibling caches for two different payloads
 	 * is the shape CLAUDE.md's "one struct per thing" rule means to catch - so the fields both
-	 * tools needed are here once, and only the payload (a PlotYard::FReservation for one, a
-	 * refusal string for the other) is theirs to add.
+	 * tools needed are here once, and only the payload (a PlotYard::FReservation for one, the
+	 * SITE half of a refusal for the other - issue #439: never the half that reads the purse) is
+	 * theirs to add, along with whatever ELSE its answer depends on beyond the outline.
 	 *
 	 * EXACT EQUALITY, not a tolerance - Shape() either reproduces a pinned corner bit for bit or
 	 * derives the moving one from the same cursor value MakeToolContext resolved this frame, so
@@ -260,7 +261,34 @@ protected:
 			Payload = MoveTemp(InPayload);
 			bValid = true;
 		}
+
+		/**
+		 * Forget the answer, so nothing is Matches()'d until the next Store - issue #439. There
+		 * was no way to, and a memo nothing could clear outlived the gesture that made it: a later
+		 * gesture that reproduced the same outline (grid snap makes that likely) was answered with
+		 * the earlier one's payload. The payload goes back to its default too, so a reader that
+		 * forgot to check bValid sees the empty answer rather than the stale one.
+		 */
+		void Reset()
+		{
+			bValid = false;
+			Payload = PayloadT{};
+		}
 	};
+
+	/**
+	 * A GESTURE BOUNDARY: the shape the player was working on is gone or changed hands, so a tool
+	 * holding anything keyed on that shape - a TOutlineMemo below all - drops it here. Called at
+	 * a cancel, a deactivate and a successful commit: the three ways back to Idle, which is why a
+	 * fresh anchor needs no call of its own. Empty by default: a tool with no shape-keyed memory
+	 * has nothing to drop.
+	 *
+	 * NOT WHAT KEEPS A MEMO CORRECT - its key does that (see FStandPlotTool::RefusalFor). This
+	 * bounds how long a wrong answer could live if a key ever missed an input, and stops one
+	 * gesture's payload being reachable from the next.
+	 * ENFORCED BY: Airside.Tool.StandPlot.GestureBoundariesDropTheRefusalMemo
+	 */
+	virtual void OnGestureBoundary() {}
 
 private:
 	/** The entity under the cursor this tool would act on for Remove, or INDEX_NONE - the body

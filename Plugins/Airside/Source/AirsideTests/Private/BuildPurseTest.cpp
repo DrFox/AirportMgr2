@@ -34,6 +34,8 @@ namespace
 		TArray<double> Credits;
 		int32 NextId = 1;
 
+		virtual double Balance() const override { return Funds; }
+
 		virtual bool CanAfford(const FBuildQuote& Quote) const override
 		{
 			return Quote.BaseAmount() <= Funds;

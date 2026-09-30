@@ -267,6 +267,28 @@ public:
 	 */
 	virtual FString WhyUpgradeRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const = 0;
 
+	/**
+	 * The SITE half of WhyUpgradeRefused (issue #439's sibling of WhyStandSiteRefused): every gate
+	 * that reads the model and the picks - a dead slot, a runway or kind change, no such width, an
+	 * unoffered surface, the widened pavement inside a neighbour's strip - and none that reads
+	 * money. THE HALF A CALLER MAY MEMOISE, against GetEditEpoch and its own picks.
+	 *
+	 * SITE FIRST, then WhyUpgradeUnaffordable, is the composition WhyUpgradeRefused now is. That
+	 * moved the price gate AFTER the strip gate, where it used to sit before it: an upgrade both
+	 * unaffordable and refused by a neighbour's strip now says the strip, because earning the
+	 * money cannot make it committable and "cannot afford" would promise that it could.
+	 * ENFORCED BY: Airside.Present.UpgradeRefusalIsTheTwoHalves
+	 */
+	virtual FString WhyUpgradeSiteRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const = 0;
+
+	/**
+	 * The MONEY half of WhyUpgradeRefused: "cannot afford ..." when the purse cannot pay the
+	 * difference between the new ground and the old, else empty. Asked FRESH by every caller and
+	 * never memoised - the balance moves through no edit of the model (see WhyStandUnaffordable). EMPTY when there is nothing to price: a dead slot, a width or
+	 * kind that does not resolve (the site half's to refuse), or an upgrade that changes nothing.
+	 */
+	virtual FString WhyUpgradeUnaffordable(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const = 0;
+
 	/** MinimumRunwayLength, read-only: RunwayTool judges a drag against it but never sets it. */
 	virtual double GetMinimumRunwayLength() const = 0;
 
@@ -466,8 +488,60 @@ public:
 	 * Pavement is the pad the commit would lay - the afford gate prices it, so the readout
 	 * and the Build click agree on what a grass stand costs. No default, for
 	 * PlaceStandInPlot's reason.
+	 *
+	 * IN TWO HALVES since issue #439, which this is the composition of: WhyStandSiteRefused,
+	 * then WhyStandUnaffordable. A tool that wants to remember the answer may remember only the
+	 * first - see each half's own comment for why the second must not be remembered.
+	 * ENFORCED BY: Airside.Present.StandPlot.WhyStandRefusedIsTheTwoHalves
 	 */
 	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const = 0;
+
+	/**
+	 * The SITE half of WhyStandRefused: everything that reads the outline and the model and
+	 * nothing that reads money - self-crossing, too small, an unfit letter, an overlap, a taxiway
+	 * through the interior, a clearance strip. Empty means the ground would take a stand.
+	 *
+	 * THE HALF A CALLER MAY MEMOISE, against GetEditEpoch: it is a function of the outline and
+	 * the model, and the epoch moves on every edit of the model that notifies (see its exception).
+	 * No Pavement parameter, because
+	 * no gate in it reads one - every pavement passes or fails the site alike.
+	 */
+	virtual FString WhyStandSiteRefused(TArrayView<const FVector2D> Outline) const = 0;
+
+	/**
+	 * The MONEY half of WhyStandRefused: "cannot afford ..." when the purse cannot pay for a stand
+	 * on this Outline in this Pavement, else empty. The ghost already asks CanAfford every frame
+	 * (IBuildPurse::CanAfford's own doc) - and this MUST be asked fresh, never memoised: the balance moves on its own
+	 * (landing fees, other purchases, refunds) through no edit of the model, so GetEditEpoch cannot
+	 * see it. Issue #439 was a memo that could not.
+	 *
+	 * EMPTY WHEN THERE IS NOTHING TO PRICE - no letter, or no template for it. The site half
+	 * refuses both, so that refusal is its to say, and the composition asks it first. (An outline
+	 * the site refuses for another reason may still be priced here, and refused; asked alone,
+	 * this half says only whether the money is there.)
+	 */
+	virtual FString WhyStandUnaffordable(TArrayView<const FVector2D> Outline, EPavement Pavement) const = 0;
+
+	/**
+	 * A counter that moves on every edit of the model that goes through the facade - node, segment,
+	 * apron, entity, undo, redo, a network swapped in or cleared - and on nothing else. What a memo
+	 * of an answer that reads the model keys on, beside the outline it was asked about.
+	 *
+	 * EXCEPT A SAVE-GAME LOAD, per issue #426's trace (open, and no test here pins it):
+	 * the ops runtime's LoadFromSlot deserialises into the live network in place with no NotifyChanged,
+	 * so the epoch does not move (and the network pointer is the same, so no second key would catch
+	 * it either). A memo held across a load can be stale until the next edit or gesture boundary;
+	 * the load's own protocol is #426's to write, not this counter's to paper over.
+	 *
+	 * WHY NOT URoadNetwork::GetEditRevision, which is the counter a memo would reach for: it is
+	 * scoped to nodes and segments, so PlaceEntity and RemoveEntity - a stand placed into the
+	 * outline - do not move it, and it is not a UPROPERTY, so an undone-to network starts its own
+	 * clock again from wherever it was duplicated. This one is counted at the facade's one
+	 * notification door (URoadEditFacade::NotifyChanged), which an edit passes through to be
+	 * rebuilt at all - so a new mutator gets it by notifying, not by remembering a second call.
+	 * ENFORCED BY: Airside.Present.EditEpoch.MovesOnEveryEditDoor (a place, a delete, an undo and a clear)
+	 */
+	virtual uint32 GetEditEpoch() const = 0;
 
 	/**
 	 * Why a depot plot with this Outline may not be placed, or empty. WhyStandRefused's

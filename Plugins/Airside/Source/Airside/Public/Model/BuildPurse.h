@@ -111,7 +111,7 @@ enum class EBuildRefusal : uint8
  *
  * WHY NOT A TFunction, which is what UFlightBoard::Dispatcher is. That one is a single call in
  * a single direction, and its own comment argues against an interface for one call site. This
- * is five operations that must ALL be bound together: five independently-bindable TFunction
+ * is six operations that must ALL be bound together: six independently-bindable TFunction
  * members would let a build charge while undo silently stopped refunding, and nothing anywhere
  * would say so.
  *
@@ -126,6 +126,25 @@ public:
 
 	/** Can this be paid for right now? No side effect - the ghost asks it every frame. */
 	virtual bool CanAfford(const FBuildQuote& Quote) const = 0;
+
+	/**
+	 * The funds CanAfford compares a quote against - the one figure that decides it, exposed so a
+	 * cache of anything CanAfford influenced can KEY on it (ARoadBuildController's readout cache
+	 * does; issue #439). The balance moves on its own - landing fees, upkeep, a load - through no
+	 * edit of the model, so nothing else a cache could watch sees it, and a stamp that only some
+	 * mutations bump (ULedger::Revision, which a load leaves alone - issue #426) would miss the rest.
+	 *
+	 * A VALUE, NOT A COUNTER: for one quote, equal balances give equal CanAfford answers whichever
+	 * route they were reached by, and a restored save that lands on a different balance differs by
+	 * construction. THAT HOLDS ONLY WHILE THE PRICE OF A QUOTE DEPENDS ON THE QUOTE ALONE, which is
+	 * true today because UPricing::PriceOfBuild is the identity; the M4 modifier seam (research,
+	 * contracts) will end it, and the day it does this key must grow to name what the price also
+	 * reads. PURE, so an implementer answers it rather than inheriting a constant that would freeze
+	 * every cache keyed on it.
+	 * ENFORCED BY: AirportMgr.Actions.ReadoutCacheSeesThePurse (the key sees the balance),
+	 * AirportOps.Model.PriceOfBuildIsTheIdentityWhileBalanceKeysCaches (the tripwire on the price)
+	 */
+	virtual double Balance() const = 0;
 
 	/** Take the money. Returns an id to reverse it by, or INDEX_NONE if nothing was charged. */
 	virtual int32 Charge(const FBuildQuote& Quote) = 0;

@@ -112,7 +112,9 @@ public:
 	void Rect(const FToolContext& Context, TArray<FVector2D>& Out) const { Shape(Context, Out); }
 
 	/**
-	 * How many times RefusalFor has actually asked the facade, rather than been asked to.
+	 * How many times RefusalFor has actually asked the target for the SITE half of a refusal,
+	 * rather than been asked to. The money half is never counted: it is asked on every call by
+	 * design (issue #439), so a count of it would only ever equal the number of calls.
 	 *
 	 * FOR TESTS ONLY - issue #302. BuildPreview and BuildReadout each asked
 	 * IRoadEditTarget::WhyStandRefused for the same Shown outline every hover frame - the exact
@@ -121,6 +123,13 @@ public:
 	 * prove the memo below is doing its job instead of merely existing.
 	 */
 	int32 GetRefusalCountForTest() const { return RefusalCountForTest; }
+
+	/**
+	 * Whether the site refusal memo currently holds an answer. FOR TESTS ONLY - issue #439: the
+	 * gesture boundaries (cancel, deactivate, a commit, a fresh anchor) each drop it, and a count of
+	 * asks cannot tell WHICH boundary did, since a fresh anchor click follows most of them.
+	 */
+	bool HasRefusalMemoForTest() const { return SiteMemo.bValid; }
 
 	/**
 	 * One "Surface" row of all four pavements, lit on the one the next Build lays - built by
@@ -182,27 +191,39 @@ private:
 		IToolPreviewSink& Sink) const;
 
 	/**
-	 * WhyStandRefused for Shown, asked of the facade at most once per distinct shape AND
-	 * pavement.
+	 * Why Shown may not become a stand, or empty: IRoadEditTarget::WhyStandRefused's two halves
+	 * asked one at a time - the SITE half remembered, the MONEY half never (issue #439).
+	 *
+	 * A MEMO OF THE WHOLE ANSWER WAS WRONG TWICE: keyed on the outline and pavement it could not
+	 * see the purse (a Confirm-stage shape kept "cannot afford" after the landing fees arrived, so
+	 * Build stayed greyed) nor the model (a "" outlived a stand placed into the outline). Each half
+	 * now carries the key its inputs need - the site half the outline and the target's edit epoch,
+	 * the money half none: the balance moves through no edit, so no key on the model could see it,
+	 * and CanAfford is already asked every frame by the ghost (IBuildPurse::CanAfford's own doc).
 	 *
 	 * THE SAME MEMO SHAPE AS FPlotPlaceTool::ReservationFor, through the base's TOutlineMemo
 	 * (issue #302) - see that class's own comment on why the {bValid, Outline[4]} half is
-	 * shared rather than copied a second time. PAVEMENT IS AN EXTRA KEY, as the depot's Layout
-	 * is, since shared-pavement Task 8: IRoadEditTarget::WhyStandRefused now takes the pad's
-	 * pavement too, and its afford gate prices it - a memo keyed on the outline alone would
-	 * keep showing the previous row's "cannot afford" after a Surface pick. (It had no second
-	 * key before, because the function it caches had nothing else to ask.)
-	 * ENFORCED BY: Airside.Tool.StandPlot.SurfaceChangeReasksRefusal
+	 * shared rather than copied a second time. The extra keys are this payload's, as the depot's
+	 * Layout is. PAVEMENT IS NOT ONE, though it was until #439: no site gate reads it, and the
+	 * money half that does is asked fresh, so a Surface pick re-prices without re-asking the site.
+	 * ENFORCED BY: Airside.Tool.StandPlot.SurfaceChangeRepricesWithoutReaskingSite
 	 */
 	FString RefusalFor(const FToolContext& Context, TConstArrayView<FVector2D> Shown) const;
 
-	/** The memo's payload: the refusal, and the pavement it was asked for - see RefusalFor. */
-	struct FRefusalPayload
+	/** The memo's payload: the site refusal, and the target's edit epoch it was asked at. THE
+	 *  EPOCH ALONE, no network pointer beside it: an undo, a redo and a clear swap the graph through
+	 *  AdoptNetwork, which notifies, so the epoch moves on every swap this tool can meet (a save-game
+	 *  load is the exception, and it deserialises in place - the same pointer - see GetEditEpoch).
+	 *  ENFORCED BY: Airside.Present.EditEpoch.MovesOnEveryEditDoor (an undo and a clear) */
+	struct FSitePayload
 	{
-		EPavement Pavement = EPavement::Tarmac;
+		uint32 Epoch = 0;
 		FString Why;
 	};
-	mutable TOutlineMemo<FRefusalPayload> RefusalMemo;
+	mutable TOutlineMemo<FSitePayload> SiteMemo;
+
+	/** Drops SiteMemo at a gesture boundary - see FStagedPlotTool::OnGestureBoundary. */
+	virtual void OnGestureBoundary() override { SiteMemo.Reset(); }
 
 	/** What the next Build paves the pad with - the Surface row's pick. STARTS GRASS - see
 	 *  FRoadDrawTool::Surface for the ruling; it was tarmac, what every stand was drawn with

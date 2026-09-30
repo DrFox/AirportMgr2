@@ -993,6 +993,16 @@ FString ARoadNetworkActor::WhyUpgradeRefused(int32 SegmentIndex, ERoadKind Kind,
 	return Facade->WhyUpgradeRefused(SegmentIndex, Kind, WidthIndex, Surface);
 }
 
+FString ARoadNetworkActor::WhyUpgradeSiteRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const
+{
+	return Facade->WhyUpgradeSiteRefused(SegmentIndex, Kind, WidthIndex, Surface);
+}
+
+FString ARoadNetworkActor::WhyUpgradeUnaffordable(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const
+{
+	return Facade->WhyUpgradeUnaffordable(SegmentIndex, Kind, WidthIndex, Surface);
+}
+
 bool ARoadNetworkActor::SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet)
 {
 	return Facade->SetIntermediateHoldingPosition(NodeIndex, bSet);
@@ -1131,6 +1141,21 @@ FString ARoadNetworkActor::WhySegmentRefused(int32 FromIndex, const FRoadSnapRes
 FString ARoadNetworkActor::WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const
 {
 	return Facade->WhyStandRefused(Outline, Pavement);
+}
+
+FString ARoadNetworkActor::WhyStandSiteRefused(TArrayView<const FVector2D> Outline) const
+{
+	return Facade->WhyStandSiteRefused(Outline);
+}
+
+FString ARoadNetworkActor::WhyStandUnaffordable(TArrayView<const FVector2D> Outline, EPavement Pavement) const
+{
+	return Facade->WhyStandUnaffordable(Outline, Pavement);
+}
+
+uint32 ARoadNetworkActor::GetEditEpoch() const
+{
+	return Facade->GetEditEpoch();
 }
 
 bool ARoadNetworkActor::DeleteEntity(int32 EntityIndex)

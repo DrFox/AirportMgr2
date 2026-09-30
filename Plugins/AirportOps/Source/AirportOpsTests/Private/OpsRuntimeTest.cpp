@@ -211,6 +211,8 @@ namespace
 	public:
 		int32 CanAffordCalls = 0;
 
+		virtual double Balance() const override { return 0.0; }
+
 		virtual bool CanAfford(const FBuildQuote& Quote) const override
 		{
 			++const_cast<FSpyPurse*>(this)->CanAffordCalls;

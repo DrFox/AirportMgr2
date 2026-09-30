@@ -1,10 +1,13 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
+#include "Model/BuildPurse.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
 #include "Model/TaxiwayStrip.h"
 #include "Profiles/RoadProfile.h"
+#include "Present/RoadEditFacade.h"
 #include "Present/RoadEditHistory.h"
 #include "Present/RoadNetworkActor.h"
 #include "Tool/RoadDrawTool.h"
@@ -993,6 +996,153 @@ bool FRoadDrawToolUpgradeKeepsWidthTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("the hover says it narrows"),
 			Sink.Labels.ContainsByPredicate([](const FString& L) { return L.StartsWith(TEXT("Narrow to Code")); }));
 	}
+	return true;
+}
+
+// NAMED, NOT ANONYMOUS - the tests module is a UNITY build, and a purse fake of a common name
+// collides with another file's copy the moment both land in one translation unit.
+namespace UpgradeHoverPurseFixture
+{
+	/** A purse whose balance the test moves BETWEEN previews. Declared before the world in the
+	 *  test that uses it, so it outlives the facade holding a raw pointer to it. */
+	struct FMovableFundsPurse : IBuildPurse
+	{
+		double Funds = 0.0;
+
+		virtual bool CanAfford(const FBuildQuote& Quote) const override { return Quote.BaseAmount() <= Funds; }
+		virtual double Balance() const override { return Funds; }
+		virtual int32 Charge(const FBuildQuote& Quote) override { Funds -= Quote.BaseAmount(); return 1; }
+		virtual void Reverse(int32) override {}
+		virtual void Credit(const FBuildQuote& Quote) override { Funds += Quote.BaseAmount(); }
+		virtual FText Describe(const FBuildQuote& Quote) const override { return FText::AsNumber(Quote.BaseAmount()); }
+	};
+}
+
+/**
+ * THE UPGRADE HOVER FOLLOWS THE PURSE (issue #439's sibling). FRoadDrawTool::PreviewUpgrade
+ * memoised the whole hover - text, outline, refused flag - on the network and the picks, and the
+ * text carries the facade's afford gate ("Upgrade refused: cannot afford ..."). So a hover held
+ * over a segment the player could not yet afford kept saying so as the money arrived, until the
+ * cursor moved to another segment or a pick changed.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadDrawToolUpgradeHoverFollowsThePurseTest,
+	"Airside.Tool.UpgradeHoverFollowsThePurse",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadDrawToolUpgradeHoverFollowsThePurseTest::RunTest(const FString& Parameters)
+{
+	using namespace UpgradeHoverPurseFixture;
+
+	UpgradeHoverPurseFixture::FMovableFundsPurse Purse; // before the world - the facade holds a raw pointer to it
+
+	FAirsideTestWorld World;
+	if (!TestNotNull(TEXT("a world"), World.Actor)) { return false; }
+	ARoadNetworkActor* Actor = World.Actor;
+	const auto WidthIndexFor = [Actor](EIcaoCode Letter)
+	{
+		for (int32 W = 0; W < Actor->GetWidthCount(ERoadKind::Taxiway); ++W)
+		{
+			const URoadProfile* Each = Actor->ResolveWidthProfile(ERoadKind::Taxiway, W);
+			if (Each != nullptr && IcaoCode::TaxiwayLetterForWidth(Each->GetTotalWidth()) == Letter) { return W; }
+		}
+		return int32(INDEX_NONE);
+	};
+	const int32 C = WidthIndexFor(EIcaoCode::C);
+	const int32 F = WidthIndexFor(EIcaoCode::F);
+	if (!TestTrue(TEXT("C and F widths"), C != INDEX_NONE && F != INDEX_NONE)) { return false; }
+
+	// LAID FREE, then the purse is attached: the lay is not what is under test.
+	TestTrue(TEXT("a C tarmac taxiway"), Actor->ConnectNodes(Actor->PlaceNode({ -20000.0, 0.0 }), Actor->PlaceNode({ 20000.0, 0.0 }),
+		ERoadKind::Taxiway, C, EPavement::Tarmac));
+	Actor->GetEditFacade()->SetPurse(&Purse);
+	ON_SCOPE_EXIT { Actor->GetEditFacade()->SetPurse(nullptr); };
+
+	FRoadDrawTool Tool(ERoadKind::Taxiway);
+	const FToolContext OnTaxiway = TestTool::ContextAt(*Actor, FVector2D(0.0, 0.0));
+	TArray<FToolVariantAxis> Axes;
+	Tool.GetVariantAxes(OnTaxiway, Axes);
+	const auto Row = [&Axes](FName Id) { return Axes.IndexOfByPredicate([Id](const FToolVariantAxis& A) { return A.Id == Id; }); };
+	TestTrue(TEXT("Upgrade picked"), Tool.SelectVariant(OnTaxiway, Row(ModeAxis::AxisId()), static_cast<int32>(EToolMode::Upgrade)));
+	TestTrue(TEXT("F picked - one past its Build index, after Keep"), Tool.SelectVariant(OnTaxiway, Row(TEXT("Width")), F + 1));
+
+	// TARMAC, NOT THE TOOL'S GRASS DEFAULT: C tarmac to F grass prices at the difference of the two
+	// grounds, which is not positive, so an empty purse would afford it and prove nothing.
+	Axes.Reset();   // GetVariantAxes APPENDS
+	Tool.GetVariantAxes(OnTaxiway, Axes);
+	const int32 SurfaceRow = Row(TEXT("Surface"));
+	const int32 Tarmac = SurfaceRow != INDEX_NONE ? Axes[SurfaceRow].Options.IndexOfByPredicate(
+		[](const FToolVariant& V) { return V.Id == FName(Pavement::Name(EPavement::Tarmac)); }) : INDEX_NONE;
+	TestTrue(TEXT("tarmac picked"), Tool.SelectVariant(OnTaxiway, SurfaceRow, Tarmac));
+
+	const auto Hover = [&]()
+	{
+		FCountingPreviewSink Sink;
+		Tool.BuildPreview(OnTaxiway, Sink);
+		return Sink;
+	};
+
+	// SHORT: the hover refuses, and says it is the money.
+	Purse.Funds = 0.0;
+	{
+		const FCountingPreviewSink Sink = Hover();
+		TestTrue(*FString::Printf(TEXT("purse short: the hover says it cannot afford it (it said: '%s')"),
+			*FString::Join(Sink.Labels, TEXT(" | "))),
+			Sink.Labels.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("cannot afford")); }));
+		TestTrue(TEXT("and is drawn as refused"), Sink.LabelStyle.Contains(EPreviewStyle::Refused));
+	}
+	const int32 Built = Tool.GetHoverBuildCountForTest();
+	Hover();
+	TestEqual(TEXT("the control: the same hover with the same purse is answered from the memo"),
+		Tool.GetHoverBuildCountForTest(), Built);
+
+	// CREDITED, THE CURSOR STILL ON THE SAME SEGMENT with the same picks.
+	Purse.Funds = 1.0e12;
+	{
+		const FCountingPreviewSink Sink = Hover();
+		TestTrue(TEXT("purse credited: the NEXT hover names the widening"),
+			Sink.Labels.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("Widen to Code F")); }));
+		TestFalse(TEXT("and no longer refuses it"),
+			Sink.Labels.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("refused")); }));
+		TestFalse(TEXT("nor draws it as refused"), Sink.LabelStyle.Contains(EPreviewStyle::Refused));
+	}
+
+	// AND DRAINED AGAIN, the other direction: a memoised "can afford" would be stale too.
+	Purse.Funds = 0.0;
+	TestTrue(TEXT("purse drained: it refuses again"),
+		Hover().Labels.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("cannot afford")); }));
+
+	// THE SPLIT'S POINT: the money moved twice, the ground and the picks never did, so the
+	// site half - the duplicate network, the restriction pass, the closures - was paid for once.
+	TestEqual(TEXT("a purse change does not rebuild the site half of the hover"),
+		Tool.GetHoverBuildCountForTest(), Built);
+
+	// AND A REAL EDIT STILL DOES: a stand placed anywhere moves the edit epoch, which the memo keys on.
+	Purse.Funds = 1.0e12;
+	const TArray<FVector2D> Box = { { -6000.0, 5000.0 }, { -1000.0, 5000.0 }, { -1000.0, 9000.0 }, { -6000.0, 9000.0 } };
+	IRoadEditTarget* Edit = Actor;
+	const int32 First = Edit->PlaceStandInPlot(Box, Box[0], Box[1], EPavement::Tarmac);
+	if (!TestTrue(TEXT("a stand is placed beside the taxiway"), First != INDEX_NONE)) { return false; }
+	Hover();
+	const int32 AfterFirst = Tool.GetHoverBuildCountForTest();
+	TestTrue(TEXT("an edit of the model rebuilds it"), AfterFirst > Built);
+
+	// THE EPOCH KEY ON ITS OWN. The stand above raised the entity count, which the older key
+	// fields (entity count, EditRevision) already catch, so it pins nothing about the epoch. A stand
+	// removed and another placed in its recycled slot leaves BOTH of those exactly where they were:
+	// only the epoch says the model changed. The premises are asserted, or this measures nothing.
+	const int32 EntitiesBefore = Actor->Network->GetEntities().Num();
+	const uint32 RevisionBefore = Actor->Network->GetEditRevision();
+	if (!TestTrue(TEXT("the first stand is removed"), Edit->DeleteEntity(First))) { return false; }
+	if (!TestTrue(TEXT("and a replacement is placed"),
+		Edit->PlaceStandInPlot(Box, Box[0], Box[1], EPavement::Tarmac) != INDEX_NONE)) { return false; }
+	if (!TestEqual(TEXT("premise: the replacement took the recycled slot, so the entity count is unchanged"),
+		Actor->Network->GetEntities().Num(), EntitiesBefore)) { return false; }
+	if (!TestEqual(TEXT("premise: no node or segment moved, so EditRevision is unchanged"),
+		Actor->Network->GetEditRevision(), RevisionBefore)) { return false; }
+	Hover();
+	TestTrue(TEXT("and the hover is rebuilt anyway - the epoch alone is what told it"),
+		Tool.GetHoverBuildCountForTest() > AfterFirst);
 	return true;
 }
 

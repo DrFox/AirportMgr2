@@ -149,8 +149,12 @@ namespace StagedPlotSeamFixture
 		/** FNullEditTarget's own default is "no target" - a refusal reason that would make
 		 *  Committable false for an unrelated reason before Place() is ever asked. Empty here
 		 *  says the shape itself is fine, so the forced PlaceStandInPlot refusal below is the
-		 *  ONLY reason the commit fails. */
+		 *  ONLY reason the commit fails. BOTH FORMS, since issue #439: the tool asks the site half
+		 *  (WhyStandSiteRefused) and the money half separately, while the whole is what a commit
+		 *  would ask - a fake that answered only the whole would leave the tool reading
+		 *  FNullEditTarget's "no target" from the half it now calls. */
 		virtual FString WhyStandRefused(TArrayView<const FVector2D>, EPavement) const override { return FString(); }
+		virtual FString WhyStandSiteRefused(TArrayView<const FVector2D>) const override { return FString(); }
 	};
 }
 

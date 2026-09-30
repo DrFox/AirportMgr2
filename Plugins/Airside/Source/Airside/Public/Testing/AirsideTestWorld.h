@@ -199,6 +199,10 @@ struct FNullEditTarget : IRoadEditTarget
 	virtual bool UpgradeSegment(int32, ERoadKind, int32, EPavement) override { return false; }
 	/** Refused, WhyStandRefused's reason: a null target has no segment to upgrade. */
 	virtual FString WhyUpgradeRefused(int32, ERoadKind, int32, EPavement) const override { return TEXT("no target"); }
+	/** WhyUpgradeRefused's two halves, WhyStandSiteRefused's split: the site half carries the
+	 *  refusal, the money half has nothing to price on a segment that is not there. */
+	virtual FString WhyUpgradeSiteRefused(int32, ERoadKind, int32, EPavement) const override { return TEXT("no target"); }
+	virtual FString WhyUpgradeUnaffordable(int32, ERoadKind, int32, EPavement) const override { return FString(); }
 	virtual double GetMinimumRunwayLength() const override { return 0.0; }
 	virtual int32 GetRunwayProfileCount() const override { return 0; }
 	virtual URoadProfile* ResolveRunwayProfile(int32) const override { return nullptr; }
@@ -230,6 +234,12 @@ struct FNullEditTarget : IRoadEditTarget
 	 *  string "placeable" - the one WhyStandRefused implementer where an empty Outline is
 	 *  the normal case, not a malformed one. */
 	virtual FString WhyStandRefused(TArrayView<const FVector2D>, EPavement) const override { return TEXT("no target"); }
+	/** WhyStandRefused's two halves: the SITE half carries the refusal (it is asked first, and a
+	 *  refused site is never priced), the money half has nothing to say about ground it will not
+	 *  take. A constant epoch, because a null target has no model to edit. */
+	virtual FString WhyStandSiteRefused(TArrayView<const FVector2D>) const override { return TEXT("no target"); }
+	virtual FString WhyStandUnaffordable(TArrayView<const FVector2D>, EPavement) const override { return FString(); }
+	virtual uint32 GetEditEpoch() const override { return 0; }
 	/** ALLOWED, unlike WhyStandRefused above: a null target has no network, so no strip to be
 	 *  inside, and the road fakes built on this (TaxiwayWidthTest's FFakeWidthTarget) record a
 	 *  click's ConnectNodes - a refusal here would stop the click before it reached them. */

@@ -189,6 +189,11 @@ bool URoadEditFacade::MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) cons
 
 void URoadEditFacade::NotifyChanged(EChangeKind Kind)
 {
+	// COUNTED BEFORE THE BATCH FOLD BELOW, so an edit inside an open batch still moves the epoch
+	// a tool reads (IRoadEditTarget::GetEditEpoch): the model HAS changed, whenever the rebuild
+	// that follows it is owed.
+	++EditEpoch;
+
 	// FOLDED, NOT BROADCAST, WHILE A BATCH IS OPEN - see the class comment's REBUILD BATCHES.
 	if (RebuildBatchDepth > 0)
 	{
@@ -901,6 +906,23 @@ FString URoadEditFacade::WhyUpgradeRefused(int32 SegmentIndex, ERoadKind Kind, i
 FString URoadEditFacade::WhyUpgradeRefusedImpl(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface,
 	FBuildQuote* OutUnaffordable) const
 {
+	// THE TWO HALVES, SITE FIRST, and nothing else (issue #439, WhyStandRefusedImpl's split): the
+	// Upgrade hover asks them one at a time - it remembers the first and never the second - while
+	// the click asks them together here, so the pair and the whole cannot be two evaluators.
+	// THE PRICE GATE USED TO SIT BEFORE THE STRIP GATE; it now follows it, so an upgrade that is
+	// both unaffordable and refused by a neighbour's strip says the strip. Earning the money could
+	// not make it committable, and "cannot afford" would promise that it could.
+	// ENFORCED BY: Airside.Present.UpgradeRefusalIsTheTwoHalves
+	const FString Site = WhyUpgradeSiteRefused(SegmentIndex, Kind, WidthIndex, Surface);
+	if (!Site.IsEmpty())
+	{
+		return Site;
+	}
+	return WhyUpgradeUnaffordableImpl(SegmentIndex, Kind, WidthIndex, Surface, OutUnaffordable);
+}
+
+FString URoadEditFacade::WhyUpgradeSiteRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const
+{
 	const URoadNetwork* Network = Actor().Network;
 	FRoadSegmentId Id;
 	if (Network == nullptr || !MakeLiveSegmentId(SegmentIndex, Id))
@@ -940,16 +962,9 @@ FString URoadEditFacade::WhyUpgradeRefusedImpl(int32 SegmentIndex, ERoadKind Kin
 	{
 		return FString();   // already so - UpgradeSegment answers true with no edit
 	}
-	const FBuildQuote Quote = BuildCost::ForUpgrade(*Old, Segment.Surface, *New, Surface,
-		BuildCost::SegmentLengthUu(*Network, Segment));
-	if (!CanAfford(Quote)) // preview: WhyUpgradeRefused is asked by the tool every frame - silent here, UpgradeSegment announces
-	{
-		if (OutUnaffordable != nullptr)
-		{
-			*OutUnaffordable = Quote;
-		}
-		return FString::Printf(TEXT("cannot afford %s"), *Quote.What.ToString());
-	}
+
+	// NO PRICE GATE HERE - WhyUpgradeUnaffordable's, asked fresh (issue #439): this function is the
+	// half a tool may remember, and the purse is no part of the model it can key on.
 
 	// WIDENING INTO A NEIGHBOUR IS LAYING PAVEMENT (plan Task 2): the new edge is judged as if
 	// laid now - its own nodes, itself ignored - as a ROAD (bIsTaxiway false), so only its
@@ -976,6 +991,47 @@ FString URoadEditFacade::WhyUpgradeRefusedImpl(int32 SegmentIndex, ERoadKind Kin
 				return Verdict.Text;
 			}
 		}
+	}
+	return FString();
+}
+
+FString URoadEditFacade::WhyUpgradeUnaffordable(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const
+{
+	return WhyUpgradeUnaffordableImpl(SegmentIndex, Kind, WidthIndex, Surface, nullptr);
+}
+
+FString URoadEditFacade::WhyUpgradeUnaffordableImpl(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface,
+	FBuildQuote* OutUnaffordable) const
+{
+	// THE SEGMENT AND ITS TWO PROFILES, resolved again rather than handed over: a caller asking
+	// this half alone of an upgrade the site half refuses (a dead slot, a width that does not
+	// resolve) gets "" - nothing to price, the refusal is the site half's to state.
+	const URoadNetwork* Network = Actor().Network;
+	FRoadSegmentId Id;
+	if (Network == nullptr || !MakeLiveSegmentId(SegmentIndex, Id))
+	{
+		return FString();
+	}
+	const FRoadSegment& Segment = Network->GetSegments()[SegmentIndex];
+	const URoadProfile* Old = Network->ProfileFor(Segment);
+	const URoadProfile* New = UpgradeTarget(Actor(), *Network, Segment, Kind, WidthIndex);
+	if (Old == nullptr || New == nullptr)
+	{
+		return FString();
+	}
+	if (New == Old && Surface == Segment.Surface)
+	{
+		return FString();   // already so - nothing to pay for, and the site half agrees
+	}
+	const FBuildQuote Quote = BuildCost::ForUpgrade(*Old, Segment.Surface, *New, Surface,
+		BuildCost::SegmentLengthUu(*Network, Segment));
+	if (!CanAfford(Quote)) // preview: WhyUpgradeRefused is asked by the tool every frame - silent here, UpgradeSegment announces
+	{
+		if (OutUnaffordable != nullptr)
+		{
+			*OutUnaffordable = Quote;
+		}
+		return FString::Printf(TEXT("cannot afford %s"), *Quote.What.ToString());
 	}
 	return FString();
 }

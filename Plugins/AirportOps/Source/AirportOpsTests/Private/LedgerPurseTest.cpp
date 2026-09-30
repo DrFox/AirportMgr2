@@ -97,6 +97,34 @@ bool FLedgerNegativeBalanceLocksPlacementTest::RunTest(const FString& Parameters
 	return true;
 }
 
+/**
+ * THE TRIPWIRE UNDER IBuildPurse::Balance (issue #439). ARoadBuildController's readout cache keys on
+ * the balance VALUE, which is enough only while CanAfford is the plain comparison of a quote's base
+ * amount with the balance - i.e. while UPricing::PriceOfBuild is the identity. The M4 modifier seam
+ * (research, contracts) will end that; this goes red the day it does, and the cache key must then grow
+ * to name what the price also reads.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPriceOfBuildIsTheIdentityWhileBalanceKeysCachesTest,
+	"AirportOps.Model.PriceOfBuildIsTheIdentityWhileBalanceKeysCaches",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPriceOfBuildIsTheIdentityWhileBalanceKeysCachesTest::RunTest(const FString& Parameters)
+{
+	UPricing* Pricing = nullptr;
+	ULedger* Ledger = PurseWith(1000.0, Pricing);
+	const IBuildPurse& Purse = *Ledger;
+
+	for (const double Amount : { 0.5, 999.0, 1000.0, 1001.0, 5.0e6 })
+	{
+		TestEqual(*FString::Printf(TEXT("the price of a %.1f build is what Airside quoted"), Amount),
+			Pricing->PriceOfBuild(Amount, nullptr), Amount, 1e-9);
+		TestEqual(*FString::Printf(TEXT("and affording it is the base amount against the balance alone: %.1f"), Amount),
+			Purse.CanAfford(QuoteOf(Amount)), Amount <= Purse.Balance());
+	}
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FLedgerDatesItsEntriesTest,
 	"AirportOps.Model.LedgerDatesItsEntries",

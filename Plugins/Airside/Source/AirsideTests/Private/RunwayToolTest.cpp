@@ -167,8 +167,9 @@ namespace
 	/** A purse with a fixed balance that names the price in plain figures. */
 	struct FM2RwyPurse : IBuildPurse
 	{
-		double Balance = 0.0;
-		virtual bool CanAfford(const FBuildQuote& Quote) const override { return Quote.BaseAmount() <= Balance; }
+		double Funds = 0.0;
+		virtual bool CanAfford(const FBuildQuote& Quote) const override { return Quote.BaseAmount() <= Funds; }
+		virtual double Balance() const override { return Funds; }
 		virtual int32 Charge(const FBuildQuote&) override { return 0; }
 		virtual void Reverse(int32) override {}
 		virtual void Credit(const FBuildQuote&) override {}
@@ -222,7 +223,7 @@ bool FRunwayPriceBeforeClickTest::RunTest(const FString& Parameters)
 		return Sink.Labels.FindByPredicate([](const TPair<FString, EPreviewStyle>& L) { return L.Key.Contains(TEXT("60000")); });
 	};
 
-	Purse.Balance = 100000.0;
+	Purse.Funds = 100000.0;
 	FM2RwyStyledSink Rich;
 	Tool.BuildPreview(Context, Rich);
 	const TPair<FString, EPreviewStyle>* RichPrice = PriceLabel(Rich);
@@ -230,7 +231,7 @@ bool FRunwayPriceBeforeClickTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("in the pending style"), RichPrice != nullptr && RichPrice->Value == EPreviewStyle::Pending);
 	TestEqual(TEXT("and is drawn pending, not red"), Rich.RefusedLines, 0);
 
-	Purse.Balance = 1000.0;
+	Purse.Funds = 1000.0;
 	FM2RwyStyledSink Broke;
 	Tool.BuildPreview(Context, Broke);
 	const TPair<FString, EPreviewStyle>* BrokePrice = PriceLabel(Broke);

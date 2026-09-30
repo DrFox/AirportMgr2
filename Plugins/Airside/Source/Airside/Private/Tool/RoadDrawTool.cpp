@@ -891,23 +891,36 @@ void FRoadDrawTool::PreviewUpgrade(const FToolContext& Context, IToolPreviewSink
 	const FRoadSegment& Piece = Network->GetSegments()[Segment];
 	const URoadProfile* Had = Network->ProfileFor(Piece);
 
+	// THE MEMO'S KEY: the graph it was asked of, its edit revision and entity count, and the epoch
+	// (IRoadEditTarget::GetEditEpoch), which moves on every edit the first two miss - a stand
+	// removed and another placed leaves the count alone, and a stand is what the strip closure
+	// below reads. The purse is deliberately NOT in it: the money half is asked fresh, see below.
+	const uint32 Epoch = Context.Target->GetEditEpoch();
 	const bool bSame = Hover.Network == Network && Hover.Revision == Network->GetEditRevision()
-		&& Hover.Entities == Network->GetEntities().Num() && Hover.Segment == Segment && Hover.Had == Had
+		&& Hover.Entities == Network->GetEntities().Num() && Hover.Epoch == Epoch
+		&& Hover.Segment == Segment && Hover.Had == Had
 		&& Hover.HadSurface == Piece.Surface && Hover.Width == UpgradeWidthIndex && Hover.Surface == Surface;
 	if (!bSame)
 	{
+		// FOR TESTS ONLY - see GetHoverBuildCountForTest.
+		++HoverBuildCountForTest;
+
 		Hover = FUpgradeHover();
 		Hover.Network = Network;
 		Hover.Revision = Network->GetEditRevision();
 		Hover.Entities = Network->GetEntities().Num();
+		Hover.Epoch = Epoch;
 		Hover.Segment = Segment;
 		Hover.Had = Had;
 		Hover.HadSurface = Piece.Surface;
 		Hover.Width = UpgradeWidthIndex;
 		Hover.Surface = Surface;
 
-		// THE ONE EVALUATOR the click asks (IRoadEditTarget::WhyUpgradeRefused).
-		const FString Why = Context.Target->WhyUpgradeRefused(Segment, Kind, UpgradeWidthIndex, Surface);
+		// THE SITE HALF of the evaluator the click asks (IRoadEditTarget::WhyUpgradeRefused is its
+		// composition with the money half) - the half this memo may hold, since the model and the
+		// picks are what it is keyed on. Issue #439: the memo used to hold the WHOLE answer, and
+		// its "cannot afford" outlived the balance that produced it.
+		const FString Why = Context.Target->WhyUpgradeSiteRefused(Segment, Kind, UpgradeWidthIndex, Surface);
 		URoadProfile* New = UpgradeWidthIndex != INDEX_NONE ? Context.Target->ResolveWidthProfile(Kind, UpgradeWidthIndex) : nullptr;
 		const URoadProfile* Becomes = New != nullptr ? New : Had;
 		const bool bTaxiway = TaxiwayStrip::HasStrip(*Network, Id);
@@ -986,11 +999,25 @@ void FRoadDrawTool::PreviewUpgrade(const FToolContext& Context, IToolPreviewSink
 		}
 	}
 
+	// THE MONEY HALF, FRESH EVERY CALL, hit or miss above - the purse moves through no edit for the
+	// key to see. Asked only when the site half let the upgrade through
+	// (a refused site says so whatever the purse holds, as the composition orders it), and empty
+	// for an upgrade that changes nothing, so "already so" survives an empty purse.
+	// An unaffordable upgrade OVERRIDES the memoised label - the site text, effects and all, is
+	// what it would say once the money is there - and draws as refused, outline included.
+	FString Unaffordable;
+	if (!Hover.bRefused)
+	{
+		Unaffordable = Context.Target->WhyUpgradeUnaffordable(Segment, Kind, UpgradeWidthIndex, Surface);
+	}
+	const bool bRefusedNow = Hover.bRefused || !Unaffordable.IsEmpty();
 	if (Hover.Outline.Num() > 0)
 	{
-		Sink.Polygon(Hover.Outline, Hover.bRefused ? EPreviewStyle::Refused : EPreviewStyle::Guide);
+		Sink.Polygon(Hover.Outline, bRefusedNow ? EPreviewStyle::Refused : EPreviewStyle::Guide);
 	}
-	Sink.Label(Context.Cursor, Hover.Text, Hover.bRefused ? EPreviewStyle::Refused : EPreviewStyle::Pending);
+	Sink.Label(Context.Cursor,
+		Unaffordable.IsEmpty() ? Hover.Text : FString::Printf(TEXT("Upgrade refused: %s"), *Unaffordable),
+		bRefusedNow ? EPreviewStyle::Refused : EPreviewStyle::Pending);
 }
 
 #undef LOCTEXT_NAMESPACE

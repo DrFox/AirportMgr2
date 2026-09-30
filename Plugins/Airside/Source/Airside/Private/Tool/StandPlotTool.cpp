@@ -231,19 +231,34 @@ bool FStandPlotTool::SelectVariant(const FToolContext& Context, int32 Axis, int3
 
 FString FStandPlotTool::RefusalFor(const FToolContext& Context, TConstArrayView<FVector2D> Shown) const
 {
-	// PAVEMENT IS PART OF THE KEY - see RefusalMemo's own comment.
-	if (RefusalMemo.Matches(Shown) && RefusalMemo.Payload.Pavement == Pavement)
+	// NO TARGET, NO OPINION - what the ternary this replaced answered, and nothing to key a memo on.
+	if (Context.Target == nullptr)
 	{
-		return RefusalMemo.Payload.Why;
+		return FString();
 	}
 
-	const FString Why = Context.Target != nullptr ? Context.Target->WhyStandRefused(Shown, Pavement) : FString();
-	RefusalMemo.Store(Shown, FRefusalPayload{ Pavement, Why });
+	// THE SITE HALF, REMEMBERED. Its key is everything it reads: the outline (Matches) and the
+	// target's edit epoch (moved by every edit of the model, entities included - a stand placed into
+	// this outline is exactly such an edit - and by an undo's graph swap). The pavement is NOT in it -
+	// see RefusalFor's own comment.
+	const uint32 Epoch = Context.Target->GetEditEpoch();
+	const bool bHit = SiteMemo.Matches(Shown) && SiteMemo.Payload.Epoch == Epoch;
+	if (!bHit)
+	{
+		SiteMemo.Store(Shown, FSitePayload{ Epoch, Context.Target->WhyStandSiteRefused(Shown) });
 
-	// FOR TESTS ONLY, and only on the path that actually paid for the ask - see
-	// GetRefusalCountForTest.
-	++RefusalCountForTest;
-	return Why;
+		// FOR TESTS ONLY, and only on the path that actually paid for the ask - see
+		// GetRefusalCountForTest.
+		++RefusalCountForTest;
+	}
+	if (!SiteMemo.Payload.Why.IsEmpty())
+	{
+		return SiteMemo.Payload.Why;
+	}
+
+	// THE MONEY HALF, FRESH EVERY CALL - the purse moves with no edit for an epoch to count, so
+	// this is the half no key on the model can cover.
+	return Context.Target->WhyStandUnaffordable(Shown, Pavement);
 }
 
 void FStandPlotTool::DescribeLetter(const FToolContext& Context, TConstArrayView<FVector2D> Shown,

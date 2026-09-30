@@ -212,6 +212,7 @@ namespace
 		double Funds = 1.0e9;
 		TArray<double> Charges;
 		virtual bool CanAfford(const FBuildQuote& Quote) const override { return Quote.BaseAmount() <= Funds; }
+		virtual double Balance() const override { return Funds; }
 		virtual int32 Charge(const FBuildQuote& Quote) override { Funds -= Quote.BaseAmount(); Charges.Add(Quote.BaseAmount()); return Charges.Num(); }
 		virtual void Reverse(int32) override {}
 		virtual void Credit(const FBuildQuote&) override {}
@@ -364,6 +365,83 @@ bool FUpgradeSegmentRefusesIntoNeighbourTest::RunTest(const FString& Parameters)
 		Actor->UpgradeSegment(Seg, ERoadKind::Taxiway, F, EPavement::Tarmac));
 	TestTrue(TEXT("and the refusal names the strip"),
 		Actor->WhyUpgradeRefused(Seg, ERoadKind::Taxiway, F, EPavement::Tarmac).Contains(TEXT("clearance strip")));
+	return true;
+}
+
+/**
+ * WhyUpgradeRefused IS ITS TWO HALVES, SITE FIRST (issue #439). The Upgrade hover remembers the
+ * site half and asks the money half fresh, while UpgradeSegment asks the composition - so the pair
+ * and the whole must be the same function. Also pins the one behaviour the split changed: the
+ * price gate used to come BEFORE the neighbour-strip gate, and now follows it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUpgradeRefusalIsTheTwoHalvesTest,
+	"Airside.Present.UpgradeRefusalIsTheTwoHalves",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUpgradeRefusalIsTheTwoHalvesTest::RunTest(const FString& Parameters)
+{
+	FUpgradeRecordingPurse Purse; // before the world - the facade holds a raw pointer to it
+	FAirsideTestWorld World;
+	if (!TestNotNull(TEXT("a world"), World.Actor)) { return false; }
+	ARoadNetworkActor* Actor = World.Actor;
+	const int32 C = UpgradeWidthIndexFor(*Actor, EIcaoCode::C);
+	const int32 F = UpgradeWidthIndexFor(*Actor, EIcaoCode::F);
+	if (!TestTrue(TEXT("C and F widths"), C != INDEX_NONE && F != INDEX_NONE)) { return false; }
+	const double HalfC = Actor->ResolveWidthProfile(ERoadKind::Taxiway, C)->GetMaxHalfWidth();
+	const double HalfF = Actor->ResolveWidthProfile(ERoadKind::Taxiway, F)->GetMaxHalfWidth();
+	const double Gap = HalfC + IcaoCode::TaxiwayStripForWidth(2.0 * HalfC) + 0.5 * (HalfC + HalfF);
+
+	// A SOLO TAXIWAY far from everything, for the money-only cases; and the neighbour pair from
+	// the test above, for the case where the strip and the money both refuse. Laid free, then priced.
+	TestTrue(TEXT("a solo C taxiway"), Actor->ConnectNodes(Actor->PlaceNode(FVector2D(0.0, -90000.0)),
+		Actor->PlaceNode(FVector2D(20000.0, -90000.0)), ERoadKind::Taxiway, C, EPavement::Tarmac));
+	const int32 Solo = Actor->Network->GetSegments().Num() - 1;
+	TestTrue(TEXT("a taxiway to widen"), Actor->ConnectNodes(Actor->PlaceNode(FVector2D(0.0, 0.0)),
+		Actor->PlaceNode(FVector2D(20000.0, 0.0)), ERoadKind::Taxiway, C, EPavement::Tarmac));
+	const int32 Boxed = Actor->Network->GetSegments().Num() - 1;
+	TestTrue(TEXT("a parallel C taxiway, clear of it at C"), Actor->ConnectNodes(
+		Actor->PlaceNode(FVector2D(0.0, Gap)), Actor->PlaceNode(FVector2D(20000.0, Gap)),
+		ERoadKind::Taxiway, C, EPavement::Tarmac));
+	Actor->GetEditFacade()->SetPurse(&Purse);
+	ON_SCOPE_EXIT { Actor->GetEditFacade()->SetPurse(nullptr); };
+	const ERoadKind Taxiway = ERoadKind::Taxiway;
+
+	// MONEY SHORT, NOTHING IN THE WAY: the whole is the money half's word.
+	Purse.Funds = 0.0;
+	TestEqual(TEXT("the site half is clear"), Actor->WhyUpgradeSiteRefused(Solo, Taxiway, F, EPavement::Tarmac), FString());
+	const FString Poor = Actor->WhyUpgradeUnaffordable(Solo, Taxiway, F, EPavement::Tarmac);
+	TestTrue(TEXT("the money half says it cannot afford it"), Poor.Contains(TEXT("afford")));
+	TestEqual(TEXT("and the whole is that"), Actor->WhyUpgradeRefused(Solo, Taxiway, F, EPavement::Tarmac), Poor);
+
+	// FUNDED: both clear.
+	Purse.Funds = 1.0e9;
+	TestEqual(TEXT("funded: the money half is clear"), Actor->WhyUpgradeUnaffordable(Solo, Taxiway, F, EPavement::Tarmac), FString());
+	TestEqual(TEXT("funded: the whole is clear"), Actor->WhyUpgradeRefused(Solo, Taxiway, F, EPavement::Tarmac), FString());
+
+	// NOTHING TO PRICE: already so is not an unaffordable upgrade, whatever the purse holds. A dead
+	// slot is the site half's to refuse; asked alone the money half has nothing to say about it.
+	Purse.Funds = 0.0;
+	TestEqual(TEXT("already so: nothing to pay for on an empty purse"),
+		Actor->WhyUpgradeUnaffordable(Solo, Taxiway, C, EPavement::Tarmac), FString());
+	TestEqual(TEXT("already so: the whole is clear"), Actor->WhyUpgradeRefused(Solo, Taxiway, C, EPavement::Tarmac), FString());
+	TestEqual(TEXT("a dead slot: the money half is silent"),
+		Actor->WhyUpgradeUnaffordable(Solo + 100, Taxiway, F, EPavement::Tarmac), FString());
+	TestFalse(TEXT("a dead slot: the site half refuses"),
+		Actor->WhyUpgradeSiteRefused(Solo + 100, Taxiway, F, EPavement::Tarmac).IsEmpty());
+
+	// SITE OUTRANKS MONEY - the one behaviour the split changed. The purse is empty, so the money
+	// half WOULD refuse this widening; the neighbour's strip refuses it too, and the whole says the
+	// strip: earning the money could not make it committable.
+	const FString Strip = Actor->WhyUpgradeSiteRefused(Boxed, Taxiway, F, EPavement::Tarmac);
+	TestTrue(TEXT("the neighbour's strip refuses the widening"), Strip.Contains(TEXT("clearance strip")));
+	TestTrue(TEXT("and the money half alone would refuse it as well"),
+		Actor->WhyUpgradeUnaffordable(Boxed, Taxiway, F, EPavement::Tarmac).Contains(TEXT("afford")));
+	TestEqual(TEXT("but the whole names the strip"), Actor->WhyUpgradeRefused(Boxed, Taxiway, F, EPavement::Tarmac), Strip);
+
+	// AND UpgradeSegment ASKS THE SAME COMPOSITION: refused, nothing charged.
+	TestFalse(TEXT("the click is refused"), Actor->UpgradeSegment(Boxed, Taxiway, F, EPavement::Tarmac));
+	TestEqual(TEXT("and charges nothing"), Purse.Charges.Num(), 0);
 	return true;
 }
 
