@@ -7,6 +7,7 @@
 #include "Model/GroundTraffic.h"
 
 #include "AirsideLog.h"
+#include "Model/AirsideCapability.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/PushbackPlanner.h"
@@ -1183,6 +1184,83 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 	for (int32 Index = 0; Index < Steps; ++Index)
 	{
 		AdvanceOnce(Step, Network);
+	}
+
+	// AFTER EVERY SUBSTEP, once a frame - see DiffFreedom. No network, no arbitration, no table to diff.
+	if (Network != nullptr)
+	{
+		DiffFreedom(*Network, /*bRebuilt*/ false);
+	}
+}
+
+void UGroundTraffic::DiffFreedom(const URoadNetwork& Network, bool bRebuilt)
+{
+	// THE STRIPS, re-read only when the topology can have moved - see RunwaySeeds. A rebuild always re-reads:
+	// it is where a runway vanishes, and the seed list must stop naming it before the diff below asks.
+	if (bRebuilt || RunwaySeedsNetwork != &Network || RunwaySeedsRevision != Network.GetEditRevision())
+	{
+		RunwaySeeds.Reset();
+		for (const FRunwaySummary& Runway : AirsideCapability::SummariseRunways(Network))
+		{
+			RunwaySeeds.Add(Runway.End.Seed);
+		}
+		RunwaySeedsNetwork = &Network;
+		RunwaySeedsRevision = Network.GetEditRevision();
+	}
+
+	// HELD NOW, by the queue's own predicate - see OnRunwayFreed.
+	TArray<FRoadSegmentId> RunwaysNow;
+	for (const FRoadSegmentId Seed : RunwaySeeds)
+	{
+		if (ArrivalPlanner::IsChainHeld(Network, Seed, &Occupancy))
+		{
+			RunwaysNow.Add(Seed);
+		}
+	}
+	// FREED IS "IN THE BASELINE, NOT HELD NOW" - which also covers a strip that is gone. A seed the rebuild
+	// renamed for a strip still held reads as freed once: a spurious freed costs a listener one look, a missed
+	// one strands an arrival queue, so the diff errs that way.
+	TArray<FRoadSegmentId> FreedRunways;
+	for (const FRoadSegmentId Seed : HeldRunways)
+	{
+		if (!RunwaysNow.Contains(Seed))
+		{
+			FreedRunways.Add(Seed);
+		}
+	}
+	HeldRunways = MoveTemp(RunwaysNow);
+
+	// THE STANDS, the same shape: IsStandCandidate is the one filter ChooseStand and UStandAllocator use, and
+	// IsStandHeld is what they ask of it.
+	TArray<FGuidelineNodeId> StandsNow;
+	for (const FEntityInstance& Stand : Network.GetEntities())
+	{
+		if (Stand.IsStandCandidate() && IsStandHeld(Stand.PoseNode, 0))
+		{
+			StandsNow.Add(Stand.PoseNode);
+		}
+	}
+	TArray<FGuidelineNodeId> FreedStands;
+	for (const FGuidelineNodeId Pose : HeldStands)
+	{
+		if (!StandsNow.Contains(Pose))
+		{
+			FreedStands.Add(Pose);
+		}
+	}
+	HeldStands = MoveTemp(StandsNow);
+
+	// BASELINES FIRST, BROADCASTS AFTER: a listener that asks this model anything sees the state the diff saw.
+	for (const FRoadSegmentId Seed : FreedRunways)
+	{
+		++RunwayFreedTotal;
+		UE_LOG(LogAirsideTraffic, Log, TEXT("Runway (seed %d) freed%s"), Seed.Index, bRebuilt ? TEXT(" by a rebuild") : TEXT(""));
+		OnRunwayFreed.Broadcast(Seed);
+	}
+	if (FreedStands.Num() > 0)
+	{
+		UE_LOG(LogAirsideTraffic, Log, TEXT("%d stand(s) freed%s"), FreedStands.Num(), bRebuilt ? TEXT(" by a rebuild") : TEXT(""));
+		OnStandsFreed.Broadcast(FreedStands);
 	}
 }
 

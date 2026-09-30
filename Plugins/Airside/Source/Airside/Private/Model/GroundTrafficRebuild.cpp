@@ -473,6 +473,12 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 	UE_LOG(LogAirsideTraffic, Log,
 		TEXT("Graph rebuilt: %d agents re-resolved, %d replanned, %d truncated, %d stranded"),
 		LastRebuild.ReResolved, Replanned, Truncated, Stranded);
+
+	// LAST: every claim this rebuild keeps or drops has settled, so the freed diff reads the table as the next
+	// planner will. A deleted runway or stand is reported here rather than at the next Advance - the player may
+	// delete and press 7 in one breath, the reason the stand claims above come back at once.
+	// ENFORCED BY: Airside.Model.Traffic.RunwayFreed.DeletedRunway, Airside.Model.Traffic.RunwayFreed.StandsDiff
+	DiffFreedom(Network, /*bRebuilt*/ true);
 }
 
 FRouteQuery FPlanReResolver::QueryFor(ERouteErrand Errand, FGuidelineNodeId Start, FGuidelineNodeId Goal,

@@ -106,6 +106,34 @@ public:
 	FOnArrivalRefused OnArrivalRefused;
 
 	/**
+	 * A runway's strip was held and is not now - fired once per strip, with the seed its summary names, at the
+	 * end of the Advance (or OnGraphRebuilt) that saw it go. See DiffFreedom. Relayed by UAirsideTraffic.
+	 *
+	 * DERIVED, NOT RAISED AT A SITE (ops batch 3 §5): "held" is ArrivalPlanner::IsChainHeld, exactly what the
+	 * arrival queue's IsRunwayBusy asks, so "freed" means "what the queue asks just turned false" - whatever
+	 * released it. A taxiing crossing clears through the per-tick claim pass with no event and no
+	 * OccupancyRevision bump of its own, and a per-site event would have missed it; a diff cannot.
+	 * ENFORCED BY: Airside.Model.Traffic.RunwayFreed.CrossingClears
+	 */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnRunwayFreed, FRoadSegmentId /*Seed*/);
+	FOnRunwayFreed OnRunwayFreed;
+
+	/**
+	 * Stand pose nodes that were held - a reservation (HoldStand) or an agent's goal or body - and are not now,
+	 * one broadcast per Advance (or rebuild) that freed any. Same diff as OnRunwayFreed. The bStandsMayHaveFreed
+	 * sites are NOT this signal: they gate ReofferStands inside this class, and stay as they are.
+	 * ENFORCED BY: Airside.Model.Traffic.RunwayFreed.StandsDiff
+	 */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnStandsFreed, const TArray<FGuidelineNodeId>& /*PoseNodes*/);
+	FOnStandsFreed OnStandsFreed;
+
+	/**
+	 * How many times OnRunwayFreed has fired this session. A plain counter, like OccupancyRevision: a poller
+	 * (ops batch 3 PR E's gate) asks "has a runway freed since the number I remember".
+	 */
+	int32 RunwayFreedCount() const { return RunwayFreedTotal; }
+
+	/**
 	 * The figures this tick arbitrates in. NOT the knob a designer turns.
 	 *
 	 * TRANSIENT AND NO LONGER EditAnywhere. This object is re-created every session and
@@ -826,6 +854,38 @@ private:
 	/** See OccupancyRevision. Not a UPROPERTY, the same reason LastStepsForTest above is
 	 *  not: a session counter about calls made, not state a save would ever need. */
 	uint32 OccupancyRevisionCount = 0;
+
+	/**
+	 * The freed diff - OnRunwayFreed and OnStandsFreed. Runs at the end of Advance (after the substeps, so a
+	 * release and a re-hold inside one frame fire nothing - nobody could have acted between them) and at the
+	 * end of OnGraphRebuilt, bRebuilt true: a rebuild re-reads the runways at once, and whatever vanished is
+	 * not held now, so it is freed - a deleted runway is no longer busy.
+	 *
+	 * A DIFF RATHER THAN A POLL BY EACH LISTENER: the question is asked once here, where the table lives, and
+	 * AirportOps hears a change instead of asking every runway every frame. Cost: one IsChainHeld per runway
+	 * and one IsStandHeld per stand per Advance - 2 runways and 30 stands on the largest test field
+	 * (FTestAirport::BuildScale, 2026-09-30).
+	 */
+	void DiffFreedom(const URoadNetwork& Network, bool bRebuilt);
+
+	/**
+	 * Every runway's seed, one per strip (AirsideCapability::SummariseRunways), as of RunwaySeedsRevision on
+	 * RunwaySeedsNetwork. RE-READ WHEN THE ROAD TOPOLOGY MOVES (GetEditRevision) or the network object
+	 * changes, not per Advance: which segments make a strip is topology - FRunwayChainCache's own argument -
+	 * and SummariseRunways walks every segment. Plain members: derived, never saved.
+	 */
+	TArray<FRoadSegmentId> RunwaySeeds;
+	uint32 RunwaySeedsRevision = 0;
+	const URoadNetwork* RunwaySeedsNetwork = nullptr;
+
+	/** The strips held at the last DiffFreedom - the baseline the next one compares against. */
+	TArray<FRoadSegmentId> HeldRunways;
+
+	/** The stand pose nodes held at the last DiffFreedom. */
+	TArray<FGuidelineNodeId> HeldStands;
+
+	/** See RunwayFreedCount. A session counter, not saved. */
+	int32 RunwayFreedTotal = 0;
 
 	// ResolveDeadlocks, CanReplanAtBlockedStep, EReResolve, ReResolvePlan and SpliceReplan ALL
 	// MOVED to FDeadlockResolver / FPlanReResolver (issue #84) - both declared above, near
