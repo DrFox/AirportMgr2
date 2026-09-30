@@ -139,3 +139,72 @@ int32 FlightLookupCountForTest() const; int32 FuelLookupCountForTest() const; in
    `StandHoldChanges` bump; LoadFromSlot's `ApplySpeed`; FocusOn's `bWatchingAgent = false`; SelectAndFocus's agent
    select.
 5. **Full suite**, counts, report.
+
+## Execution notes (2026-09-30)
+
+Full suite: `1563 test(s) run, 0 failed, 0 crashed` (baseline 1542; +21: Airside 4, AirportOps 4, AirportMgr 13 - the
+count rose by exactly the tests added, so no bare parent was dropped). Check-Architecture PASS with rule 34, rule-12
+warnings 111 (unchanged).
+
+Red before the gates (counters in, gates not): `HeldTaxiOut.AsksOncePerEdit` ("asked once" expected 1, got 99);
+`StandHolds.ChurnIsCounted` (not equal x3); `EmptyBoardCopiesNothing` (0, got 100); `Fuel.RevisionMovesOnEveryChange`
+(all seven mutators "to be true"); `Fuel.LineSaysWhenItMovesWithTheClock` ("pumping: it moves with the clock");
+`SimTimeScale.SetOnlyWhenItChanges` (0, got 100); `Inspector.Cache.QuietCardsDescribeOnce` (1, got 30, per card),
+`.AircraftLookupsOnce` (1, got 30 x3), `.DepotDescribedOncePerMinute` (0, got 20); `LandPanelBuildsOnlyOnChange` (1, got
+30). The refresh tests (`StandSeesAHold`, `...Churn`, `...ALine`, `RunwaySeesAMove`, `...ItsFacts`, `DepotSeesTheBoard`,
+`TurnaroundTicksByTheMinute`, `FuelLineLiveWhilePumping`) and the two UI pins passed with no cache - their reds are the
+mutations below.
+
+Mutations (restored by copy + touch, rebuilt, full suite green after):
+
+| Mutation | Red |
+|---|---|
+| taxi-out gate's `continue` off | AsksOncePerEdit ("asked once" 1, got 99) |
+| `++StandHoldChanges` off | ChurnIsCounted (not equal x3); with the card cache on, `Cache.StandSeesChurn` ("the card names it ('Empty')") |
+| JobBoard OnAgentPhase bump off | RevisionMovesOnEveryChange ("an agent's phase moves the revision") |
+| live flag never set | LineSaysWhenItMovesWithTheClock; with the flag off the card's key, `FuelLineLiveWhilePumping` ("500 L are in ('... 2,900 L left ...')") |
+| TickOffers early-out off | EmptyBoardCopiesNothing (0, got 100) |
+| LoadFromSlot's ApplySpeed off | SetOnlyWhenItChanges ("a load: the saved speed reaches the actor" 2, got 4) |
+| FocusOn's `bWatchingAgent = false` off | FocusOnLeavesWatch ("a Go leaves watch mode") |
+| SelectAndFocus agent select off | GoToAnAgentSelectsIt ("the aircraft is selected" not equal) |
+| Land gate off | LandPanelBuildsOnlyOnChange (1, got 30) |
+| card reuse off | QuietCardsDescribeOnce (1, got 30 per card) |
+| flight lookup gate off | AircraftLookupsOnce (1, got 30) |
+| card key without EditRevision / GuidelineRevision / OccupancyRevision / StandHolds / JobRevision / Minute | RunwaySeesAMove; StandSeesALine + RunwaySeesItsFacts; StandSeesAHold; StandSeesChurn; DepotSeesTheBoard; DepotDescribedOncePerMinute (0, got... "the next minute: one describe" 1, got 0) |
+| flight lookup without the board revision; fuel line without the job revision; without the live flag; turnaround without its minutes | AircraftLookupsOnce ("looked up again" 2, got 1; "asked again" 2, got 1); FuelLineLiveWhilePumping; TurnaroundTicksByTheMinute ("3 h left" unchanged) |
+| Land key without Seed / EditRevision / GuidelineRevision | LandPanelBuildsOnlyOnChange ("onto runway B", "dragged longer", "turned to grass": 1, got 0) |
+| `SetSimTimeScale` back in Tick | rule 34 `scale-on-change` FAIL |
+
+Two refresh tests first compared the whole card, which a taxiing aircraft changes every frame anyway; under the
+mutations they passed. They now read their own line (`FAircraftRig::Line`) and went red.
+
+Not pinned: the network-object resets (the taxi-out gate's `TaxiOutGateNetwork`, the three pointers on
+`FInspectorCardKey`, `FLandChoicesKey::Network`) - a new network also moves the revisions, and no test can hold every
+revision equal across two objects; the Revision bumps in `ResolveVehicles` and `Serialize`.
+
+Deviations from the spec (each argued at its site):
+
+- **Taxi-out gate is `(network, GuidelineRevision)`, no `RunwayFreedCount`.** `PlanAny` ranks a held runway, never
+  refuses one; both departure errands read no occupancy. Pinned by `BusyRunwayIsNoRefusal`.
+- **Land key has no `RunwayFreedCount`, no airport status**: Build reads neither. Focus is reduced to the runway seed.
+- **Depot card keys on a new `UJobBoard::Revision`, not `StepCount`**: OnAgentPhase and the recall change the board
+  outside Step. The card now describes AT THE MINUTE (Now floored to 60 s): its "+N min" figures are the minute's,
+  up to 59 game s behind the old per-frame ones, so the text is a function of the key.
+- **Aircraft lookups key on the boards' revisions and the clock, not agent phase**: the phase is no input; the fuel
+  line is asked every frame while pumping (its live flag), the turnaround when its printed minutes move.
+- **`StandHoldChangeCount` added to UGroundTraffic**: OccupancyRevision and StandsFreed miss a body arriving on a pose.
+- **The scale-set counter lives on UOpsRuntime** (`TimeScaleSetsForTest`): rule 19 forbids a new ForTest member on
+  ARoadNetworkActor. Rule 34 added for the shape.
+
+Finding: `URoadNetwork::SetRunwayFacts` bumps no revision. Every production write goes through the facade, whose
+Topology rebuild moves `GetGuidelineRevision`; the three new gates rely on that, and `Cache.RunwaySeesItsFacts` pins
+it. A future facts write that skips the facade would leave all three stale.
+
+UE_LOG / comment lines, `f056d647` -> now (no file fell): FlightBoard.cpp 24/264 -> 24/267; JobBoard.cpp 22/185 -> 22/188;
+OpsRuntime.cpp 25/355 -> 25/360; FlightBoard.h 0/388 -> 0/390; JobBoard.h 0/413 -> 0/429; OpsRuntime.h 0/190 -> 0/193;
+GroundTraffic.cpp 34/595 -> 34/614; RoadAgent.cpp 15/533 -> 15/533; GroundTraffic.h 0/758 -> 0/778; RoadAgent.h
+0/779 -> 0/786; RoadNetworkActor.h 0/899 -> 0/900; InspectorWidget.cpp 8/128 -> 8/148; InspectorWidget.h 0/138 -> 0/191;
+LandAircraftPanelWidget.cpp 1/22 -> 1/24; LandAircraftPanelWidget.h 0/49 -> 0/60; LandChoices.cpp 0/11 -> 0/12;
+LandChoices.h 0/32 -> 0/48.
+
+Unverified in PIE: all of it - the cards, the Land panel and the held taxi out are measured headlessly only.
