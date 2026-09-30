@@ -365,8 +365,10 @@ void UOpsRuntime::WireBus()
 		// its agent - and deciding which here would be a second copy of OnAgentPhase's own rules.
 		DirtyJobBoard();
 	});
-	// THE PLAYER DREW SOMETHING: a new depot seeds its fleet, a refused job may be servable now, and so may a refused
-	// departure - a runway, a route or the push arm it had none of. Every refusal but PushbackBlocked waits on this.
+	// THE PLAYER DREW SOMETHING: a refused job may be servable now, and so may a refused departure - a runway, a route or
+	// the push arm it had none of. Every refusal but PushbackBlocked waits on this. (A new depot's starter fleet is NOT this
+	// pass's: the "FleetSeed" pass, woken by the same event and registered ahead of this one, seeds it in the same drain, so
+	// the bids below meet the vehicles - Check-Architecture rule 60.)
 	// ENFORCED BY: AirportOps.Present.PushGroundFreed.NoPushbackRouteIsQuiet ("drawing the arm")
 	Bus.Subscribe<FNetworkChangedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
 		[this](const FNetworkChangedEvent&) { DirtyJobBoard(); });

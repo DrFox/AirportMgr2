@@ -79,10 +79,17 @@ void UJobBoard::Serialize(FArchive& Ar)
 	}
 }
 
+// A MISSING CASE BELOW IS A BUILD ERROR - see ExhaustiveSwitch.h: a refusal added to EServiceRefusal must say what the player is
+// told. It had a `default:` that answered "unserviceable" for every value it did not name, so a new reason silently read as
+// the bare word and the player was sent nowhere - the thing this enum exists to avoid. ENFORCED BY: the build, checked by
+// adding a stray enumerator to EServiceRefusal and watching it fail here (2026-09-30).
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
 const TCHAR* UJobBoard::RefusalText(EServiceRefusal Why)
 {
 	switch (Why)
 	{
+	// NOT REFUSED: there is no reason to give, and the bare word is what this has always answered for it.
+	case EServiceRefusal::None:          return TEXT("unserviceable");
 	case EServiceRefusal::NoDepot:       return TEXT("no fuel depot");
 	case EServiceRefusal::NoRoad:        return TEXT("depot not on a road");
 	// THE ENTRANCES, NAMED, since 2026-09-16 - the message the stand-routing spec promised and the
@@ -104,9 +111,11 @@ const TCHAR* UJobBoard::RefusalText(EServiceRefusal Why)
 	// NOT "buy one": the card lists the vehicle, and it is the listed one that cannot be used (#478) - sell it, buy a kind
 	// the scenario has.
 	case EServiceRefusal::UnknownVehicleKind: return TEXT("the depot's vehicles are of a kind this scenario no longer has - sell them and buy new");
-	default:                             return TEXT("unserviceable");
 	}
+	// A VALUE OUTSIDE THE ENUM (a corrupt save's Why): not one of the cases above, and still worded.
+	return TEXT("unserviceable");
 }
+AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 void UJobBoard::ResolveVehicles(TFunctionRef<FVehicle(EIcaoCode)> Resolve)
 {

@@ -717,7 +717,7 @@ void FFuelFixture::Advance(double Seconds)
 		// drain for what the Step itself published (a dispatch, a departure), which production hears in the drain's
 		// next round.
 		PhaseBus->Drain();
-		Service->Tick(*Traffic, *Net, *Clock);
+		Service->TickForTest(*Traffic, *Net, *Clock);
 		PhaseBus->Drain();
 
 		// AFTER THE SERVICE, not before, and that is the whole point of watching here. The
@@ -1075,7 +1075,7 @@ bool FFuelPerDemandRefusalRevisionTest::RunTest(const FString& Parameters)
 
 	// ONE TICK. A refuses for the first time, at the new revision, and writes that fact; B is
 	// checked in the very same pass, straight after.
-	Fixture.Service->Tick(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
+	Fixture.Service->TickForTest(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
 
 	auto FindDemand = [&Fixture](int32 AircraftId) -> const FServiceJob*
 	{
@@ -2254,7 +2254,7 @@ bool FFuelCouldServeAgreesWithBidTest::RunTest(const FString& Parameters)
 		Fixture.Build(/*bWithRoad=*/true);
 		TestFalse(TEXT("before the seeding pass the starter depot has no vehicle - and CouldServe says so, it predicts none"),
 			Fixture.Service->CouldServe(*Fixture.Traffic, *Fixture.Net, Airframe));
-		Fixture.Service->Tick(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
+		Fixture.Service->TickForTest(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
 		if (!TestTrue(TEXT("setup: the drain's seeding pass made the starter fleet"), Fixture.Service->GetVehicles().Num() > 0)) { return false; }
 		TestTrue(TEXT("in the same frame the same question says yes - off real vehicles"),
 			Fixture.Service->CouldServe(*Fixture.Traffic, *Fixture.Net, Airframe));
@@ -3828,7 +3828,7 @@ bool FFuelRevisionPointsOfChangeTest::RunTest(const FString& Parameters)
 		// A TURNAROUND OPENS, then DROPS. The phase events are withheld from the board and delivered by hand, one at a time.
 		FFuelFixture Fixture;
 		Fixture.Build(/*bWithRoad=*/true);
-		Fixture.Service->Tick(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
+		Fixture.Service->TickForTest(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
 		Fixture.Traffic->OnAgentPhaseChanged.Clear();
 		const int32 Aircraft = Fixture.ParkAircraft();
 		if (!TestTrue(TEXT("an aircraft parked, unheard by the board"), Aircraft != 0)) { return false; }
@@ -3851,7 +3851,7 @@ bool FFuelRevisionPointsOfChangeTest::RunTest(const FString& Parameters)
 		// stamps are current and this Step's only change to the count is the assignment.
 		FFuelFixture Fixture;
 		Fixture.Build(/*bWithRoad=*/true);
-		Fixture.Service->Tick(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
+		Fixture.Service->TickForTest(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
 		FServiceJob& Job = Fixture.Service->AddJobForTest(901, EServiceJobState::Open, EServiceRefusal::None, 0);
 		Job.Stand = Fixture.Stand;
 		Job.QuantityOwed = 300.0;

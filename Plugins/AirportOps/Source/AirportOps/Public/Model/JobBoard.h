@@ -423,13 +423,16 @@ public:
 	int32 SeedStarterFleets(const URoadNetwork& Network, const USimClock& Clock);
 
 	/**
-	 * Step, ignoring its answer - the world-free fixtures' per-frame driver, as it always was. THE TWO PASSES OF A DRAIN IN
-	 * THE ORDER UOpsRuntime RUNS THEM (#443): the fleet seeded for any depot the airport has gained ("FleetSeed"), then Step
-	 * ("JobBoard"). So a fixture that places a depot and ticks finds its starter fleet, as the game does, and a test that
-	 * calls Step alone asks what the job board pass alone does - which no longer seeds.
-	 * ENFORCED BY: AirportOps.Present.Fleet.PlacedDepotIsSeededByTheAnnouncement (the production order; this mirrors it)
+	 * Step, ignoring its answer - the world-free fixtures' per-frame driver, as it always was (it was `Tick` until #443; FOR
+	 * TEST, in its name, because nothing in production calls it - the bus's passes do). THE TWO PASSES OF A DRAIN IN THE ORDER
+	 * UOpsRuntime RUNS THEM: the fleet seeded for any depot the airport has gained ("FleetSeed"), then Step ("JobBoard"). So a
+	 * fixture that places a depot and ticks finds its starter fleet, as the game does, and a test that calls Step alone asks
+	 * what the job board pass alone does - which no longer seeds. THE PRODUCTION ORDER is what this mirrors, and what
+	 * Check-Architecture rule 60(b) holds: the "FleetSeed" pass seeds and is registered before the "JobBoard" one.
+	 * ENFORCED BY: Check-Architecture rule 60(b) (the production order) and rule 4's 'UJobBoard::TickForTest' row (no
+	 * production caller); AirportOps.Present.Fleet.PlacedDepotIsSeededByTheAnnouncement (the pass, woken by the announcement)
 	 */
-	void Tick(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
+	void TickForTest(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
 	{
 		SeedStarterFleets(Network, Clock);
 		Step(Traffic, Network, Clock);

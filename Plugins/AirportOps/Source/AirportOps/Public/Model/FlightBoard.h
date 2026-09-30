@@ -32,14 +32,17 @@ enum class ECancelReason : uint8;
  * (UFlightBoard::Revision - added/accepted/declined/expired), the guideline graph
  * (URoadNetwork::GetGuidelineRevision - an edit changed the taxiways), or occupancy
  * (UGroundTraffic::OccupancyRevision - a stand claimed or freed, a runway taken or cleared). bFuelServable is
- * CouldServe, which reads the airport's shape and the fleet's COMPOSITION and nothing else: it is dated by the
- * guideline graph and by UJobBoard::GetFleetCompositionRevision (a vehicle added, withdrawn, seeded, sold or a load
- * replacing the fleet), and by NEITHER the board (the airframe is the flight's own) NOR occupancy (it judges no traffic)
- * NOR a vehicle's state. Before #443 the whole verdict hung on the counter that moves on every vehicle TRANSITION
+ * CouldServe, which reads the airport's shape, the fleet's COMPOSITION and which of its vehicles are STRANDED (it is
+ * handed the traffic model to ask, #443 - a stranded vehicle never counts) and nothing else: it is dated by the
+ * guideline graph and by UJobBoard::GetFleetCompositionRevision (a vehicle added, withdrawn, seeded by the "FleetSeed"
+ * pass, sold or a load replacing the fleet, and a vehicle's agent stranding or moving again), and by NEITHER the board
+ * (the airframe is the flight's own) NOR occupancy (it judges no traffic's whereabouts) NOR any vehicle state but being
+ * stranded. Before #443 the whole verdict hung on the counter that moves on every vehicle TRANSITION
  * (dispatched, arrived, serving, refilled - #428 made each one bump it), so a truck arriving or finishing a refill
  * re-planned every pending offer's full arrival plan, which reads no fleet. A few integer compares replace the
  * search on every frame where none of them moved.
- * ENFORCED BY: AirportOps.Model.FlightBoard.VehicleTransitionsDoNotReplanOffers
+ * ENFORCED BY: AirportOps.Model.FlightBoard.VehicleTransitionsDoNotReplanOffers,
+ * AirportOps.Fuel.CouldServe.StrandingMovesTheCompositionAndTheVerdict (the stranded clause)
  */
 struct FOfferVerdict
 {
@@ -60,10 +63,12 @@ struct FOfferVerdict
 	uint32 BoardAt = 0;
 	uint32 GuidelineAt = 0;
 	uint32 OccupancyAt = 0;
-	/** UJobBoard::GetFleetCompositionRevision when bFuelServable was judged - a vehicle bought, sold, seeded or
-	 *  withdrawn changes it (facility-upgrades spec), a vehicle changing STATE does not (#443: this was the transition
-	 *  counter, which moved on every one and re-planned every offer's Why with it).
-	 *  ENFORCED BY: AirportOps.Model.Fleet.OfferVerdictIsDatedByTheFleet */
+	/** UJobBoard::GetFleetCompositionRevision when bFuelServable was judged - a vehicle bought, sold, seeded (by the
+	 *  "FleetSeed" pass) or withdrawn changes it (facility-upgrades spec), and so does a vehicle's agent stranding or moving
+	 *  again (#443: a stranded vehicle does not count), but a vehicle changing any other STATE does not (#443: this was the
+	 *  transition counter, which moved on every one and re-planned every offer's Why with it).
+	 *  ENFORCED BY: AirportOps.Model.Fleet.OfferVerdictIsDatedByTheFleet,
+	 *  AirportOps.Fuel.CouldServe.StrandingMovesTheCompositionAndTheVerdict */
 	uint32 FleetAt = 0;
 	bool bValid = false;
 };
