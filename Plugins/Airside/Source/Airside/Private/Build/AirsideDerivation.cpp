@@ -88,7 +88,11 @@ FRoadSolveResult AirsideDerivation::Derive(URoadNetwork& Network, const FDeriveI
 		// profile they were given lived in the transient package and never survived the save.
 		// Handing it to the network repairs both cases through one accessor - see
 		// URoadNetwork::ProfileFor, and Airside.Build.ProfileFallback for what it is worth.
-		Network.DefaultProfile = Inputs.DefaultProfile;
+		// NULL KEEPS the network's own - see FDeriveInputs::DefaultProfile for why it no longer writes null.
+		if (Inputs.DefaultProfile != nullptr)
+		{
+			Network.DefaultProfile = Inputs.DefaultProfile;
+		}
 
 		// RESOLVED ONCE, BY THE CALLER, AND PASSED DOWN (issue #190) - see FSurfaceSettings::
 		// DesignVehicles' own comment. SolveAll's BuildNodeInput asks a profile's
@@ -151,7 +155,9 @@ FRoadSolveResult AirsideDerivation::Derive(URoadNetwork& Network, const FDeriveI
 	// the planners may search it again - see URoadNetwork::AreGuidelinesBehindRoad. THE DERIVATION'S
 	// STAMP, not the builder's (#438): it moved here from the end of FRoadGuidelineBuilder::Build,
 	// so "derived" means every pass this scope runs finished, links included, rather than one pass.
-	if (Passes.bStamp)
+	// A SCOPE THAT DERIVES NO GRAPH (Links) STAMPS ONLY ONE THAT WAS DERIVED (#472 review): a hand-laid
+	// graph never derived stays never-derived - see URoadNetwork::WereGuidelinesEverDerived.
+	if (Passes.bStamp && (Passes.bGraph || Network.WereGuidelinesEverDerived()))
 	{
 		Network.MarkGuidelinesDerived();
 	}

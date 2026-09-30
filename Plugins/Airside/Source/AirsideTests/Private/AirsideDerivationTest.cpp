@@ -7,6 +7,7 @@
 #include "Misc/AutomationTest.h"
 #include "Build/AirsideDerivation.h"
 #include "Content/AirsideSettings.h"
+#include "Entities/EntityDefinition.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TaxiwayRestriction.h"
@@ -77,9 +78,10 @@ namespace
 	 * guideline builder lays turn paths the solve measured), two stands (so the anchor links join
 	 * and split a taxiway), and a service road just off exit 1's taxiway, inside its strip (so the
 	 * restriction pass lowers its letter and the builder writes a smaller MaxWingspan). A fixture
-	 * missing any of these would let that pass drift between two doors unseen.
+	 * missing any of these would let that pass drift between two doors unseen. Returns the service
+	 * road's first node, which the drag test moves.
 	 */
-	void DerivationTestLayField(URoadNetwork& Net)
+	FRoadNodeId DerivationTestLayField(URoadNetwork& Net)
 	{
 		const FTestAirport Field = FTestAirport::Build(UAirsideSettings::ResolveDefaultAirframe(),
 			{ .StandCount = 2, .ExitCount = 2, .bDerived = false }, &Net);
@@ -91,7 +93,9 @@ namespace
 		const URoadProfile* Taxiway = TestProfiles::Taxiway();
 		URoadProfile* Road = URoadProfile::MakeServiceRoadTransient();
 		const double RoadX = Field.Exits[0].X - (Taxiway->GetMaxHalfWidth() + Road->GetMaxHalfWidth() + 500.0);
-		Net.AddStraightSegment(Net.AddNode(FVector2D(RoadX, -12000.0)), Net.AddNode(FVector2D(RoadX, -8000.0)), Road);
+		const FRoadNodeId RoadStart = Net.AddNode(FVector2D(RoadX, -12000.0));
+		Net.AddStraightSegment(RoadStart, Net.AddNode(FVector2D(RoadX, -8000.0)), Road);
+		return RoadStart;
 	}
 }
 
@@ -253,5 +257,93 @@ bool FDerivationRefusesWithoutVehiclesTest::RunTest(const FString&)
 	AirsideDerivation::FDeriveInputs Inputs;
 	AirsideDerivation::Derive(*Net, Inputs);
 	TestEqual(TEXT("nothing derived"), Net->GetGuidelineEdges().Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDerivationDragFrameIsSurfaceScopeTest, "Airside.Present.Derivation.DragFrameIsSurfaceScope",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDerivationDragFrameIsSurfaceScopeTest::RunTest(const FString&)
+{
+	// A DRAG FRAME GETS THE SURFACE SCOPE (#472 review), measured through the actor's own presenter:
+	// RebuildInternal's Kind -> scope choice is one ternary, and mapping every Kind to Full left the
+	// suite green. A drag frame (RebuildSurfaceOnly) must re-solve and nothing more - no guideline
+	// rebuild (issue #165's cost) and NO STAMP, so the planners see the graph is behind the road for
+	// the drag's duration. NO WIDENING-TRACE COUNT here: this field has no service-road bend the
+	// widening drives a vehicle round (the count read 0 on the Topology rebuild too), so a zero
+	// would measure nothing - Airside.Build.BendLanes.SnapAndDragDoNotTrace owns that fact.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor))
+	{
+		return false;
+	}
+	Actor->Network = NewObject<URoadNetwork>(Actor);
+	URoadNetwork& Net = *Actor->Network;
+	const FRoadNodeId Dragged = DerivationTestLayField(Net);
+	URoadSurfacePresenter* Presenter = Actor->GetPresenter();
+
+	// (1) A Topology rebuild derives and stamps.
+	Presenter->Rebuild(Net, Actor->MakeSurfaceSettingsForTest());
+	TestFalse(TEXT("derived, the graph is current"), Net.AreGuidelinesBehindRoad());
+	const uint32 GuidelinesAtRebuild = Net.GetGuidelineRevision();
+
+	// (2) A drag frame: the node moves, the surface re-solves, the graph is left alone.
+	const FVector2D From = Net.GetNode(Dragged)->Position;
+	if (!TestTrue(TEXT("the node moves"), Net.SetNodePosition(Dragged, From + FVector2D(0.0, 200.0))))
+	{
+		return false;
+	}
+	Presenter->RebuildSurfaceOnly(Net, Actor->MakeSurfaceSettingsForTest());
+	TestEqual(TEXT("a drag frame rebuilds no guideline (the Surface scope, not Full)"),
+		static_cast<int64>(Net.GetGuidelineRevision()), static_cast<int64>(GuidelinesAtRebuild));
+	TestTrue(TEXT("and stamps nothing: the graph reads as behind the road mid-drag"), Net.AreGuidelinesBehindRoad());
+
+	// (3) The drag's closing Topology rebuild re-derives and stamps.
+	Presenter->Rebuild(Net, Actor->MakeSurfaceSettingsForTest());
+	TestFalse(TEXT("the Topology rebuild that ends a drag makes the graph current again"), Net.AreGuidelinesBehindRoad());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDerivationNullProfileKeepsTest, "Airside.Build.Derivation.NullProfileKeepsTheNetworks",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDerivationNullProfileKeepsTest::RunTest(const FString&)
+{
+	// FDeriveInputs DEFAULTS TO Full: a caller that set only DesignVehicles used to write a null
+	// DefaultProfile, and every profile-less segment (a reloaded road) lost its width on the next
+	// rebuild. Null now keeps the network's own; a profile given is still written.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	DerivationTestLayField(*Net);
+	URoadProfile* Own = URoadProfile::MakeTransient(2000.0, 500.0);
+	Net->DefaultProfile = Own;
+	const FRoadDesignVehicles Vehicles = UAirsideSettings::ResolveRoadDesignVehicles();
+	AirsideDerivation::FDeriveInputs Inputs;
+	Inputs.DesignVehicles = &Vehicles;
+	AirsideDerivation::Derive(*Net, Inputs);
+	TestTrue(TEXT("a null DefaultProfile keeps the network's own"), Net->DefaultProfile == Own);
+
+	URoadProfile* Given = URoadProfile::MakeTransient(2400.0, 600.0);
+	Inputs.DefaultProfile = Given;
+	AirsideDerivation::Derive(*Net, Inputs);
+	TestTrue(TEXT("a DefaultProfile given is written (the control: the write still happens)"), Net->DefaultProfile == Given);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDerivationLinksKeepsUnderivedTest, "Airside.Build.Derivation.LinksKeepsAHandLaidGraphUnderived",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDerivationLinksKeepsUnderivedTest::RunTest(const FString&)
+{
+	// THE Links SCOPE DERIVES NO GRAPH, so it stamps only one that was derived (#472 review): a graph
+	// laid wholly by hand stamped "derived" would make the planners refuse it after its next edit -
+	// URoadNetwork::RestoreFrom's trap. A derived graph's stamp still moves forward (ScopeTable's Links row).
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	TestGraph::Join(*Net, TestGraph::Node(*Net, -10000.0, -10000.0), TestGraph::Node(*Net, -10000.0, 10000.0));
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, 0.0), 0.0);
+	TestFalse(TEXT("precondition: the hand-laid graph was never derived"), Net->WereGuidelinesEverDerived());
+
+	TestGraph::Link(*Net);
+	TestFalse(TEXT("linking a hand-laid graph leaves it never-derived"), Net->WereGuidelinesEverDerived());
+	Net->AddNode(FVector2D(50000.0, 50000.0));
+	TestFalse(TEXT("so an edit does not read as a graph behind its road"), Net->AreGuidelinesBehindRoad());
 	return true;
 }

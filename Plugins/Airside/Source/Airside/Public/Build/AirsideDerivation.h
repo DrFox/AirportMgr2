@@ -63,6 +63,8 @@ namespace AirsideDerivation
 		 * Full's passes AFTER the guideline graph, over the graph as it stands: the anchor links, the
 		 * census and the stamp. No solve, so no turn path to re-measure (FAnchorLink::Build gets no
 		 * Solved). TestGraph::Link - a fixture whose guideline graph is hand-laid, the ops tests'.
+		 * THE STAMP ONLY MOVES FORWARD: a graph never derived (hand-laid from scratch) is left
+		 * never-derived - this scope derived nothing - see URoadNetwork::WereGuidelinesEverDerived.
 		 */
 		Links,
 
@@ -91,8 +93,12 @@ namespace AirsideDerivation
 
 		/**
 		 * Written to URoadNetwork::DefaultProfile before the solve, by every scope that solves - see
-		 * Derive for why. Null writes null, as the presenter always did; a caller with no profile of
-		 * its own to hand (TestGraph) passes the network's current one.
+		 * Derive for why. NULL KEEPS the network's own (#472 review): this struct defaults to Full, so
+		 * null-writes-null let a caller that set only DesignVehicles silently null the fallback every
+		 * profile-less segment reads - a road that vanishes on its next rebuild. The presenter never
+		 * passes null (ARoadNetworkActor::ResolveProfile always answers); TestGraph passes nothing,
+		 * because a bare network has no actor to resolve one.
+		 * ENFORCED BY: Airside.Build.Derivation.NullProfileKeepsTheNetworks
 		 */
 		URoadProfile* DefaultProfile = nullptr;
 

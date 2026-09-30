@@ -961,9 +961,12 @@ void FRoadDrawTool::PreviewUpgrade(const FToolContext& Context, IToolPreviewSink
 				// so the closures below read the strip at the letter it will OPERATE (StripWidthOf's
 				// ruling), and a neighbour the new pavement restricts is restricted here too.
 				// THROUGH THE DERIVATION'S Facts SCOPE (#438), not TaxiwayRestriction::Apply by name: the
-				// passes the road alone determines, the ones these closures read, so a fact pass the
-				// rebuild gains reaches this preview without a second edit. Not the Full scope: the
-				// guideline builder has no quiet mode, and nothing asked below reads the graph.
+				// passes the road alone determines, so a fact pass the rebuild gains reaches this preview
+				// without a second edit.
+				// ENFORCED BY: Airside.Tool.UpgradeMode (with this call removed, the outline and closures go wrong)
+				// Not the Full scope: the guideline builder has no quiet mode, so every hover change would
+				// log a rebuild nobody made - a question below that comes to need the graph needs a quiet
+				// builder first.
 				URoadNetwork* Ghost = DuplicateObject<URoadNetwork>(Network, GetTransientPackage());
 				Ghost->SetSegmentProfile(Id, New);
 				AirsideDerivation::FDeriveInputs WhatIf;

@@ -62,9 +62,9 @@ FGuidelineNodeId TestGraph::NodeFor(const URoadNetwork& Net, FRoadSegmentId Segm
 
 FRoadSolveResult TestGraph::Derive(URoadNetwork& Net, const FRoadDesignVehicles* DesignVehicles)
 {
-	// RESOLVE ONCE if the caller has not already: URoadSurfacePresenter::Rebuild resolves its
-	// own FRoadDesignVehicles and passes THE SAME instance to SolveAll and to
-	// FRoadGuidelineBuilder::Build (#190) - so a fixture that means the production sequence
+	// RESOLVE ONCE if the caller has not already: ARoadNetworkActor::MakeSurfaceSettings resolves
+	// one FRoadDesignVehicles and AirsideDerivation::Derive passes THE SAME instance to SolveAll and
+	// to FRoadGuidelineBuilder::Build (#190, #438) - so a fixture that means the production sequence
 	// does the same, rather than SolveAll(nullptr) (each profile resolving its own) followed
 	// by a second, independent ResolveRoadDesignVehicles() for Build. The two happen to answer
 	// with the same figures today (URoadProfile::ResolvedDesignBody and
@@ -76,11 +76,10 @@ FRoadSolveResult TestGraph::Derive(URoadNetwork& Net, const FRoadDesignVehicles*
 	// THE PRODUCTION SEQUENCE ITSELF (#438), not a copy of it: this body used to re-type the
 	// solve, "the production sequence's restriction pass too" and the builder, and a pass the
 	// presenter gained had to be remembered here. The Graph scope is the derivation up to and
-	// including the guideline graph and its stamp - no links, which Rebuild adds. The network's own
-	// DefaultProfile is handed back: a bare network has no actor to resolve one.
+	// including the guideline graph and its stamp - no links, which Rebuild adds. NO DefaultProfile:
+	// a bare network has no actor to resolve one, and a null one keeps the network's own.
 	AirsideDerivation::FDeriveInputs Inputs;
 	Inputs.Scope = AirsideDerivation::EDeriveScope::Graph;
-	Inputs.DefaultProfile = Net.DefaultProfile;
 	Inputs.DesignVehicles = &Resolved;
 	return AirsideDerivation::Derive(Net, Inputs);
 }
@@ -97,7 +96,6 @@ void TestGraph::Rebuild(URoadNetwork& Net)
 	const FRoadDesignVehicles Resolved = UAirsideSettings::ResolveRoadDesignVehicles();
 	AirsideDerivation::FDeriveInputs Inputs;
 	Inputs.Scope = AirsideDerivation::EDeriveScope::Full;
-	Inputs.DefaultProfile = Net.DefaultProfile;
 	Inputs.DesignVehicles = &Resolved;
 	AirsideDerivation::Derive(Net, Inputs);
 }

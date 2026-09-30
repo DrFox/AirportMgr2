@@ -156,6 +156,16 @@ public:
 		return GuidelinesDerivedAt != MAX_uint32 && GuidelinesDerivedAt != EditRevision;
 	}
 
+	/**
+	 * The guideline graph was derived from this road at least once this session - stamped, not only
+	 * hand-laid. What AirsideDerivation::Derive's Links scope asks before it stamps: that scope
+	 * derives no graph, so it moves a derived graph's stamp forward and leaves a never-derived
+	 * (hand-laid) one never-derived - RestoreFrom's rule below, for its reason: stamping a hand-laid
+	 * graph would make the planners refuse it after its next edit.
+	 * ENFORCED BY: Airside.Build.Derivation.LinksKeepsAHandLaidGraphUnderived
+	 */
+	bool WereGuidelinesEverDerived() const { return GuidelinesDerivedAt != MAX_uint32; }
+
 	/** Stamps the current EditRevision as the one the guideline graph was derived from.
 	 *  AirsideDerivation::Derive's last act, after every pass its scope ran (#438; the builder's
 	 *  own last act until then) - see AreGuidelinesBehindRoad. */

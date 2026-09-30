@@ -225,8 +225,8 @@ namespace TestGraph
 	 * The WHOLE derivation - AirsideDerivation::Derive's Full scope, the one ARoadNetworkActor::
 	 * RebuildMesh runs through its presenter: solve, restriction, guidelines, anchor links, census,
 	 * stamp. The content set's design vehicles, the default service-link radius and no depot kit
-	 * table - an actor's are per-level, and a bare network has none. The network's own
-	 * DefaultProfile stands: there is no actor here to resolve one.
+	 * table - an actor's are per-level, and a bare network has none. No DefaultProfile either: the
+	 * network's own stands (FDeriveInputs::DefaultProfile - null keeps it), with no actor to resolve one.
 	 * ENFORCED BY: Airside.Build.Derivation.TestGraphMatchesTheActor (bit for bit, one fixture)
 	 */
 	AIRSIDE_API void Rebuild(URoadNetwork& Net);
@@ -236,6 +236,8 @@ namespace TestGraph
 	 * graph as it stands, for a fixture that HAND-LAYS that graph (the ops tests' taxi lines) and so
 	 * must not run the builder, which would sweep it. Was FAnchorLink::Build + MarkGuidelinesDerived
 	 * typed at each such fixture (#438); a pass added to the derivation's tail now reaches them.
+	 * STAMPS ONLY A GRAPH SOMETHING DERIVED (the ops fixtures' PlaceNode rebuild did): a graph laid
+	 * wholly by hand stays never-derived, so its next edit does not make the planners refuse it.
 	 */
 	AIRSIDE_API void Link(URoadNetwork& Net);
 

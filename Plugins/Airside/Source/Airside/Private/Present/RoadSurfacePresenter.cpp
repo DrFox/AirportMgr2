@@ -655,8 +655,8 @@ void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfac
 		// mesh, aprons, the guideline graph, anchor links, runway paint and rubber - can have
 		// changed: SetIntermediateHoldingPosition flips a flag on a guideline node that
 		// already exists. RebuildMarkings reads Network.GetGuidelineNodes() exactly as they
-		// stand, which is safe ONLY because this returns before FRoadGuidelineBuilder::Build
-		// (below, under Topology) would reallocate them - see RebuildMarkingsOnly's own
+		// stand, which is safe ONLY because this returns before AirsideDerivation::Derive (below;
+		// its Full scope runs FRoadGuidelineBuilder::Build) would reallocate them - see RebuildMarkingsOnly's own
 		// comment for why routing this through Topology instead was tried and reverted.
 		RebuildMarkings(Network, Settings);
 		return;
