@@ -7,6 +7,7 @@
 #include "Components/TextBlock.h"
 #include "Entities/EntityDefinition.h"
 #include "Content/AirsideSettings.h"
+#include "InspectorFacilityRows.h"
 #include "InspectorWidget.h"
 #include "Misc/AutomationTest.h"
 #include "Model/FacilityPurchases.h"
@@ -223,7 +224,7 @@ bool FInspectorIdleTickSetsNoTextTest::RunTest(const FString& Parameters)
  * FInspectorIdleTickSetsNoTextTest above. That test proves SetText adds no more calls; it
  * does NOT prove the four Printfs and two NSLOCTEXT lookups that build the sentence SetText
  * then compares stopped running - they used to run every Refresh regardless, gated only at the
- * very end. This measures the earlier gate (FInspectorKey) directly, through
+ * very end. This measures the earlier gate (FAircraftDisplay) directly, through
  * ComposeCountForTest, rather than trusting that an unchanged SetText count means an unchanged
  * compose count - which is exactly the assumption #187 shipped and #309 found false here.
  *
@@ -282,7 +283,7 @@ bool FInspectorIdleTickComposesNoTextTest::RunTest(const FString& Parameters)
 	}
 
 	TestEqual(TEXT("ten idle refreshes of a PARKED aircraft compose the sentence zero more "
-		"times - FInspectorKey read unchanged, so Refresh never reran the Printf/FString::Format "
+		"times - FAircraftDisplay read unchanged, so Refresh never reran the Printf/FString::Format "
 		"work SetTextCallCountForTest's own gate only compared the RESULT of"),
 		Panel->ComposeCountForTest(), Before);
 
@@ -293,7 +294,7 @@ bool FInspectorIdleTickComposesNoTextTest::RunTest(const FString& Parameters)
  * A SUB-KNOT SPEED CHANGE STILL RECOMPOSES - PR #329 review, on FInspectorIdleTickComposesNoTextTest's
  * own key. The Facts line prints speed TWICE from the same Shown value at two different
  * precisions - m/s to one decimal (%.1f), knots to zero (%.0f) - and 1 kt is 0.514 m/s, finer
- * than a whole knot, so FInspectorKey keying on the ROUNDED KNOT alone missed a real, displayed
+ * than a whole knot, so a key on the ROUNDED KNOT alone missed a real, displayed
  * m/s change whenever it landed on the same knot: 5.0 -> 5.1 m/s both round to 10 kt. The key
  * now uses SpeedTenthsRounded (tenths of m/s) for exactly this reason - see its own comment.
  *
@@ -888,8 +889,8 @@ bool FInspectorFacilityCardTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("a world"), Bare.World)) { return false; }
 	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(Bare.World, UInspectorWidget::StaticClass());
 	if (!TestNotNull(TEXT("the panel is created with no asset"), Panel)) { return false; }
-	TestNotNull(TEXT("the code-built card has a buy-module button"), Panel->BuyModuleButton.Get());
-	TestNotNull(TEXT("and a buy-vehicle menu"), Panel->BuyVehicleMenu.Get());
+	TestNotNull(TEXT("the code-built card has a buy-module button"), Panel->FacilityRows->BuyModuleButton.Get());
+	TestNotNull(TEXT("and a buy-vehicle menu"), Panel->FacilityRows->BuyVehicleMenu.Get());
 
 	FFacilityQuote Quote;
 	Quote.Refusal = EPurchaseRefusal::None;
@@ -916,32 +917,32 @@ bool FInspectorFacilityCardTest::RunTest(const FString& Parameters)
 	Row.Refusal = EPurchaseRefusal::VehicleBusy;
 	Row.SellLabel = FText::FromString(TEXT("Sell 45,000"));
 
-	Panel->ShowFacilityQuote(Quote);
-	TestTrue(TEXT("a facility's rows are shown"), Panel->AreFacilityRowsShownForTest());
-	TestEqual(TEXT("the shed line counts owned against reserved"), Panel->ShedsTextForTest(), FString(TEXT("Sheds 1 / 3 space")));
-	TestFalse(TEXT("an unaffordable shed is a disabled button"), Panel->IsBuyModuleEnabledForTest());
-	TestTrue(TEXT("whose caption says why"), Panel->BuyModuleCaptionForTest().Contains(UFacilityPurchases::RefusalText(EPurchaseRefusal::CannotAfford).ToString()));
-	TestEqual(TEXT("the vehicle line counts vehicles against bays"), Panel->VehiclesTextForTest(), FString(TEXT("Vehicles 1 / 1 bays")));
-	const TArray<FUiMenuItem> Items = Panel->BuyVehicleItemsForTest();
+	Panel->FacilityRows->Show(Quote);
+	TestTrue(TEXT("a facility's rows are shown"), Panel->FacilityRows->AreFacilityRowsShownForTest());
+	TestEqual(TEXT("the shed line counts owned against reserved"), Panel->FacilityRows->ShedsTextForTest(), FString(TEXT("Sheds 1 / 3 space")));
+	TestFalse(TEXT("an unaffordable shed is a disabled button"), Panel->FacilityRows->IsBuyModuleEnabledForTest());
+	TestTrue(TEXT("whose caption says why"), Panel->FacilityRows->BuyModuleCaptionForTest().Contains(UFacilityPurchases::RefusalText(EPurchaseRefusal::CannotAfford).ToString()));
+	TestEqual(TEXT("the vehicle line counts vehicles against bays"), Panel->FacilityRows->VehiclesTextForTest(), FString(TEXT("Vehicles 1 / 1 bays")));
+	const TArray<FUiMenuItem> Items = Panel->FacilityRows->BuyVehicleItemsForTest();
 	if (TestEqual(TEXT("one menu line per vehicle offer"), Items.Num(), 2))
 	{
 		TestFalse(TEXT("a full depot greys every line"), Items[0].bEnabled);
 		TestTrue(TEXT("with the refusal as its reason"), Items[0].Why.EqualTo(UFacilityPurchases::RefusalText(EPurchaseRefusal::NoFreeBay)));
 	}
-	TestEqual(TEXT("one fleet row per vehicle"), Panel->FleetRowCountForTest(), 1);
-	TestFalse(TEXT("a busy vehicle's Sell is disabled"), Panel->IsSellEnabledForTest(0));
+	TestEqual(TEXT("one fleet row per vehicle"), Panel->FacilityRows->FleetRowCountForTest(), 1);
+	TestFalse(TEXT("a busy vehicle's Sell is disabled"), Panel->FacilityRows->IsSellEnabledForTest(0));
 
-	Panel->ShowFacilityQuote(FFacilityQuote());
-	TestFalse(TEXT("a card that is no facility shows no purchase rows"), Panel->AreFacilityRowsShownForTest());
+	Panel->FacilityRows->Show(FFacilityQuote());
+	TestFalse(TEXT("a card that is no facility shows no purchase rows"), Panel->FacilityRows->AreFacilityRowsShownForTest());
 
 	FFacilityQuote Empty = Quote;
 	Empty.Vehicles = 0;
 	TestEqual(TEXT("an empty depot on a road says what to do"),
-		UInspectorWidget::DepotStatus(Empty, /*bReachable=*/true, TEXT("No jobs")), FString(TEXT("No vehicles \u2014 buy one")));
+		FDepotCard::StatusWith(Empty, /*bReachable=*/true, TEXT("No jobs")), FString(TEXT("No vehicles \u2014 buy one")));
 	TestEqual(TEXT("off the road, the road is the fix it names"),
-		UInspectorWidget::DepotStatus(Empty, /*bReachable=*/false, TEXT("Cannot dispatch")), FString(TEXT("Cannot dispatch")));
+		FDepotCard::StatusWith(Empty, /*bReachable=*/false, TEXT("Cannot dispatch")), FString(TEXT("Cannot dispatch")));
 	TestEqual(TEXT("with a vehicle, the backlog stands"),
-		UInspectorWidget::DepotStatus(Quote, /*bReachable=*/true, TEXT("No jobs")), FString(TEXT("No jobs")));
+		FDepotCard::StatusWith(Quote, /*bReachable=*/true, TEXT("No jobs")), FString(TEXT("No jobs")));
 	return true;
 }
 
@@ -1012,21 +1013,21 @@ bool FInspectorDepotCardBuysTest::RunTest(const FString& Parameters)
 
 	Rig.Refresh();
 	TestTrue(TEXT("the depot's card is shown"), Rig.Panel->IsShownForTest());
-	TestTrue(TEXT("with its purchase rows - the panel reached the controller's runtime"), Rig.Panel->AreFacilityRowsShownForTest());
+	TestTrue(TEXT("with its purchase rows - the panel reached the controller's runtime"), Rig.Panel->FacilityRows->AreFacilityRowsShownForTest());
 	const FFacilityQuote Before = Rig.Runtime->QuoteFacility(Rig.Depot);
 	if (!TestTrue(TEXT("setup: an empty depot with a free bay and an affordable vehicle"),
 		Before.Vehicles == 0 && Before.VehicleOffers.Num() > 0 && Before.VehicleOffers[0].Refusal == EPurchaseRefusal::None)) { return false; }
 	if (!TestTrue(TEXT("setup: a second shed is reserved and affordable"),
 		Before.Modules.Num() == 1 && Before.Modules[0].Refusal == EPurchaseRefusal::None)) { return false; }
-	TestEqual(TEXT("the card's menu offers what the quote offers"), Rig.Panel->BuyVehicleItemsForTest().Num(), Before.VehicleOffers.Num());
+	TestEqual(TEXT("the card's menu offers what the quote offers"), Rig.Panel->FacilityRows->BuyVehicleItemsForTest().Num(), Before.VehicleOffers.Num());
 
 	const double Balance = Ledger->Balance();
-	Rig.Panel->ChooseBuyVehicleForTest(0);
+	Rig.Panel->FacilityRows->ChooseBuyVehicleForTest(0);
 	TestEqual(TEXT("choosing the first line bought one vehicle at the depot"), Board->VehiclesAt(Rig.Depot), 1);
 	TestEqual(TEXT("and charged its price"), Ledger->Balance(), Balance - Before.VehicleOffers[0].Price, 0.01);
 
 	Rig.Refresh();
-	Rig.Panel->ClickBuyModuleForTest();
+	Rig.Panel->FacilityRows->ClickBuyModuleForTest();
 	const FFacilityQuote After = Rig.Runtime->QuoteFacility(Rig.Depot);
 	TestEqual(TEXT("Buy Shed bought the second shed through the controller"), After.Modules.Num() > 0 ? After.Modules[0].Owned : 0, 2);
 	TestEqual(TEXT("and the depot has a second bay"), After.Bays, 2);
@@ -1057,17 +1058,17 @@ bool FInspectorSellTakesTwoClicksTest::RunTest(const FString& Parameters)
 	Rig.Refresh();
 	const FFacilityQuote Quote = Rig.Runtime->QuoteFacility(Rig.Depot);
 	if (!TestTrue(TEXT("setup: the idle vehicle can be sold"), Quote.Fleet.Num() == 1 && Quote.Fleet[0].Refusal == EPurchaseRefusal::None)) { return false; }
-	if (!TestEqual(TEXT("setup: one fleet row"), Rig.Panel->FleetRowCountForTest(), 1)) { return false; }
+	if (!TestEqual(TEXT("setup: one fleet row"), Rig.Panel->FacilityRows->FleetRowCountForTest(), 1)) { return false; }
 	const double Refund = Quote.Fleet[0].Refund;
 	const double Balance = Ledger->Balance();
 
 	// FIRST CLICK: armed, nothing sold.
-	Rig.Panel->ClickSellForTest(0);
+	Rig.Panel->FacilityRows->ClickSellForTest(0);
 	TestEqual(TEXT("the first click arms this vehicle on the controller"), Rig.Controller->GetArmedSellVehicle(), Vehicle);
 	TestNotNull(TEXT("the vehicle is still there"), Board->FindVehicle(Vehicle));
 	TestEqual(TEXT("and no money moved"), Ledger->Balance(), Balance, 0.01);
 	Rig.Refresh();
-	TestTrue(TEXT("the caption asks again"), Rig.Panel->SellCaptionForTest(0).Contains(TEXT("click again")));
+	TestTrue(TEXT("the caption asks again"), Rig.Panel->FacilityRows->SellCaptionForTest(0).Contains(TEXT("click again")));
 
 	// CLICK AWAY AND BACK: disarmed.
 	Rig.Controller->SelectForTest(FSelection());
@@ -1075,14 +1076,14 @@ bool FInspectorSellTakesTwoClicksTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("clearing the selection disarms the sale"), Rig.Controller->GetArmedSellVehicle(), 0);
 	Rig.Controller->SelectForTest(Rig.DepotSelection);
 	Rig.Refresh();
-	TestFalse(TEXT("back on the depot, the caption no longer asks again"), Rig.Panel->SellCaptionForTest(0).Contains(TEXT("click again")));
-	Rig.Panel->ClickSellForTest(0);
+	TestFalse(TEXT("back on the depot, the caption no longer asks again"), Rig.Panel->FacilityRows->SellCaptionForTest(0).Contains(TEXT("click again")));
+	Rig.Panel->FacilityRows->ClickSellForTest(0);
 	TestNotNull(TEXT("so the next click only arms again - still not sold"), Board->FindVehicle(Vehicle));
 	TestEqual(TEXT("armed once more"), Rig.Controller->GetArmedSellVehicle(), Vehicle);
 
 	// SECOND CLICK: sold.
 	Rig.Refresh();
-	Rig.Panel->ClickSellForTest(0);
+	Rig.Panel->FacilityRows->ClickSellForTest(0);
 	TestNull(TEXT("the second click sells it"), Board->FindVehicle(Vehicle));
 	TestEqual(TEXT("crediting the resale"), Ledger->Balance(), Balance + Refund, 0.01);
 	TestEqual(TEXT("and the controller is disarmed"), Rig.Controller->GetArmedSellVehicle(), 0);
@@ -1090,8 +1091,43 @@ bool FInspectorSellTakesTwoClicksTest::RunTest(const FString& Parameters)
 }
 
 /**
+ * THE CONTROLLER'S ARMED SALE IS NOT THE ROWS' TO CLEAR ALONE. A sale armed on a depot and then clicked away from - or replaced by
+ * another selection - must not survive to the next time the depot is picked, and that holds for an inspector whose asset placed no
+ * UInspectorFacilityRows too: there is no row to ask, and the controller's id is still armed. (Until review of #441 the widget asked
+ * the rows and did nothing when it had none.)
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorDeselectDisarmsWithoutRowsTest,
+	"AirportMgr.Inspector.DeselectDisarmsTheControllerWithoutRows",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorDeselectDisarmsWithoutRowsTest::RunTest(const FString& Parameters)
+{
+	FInspectorDepotRig Rig;
+	if (!TestTrue(TEXT("setup: depot, runtime, controller and panel"), Rig.Build())) { return false; }
+	Rig.Refresh();
+	if (!TestNotNull(TEXT("setup: the panel built its purchase rows"), Rig.Panel->FacilityRows.Get())) { return false; }
+	Rig.Panel->FacilityRows = nullptr;   // an inspector whose asset placed none
+	Rig.Controller->ArmSellVehicle(42);
+	if (!TestEqual(TEXT("setup: a sale armed on the controller"), Rig.Controller->GetArmedSellVehicle(), 42)) { return false; }
+
+	Rig.Controller->SelectForTest(FSelection());
+	Rig.Refresh();
+	TestEqual(TEXT("clearing the selection disarms it, with no rows to ask"), Rig.Controller->GetArmedSellVehicle(), 0);
+
+	Rig.Controller->SelectForTest(Rig.DepotSelection);
+	Rig.Refresh();
+	Rig.Controller->ArmSellVehicle(43);
+	FSelection Other = Rig.DepotSelection;
+	Other.Id += 1;
+	Rig.Panel->Refresh(Rig.World.Actor, Other);
+	TestEqual(TEXT("and so does a different selection"), Rig.Controller->GetArmedSellVehicle(), 0);
+	return true;
+}
+
+/**
  * WHAT IT WAITS FOR AND THE RING move with no board revision (the #423 lines on PR E's keyed card): the stall and the
- * partner's wait are traffic state, re-read from InspectFacts::DescribeAgent every tick and gated only by FInspectorKey's
+ * partner's wait are traffic state, re-read from InspectFacts::DescribeAgent every tick and gated only by FAircraftDisplay's
  * Waited and Partners fields. Each step below moves ONE of them, the flight board untouched, and the card must follow.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -1156,14 +1192,14 @@ bool FInspectorWaitingOnRefreshesTest::RunTest(const FString& Parameters)
 	const FString WaitedBefore = Panel->StatusForTest();
 	TestTrue(FString::Printf(TEXT("the hold line names the blocker ('%s')"), *WaitedBefore), WaitedBefore.StartsWith(TEXT("Waiting behind G-HDVK")));
 
-	// THE PARTNER STALLS TOO: a ring, with this aircraft's own wait unchanged - only FInspectorKey::Partners moves.
+	// THE PARTNER STALLS TOO: a ring, with this aircraft's own wait unchanged - only FAircraftDisplay::Partners moves.
 	Access.ScriptWait(Two, FTrafficResource::OfNode(B), One, Long);
 	Panel->Refresh(Actor, Sel);
 	TestTrue(FString::Printf(TEXT("the ring appears at once ('%s')"), *Panel->DeadlockForTest()),
 		Panel->DeadlockForTest().Contains(TEXT("Deadlocked with G-HDVK")));
 	TestEqual(TEXT("and its own wait line is as it was"), Panel->StatusForTest(), WaitedBefore);
 
-	// ITS OWN WAIT GROWS, the ring and the blocker unchanged - only FInspectorKey::Waited moves.
+	// ITS OWN WAIT GROWS, the ring and the blocker unchanged - only FAircraftDisplay::Waited moves.
 	Access.ScriptWait(One, FTrafficResource::OfEdge(Lane), Two, Long * 4.0);
 	Panel->Refresh(Actor, Sel);
 	TestNotEqual(FString::Printf(TEXT("the wait line counts on ('%s')"), *Panel->StatusForTest()), Panel->StatusForTest(), WaitedBefore);
@@ -1173,9 +1209,10 @@ bool FInspectorWaitingOnRefreshesTest::RunTest(const FString& Parameters)
 }
 
 /**
- * THE PURCHASE ROWS ARE ASKED EVERY TICK over a kept depot card (FInspectorCardKey's comment): the quote reads the
- * balance, which moves no revision the card key holds. The money runs out with nothing else changing, the card is NOT
- * described again, and Buy greys all the same.
+ * THE QUOTE FOLLOWS THE BALANCE, AND IS ASKED ONCE PER KEY (#441). The purchase quote reads the balance, which moves no
+ * revision of the job board or the network - so it was asked EVERY TICK, outside the depot card's key, although ULedger::Revision
+ * exists. The ledger is in the key now: a quiet frame asks nothing (the count stays flat), and the money running out is a
+ * revision like any other, so the card is described again that tick and Buy greys with it.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FInspectorDepotQuoteFollowsBalanceTest,
@@ -1187,14 +1224,18 @@ bool FInspectorDepotQuoteFollowsBalanceTest::RunTest(const FString& Parameters)
 	FInspectorDepotRig Rig;
 	if (!TestTrue(TEXT("setup: depot, runtime, controller and panel"), Rig.Build())) { return false; }
 	Rig.Refresh();
-	if (!TestTrue(TEXT("setup: a second shed is affordable"), Rig.Panel->IsBuyModuleEnabledForTest())) { return false; }
-	const int32 Described = Rig.Panel->CardDescribeCountForTest();
+	if (!TestTrue(TEXT("setup: a second shed is affordable"), Rig.Panel->FacilityRows->IsBuyModuleEnabledForTest())) { return false; }
+	const int32 Quoted = Rig.Panel->QuoteCountForTest();
+	if (!TestTrue(TEXT("setup: the first frame asked for a quote"), Quoted > 0)) { return false; }
+	for (int32 Frame = 0; Frame < 30; ++Frame) { Rig.Refresh(); }
+	TestEqual(TEXT("thirty quiet frames ask the runtime for no more quotes"), Rig.Panel->QuoteCountForTest(), Quoted);
+
 	ULedger* Ledger = Rig.Runtime->GetLedger();
 	if (!TestNotNull(TEXT("a ledger"), Ledger)) { return false; }
 	Ledger->Post(0.0, ELedgerCategory::Fleet, -(Ledger->Balance() + 1.0e9), FText::FromString(TEXT("test: spent")));
 	Rig.Refresh();
-	TestEqual(TEXT("the card itself is kept - nothing its key holds moved"), Rig.Panel->CardDescribeCountForTest(), Described);
-	TestFalse(TEXT("but Buy greys the tick the money is gone"), Rig.Panel->IsBuyModuleEnabledForTest());
+	TestEqual(TEXT("the money moving asks once more - the ledger's revision is in the card's key"), Rig.Panel->QuoteCountForTest(), Quoted + 1);
+	TestFalse(TEXT("and Buy greys the tick the money is gone"), Rig.Panel->FacilityRows->IsBuyModuleEnabledForTest());
 	return true;
 }
 

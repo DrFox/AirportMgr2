@@ -505,4 +505,85 @@ bool FInspectorCacheFuelLiveTest::RunTest(const FString&)
 	return true;
 }
 
+/**
+ * KEY EQUAL MEANS TEXT EQUAL (issue #441's pin): a card that is handed facts whose key matches the last one it composed
+ * from shows the last text, and that text must be the one a fresh composition of THESE facts would give. The gate is an
+ * optimisation, so it may never be visible - and it was: the aircraft key held speed as tenths of m/s while the sentence
+ * also prints whole knots (their boundaries do not line up: 25.5 and 26 uu/s are one tenth and two different knots), and
+ * held heading and altitude by FMath::RoundToInt while the sentence printed them with printf's round-half-even.
+ *
+ * THE OBSERVABLE FORM, through the real widget, so it holds however the key is built: one long-lived panel follows a
+ * fixed-seed random walk of one aircraft's facts (each step moves a few of them by a little, or snaps one to a rounding
+ * tie), and after every step its three lines must equal what a panel that could not reuse anything composes for the
+ * same facts. The reference is forced to compose by showing it another aircraft first - the key holds the agent id.
+ * A failure names the first step and the two texts.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorKeyEqualMeansTextEqualTest, "AirportMgr.Inspector.KeyEqualMeansTextEqual",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FInspectorKeyEqualMeansTextEqualTest::RunTest(const FString&)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World) || !TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UInspectorWidget* Walker = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	UInspectorWidget* Reference = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panels"), Walker) || !TestNotNull(TEXT("and the reference"), Reference)) { return false; }
+
+	FRandomStream Stream(441);
+	FSelection Sel; Sel.Kind = ESelectionKind::Aircraft; Sel.Id = 1;
+	FAgentFacts F;
+	F.Id = 1;
+	F.TypeName = TEXT("TestType");
+	F.Destination = TEXT("Stand 1");
+	F.Status = TEXT("Taxiing");
+	F.HeadingDegrees = 90.0;
+	F.GroundSpeed = 200.0;
+	F.Altitude = 0.0;
+	const TCHAR* Statuses[] = { TEXT("Taxiing"), TEXT("Parked"), TEXT("Rolling / Climbing") };
+	const TCHAR* Destinations[] = { TEXT("Stand 1"), TEXT("Stand 2"), TEXT("Runway 09") };
+
+	int32 Mismatches = 0;
+	FString First;
+	constexpr int32 Steps = 4000;
+	for (int32 Step = 0; Step < Steps; ++Step)
+	{
+		// A FEW FACTS MOVE A LITTLE: the deltas a taxiing aircraft makes, plus a snap to a half-way value, where two
+		// roundings of one number can part company.
+		switch (Stream.RandRange(0, 6))
+		{
+		case 0: F.GroundSpeed += Stream.FRandRange(-6.0f, 6.0f); break;
+		case 1: F.GroundSpeed = Stream.RandRange(0, 600) * 5.0 + (Stream.RandRange(0, 1) == 0 ? 0.0 : 0.5); break;
+		case 2: F.HeadingDegrees = FMath::Fmod(F.HeadingDegrees + Stream.FRandRange(-1.5f, 1.5f) + 360.0, 360.0); break;
+		case 3: F.HeadingDegrees = Stream.RandRange(0, 719) * 0.5; break;
+		case 4: F.Altitude = FMath::Max(0.0, F.Altitude + Stream.FRandRange(-120.0f, 120.0f)); break;
+		case 5: F.Altitude = Stream.RandRange(0, 200) * 50.0; break;
+		default:
+			F.bEngineRunning = !F.bEngineRunning;
+			F.Status = Statuses[Stream.RandRange(0, 2)];
+			F.Destination = Destinations[Stream.RandRange(0, 2)];
+			break;
+		}
+		F.GroundSpeed = FMath::Clamp(F.GroundSpeed, -3000.0, 3000.0);
+
+		Walker->Refresh(TestWorld.Actor, Sel, &F);
+		FAgentFacts Other = F;
+		Other.Id = 100000 + Step;
+		Reference->Refresh(TestWorld.Actor, Sel, &Other);
+		Reference->Refresh(TestWorld.Actor, Sel, &F);
+
+		if (Walker->TitleForTest() != Reference->TitleForTest() || Walker->FactsForTest() != Reference->FactsForTest()
+			|| Walker->StatusForTest() != Reference->StatusForTest())
+		{
+			if (Mismatches++ == 0)
+			{
+				First = FString::Printf(TEXT("step %d (speed %.3f uu/s, heading %.3f, altitude %.3f): the long-lived panel shows '%s' but a fresh composition gives '%s'"),
+					Step, F.GroundSpeed, F.HeadingDegrees, F.Altitude, *Walker->FactsForTest().Replace(LINE_TERMINATOR, TEXT(" | ")).Replace(TEXT("\n"), TEXT(" | ")),
+					*Reference->FactsForTest().Replace(LINE_TERMINATOR, TEXT(" | ")).Replace(TEXT("\n"), TEXT(" | ")));
+			}
+		}
+	}
+	TestEqual(FString::Printf(TEXT("%d of %d steps showed text a fresh composition would not - first: %s"), Mismatches, Steps, *First),
+		Mismatches, 0);
+	return true;
+}
+
 #endif
