@@ -277,6 +277,13 @@ bool FPlotPlacementStoresFrontageEdgeTest::RunTest(const FString& Parameters)
  * depot, which has no frontage to lose. A depot placed on its FAR edge (so nothing passes by reading edge 0) is placed, undone, redone,
  * and then bulldozed and the bulldoze undone: each time the entity that comes back stores the same edge, reads back the same two ends, and
  * solves the same yard as before.
+ *
+ * WHAT THE ACTOR HALF DOES AND DOES NOT PIN. It pins the OUTCOME the player sees. The actor re-runs the load repair on a network undo
+ * hands back, and EnsureDepotFrontages re-derives the edge for a depot with none stored - for a facade-placed depot, whose Position IS
+ * its frontage's midpoint, the SAME edge - so a restore that dropped the field would be healed here and this half would stay green
+ * (mutation-checked 2026-10-01: clearing FrontageEdge in a read pass of URoadNetwork::Serialize left it green for exactly that reason).
+ * The second half is the one that measures the Memento's own copy: a DuplicateObject snapshot, no actor and so no repair, of a depot
+ * whose Position would make a re-derivation answer edge 0 while it stores edge 2.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FPlotFrontageEdgeSurvivesUndoRedoTest,
@@ -303,6 +310,27 @@ bool FPlotFrontageEdgeSurvivesUndoRedoTest::RunTest(const FString& Parameters)
 	if (!TestEqual(TEXT("storing edge 2"), Placed->FrontageEdge, 2)) { return false; }
 	const TOptional<PlotYard::FReservation> Yard = DepotKit::ReservationOf(*Placed, Specs);
 	if (!TestTrue(TEXT("and solving a yard"), Yard.IsSet() && Yard->Stands.Num() > 0)) { return false; }
+
+	// THE MEMENTO'S OWN COPY, with nothing to heal a loss: a depot whose POSITION is edge 0's midpoint (a re-derivation would say 0) but which
+	// stores edge 2, duplicated the way the undo history snapshots a network.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		UEntityDefinition* Definition = UEntityDefinition::MakeFuelDepotTransient();
+		FEntityPlacement Placement;
+		Placement.Definition = Definition;
+		Placement.Anchors = Definition->Anchors;
+		Placement.Position = (Plot[0] + Plot[1]) * 0.5;
+		Placement.Heading = UE_DOUBLE_HALF_PI;
+		Placement.PoseRole = EServiceRole::Fuel;
+		Placement.Outline = Plot;
+		Placement.FrontageEdge = 2;
+		const FEntityInstanceId Stored = Net->PlaceEntity(Placement);
+		URoadNetwork* Snapshot = DuplicateObject<URoadNetwork>(Net, GetTransientPackage());
+		if (!TestNotNull(TEXT("a DuplicateObject snapshot of a network holding a depot"), Snapshot)) { return false; }
+		const FEntityInstance* Copied = Snapshot->GetEntity(Stored);
+		if (!TestNotNull(TEXT("holds the depot"), Copied)) { return false; }
+		TestEqual(TEXT("and the snapshot keeps the stored frontage edge - not edge 0, which its Position would re-derive"), Copied->FrontageEdge, 2);
+	}
 
 	// EACH RETURN OF THE DEPOT: the same entity, the same stored edge, the same ends, the same yard.
 	const auto ExpectBack = [&](const TCHAR* When)
