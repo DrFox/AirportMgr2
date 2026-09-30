@@ -121,7 +121,8 @@ int32 FServiceFleet::Add(FName TypeCode, FEntityInstanceId Home, EFleetOrigin Or
 	// A NEW VEHICLE IS A CHANGE A REFUSED JOB CAN ANSWER DIFFERENTLY - whichever way it came. A refused job is terminal
 	// until something changes, the Step's re-offer pass watches the guideline revision alone, and seeding used to
 	// re-open nothing. Re-opened, not bid here: the next Step bids it, in its one sequence (the bus's FleetChanged wakes
-	// that pass for a purchase; a seeded vehicle is made by the Step itself, which bids after it).
+	// that pass for a purchase; a seeded vehicle is made by the "FleetSeed" pass, which runs before the job board's pass
+	// in the same drain, so that pass bids after it).
 	// ENFORCED BY: AirportOps.Present.Facility.PurchaseWakesTheBoard, AirportOps.Model.Fleet.SeedingReopensRefusedJobs
 	int32 Reopened = 0;
 	for (FServiceJob& Job : Board.Jobs)

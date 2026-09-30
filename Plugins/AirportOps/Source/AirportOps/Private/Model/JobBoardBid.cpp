@@ -146,10 +146,17 @@ TArray<UJobBoard::FCandidate> UJobBoard::Judge(const URoadNetwork& Network, ESer
 		// stand letter used to become. TypeFor has warned; FServiceFleet::Add never makes one, so only a vehicle restored
 		// under a scenario that dropped its kind, or a test's hand, gets here.
 		// ENFORCED BY: AirportOps.Fleet.UnknownKindServesNothing, AirportOps.Fleet.CatalogueDropsARowWithNoChassis (Add)
+		//
+		// COUNTED, NOT ONLY SKIPPED (#478): the skip set no flag, so a depot whose vehicles were ALL of unknown kinds fell
+		// through RefusalOf to NoRoute - "no road from depot", about a depot on a road that reaches the stand. The count says
+		// "nothing here could be sized", which is not a road problem and not an empty depot: EServiceRefusal::UnknownVehicleKind.
+		// ENFORCED BY: AirportOps.Fuel.UnknownKindSaysSo
 		if (Type.TypeCode.IsNone())
 		{
+			++Out.UnknownKinds;
 			continue;
 		}
+		++Out.KnownKinds;
 		if (!VehicleFit::NoLargerThan(Type.Vehicle, Design))
 		{
 			Out.bAnyTooLarge = true;
@@ -208,6 +215,15 @@ EServiceRefusal UJobBoard::RefusalOf(const FJudgement& Out)
 		// BEFORE NoRoute, because this is a thing the player can go and fix. Falling through to
 		// NoRoute would have told them "no road from depot" about a depot sitting on a road.
 		return EServiceRefusal::NoPump;
+	}
+	if (Out.UnknownKinds > 0 && Out.KnownKinds == 0)
+	{
+		// EVERY VEHICLE JUDGED HAD NO CATALOGUE ROW (#478): not one was sized, so nothing below - too large, too narrow, no
+		// route - was ever asked of a vehicle, and falling to NoRoute would blame a road nobody tried. A depot with ONE known
+		// vehicle among the unknown ones does not come here: its own verdict (too large, no route...) is the honest one.
+		// AFTER NoPump, which is flagged before a vehicle's kind is looked at and is the nearer fix.
+		// ENFORCED BY: AirportOps.Fuel.UnknownKindSaysSo
+		return EServiceRefusal::UnknownVehicleKind;
 	}
 	if (Out.bAnyTooLarge)
 	{
@@ -416,7 +432,7 @@ void UJobBoard::Assign(FServiceVehicle& Vehicle, FServiceJob& Job, double Promis
 	Job.Why = EServiceRefusal::None;
 }
 
-TArray<UJobBoard::FCandidate> UJobBoard::CandidatesFor(EServiceRole Role, const UGroundTraffic* Traffic, int32 Except) const
+TArray<UJobBoard::FCandidate> UJobBoard::CandidatesFor(EServiceRole Role, const UGroundTraffic& Traffic, int32 Except) const
 {
 	TArray<FCandidate> Candidates;
 	for (const FServiceVehicle& Vehicle : Vehicles)
@@ -429,7 +445,7 @@ TArray<UJobBoard::FCandidate> UJobBoard::CandidatesFor(EServiceRole Role, const 
 		// and holds the job for a trip it will never make - the wedge OnAgentPhase's Stranded branch releases jobs from.
 		// Its jobs are already back on the board (LoseAgent / ReleaseJobsOf), and it bids for nothing until the player
 		// unsticks it.
-		if (Traffic != nullptr && IsStranded(Vehicle, *Traffic))
+		if (IsStranded(Vehicle, Traffic))
 		{
 			continue;
 		}
@@ -450,7 +466,7 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 
 		// NOT A STRANDED ONE (CandidatesFor says why): the wedge OnAgentPhase's Stranded branch just released the job from.
 		FJudgement Judged;
-		const TArray<FCandidate> Eligible = Judge(Network, Job.Role, Job.Stand, CandidatesFor(Job.Role, &Traffic), Judged);
+		const TArray<FCandidate> Eligible = Judge(Network, Job.Role, Job.Stand, CandidatesFor(Job.Role, Traffic), Judged);
 
 		// THE BIDS: when each would FINISH this job appended to its queue (user's ruling 6). The
 		// runner-up is kept for the log, because "why did the tow go?" is the first question in play.
@@ -587,7 +603,7 @@ void UJobBoard::RebidQueued(UGroundTraffic& Traffic, const URoadNetwork& Network
 		FJudgement Judged;
 		FServiceVehicle* Best = nullptr;
 		double BestFinish = TNumericLimits<double>::Max();
-		for (const FCandidate& Candidate : Judge(Network, Job->Role, Job->Stand, CandidatesFor(Job->Role, &Traffic, Holder->Id), Judged))
+		for (const FCandidate& Candidate : Judge(Network, Job->Role, Job->Stand, CandidatesFor(Job->Role, Traffic, Holder->Id), Judged))
 		{
 			FServiceVehicle* Vehicle = FindVehicleMutable(Candidate.VehicleId);
 			if (Vehicle == nullptr)
@@ -620,18 +636,21 @@ void UJobBoard::RebidQueued(UGroundTraffic& Traffic, const URoadNetwork& Network
 	}
 }
 
-bool UJobBoard::CouldServe(const URoadNetwork& Network, const FAirframe& Airframe) const
+bool UJobBoard::CouldServe(const UGroundTraffic& Traffic, const URoadNetwork& Network, const FAirframe& Airframe) const
 {
 	// THE CANDIDATES THE BOARD HAS, and only those (#443). This used to add the STARTER fleet a not-yet-seeded depot would
 	// get, so an offer asked before the first tick could say yes - a prediction written beside the seeding it had to mirror
 	// (FServiceFleet::SeedStarterFleets), and one that had already drifted from it once: a starter depot whose fleet the
 	// player sold said "fuel OK" on the offer while the board refused the aircraft NoVehicles (final review 2026-09-30).
-	// The seeding runs in every Step through the fleet's door, so a starter depot has real vehicles before any bid could
-	// use them and there is nothing to predict; a depot the player drew has Trucks 0 and, until a vehicle is bought, no
-	// candidate - its offers say "no fuel", and so does a seeded depot whose fleet was sold. NULL TRAFFIC: an offer is
-	// judged before its aircraft exists, so no agent is stranded and the fleet is asked as it stands.
-	// ENFORCED BY: AirportOps.Fuel.CouldServe.StarterDepotVerdictAgreesWithItsFirstBid, AirportOps.Fuel.CouldServe.SoldOutStarterDepotCannot
-	const TArray<FCandidate> Candidates = CandidatesFor(EServiceRole::Fuel, nullptr);
+	// The seeding is the "FleetSeed" pass's, through the fleet's door, and runs before the job board's pass in the drain that
+	// heard of the depot, so a starter depot has real vehicles before any bid could use them and there is nothing to predict; a depot the player drew has Trucks 0 and, until a vehicle is bought, no
+	// candidate - its offers say "no fuel", and so does a seeded depot whose fleet was sold. THE TRAFFIC MODEL IS ASKED, as
+	// the bids ask it (#443): a stranded vehicle is no candidate, and this used to pass null on the reasoning that an offer
+	// is judged before its aircraft exists so no agent is stranded - but the vehicles and their agents exist without the
+	// aircraft, and a depot whose only bowser stood stranded said "fuel OK" while every job would be refused.
+	// ENFORCED BY: AirportOps.Fuel.CouldServe.StarterDepotVerdictAgreesWithItsFirstBid, AirportOps.Fuel.CouldServe.SoldOutStarterDepotCannot,
+	// AirportOps.Fuel.CouldServe.StrandedOnlyVehicleCannot
+	const TArray<FCandidate> Candidates = CandidatesFor(EServiceRole::Fuel, Traffic);
 	const TArray<FEntityInstance>& Entities = Network.GetEntities();
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)
 	{

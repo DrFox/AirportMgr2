@@ -128,7 +128,18 @@ enum class EServiceRefusal : uint8
 	 * road sends the player to fix a road that is fine. APPENDED so no other value moves.
 	 * ENFORCED BY: AirportOps.Fuel.EmptyDepotSaysNoVehicles
 	 */
-	NoVehicles
+	NoVehicles,
+
+	/**
+	 * A depot is on a road with a pump and has vehicles, but every one of them is of a kind the catalogue has no row for - a
+	 * vehicle restored under a scenario that has since dropped its kind (#430, #478). Judge skips such a vehicle (it has no
+	 * chassis to fit a stand with), and before this it skipped it silently, so the chain fell through to NoRoute: "no road
+	 * from depot" about a depot on a road that reaches the stand. ITS OWN REFUSAL AND NOT NoVehicles: the card lists the
+	 * vehicle, so "buy one" would contradict it - what the player can do is sell the unusable ones and buy a kind that exists.
+	 * NOT NoRoute, for NoPump's reason. APPENDED so no other value moves.
+	 * ENFORCED BY: AirportOps.Fuel.UnknownKindSaysSo
+	 */
+	UnknownVehicleKind
 };
 
 /**

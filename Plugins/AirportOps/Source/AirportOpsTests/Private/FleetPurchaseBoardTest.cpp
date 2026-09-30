@@ -339,11 +339,12 @@ bool FFleetSeedingReopensTest::RunTest(const FString&)
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
 
-	// ONE STEP: it seeds (SyncFleet, through the door), which re-opens the job, and the same Step's bid then judges it again. The
-	// job was refused at THIS graph revision, so the Step's own re-offer pass would not touch it: what changed its reason is
-	// the seeding's re-open alone. Nothing to bid it to (no road), so it is refused afresh - for the road, not for a vehicle.
-	Board->Step(*Traffic, *Net, *Clock);
-	TestEqual(TEXT("the Step seeded the starter truck"), Board->GetVehicles().Num(), 1);
+	// ONE TICK, the two passes of a drain in order: the seeding ("FleetSeed", through the door) re-opens the job, and the
+	// Step's bid then judges it again. The job was refused at THIS graph revision, so the Step's own re-offer pass would not
+	// touch it: what changed its reason is the seeding's re-open alone. Nothing to bid it to (no road), so it is refused
+	// afresh - for the road, not for a vehicle.
+	Board->Tick(*Traffic, *Net, *Clock);
+	TestEqual(TEXT("the drain's seeding made the starter truck"), Board->GetVehicles().Num(), 1);
 	const FServiceJob* After = Board->GetJobs().FindByPredicate([JobId](const FServiceJob& J) { return J.Id == JobId; });
 	if (!TestNotNull(TEXT("the job is still on the board"), After)) { return false; }
 	// THE EXACT POST-STATE, not merely "not NoVehicles" (#461 final review): a Why that moved to ANY other value passed the

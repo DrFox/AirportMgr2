@@ -318,8 +318,27 @@ void UOpsRuntime::WireBus()
 	Bus.ResetWiring();
 	Bus.BeginWiring();
 
+	// THE STARTER FLEET OF A DEPOT THE AIRPORT GAINED (#443), a pass - see UJobBoard::SeedStarterFleets. It was the first loop
+	// of every job board Step, finding a placed depot by walking every entity; placement is ANNOUNCED now, so it is woken by
+	// the announcement (FNetworkChangedEvent, published in the rebuild that committed the depot, whichever door it came
+	// through: a placement, an undo, a load) and by the attach's and a load's MarkAllDirty, the catch-up for the depots that
+	// were there before anything was announced. REGISTERED BEFORE THE "JobBoard" PASS, so a drain seeds and then bids: a
+	// starter depot's CouldServe verdict and its first bid are made from the same real vehicles in the same drain.
+	// A LOAD DOES NOT RE-SEED: SeededDepots is saved and restored, so the pass the load wakes finds every depot seen.
+	// ENFORCED BY: AirportOps.Present.Fleet.PlacedDepotIsSeededByTheAnnouncement, AirportOps.Present.Fleet.LoadDoesNotReseedADepotThatHasVehicles,
+	// AirportOps.Present.Fleet.AttachSeedsTheStarterFleetOnTheFirstDrain; Check-Architecture rule 60 (starter-fleet-seeded-on-announcement)
+	Bus.RegisterPass(TEXT("FleetSeed"), [this]()
+	{
+		if (Target != nullptr && Target->Network != nullptr)
+		{
+			JobBoard->SeedStarterFleets(*Target->Network, *Clock);
+		}
+	});
+	Bus.Subscribe<FNetworkChangedEvent>(EOpsTier::Sim, TEXT("FleetSeed"),
+		[this](const FNetworkChangedEvent&) { Bus.MarkDirty(TEXT("FleetSeed")); });
+
 	// THE UNPLACED-MODULE REPAIR (#266, owner 2026-09-30, option b: "there must never be unplaced modules"), a pass - see
-	// UFacilityPurchases::RemoveUnseated. REGISTERED FIRST, so a drain that repairs runs the job board's pass after it and
+	// UFacilityPurchases::RemoveUnseated. REGISTERED BEFORE THE JOB BOARD'S PASS, so a drain that repairs runs that pass after it and
 	// the board bids with the pumps that are standing. DIRTIED by the attach's and a load's MarkAllDirty (the catch-up:
 	// an old save, a level whose kits changed since it was built) and by every network change, the other moment a plot's
 	// seat can move. Not by a purchase: the shop refuses one past the ceiling, so it can never leave an excess.

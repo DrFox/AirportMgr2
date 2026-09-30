@@ -130,9 +130,10 @@ public:
 
 private:
 	// THE DOOR'S OWN SURFACE, callable by the board alone (#461 review): a load's clear and restore, the test adder and
-	// the starter seeding are the BOARD's to call - from OnBeforeRestore, Serialize, AddVehicleForTest and SyncFleet -
-	// and public on a handle that any holder of a UJobBoard can make (Fleet()) they were a way in for everyone else.
-	// The Seeded origin of Add stays public because Add takes it as data; SeedStarterFleets, which calls it, is private.
+	// the starter seeding are the BOARD's to call - from OnBeforeRestore, Serialize, AddVehicleForTest and
+	// UJobBoard::SeedStarterFleets - and public on a handle that any holder of a UJobBoard can make (Fleet()) they were a
+	// way in for everyone else. The Seeded origin of Add stays public because Add takes it as data; SeedStarterFleets,
+	// which calls it, is private, and the board's own public SeedStarterFleets is the one way to ask for it.
 	// The containers themselves stay UJobBoard's private members with a friend, not a struct of their own: splitting the
 	// data out of the god-class is #427's, and this handle would then hold it.
 	friend class UJobBoard;
@@ -140,7 +141,9 @@ private:
 	/**
 	 * Every live fuel depot not seen before that has Trucks > 0 gets Trucks x UJobBoard::StarterFleet vehicles through Add
 	 * (Seeded), and is marked seen so a vehicle that is out never gets a twin at home and a sold starter fleet stays sold.
-	 * Returns how many vehicles it added. WAS the first half of SyncFleet's own loop, which built its vehicles by hand.
+	 * Returns how many vehicles it added. WAS the first half of SyncFleet's own loop, which built its vehicles by hand, and
+	 * ran in every job board Step: it is the "FleetSeed" pass's now (UJobBoard::SeedStarterFleets), woken by the network
+	 * change that announces a placed depot (#443).
 	 * ENFORCED BY: AirportOps.Model.Fleet.SoldStarterFleetIsNotReseededAfterLoad, AirportOps.Fuel.RestoredFleetIsNotReseeded
 	 */
 	int32 SeedStarterFleets(const URoadNetwork& Network, double Now);
@@ -154,7 +157,7 @@ private:
 
 	/**
 	 * A vehicle staged where the tests want it: in State, carrying Cargo, its Home counted as seen (a test that places a
-	 * depot's vehicles by hand means those to be the fleet, and SyncFleet must not add the placeholder's beside them).
+	 * depot's vehicles by hand means those to be the fleet, and the seeding must not add the placeholder's beside them).
 	 * No money, no event, no re-open: it is a fixture's hand, not a way into the fleet.
 	 */
 	FServiceVehicle& AddForTest(FName TypeCode, FEntityInstanceId Home, EServiceVehicleState State, double Cargo);

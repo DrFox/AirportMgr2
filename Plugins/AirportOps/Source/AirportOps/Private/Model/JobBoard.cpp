@@ -13,6 +13,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
 #include "Model/SimClock.h"
+#include "Model/VehicleFit.h"
 #include "Solve/StandBox.h"
 
 namespace JobBoardText
@@ -100,6 +101,9 @@ const TCHAR* UJobBoard::RefusalText(EServiceRefusal Why)
 	case EServiceRefusal::VehicleTooLarge: return TEXT("the depot's vehicle is too large for this stand");
 	// THE FIX, NAMED: the depot card has the buy button (facility-upgrades spec §4).
 	case EServiceRefusal::NoVehicles:    return TEXT("depot has no vehicles - buy one");
+	// NOT "buy one": the card lists the vehicle, and it is the listed one that cannot be used (#478) - sell it, buy a kind
+	// the scenario has.
+	case EServiceRefusal::UnknownVehicleKind: return TEXT("the depot's vehicles are of a kind this scenario no longer has - sell them and buy new");
 	default:                             return TEXT("unserviceable");
 	}
 }
@@ -128,6 +132,29 @@ FVehicle UJobBoard::VehicleFor(const FEntityInstance& Stand) const
 FVehicle UJobBoard::DesignVehicleFor(const FEntityInstance& Stand) const
 {
 	return DesignVehicleOf ? DesignVehicleOf(Stand) : VehicleFor(Stand);
+}
+
+bool UJobBoard::AnyStandAdmits(const FVehicle& Kind, const URoadNetwork& Network) const
+{
+	// THE LETTERS FIRST: a stand with no authored design vehicle is built for its letter's, and there are six entries and no
+	// network walk to read them - so a kind any letter admits never pays for the placed stands.
+	for (const FVehicle& Design : VehiclesByLetter)
+	{
+		if (VehicleFit::NoLargerThan(Kind, Design))
+		{
+			return true;
+		}
+	}
+	// THEN EACH LIVE STAND'S OWN, which a definition may author bigger than its letter's (UEntityDefinition::DesignVehicle):
+	// a kind one placed stand admits is never refused, whatever the letter table says. The same ceiling Judge applies.
+	for (const FEntityInstance& Stand : Network.GetEntities())
+	{
+		if (Stand.bAlive && Stand.IsStandCandidate() && VehicleFit::NoLargerThan(Kind, DesignVehicleFor(Stand)))
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 FServiceVehicleType UJobBoard::TypeFor(FName TypeCode) const
@@ -375,6 +402,14 @@ int32 UJobBoard::ReleaseJobsOf(FServiceVehicle& Vehicle)
 void UJobBoard::RetireAgentOf(FServiceVehicle& Vehicle, UGroundTraffic& Traffic)
 {
 	const int32 AgentId = Vehicle.AgentId;
+	// A STRANDED VEHICLE LEAVING THE ROAD IS IT COUNTING AGAIN (Idle at home, it bids): asked BEFORE the unhook, which is
+	// when the agent still says so, and said by the composition counter because the Gone this retire publishes finds no
+	// vehicle with that agent (OnAgentPhase's own stranded-exit bump cannot see it).
+	// ENFORCED BY: AirportOps.Fuel.CouldServe.StrandingMovesTheCompositionAndTheVerdict (the despawn row)
+	if (IsStranded(Vehicle, Traffic))
+	{
+		++FleetCompositionRevision;
+	}
 	Lifecycle(Vehicle).LeaveRoad();
 	// RetireAgent's bool is deliberately dropped: false means the agent was already gone, which is the state this
 	// wants - the vehicle is unhooked either way, and a missing agent is not an error here.
@@ -421,13 +456,19 @@ bool UJobBoard::RecallVehicleOfAgent(int32 AgentId, bool bRetire, UGroundTraffic
 	return true;
 }
 
-void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
+int32 UJobBoard::SeedStarterFleets(const URoadNetwork& Network, const USimClock& Clock)
 {
 	// NEW DEPOTS GET THEIR PLACEHOLDER FLEET (spec §3.4): Trucks of every kind in StarterFleet, Idle and full - through the
 	// fleet's door (#443), so a seeded vehicle is announced and re-opens refused jobs like any other, and CouldServe can
-	// read real vehicles instead of predicting these.
-	Fleet().SeedStarterFleets(Network, Clock.Now());
+	// read real vehicles instead of predicting these. RUN BY THE "FleetSeed" PASS, NOT BY STEP (#443): SyncFleet used to
+	// open with this, so every job board pass walked every entity to find a depot it had not seen, although placement is
+	// announced (FNetworkChangedEvent) - see the declaration for why the announcement and not the facade's placement path.
+	// ENFORCED BY: Check-Architecture rule 60 (starter-fleet-seeded-on-announcement: SyncFleet and Step do not seed)
+	return Fleet().SeedStarterFleets(Network, Clock.Now());
+}
 
+void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
+{
 	// VEHICLES WHOSE DEPOT IS GONE are withdrawn, and their jobs go back to the board - which will say
 	// "no fuel depot" if that was the only one, the reason the player needs.
 	for (int32 Index = Vehicles.Num() - 1; Index >= 0; --Index)
@@ -893,6 +934,19 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 	// jobs go), the lifecycle transitions and Reopen (a vehicle's agent parked, lost or stranded), and the turnaround
 	// opened below.
 	// ENFORCED BY: AirportOps.Fuel.RevisionHoldsStillWhenNothingChanged (a foreign agent's phase), AirportOps.Fuel.RevisionMovesOnEveryChange
+	//
+	// A VEHICLE'S AGENT ENTERING OR LEAVING STRANDED IS A CHANGE OF WHAT COULDSERVE COUNTS (#443): a stranded vehicle is not a
+	// candidate (CandidatesFor), so the offer row's "fuel" answer - dated by the composition counter - must be asked again
+	// when one strands and when it moves again (a rescue, an unstick, a retire). Only a vehicle's own agent: an aircraft's
+	// stranding is none of the fleet's. THE BOARD'S OWN RETIRE is RetireAgentOf's, which unhooks the vehicle first.
+	// ENFORCED BY: AirportOps.Fuel.CouldServe.StrandingMovesTheCompositionAndTheVerdict
+	// BOTH COUNTERS, as every composition change moves both: a vehicle that counts again is a bidder the re-bid has not met.
+	if ((Transition.Cause == EAgentEvent::Stranded || From == EAgentPhase::Stranded) && VehicleForAgent(AgentId) != nullptr)
+	{
+		++FleetCompositionRevision;
+		++FleetRevision;
+	}
+
 	// AN AIRCRAFT LEAVING ITS STAND, first: it departs, or is retired, or is deleted under the player's
 	// hand. Its turnaround and jobs go, and any vehicle out for it moves on - its next job, or home.
 	if (From == EAgentPhase::Parked && To != EAgentPhase::Parked && TurnaroundFor(AgentId) != nullptr)

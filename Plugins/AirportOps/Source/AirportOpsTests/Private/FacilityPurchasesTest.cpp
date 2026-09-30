@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Present/OpsRuntime.h"
@@ -11,6 +12,8 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
+#include "Model/VehicleCodes.h"
+#include "Model/VehicleFit.h"
 #include "Templates/UniquePtr.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -72,6 +75,9 @@ namespace
 			Net = NewObject<URoadNetwork>(GetTransientPackage());
 			Board = NewObject<UJobBoard>(GetTransientPackage());
 			UOpsRuntime::ResolveVehicleCatalogue(*Board, *GetDefault<UScenario>());   // as Attach does (#430)
+			// THE STAND LETTERS' DESIGN VEHICLES, as Attach resolves them: the shop refuses a kind no stand admits (#478), and a
+			// board that was never told what its stands were built for admits nothing.
+			Board->ResolveVehicles([](EIcaoCode Letter) { return UAirsideSettings::ResolveStandDesignVehicle(Letter); });
 			Clock = NewObject<USimClock>(GetTransientPackage());
 			Ledger = NewObject<ULedger>(GetTransientPackage());
 			Ledger->Clock = Clock;
@@ -606,6 +612,71 @@ bool FFacilityKitShedRefundTest::RunTest(const FString&)
 	TestEqual(TEXT("on a Refund line"), static_cast<int32>(Line.Category), static_cast<int32>(ELedgerCategory::Refund));
 	TestEqual(TEXT("of exactly one shed's price"), Line.Amount, Price, 1e-6);
 	TestEqual(TEXT("its kit tank and pump seat, and stay"), F.Net->GetEntity(F.Depot)->Modules.Num(), 2);
+	return true;
+}
+
+/**
+ * A KIND NO STAND ADMITS IS NOT FOR SALE (#478). A catalogue row larger than every stand's design vehicle can be bought and
+ * can never serve: every job it would bid on refuses VehicleTooLarge. The shop refuses it, as it refuses a module the plot
+ * cannot seat (owner: "a player should not be able to purchase upgrades that don't fit").
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityNoStandAdmitsTest, "AirportOps.Model.Facility.KindNoStandAdmitsIsRefused",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilityNoStandAdmitsTest::RunTest(const FString&)
+{
+	FFacilityFixture F;
+	// (The fixture resolved the stand letters, as Attach does.) A TEST-ONLY ROW, WIDER THAN ANY STAND LETTER'S DESIGN VEHICLE: the bowser's chassis with a body no lane was drawn for.
+	const FName Giant(TEXT("GIANT"));
+	TMap<FName, FFuelVehicleSpec> Rows = GetDefault<UScenario>()->FuelVehicles;
+	Rows.Add(Giant, FFuelVehicleSpec(20000.0, 100.0, 1000.0, 10.0, INVTEXT("Giant")));
+	F.Board->Fleet().ResolveCatalogue(Rows, GetDefault<UScenario>()->StarterFleet, [Giant](FName Code)
+	{
+		FVehicle Vehicle = UAirsideSettings::ResolveVehicle(Code == Giant ? FName(AirsideVehicleCodes::Fuel) : Code);
+		if (Code == Giant)
+		{
+			Vehicle.TypeCode = Giant;
+			Vehicle.BodyWidth = 10000.0;
+		}
+		return Vehicle;
+	});
+	if (!TestTrue(TEXT("setup: the giant is in the catalogue"), F.Board->GetCatalogue().Contains(Giant))) { return false; }
+	for (int32 Letter = 0; Letter < UJobBoard::LetterCount; ++Letter)
+	{
+		TestFalse(TEXT("setup: and it is larger than this stand letter's design vehicle"),
+			VehicleFit::NoLargerThan(F.Board->GetCatalogue().FindChecked(Giant).Vehicle, F.Board->VehiclesFor(static_cast<EIcaoCode>(Letter))));
+	}
+
+	const FFacilityQuote Quote = F.Shop->Quote(*F.Net, F.Depot);
+	const FVehicleOfferQuote* GiantRow = Quote.VehicleOffers.FindByPredicate([Giant](const FVehicleOfferQuote& Row) { return Row.TypeCode == Giant; });
+	const FVehicleOfferQuote* BowserRow = Quote.VehicleOffers.FindByPredicate([](const FVehicleOfferQuote& Row) { return Row.TypeCode == AirsideVehicleCodes::Fuel; });
+	if (!TestNotNull(TEXT("the quote lists the giant"), GiantRow) || !TestNotNull(TEXT("and the bowser"), BowserRow)) { return false; }
+	TestEqual(TEXT("the quote refuses the giant - nothing it would bid on admits it"),
+		static_cast<int32>(GiantRow->Refusal), static_cast<int32>(EPurchaseRefusal::NoStandAdmits));
+	TestEqual(TEXT("while the bowser, which a stand letter was built for, is still for sale"),
+		static_cast<int32>(BowserRow->Refusal), static_cast<int32>(EPurchaseRefusal::None));
+	TestTrue(TEXT("the reason has words the inspector's purchase rows show (they render RefusalText for any refusal)"),
+		!UFacilityPurchases::RefusalText(GiantRow->Refusal).IsEmpty());
+
+	const double Balance = F.Ledger->Balance();
+	const FPurchaseResult Bought = F.Shop->BuyVehicle(*F.Net, F.Depot, Giant);
+	TestFalse(TEXT("and the command refuses it"), Bought.Succeeded());
+	TestEqual(TEXT("for the quoted reason"), static_cast<int32>(Bought.Refusal), static_cast<int32>(GiantRow->Refusal));
+	TestEqual(TEXT("charging nothing"), F.Ledger->Balance(), Balance, 1e-9);
+	TestEqual(TEXT("and adding no vehicle"), F.Board->VehiclesAt(F.Depot), 0);
+
+	// AND A PLACED STAND'S OWN DESIGN VEHICLE COUNTS, not only the letters' (a definition may author a bigger one): a stand built
+	// for a vehicle that large admits the giant, so it is for sale - the refusal is "no stand admits it", and one does.
+	const FVehicle GiantVehicle = F.Board->GetCatalogue().FindChecked(Giant).Vehicle;
+	F.Board->DesignVehicleOf = [GiantVehicle](const FEntityInstance&) { return GiantVehicle; };
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Stand = F.Net->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(-8000.0, 0.0), 0.0, 3600.0,
+		StandDef->PoseRole, StandDef->Trucks);
+	if (!TestTrue(TEXT("setup: a stand is placed"), Stand.IsSet())) { return false; }
+	const FFacilityQuote WithStand = F.Shop->Quote(*F.Net, F.Depot);
+	const FVehicleOfferQuote* Admitted = WithStand.VehicleOffers.FindByPredicate([Giant](const FVehicleOfferQuote& Row) { return Row.TypeCode == Giant; });
+	if (!TestNotNull(TEXT("the quote still lists the giant"), Admitted)) { return false; }
+	TestNotEqual(TEXT("a stand that was built for it admits it: no longer refused as admitted by no stand"),
+		static_cast<int32>(Admitted->Refusal), static_cast<int32>(EPurchaseRefusal::NoStandAdmits));
 	return true;
 }
 
