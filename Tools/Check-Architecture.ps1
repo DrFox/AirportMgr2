@@ -1799,22 +1799,34 @@ $ranRules.Add('persistent-refs-transient')
 # and the enum's contract (which states have an agent, which have a job) was checked nowhere, so "Serving with no job"
 # shipped and lived on behind a per-Step backstop. FServiceVehicleLifecycle (Private/Model/ServiceVehicleLifecycle.cpp)
 # is now the one writer of the three fields, and asserts the invariant on each transition; this is what keeps it so.
-# A hit is a `.State = EServiceVehicleState::...` anywhere, or an `AgentId =` / `CurrentJob =` write in a file that
-# names FServiceVehicle or EServiceVehicleState (AgentId is also a FFlight/claim field elsewhere - a file that never
-# mentions a vehicle is not scanned for it), outside the lifecycle file. Comments and string literals are stripped first
-# (rule 34's helper). Test files are exempt: a test stages a vehicle where no transition reaches, to see what the board
-# does with it (FServiceVehicleLifecycle::SeedStateForTest is the one blessed way, and a test's own poke is allowed).
-# The rule fails, rather than checking nothing, when the lifecycle file is gone or its writes no longer match the
-# patterns.
+# THREE SHAPES OF WRITE, outside the lifecycle file, each a hit (comments and string literals are stripped first - rule
+# 34's helper):
+#   a. `.State = EServiceVehicleState::...` through ANY variable - the enum on the right names the vehicle.
+#   b. A write of State, AgentId or CurrentJob through a VEHICLE-NAMED variable (Vehicle, Vehicles[i], Truck, Bowser -
+#      `\w*(Vehicle|Truck|Bowser)\w*`) with ANY right-hand side: `Vehicle.State = To;` names no enum, and shape a alone
+#      let it through. In any file.
+#   c. In a file that holds vehicles by any name (it spells FServiceVehicle / EServiceVehicleState, or reaches them through
+#      GetVehicles( / FindVehicle( / FindVehicleMutable( / VehicleForAgent( ): ANY `.AgentId =` or `.CurrentJob =` write.
+#      That is the `for (auto& V : Board->GetVehicles()) V.AgentId = 0;` shape, whose variable names no vehicle. It is
+#      scoped to vehicle-holding files because AgentId is also an FFlight / claim / rig-runner field elsewhere. A GAP, SAID:
+#      `.State = <variable>` through a variable that names no vehicle (`auto& V ... V.State = To;`) is invisible to a regex
+#      - `Job.State = State;` is the job's - and only shape a (the enum on the right) or b (the variable's name) sees it.
+# Test files are exempt: a test stages a vehicle where no transition reaches, to see what the board does with it
+# (FServiceVehicleLifecycle::SeedStateForTest is the one blessed way, and a test's own poke is allowed). The rule fails,
+# rather than checking nothing, when the lifecycle file is gone or its writes no longer match shape b. Mutation-checked on
+# 2026-09-30 against a scratch copy: an injected `Vehicle.State = To;`, `for (auto& V : ...GetVehicles()) V.AgentId = 0;`
+# and `Vehicle.State = EServiceVehicleState::Idle;` each FAIL, and renaming the lifecycle file FAILs.
 $lifecycleFile = Join-Path $ops 'Private\Model\ServiceVehicleLifecycle.cpp'
+$vehicleEnumWrite  = '(?:\.|->)State\s*=\s*EServiceVehicleState::'
+$vehicleNamedWrite = '\b\w*(?:Vehicle|Truck|Bowser)\w*(?:\[[^\]]*\])?(?:\.|->)(?:State|AgentId|CurrentJob)\s*=(?!=)'
+$vehicleHeldFile   = '\bFServiceVehicle\b|\bEServiceVehicleState\b|\bGetVehicles\s*\(|\bFindVehicle(?:Mutable)?\s*\(|\bVehicleForAgent\s*\('
+$vehicleHeldWrite  = '(?:\.|->)(?:AgentId|CurrentJob)\s*=(?!=)'
 $lifecycleWrites = 0
-$vehicleStateWrite = '(?:\.|->)State\s*=\s*EServiceVehicleState::'
-$vehicleFieldWrite = '(?:\.|->)(?:AgentId|CurrentJob)\s*=(?!=)'
 if (-not (Test-Path $lifecycleFile)) {
     $failures.Add("vehicle-lifecycle-one-writer: $lifecycleFile not found - update rule 38, do not let it check nothing")
 } else {
     foreach ($line in (Get-Content -LiteralPath $lifecycleFile)) {
-        if ($line -match $vehicleFieldWrite -or $line -match '\bVehicle\.State\s*=') { $lifecycleWrites++ }
+        if ($line -match $vehicleNamedWrite) { $lifecycleWrites++ }
     }
     if ($lifecycleWrites -eq 0) {
         $failures.Add("vehicle-lifecycle-one-writer: no State/AgentId/CurrentJob write found in $lifecycleFile - the rule's patterns no longer match; update rule 38")
@@ -1826,16 +1838,13 @@ foreach ($lifecycleTree in $lifecycleTrees) {
         if ($file.Name -like '*Test.cpp' -or $file.Name -like '*Test.h' -or $file.Name -eq 'ServiceVehicleLifecycle.cpp') { continue }
         if ($file.FullName -match '[\\/]Testing[\\/]') { continue }
         $lines = Get-Content -LiteralPath $file.FullName
-        $namesVehicle = $null -ne ($lines | Select-String -Pattern '\bFServiceVehicle\b|\bEServiceVehicleState\b' | Select-Object -First 1)
+        $holdsVehicles = $null -ne ($lines | Select-String -Pattern $vehicleHeldFile | Select-Object -First 1)
         $inBlock = $false
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
             if ($code.Trim() -eq '') { continue }
-            if ($code -match $vehicleStateWrite) {
-                $failures.Add("vehicle-lifecycle-one-writer: $($file.Name):$($i + 1) writes a vehicle's State by hand - go through FServiceVehicleLifecycle (UJobBoard::Lifecycle), which asserts the (State, AgentId, CurrentJob) invariant")
-            }
-            elseif ($namesVehicle -and $code -match $vehicleFieldWrite) {
-                $failures.Add("vehicle-lifecycle-one-writer: $($file.Name):$($i + 1) writes a vehicle's AgentId/CurrentJob by hand - go through FServiceVehicleLifecycle (UJobBoard::Lifecycle), which asserts the (State, AgentId, CurrentJob) invariant")
+            if ($code -match $vehicleEnumWrite -or $code -match $vehicleNamedWrite -or ($holdsVehicles -and $code -match $vehicleHeldWrite)) {
+                $failures.Add("vehicle-lifecycle-one-writer: $($file.Name):$($i + 1) writes a vehicle's State/AgentId/CurrentJob by hand - go through FServiceVehicleLifecycle (UJobBoard::Lifecycle), which asserts the (State, AgentId, CurrentJob) invariant: $($code.Trim())")
             }
         }
     }

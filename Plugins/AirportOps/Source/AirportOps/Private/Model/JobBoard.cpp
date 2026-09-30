@@ -496,11 +496,19 @@ void UJobBoard::RetireAgentOf(FServiceVehicle& Vehicle, UGroundTraffic& Traffic)
 {
 	const int32 AgentId = Vehicle.AgentId;
 	Lifecycle(Vehicle).LeaveRoad();
+	// RetireAgent's bool is deliberately dropped: false means the agent was already gone, which is the state this
+	// wants - the vehicle is unhooked either way, and a missing agent is not an error here.
 	Traffic.RetireAgent(AgentId);
 }
 
 int32 UJobBoard::LoseAgent(FServiceVehicle& Vehicle)
 {
+	// IDEMPOTENT HERE, not only in its callers: a vehicle with no agent has nothing to lose (the Gone event for an
+	// agent the board already unhooked finds no vehicle at all, but a caller holding the vehicle could still ask).
+	if (Vehicle.AgentId == 0)
+	{
+		return 0;
+	}
 	const int32 Released = ReleaseJobsOf(Vehicle);
 	Lifecycle(Vehicle).LeaveRoad();
 	return Released;
@@ -577,7 +585,7 @@ void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, 
 			// event and takes the same body (LoseAgent), so this fires only for a loss no event reached - a Gone
 			// delivered while no live model was attached, a model swapped under the board. It used to be the ONLY
 			// way the board heard, polled per vehicle per Step, and re-opened just the current job.
-			// ENFORCED BY: AirportOps.Fuel.Lifecycle.LostAgentNetRecallsTheSameWay
+			// ENFORCED BY: AirportOps.Fuel.Lifecycle.LostAgentNetRecallsTheSameWay (the log line's job count: both jobs, not one)
 			if (Vehicle.AgentId != 0 && Traffic.FindAgent(Vehicle.AgentId) == nullptr)
 			{
 				const int32 LostAgent = Vehicle.AgentId;
@@ -1020,7 +1028,8 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 	// the `To != Parked` return below and found a Step later by a poll that re-opened only the current job.
 	// THE BOARD'S OWN RETIREMENTS FIND NOTHING HERE: they unhook the vehicle before retiring (RetireAgentOf), so by the
 	// time this fires - inside the call in a fixture, a drain later in production - no vehicle has that agent.
-	// ENFORCED BY: AirportOps.Fuel.Lifecycle.AgentRetiredElsewhereRebidsWholeQueue, AirportOps.Fuel.DepotGoneBeforeRecallLeavesNoAgent
+	// ENFORCED BY: AirportOps.Fuel.Lifecycle.AgentRetiredElsewhereRebidsWholeQueue, AirportOps.Fuel.Lifecycle.OwnRetirementsAreNotLosses,
+	// AirportOps.Fuel.DepotGoneBeforeRecallLeavesNoAgent
 	if (To == EAgentPhase::Gone)
 	{
 		if (const FServiceVehicle* Found = VehicleForAgent(AgentId))
@@ -1246,15 +1255,30 @@ bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 	DepartTheReady(Traffic, Network, Clock);
 
 	// A DECISION ALWAYS LANDS: no vehicle finishes a Step Deciding. Walked last, after DepartTheReady, because a
-	// departure's phase change can recall a vehicle out for that aircraft (DropAircraft). The fleet is a handful per depot
-	// (Trucks x the vehicle types), so the walk is cheap. A vehicle that does finish Deciding is a path to the old wedge -
-	// said, not polled: the ensure names it in the log the moment it is made, where the backstop hid it behind a board
-	// pass that ran every frame.
-	// ENFORCED BY: AirportOps.Fuel.Lifecycle.BlockedHeadJobNeverLeavesItServingWithNoJob (FFuelFixture's per-Step check)
+	// departure's phase change can recall a vehicle out for that aircraft (DropAircraft). The walk is O(fleet): 2 vehicles
+	// per starter depot on 2026-09-30 (Trucks 1 x the UTILITY and FUEL types, FFuelFixture's default), and a bought fleet
+	// grows it by the player's purchases, like the walks above it. A vehicle that does finish Deciding is a path to the old
+	// wedge - said, not polled: the ensure names it in the log the moment it is made, where the backstop hid it behind a
+	// board pass that ran every frame - AND SETTLED, as StartNext's own tail settles it: a future path must not park a
+	// vehicle on the hydrant for good with the ensure merely firing every Step. Ids first, then acted on: GoToFacility can
+	// dispatch, the broadcast can re-enter, and the vehicle array can move under a live reference.
+	// ENFORCED BY: AirportOps.Fuel.Lifecycle.BlockedHeadJobNeverLeavesItServingWithNoJob (FFuelFixture's per-Step check),
+	// AirportOps.Fuel.Lifecycle.StepEndSettlesAStrandedDecision (the recovery)
+	TArray<int32> Undecided;
 	for (const FServiceVehicle& Vehicle : Vehicles)
 	{
-		ensureAlwaysMsgf(Vehicle.State != EServiceVehicleState::Deciding,
-			TEXT("Vehicle %d ends a Step Deciding - a decision that never landed"), Vehicle.Id);
+		if (Vehicle.State == EServiceVehicleState::Deciding)
+		{
+			Undecided.Add(Vehicle.Id);
+		}
+	}
+	for (const int32 VehicleId : Undecided)
+	{
+		ensureAlwaysMsgf(false, TEXT("Vehicle %d ends a Step Deciding - a decision that never landed"), VehicleId);
+		if (FServiceVehicle* Vehicle = FindVehicleMutable(VehicleId))
+		{
+			GoToFacility(*Vehicle, Traffic, Network, Clock);
+		}
 	}
 
 	// WHAT IS STILL UNRESOLVED - see the header. Each of these used to be retried simply because Tick ran

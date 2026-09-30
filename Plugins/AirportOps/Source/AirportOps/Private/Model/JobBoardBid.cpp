@@ -359,7 +359,8 @@ ServiceBid::FResult UJobBoard::BidFor(const FServiceVehicle& Vehicle, const FSer
 		// ToFacility it would be "home and refilled first", and the vehicle that just pumped could never win its own
 		// remainder back at the price StartNext will actually give it. This is what the illegal "Serving with no
 		// job" was priced as by falling through the Serving case with no Current - and the state that replaces it.
-		// ENFORCED BY: AirportOps.Fuel.ChainsStandToStandWithoutTheDepot, AirportOps.Fuel.ShortTankGoesViaTheDepot
+		// ENFORCED BY: AirportOps.Service.Bid.DecidingVehiclePricesWhereItStands (deleting this case turns it red;
+		// the one-bowser ChainsStandToStand / ShortTank tests stay green without it, a lone candidate winning at any price)
 		if (Agent != nullptr)
 		{
 			In.NodeWhenFree = NodeIndex(Agent->GoalNode);

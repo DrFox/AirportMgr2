@@ -634,7 +634,9 @@ private:
 	 * would recall a vehicle this call is already moving. Unhooked first, the broadcast finds no vehicle. Production
 	 * delivers it a drain later (#436), where either order works; the one that works in both is this one.
 	 * The one spelling of "retire where it stands" (there were six, with six different tails).
-	 * ENFORCED BY: AirportOps.Fuel.DepotGoneBeforeRecallLeavesNoAgent, AirportOps.Model.AgentRescue.VehicleDespawn
+	 * ENFORCED BY: AirportOps.Fuel.Lifecycle.OwnRetirementsAreNotLosses (arrival home, player despawn, depot removed:
+	 * a log spy that sees Warnings, with a control), AirportOps.Fuel.DepotGoneBeforeRecallLeavesNoAgent,
+	 * AirportOps.Model.AgentRescue.VehicleDespawn
 	 */
 	void RetireAgentOf(FServiceVehicle& Vehicle, UGroundTraffic& Traffic);
 
@@ -797,9 +799,13 @@ private:
 	TSet<int32> DispatchRefusedWarned;
 
 	/**
-	 * Bumped whenever a vehicle's availability changes: a step ends, a vehicle is added or withdrawn.
+	 * Bumped whenever a vehicle is added or withdrawn AND on every state change of a vehicle - each
+	 * FServiceVehicleLifecycle transition moves it (issue #428): dispatched, arrived, serving, deciding, heading
+	 * home, off the road, refilling, reset by a load. Before #428 about half of those sites did.
 	 * The fleet's half of "has anything changed that a re-bid could answer differently" (stage 2);
-	 * the airport's half is URoadNetwork::GetGuidelineRevision.
+	 * the airport's half is URoadNetwork::GetGuidelineRevision. TWO READERS WANT DIFFERENT THINGS OF IT - the
+	 * re-bid (RebidQueued) wants every transition, UFlightBoard::VerdictFor only a change of composition - and
+	 * splitting it is #443's, not done here.
 	 *
 	 * A SESSION CLOCK, NOT STATE, the same as URoadNetwork::GuidelineRevision: not a UPROPERTY, and it
 	 * does not need to be one.

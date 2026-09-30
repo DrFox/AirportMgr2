@@ -3156,12 +3156,13 @@ bool FFuelQuietIdleWithAQueueTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FFuelQuietServingWithNoJobTest, "AirportOps.Fuel.QuietBoard.ServingWithNoJob",
+	FFuelQuietServeEndSettlesTest, "AirportOps.Fuel.QuietBoard.ServeEndSettlesInOneStep",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FFuelQuietServingWithNoJobTest::RunTest(const FString& Parameters)
+bool FFuelQuietServeEndSettlesTest::RunTest(const FString& Parameters)
 {
-	// A SERVE THAT ENDS COSTS THE BOARD NOTHING PER FRAME. This used to poke a vehicle into "Serving with no job" - the
+	// A SERVE THAT ENDS IS SETTLED IN THE STEP THAT ENDS IT, AND COSTS THE BOARD NOTHING PER FRAME. This was
+	// QuietBoard.ServingWithNoJob, which used to poke a vehicle into "Serving with no job" - the
 	// final review #1 backstop's state - and assert the backstop cleared it in one Step. That state is no longer
 	// representable (issue #428: the serve's end leaves the vehicle Deciding, StartNext always settles it, the fuel
 	// fixture asserts it), so there is nothing to poke; what is left to guard is the property the backstop was measured
@@ -3222,6 +3223,39 @@ bool FFuelQuietNoVehiclesTest::RunTest(const FString& Parameters)
 // in a shape no state describes, or leave part of its work on it.
 namespace FuelServiceTest
 {
+	/**
+	 * Every LogAirportOps line at WARNING verbosity for as long as it exists (RAII). Not FLogLineSpy: that keeps Log
+	 * verbosity only (AirsideTestWorld.h), and the lines these tests look for - "lost its agent" - are Warnings, so
+	 * asserting their absence through it passes with them printed (the trap the 2026-09-27 note at the
+	 * MidRouteGetsHome tests documents). UNBUFFERED (CanBeUsedOnMultipleThreads) for FLogLineSpy's #216 reason: the
+	 * dedicated log thread would otherwise deliver a line after the spy is gone. ArrivalQueuePassTest's
+	 * FSafetyWarningSpy is the precedent. Every test using it runs a POSITIVE CONTROL first - a case that must print the
+	 * line - so an absence means something.
+	 */
+	struct FWarningSpy : public FOutputDevice
+	{
+		TArray<FString> Lines;
+		FWarningSpy() { GLog->AddOutputDevice(this); }
+		virtual ~FWarningSpy() override { GLog->RemoveOutputDevice(this); }
+		virtual bool CanBeUsedOnMultipleThreads() const override { return true; }
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category) override
+		{
+			if (Category == FName(TEXT("LogAirportOps")) && (Verbosity & ELogVerbosity::VerbosityMask) == ELogVerbosity::Warning)
+			{
+				Lines.Add(V);
+			}
+		}
+		int32 CountContaining(const TCHAR* Text) const
+		{
+			int32 Count = 0;
+			for (const FString& Line : Lines)
+			{
+				Count += Line.Contains(Text) ? 1 : 0;
+			}
+			return Count;
+		}
+	};
+
 	/**
 	 * ONE bowser serving the first of two aircraft, the second's job queued behind it: a slow pump keeps the
 	 * first serve running while the second aircraft taxis in, exactly as RunTwoJobs stages it, and the rig waits
@@ -3335,6 +3369,10 @@ bool FFuelLifecycleLostAgentNetTest::RunTest(const FString& Parameters)
 	// THE NET UNDER THE EVENT: an agent the traffic model lost with no Gone event heard (a delivery skipped while
 	// no live model was attached, a model swapped under the board) is still found by SyncFleet's check, and it
 	// takes the same recall body - so the two ways of learning of a loss cannot leave different vehicles behind.
+	// THE SEAM IS THE LINE'S JOB COUNT: the old inline body re-opened only the job the vehicle was ON, and the vehicle
+	// - Idle at home with its queue - then set off for the queued one again, so the jobs' final owner is the same either
+	// way. What tells LoseAgent from the old body is how many jobs the net gave back: both, not one.
+	FuelServiceTest::FWarningSpy Spy;
 	FuelServiceTest::FQueuedBowser Rig;
 	if (!Rig.Build(*this)) { return false; }
 	const int32 OldAgent = Rig.Vehicle()->AgentId;
@@ -3344,6 +3382,17 @@ bool FFuelLifecycleLostAgentNetTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the premise: the event was not heard, so the board still names the retired agent"), Rig.Vehicle()->AgentId, OldAgent);
 
 	Rig.Fixture.Advance(1.0 / 30.0);
+	FString NetLine;
+	for (const FString& Line : Spy.Lines)
+	{
+		if (Line.Contains(TEXT("with no Gone heard")))
+		{
+			NetLine = Line;
+		}
+	}
+	if (!TestFalse(TEXT("the net said so - a Warning naming a loss with no Gone heard"), NetLine.IsEmpty())) { return false; }
+	TestTrue(*FString::Printf(TEXT("and it gave back BOTH jobs, the queued one as well as the one it was on: %s"), *NetLine),
+		NetLine.Contains(TEXT("2 job(s) back to the board")));
 	const FServiceVehicle* Vehicle = Rig.Vehicle();
 	TestTrue(TEXT("the next Step's net let go of the retired agent and the vehicle set off afresh"),
 		Vehicle != nullptr && Vehicle->AgentId != OldAgent && Vehicle->AgentId != 0);
@@ -3426,8 +3475,25 @@ bool FFuelLifecycleOwnRetirementTest::RunTest(const FString& Parameters)
 	// unhooks the vehicle before it retires the agent (RetireAgentOf). The fixture delivers the broadcast INSIDE
 	// RetireAgent, so a retire-then-unhook order shows here as the loss warning firing on the board's own retirement
 	// and recalling a vehicle mid-transition - which production, delivering a drain later, would hide.
-	FLogLineSpy Spy(FName(TEXT("LogAirportOps")));
-	GLog->AddOutputDevice(&Spy);
+	// THE LOSS LINE IS A WARNING, and FLogLineSpy keeps Log verbosity only, so an absence asserted through it can never
+	// fail. FWarningSpy sees Warnings, and the CONTROL below proves it: a bare RetireAgent - not the board's - must print
+	// the line, or "none printed" means nothing.
+	FuelServiceTest::FWarningSpy Spy;
+	bool bControlRetired = false;
+	{
+		FFuelFixture Fixture;
+		FTruckOut Out;
+		if (SendTruckOut(Fixture, Out))
+		{
+			Fixture.Traffic->RetireAgent(Out.TruckId);
+			bControlRetired = true;
+		}
+	}
+	const int32 ControlLines = Spy.CountContaining(TEXT("lost its agent"));
+	if (!TestTrue(TEXT("the premise: a truck was sent out and retired behind the board's back"), bControlRetired)) { return false; }
+	if (!TestTrue(TEXT("the CONTROL: a retirement that is not the board's IS heard as a loss - the spy sees the Warning"), ControlLines >= 1)) { return false; }
+	const int32 Before = Spy.Lines.Num();
+
 	bool bHome = false;
 	bool bDespawned = false;
 	bool bWithdrawn = false;
@@ -3466,15 +3532,114 @@ bool FFuelLifecycleOwnRetirementTest::RunTest(const FString& Parameters)
 			bWithdrawn = Fixture.Service->GetVehicles().Num() == 0 && Fixture.Traffic->FindAgent(Out.TruckId) == nullptr;
 		}
 	}
-	GLog->RemoveOutputDevice(&Spy);
 
 	TestTrue(TEXT("the premise: a whole job ends with the vehicle Idle at home, its agent retired there"), bHome);
 	TestTrue(TEXT("the premise: the player's despawn retired a vehicle on the road"), bDespawned);
 	TestTrue(TEXT("the premise: a removed depot withdrew its vehicle and retired its agent"), bWithdrawn);
-	for (const FString& Line : Spy.CapturedLines)
+	for (int32 At = Before; At < Spy.Lines.Num(); ++At)
 	{
-		TestFalse(*FString::Printf(TEXT("the board's own retirement was heard as a loss: %s"), *Line), Line.Contains(TEXT("lost its agent")));
+		TestFalse(*FString::Printf(TEXT("the board's own retirement was heard as a loss: %s"), *Spy.Lines[At]),
+			Spy.Lines[At].Contains(TEXT("lost its agent")));
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelLifecycleStepEndSettlesTest, "AirportOps.Fuel.Lifecycle.StepEndSettlesAStrandedDecision",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelLifecycleStepEndSettlesTest::RunTest(const FString& Parameters)
+{
+	// THE STEP-END WALK IS A RECOVERY, NOT ONLY AN ALARM. No path leaves a vehicle Deciding at the end of a Step any more
+	// (StartNext lands every decision), so this stages one - the serve's job let go, the state left at Deciding - and runs
+	// ONE Step: the walk must say so (an ensure, expected here) and send it home, rather than leave it on the hydrant with
+	// the ensure firing every Step for good.
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
+	Fixture.Service->DefaultFleetTypes = { Bowser };
+	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
+	int32 VehicleId = 0;
+	if (!TestTrue(TEXT("the bowser starts serving"), Fixture.AdvanceUntil([&]
+		{
+			const FServiceVehicle* V = Fixture.Service->GetVehicles().FindByPredicate(
+				[](const FServiceVehicle& Each) { return Each.State == EServiceVehicleState::Serving && Each.CurrentJob != 0; });
+			VehicleId = V != nullptr ? V->Id : 0;
+			return VehicleId != 0;
+		}, 240.0))) { return false; }
+
+	FServiceVehicle* Vehicle = const_cast<FServiceVehicle*>(Fixture.Service->FindVehicle(VehicleId));
+	Vehicle->CurrentJob = 0;
+	FServiceVehicleLifecycle::SeedStateForTest(*Vehicle, EServiceVehicleState::Deciding);
+
+	// THE ENSURE IS THE POINT AND IS EXPECTED: the automation framework reports an ensure's log lines as errors, so each
+	// shape they take is named. Any number - the count is the engine's to change, the recovery below is what is measured.
+	AddExpectedError(TEXT("Ensure condition failed"), EAutomationExpectedErrorFlags::Contains, 0);
+	AddExpectedError(TEXT("Callstack"), EAutomationExpectedErrorFlags::Contains, 0);
+	AddExpectedError(TEXT("ends a Step Deciding"), EAutomationExpectedErrorFlags::Contains, 0);
+	AddExpectedError(TEXT("Handled ensure"), EAutomationExpectedErrorFlags::Contains, 0);
+	AddExpectedError(TEXT("Stack:"), EAutomationExpectedErrorFlags::Contains, 0);
+	AddExpectedError(TEXT("LogOutputDevice"), EAutomationExpectedErrorFlags::Contains, 0);
+	Fixture.Service->Step(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
+
+	const FServiceVehicle* After = Fixture.Service->FindVehicle(VehicleId);
+	if (!TestNotNull(TEXT("the vehicle survives"), After)) { return false; }
+	TestEqual(TEXT("the Step settled it - heading home, not left Deciding on the hydrant"), After->State, EServiceVehicleState::ToFacility);
+	TestTrue(TEXT("on its own agent"), After->AgentId != 0);
+	TestTrue(TEXT("and that is a row of the invariant table, settled"), FServiceVehicleLifecycle::Violation(*After, /*bSettled=*/true).IsEmpty());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FServiceBidDecidingPricesTest, "AirportOps.Service.Bid.DecidingVehiclePricesWhereItStands",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FServiceBidDecidingPricesTest::RunTest(const FString& Parameters)
+{
+	// A VEHICLE WHOSE SERVE JUST ENDED is priced by the re-bid that runs between EndServe and StartNext, as standing where
+	// it is (BidFor's Deciding case). The one-bowser chaining tests cannot see that: a lone candidate wins at any price,
+	// and deleting the case left them green. TWO vehicles, then: one Deciding, parked at the stand a new job is for, and
+	// one Idle at the depot - and with every drive a flat three game minutes the bids differ by exactly that drive.
+	FFuelFixture Fixture;
+	Fixture.bSecondStand = true;
+	Fixture.Build(/*bWithRoad=*/true);
+	UJobBoard& Board = *Fixture.Service;
+	const FName Bowser = Board.VehiclesFor(EIcaoCode::C).TypeCode;
+	Board.DefaultFleetTypes = { Bowser };
+	Board.DriveSecondsOverride = [](FGuidelineNodeId From, FGuidelineNodeId To, FName) { return From == To ? 0.0 : 180.0; };
+	if (!TestTrue(TEXT("an aircraft parked at the second stand"), Fixture.ParkAircraftAt(Fixture.StandPose2) != 0)) { return false; }
+	int32 ParkedId = 0;
+	if (!TestTrue(TEXT("the bowser reaches that stand and serves"), Fixture.AdvanceUntil([&]
+		{
+			const FServiceVehicle* V = Board.GetVehicles().FindByPredicate(
+				[](const FServiceVehicle& Each) { return Each.State == EServiceVehicleState::Serving && Each.CurrentJob != 0; });
+			ParkedId = V != nullptr ? V->Id : 0;
+			return ParkedId != 0;
+		}, 240.0))) { return false; }
+
+	// STAGED: the moment its serve ends - the job let go, the vehicle still parked on its agent at the stand. No Advance
+	// after this: a Step would settle it, and this looks at the state BETWEEN the serve's end and the decision.
+	const double Capacity = Board.TypeFor(Bowser).Capacity;
+	FServiceVehicle* Parked = const_cast<FServiceVehicle*>(Board.FindVehicle(ParkedId));
+	Parked->CurrentJob = 0;
+	Parked->Cargo = Capacity;
+	FServiceVehicleLifecycle::SeedStateForTest(*Parked, EServiceVehicleState::Deciding);
+	const int32 FreshId = Board.AddVehicleForTest(Bowser, Fixture.Depot, EServiceVehicleState::Idle, Capacity).Id;
+	int32 JobId = 0;
+	{
+		FServiceJob& Job = Board.AddJobForTest(902, EServiceJobState::Open, EServiceRefusal::None, 0);
+		Job.Stand = Fixture.Stand2;
+		Job.QuantityOwed = 300.0;
+		JobId = Job.Id;
+	}
+
+	const ServiceBid::FResult FromStand = Board.BidForTest(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock, ParkedId, JobId);
+	const ServiceBid::FResult FromDepot = Board.BidForTest(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock, FreshId, JobId);
+	if (!TestTrue(TEXT("both vehicles can reach the job"), FromStand.bReachable && FromDepot.bReachable)) { return false; }
+	TestEqual(TEXT("the vehicle parked at the stand needs no drive - the one at the depot finishes exactly one drive (180 s) later"),
+		FromDepot.Finish - FromStand.Finish, 180.0, 1e-6);
+	TestTrue(TEXT("so the Deciding vehicle wins the bid, which is what lets the vehicle that just pumped win its own remainder"),
+		FromStand.Finish < FromDepot.Finish);
 	return true;
 }
 
