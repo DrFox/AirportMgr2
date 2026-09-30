@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "Content/AirsideSettings.h"
+#include "Model/Airport.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/ArrivalSequencer.h"
 #include "Model/Flight.h"
@@ -524,6 +525,46 @@ bool FArrivalQueueNetCancelTest::RunTest(const FString&)
 	TestTrue(TEXT("and the load's pass re-arms it on the loaded clock"), Rig.Runtime->IsQueueSafetyNetArmedForTest());
 	Rig.Runtime->Attach(nullptr);
 	TestFalse(TEXT("a detach cancels it"), Rig.Runtime->IsQueueSafetyNetArmedForTest());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalQueueClosedTest, "AirportOps.Present.ArrivalQueue.ClosedAirportDispatchesNothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalQueueClosedTest::RunTest(const FString&)
+{
+	// A CLOSED AIRPORT ADMITS NO ARRIVALS - AT THE QUEUE TOO (whole-stack review I1). The entry doors (Accept, Land) were
+	// gated; the pass that actually puts an aeroplane on the runway was not. A holding flight the closure did not cancel
+	// - planted after it here, as a load could leave one - must hold, with no safety net ticking for it, and land the
+	// moment the airport opens.
+	FRig Rig;
+	FTestAirport Field;
+	if (!TestTrue(TEXT("an attached runtime"), Rig.Attach([&](URoadNetwork& Net) { Field = FTestAirport::Build(Rig.Airframe, FTestAirportOptions(), &Net); }))) { return false; }
+	for (int32 Tick = 0; Tick < 5; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
+	Rig.Runtime->SetAirportClosed(true);
+	Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
+	if (!TestEqual(TEXT("closed"), Rig.Runtime->GetAirport()->Status(), EAirportStatus::ClosedByPlayer)) { return false; }
+
+	UFlight* Holding = NewObject<UFlight>(GetTransientPackage());
+	Holding->Airframe = Rig.Airframe;
+	Holding->ApproachFocus = Field.Threshold;
+	Holding->Phase = EFlightPhase::Inbound;
+	Holding->HoldingSince = Rig.Runtime->GetClock()->Now();
+	Rig.Runtime->GetFlightBoard()->AddOffer(*Rig.Runtime->GetClock(), Holding);
+	const int32 RunsBefore = Rig.QueueRuns();
+	Rig.Runtime->GetBus().Publish(FFlightInboundEvent{ Holding->Id, Holding->AirlineId });
+	for (int32 Tick = 0; Tick < 60; ++Tick)
+	{
+		Rig.Model->Advance(ArrivalQueuePassTest::Frame, Rig.Net);
+		Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
+	}
+	TestTrue(TEXT("the pass ran - it was asked"), Rig.QueueRuns() > RunsBefore);
+	TestEqual(TEXT("closed: the holding flight is not cleared to land"), Holding->Phase, EFlightPhase::Inbound);
+	TestEqual(TEXT("and no aircraft was dispatched"), Rig.Model->GetAgentCount(), 0);
+	TestFalse(TEXT("and no safety net ticks for a queue that cannot move"), Rig.Runtime->IsQueueSafetyNetArmedForTest());
+
+	Rig.Runtime->SetAirportClosed(false);
+	for (int32 Tick = 0; Tick < 10 && Holding->Phase == EFlightPhase::Inbound; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
+	TestEqual(TEXT("opened: it lands"), Holding->Phase, EFlightPhase::Landing);
 	return true;
 }
 

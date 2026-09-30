@@ -218,7 +218,11 @@ void UFlightBoard::Schedule(UGroundTraffic& Traffic, USimClock& Clock, UFlight& 
 	const int32 Handle = Clock.At(Flight.ArrivesAt, [this, WeakTraffic, Id]()
 	{
 		UFlight* Due = FindById(Id);
-		if (WeakTraffic.Get() != nullptr && Due != nullptr)
+		// ONLY AN ACCEPTED FLIGHT JOINS THE QUEUE (whole-stack review M3): FindById finds it in History too, and every
+		// cancel disarming this callback first is a rule of the callers, not of this line. A flight that has become
+		// anything else since it was armed is not due.
+		// ENFORCED BY: AirportOps.Model.FlightBoard.ArrivalRequeuesOnlyAnAccepted
+		if (WeakTraffic.Get() != nullptr && Due != nullptr && Due->Phase == EFlightPhase::Accepted)
 		{
 			// INTO THE QUEUE, not straight onto the runway (spec 2026-09-28-arrival-queue): the
 			// runway may be busy, and TickQueue is what decides when it is not. HoldingSince is
@@ -304,6 +308,16 @@ FQueueTick UFlightBoard::TickQueue(UGroundTraffic& Traffic, const URoadNetwork& 
 	Result.Waiting = Waiting.Num();
 	if (Clock.IsPaused() || Waiting.Num() == 0)
 	{
+		return Result;
+	}
+	// A CLOSED AIRPORT ADMITS NO ARRIVALS - HERE TOO (whole-stack review I1): Accept and Land were gated, and this, the
+	// one door onto the runway, was not; a flight left holding by a load or a closure's edge case landed anyway. The
+	// same predicate as Accept, so the two doors cannot disagree about what "open" is. Before the stand re-reserve: a
+	// closed airport takes no stand for a flight it will not land.
+	// ENFORCED BY: AirportOps.Present.ArrivalQueue.ClosedAirportDispatchesNothing
+	if (AdmitsArrivals && !AdmitsArrivals())
+	{
+		Result.bClosed = true;
 		return Result;
 	}
 
@@ -673,22 +687,26 @@ TArray<UFlight*> UFlightBoard::DemoteRestoredMidFlight(double Now)
 	return Requeued;
 }
 
-int32 UFlightBoard::CancelRequeued(const TArray<UFlight*>& Requeued, double Now)
+int32 UFlightBoard::CancelUnarrivedAtLoad(double Now)
 {
-	// REVIEW RULING I2: a flight a load put back in the queue, at an airport that is not open, can never land - and a
-	// closed airport admits no arrivals (PR B ruling I1). CANCELLED, UNSCORED: NOTHING IS PUBLISHED, so the roster
-	// charges neither ClosureCancelPenalty nor anything else; what closed the airport happened before the save, and
-	// its own cancellations were scored then. Only a flight still Inbound: this is handed LoadFromSlot's list.
-	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport
+	// REVIEW RULING I2 (PR C), WIDENED (whole-stack review I1): a flight a load leaves still to arrive, at an airport
+	// that is not open, can never land - a closed airport admits no arrivals (PR B ruling I1). The re-queued (Inbound)
+	// were the first case found; an Accepted flight saved at the closed airport is the other. CANCELLED, UNSCORED:
+	// NOTHING IS PUBLISHED, so the roster charges neither ClosureCancelPenalty nor anything else; what closed the
+	// airport happened before the save, and its own cancellations were scored then. Called before RearmSchedules and
+	// OnGraphRebuilt, so no arrival is armed and no stand held for any of them.
+	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport, AirportOps.Present.Airport.LoadRederivesWithoutCancelling
 	int32 Count = 0;
-	for (UFlight* Each : Requeued)
+	// SNAPSHOT: MoveToHistory removes from the array being walked.
+	const TArray<TObjectPtr<UFlight>> Snapshot = Flights;
+	for (const TObjectPtr<UFlight>& Each : Snapshot)
 	{
-		if (Each == nullptr || Each->Phase != EFlightPhase::Inbound)
+		if (Each == nullptr || (Each->Phase != EFlightPhase::Inbound && Each->Phase != EFlightPhase::Accepted))
 		{
 			continue;
 		}
-		UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) restored mid-flight at an airport that is not open: cancelled, unscored"),
-			Each->Id, *Each->Callsign);
+		UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) %s at an airport that is not open, after a load: cancelled, unscored"),
+			Each->Id, *Each->Callsign, Each->Phase == EFlightPhase::Inbound ? TEXT("holding") : TEXT("accepted"));
 		Each->Phase = EFlightPhase::Cancelled;
 		MoveToHistory(*Each, Now);
 		++Count;

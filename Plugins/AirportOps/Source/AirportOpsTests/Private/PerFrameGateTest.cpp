@@ -181,4 +181,35 @@ bool FSimTimeScaleOnChangeTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalRequeuesOnlyAcceptedTest, "AirportOps.Model.FlightBoard.ArrivalRequeuesOnlyAnAccepted",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalRequeuesOnlyAcceptedTest::RunTest(const FString&)
+{
+	// THE ARRIVAL CALLBACK ASKS WHAT IT IS QUEUEING (whole-stack review M3): it found its flight by id - which History
+	// keeps - and put it in the queue whatever it had become. Every cancel today disarms it first; a cancel that did
+	// not would have landed a cancelled flight. Only an Accepted flight joins the queue at its ETA.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	UFlightBoard* Board = NewObject<UFlightBoard>(GetTransientPackage());
+	Board->Allocator = NewObject<UStandAllocator>(GetTransientPackage());
+	auto Plant = [&]()
+	{
+		UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+		Flight->Phase = EFlightPhase::Accepted;
+		Flight->ArrivesAt = Clock->Now() + 10.0;
+		Board->AddOffer(*Clock, Flight);
+		return Flight;
+	};
+	UFlight* Kept = Plant();
+	UFlight* Cancelled = Plant();
+	Board->RearmSchedules(*Traffic, *Net, *Clock);
+	Cancelled->Phase = EFlightPhase::Cancelled;   // a cancel that left its arrival armed
+	const double Until = Kept->ArrivesAt + 1.0;
+	for (int32 Step = 0; Step < 100000 && Clock->Now() < Until; ++Step) { Clock->Advance(0.5 / FMath::Max(Clock->TimeScale(), 1e-6)); }
+	TestEqual(TEXT("an Accepted flight joins the queue at its ETA - the arrival was armed"), Kept->Phase, EFlightPhase::Inbound);
+	TestEqual(TEXT("a cancelled one stays cancelled"), Cancelled->Phase, EFlightPhase::Cancelled);
+	return true;
+}
+
 #endif

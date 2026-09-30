@@ -64,6 +64,9 @@ struct FQueueTick
 	UFlight* Cleared = nullptr;
 	/** The sequencer chose a flight and the dispatch refused it - a same-frame race, retried next frame. */
 	bool bRetry = false;
+	/** The airport admits no arrivals (AdmitsArrivals): nothing was cleared, and nothing can be until it opens -
+	 *  so the pass keeps no safety net ticking for the flights still Waiting (whole-stack review I1). */
+	bool bClosed = false;
 };
 
 /**
@@ -125,10 +128,11 @@ public:
 
 	/**
 	 * Whether the airport admits arrivals now - asked by Accept, which every accept comes through (the inbox,
-	 * and key 7 via AcceptImmediate). A CLOSED AIRPORT ADMITS NOTHING (ruling I1, 2026-09-30). A predicate, not a
-	 * UAirport pointer, so the board still does not learn the airport (see CancelUnarrived). Set by UOpsRuntime's
-	 * constructor; unset in a bare NewObject, which admits.
-	 * ENFORCED BY: AirportOps.Present.Airport.AcceptRefusedWhileClosed
+	 * and key 7 via AcceptImmediate) - AND BY TickQueue, the door onto the runway itself (whole-stack review I1: the
+	 * entry doors alone let a flight a load or a plant left holding land at a closed airport). A CLOSED AIRPORT ADMITS
+	 * NOTHING (ruling I1, 2026-09-30). A predicate, not a UAirport pointer, so the board still does not learn the
+	 * airport (see CancelUnarrived). Set by UOpsRuntime's constructor; unset in a bare NewObject, which admits.
+	 * ENFORCED BY: AirportOps.Present.Airport.AcceptRefusedWhileClosed, AirportOps.Present.ArrivalQueue.ClosedAirportDispatchesNothing
 	 */
 	TFunction<bool()> AdmitsArrivals;
 
@@ -390,10 +394,13 @@ public:
 	TArray<UFlight*> DemoteRestoredMidFlight(double Now);
 
 	/**
-	 * Review ruling I2: the re-queued flights of a load at an airport that is not open can never land - Cancelled,
-	 * to History, UNSCORED (nothing published). Acts on those still Inbound. Returns how many.
+	 * A load at an airport that is not open: every flight still to arrive - Accepted, or Inbound (the re-queued among
+	 * them) - can never land, since a closed airport admits no arrivals. Cancelled, to History, UNSCORED (nothing
+	 * published): whatever closed the airport happened before the save, and its own cancellations were scored then.
+	 * Was CancelRequeued, the re-queued flights only (PR C review ruling I2); widened by the whole-stack review (I1),
+	 * which found an Accepted flight saved at a closed airport still due to land after the load. Returns how many.
 	 */
-	int32 CancelRequeued(const TArray<UFlight*>& Requeued, double Now);
+	int32 CancelUnarrivedAtLoad(double Now);
 
 	/**
 	 * Re-arm the clock for every Accepted flight's arrival.

@@ -1,5 +1,7 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Kismet/GameplayStatics.h"
+#include "Misc/ScopeExit.h"
 #include "Build/AnchorLink.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
@@ -415,20 +417,40 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportLoadTest, "AirportOps.Present.Airport.L
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FAirportLoadTest::RunTest(const FString&)
 {
-	// A LOAD RE-DERIVES AND NEVER RE-CANCELS (spec §3 "Load"): everything a closure cancels was cancelled when it
-	// was saved. To make a re-run VISIBLE, the saved closed airport carries an Accepted flight planted by hand -
-	// a load that re-ran the cancellation would cancel it.
+	// A LOAD RE-DERIVES AND NEVER RE-SCORES (spec §3 "Load"): everything a closure cancels was cancelled - and scored -
+	// when it was saved. AND A CLOSED AIRPORT ADMITS NO ARRIVALS, after a load too (whole-stack review I1): the saved
+	// closed airport carries an Accepted flight planted by hand, due just after the load, on a field it COULD land on
+	// - so only the closure stands between it and the runway. The first version of this test planted it for 1e9 s
+	// and asserted it stayed Accepted, which passed while the flight was still waiting to land at a closed airport.
 	FAirsideTestWorld TestWorld;
-	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
-	UOpsRuntime* Runtime = AirportTestRuntime(TestWorld, /*bRunway=*/true);
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 90000.0));
+	if (!TestNotNull(TEXT("a network"), Actor->Network.Get())) { return false; }
+	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	const FTestAirport Field = FTestAirport::Build(Airframe, FTestAirportOptions(), Actor->Network);
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	Runtime->GetClock()->SetUniformDay(USimClock::SecondsPerDay);
+	for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
+	if (!TestEqual(TEXT("a field with a runway opens"), Runtime->GetAirport()->Status(), EAirportStatus::Open)) { return false; }
+	const FName Airline = TEXT("AirportTestLoadAirline");
+	Runtime->GetAirlines()->Ensure(Airline);
+
 	Runtime->SetAirportClosed(true);
 	Runtime->Tick(0.0);
 	UFlight* Planted = NewObject<UFlight>(GetTransientPackage());
+	Planted->Airframe = Airframe;
+	Planted->ApproachFocus = Field.Threshold;
+	Planted->AirlineId = Airline;
 	Planted->Phase = EFlightPhase::Accepted;
-	Planted->ArrivesAt = 1.0e9;
+	Planted->ArrivesAt = Runtime->GetClock()->Now() + 5.0;
 	Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Planted);
 	const int32 PlantedId = Planted->Id;
+	const double DueAt = Planted->ArrivesAt;
+	const double SatisfactionAtSave = Runtime->GetAirlines()->Find(Airline)->Satisfaction;
 	const FString Slot = TEXT("AirportOpsTest_AirportLoad");
+	ON_SCOPE_EXIT { UGameplayStatics::DeleteGameInSlot(Slot, 0); };
 	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
 
 	Runtime->SetAirportClosed(false);
@@ -437,10 +459,22 @@ bool FAirportLoadTest::RunTest(const FString&)
 
 	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
 	TestEqual(TEXT("the loaded airport is closed, re-derived by the load itself"), Runtime->GetAirport()->Status(), EAirportStatus::ClosedByPlayer);
-	for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
+	for (int32 Tick = 0; Tick < 20000 && Runtime->GetClock()->Now() < DueAt + 5.0; ++Tick)
+	{
+		Actor->Tick(0.1f);
+		Runtime->Tick(0.1);
+	}
+	if (!TestTrue(TEXT("the clock ran past the planted flight's ETA"), Runtime->GetClock()->Now() > DueAt)) { return false; }
+	TestEqual(TEXT("nothing was dispatched: no aircraft in the air"), Actor->GetTraffic()->GetAgentCount(), 0);
+	for (const UFlight* Each : Runtime->GetFlightBoard()->Live())
+	{
+		TestTrue(FString::Printf(TEXT("flight %d is not landing"), Each->Id), Each->Phase != EFlightPhase::Landing);
+	}
 	const UFlight* Restored = Runtime->GetFlightBoard()->FindByIdForTest(PlantedId);
-	if (!TestNotNull(TEXT("the planted flight is restored"), Restored)) { return false; }
-	TestEqual(TEXT("and NOT cancelled - the load published no status change"), Restored->Phase, EFlightPhase::Accepted);
+	TestTrue(FString::Printf(TEXT("the planted flight is not coming (%s)"), Restored != nullptr ? *UEnum::GetValueAsString(Restored->Phase) : TEXT("gone")),
+		Restored == nullptr || Restored->Phase == EFlightPhase::Cancelled);
+	TestEqual(TEXT("and no satisfaction change - the load published no status change, and scored nothing"),
+		Runtime->GetAirlines()->Find(Airline)->Satisfaction, SatisfactionAtSave, 1e-9);
 	return true;
 }
 

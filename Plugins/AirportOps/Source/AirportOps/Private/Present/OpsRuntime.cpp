@@ -590,7 +590,11 @@ void UOpsRuntime::RunArrivalQueue()
 		bQueueCovered = true;
 		Bus.MarkDirtyNextDrain(TEXT("ArrivalQueue"));
 	}
-	ArmQueueSafetyNet(Result.Waiting > (Result.Cleared != nullptr ? 1 : 0));
+	// NO NET WHILE CLOSED (whole-stack review I1): a closed airport clears nobody, so a net would tick every 30 s to
+	// find the same answer. Reopening is an AirportStatusChanged, which dirties this pass (WireBus), and the run that
+	// follows re-arms it if anyone is still holding.
+	// ENFORCED BY: AirportOps.Present.ArrivalQueue.ClosedAirportDispatchesNothing ("no safety net ticks")
+	ArmQueueSafetyNet(!Result.bClosed && Result.Waiting > (Result.Cleared != nullptr ? 1 : 0));
 }
 
 void UOpsRuntime::ArmQueueSafetyNet(bool bWaiting)
@@ -1310,12 +1314,14 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 
 	// THE ONE THING A LOAD DOES HAVE TO CANCEL (review ruling I2): the flights the demotion above put back in the
 	// queue were on the ground when the closure happened, so the closure left them - and at an airport that is not
-	// open they can never land again. Cancelled HERE, silently and UNSCORED (CancelRequeued publishes nothing), not
-	// by the event above: the airline did not lose them to the closure but to the save.
-	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport
+	// open they can never land again. Cancelled HERE, silently and UNSCORED (CancelUnarrivedAtLoad publishes
+	// nothing), not by the event above: the airline did not lose them to the closure but to the save. AND EVERY
+	// OTHER FLIGHT STILL TO ARRIVE (whole-stack review I1): an Accepted flight saved at the closed airport - which the
+	// closure's own cancel never met - was due to land after the load. Before RearmSchedules, so none is armed.
+	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport, AirportOps.Present.Airport.LoadRederivesWithoutCancelling
 	if (Airport->Status() != EAirportStatus::Open)
 	{
-		FlightBoard->CancelRequeued(Requeued, Clock->Now());
+		FlightBoard->CancelUnarrivedAtLoad(Clock->Now());
 	}
 
 	// IN THIS ORDER, and both are needed. RebuildMesh regenerates the guideline graph, which
