@@ -513,4 +513,99 @@ bool FFacilityUpkeepTest::RunTest(const FString&)
 	return true;
 }
 
+/**
+ * THE REPAIR, WORLD-FREE (#266, owner 2026-09-30, option b): a depot owning more of a kind than its plot seats has the
+ * excess removed through the hook and refunded at the offer's price - one Refund line, one event per kind - and owned ==
+ * seated afterwards, so upkeep never charges for a module that is not standing. With no removal hook nothing is removed
+ * AND nothing is paid (a refund alone would be money for nothing); a plotless depot has nothing to be smaller than.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityRepairTest, "AirportOps.Model.Facility.RepairRemovesAndRefundsTheExcess",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilityRepairTest::RunTest(const FString&)
+{
+	FFacilityFixture F;
+	// Ceilings: 3 sheds, 1 pump, 1 tank. Owned: 5 sheds, 3 pumps, 2 tanks - two, two and one too many.
+	for (int32 I = 0; I < 4; ++I) { F.Net->AddEntityModule(F.Depot, EDepotModule::Shed); }
+	F.Net->AddEntityModule(F.Depot, EDepotModule::Pump);
+	F.Net->AddEntityModule(F.Depot, EDepotModule::Pump);
+	F.Net->AddEntityModule(F.Depot, EDepotModule::Tank);
+	UEntityDefinition* Def = UEntityDefinition::MakeFuelDepotTransient();
+	FEntityPlacement Plotless;
+	Plotless.Definition = Def;
+	Plotless.Anchors = Def->Anchors;
+	Plotless.Position = FVector2D(40000.0, 0.0);
+	Plotless.PoseRole = EServiceRole::Fuel;
+	Plotless.Modules = { EDepotModule::Shed, EDepotModule::Shed, EDepotModule::Shed, EDepotModule::Shed, EDepotModule::Shed };
+	const FEntityInstanceId Legacy = F.Net->PlaceEntity(Plotless);
+	TArray<FModulesRefundedEvent> Seen;
+	F.Bus.BeginWiring();
+	F.Bus.Subscribe<FModulesRefundedEvent>(EOpsTier::Presentation, TEXT("test"), [&Seen](const FModulesRefundedEvent& E) { Seen.Add(E); });
+	F.Bus.EndWiring();
+	const double Balance = F.Ledger->Balance();
+	auto Count = [&F](FEntityInstanceId Id, EDepotModule Module)
+	{
+		int32 Out = 0;
+		for (const EDepotModule Each : F.Net->GetEntity(Id)->Modules) { Out += Each == Module ? 1 : 0; }
+		return Out;
+	};
+
+	TestEqual(TEXT("with no removal hook nothing is removed"), F.Shop->RemoveUnseated(*F.Net), 0);
+	TestEqual(TEXT("and nothing is paid - a refund with no removal is money for nothing"), F.Ledger->Balance(), Balance, 1e-9);
+	TestEqual(TEXT("the sheds are all still owned"), F.Sheds(), 5);
+
+	F.Shop->ApplyModuleRemoval = [&F](FEntityInstanceId Id, EDepotModule Module, int32 Many) { return F.Net->RemoveEntityModules(Id, Module, Many); };
+	TestEqual(TEXT("the repair removes every module past its ceiling: 2 sheds, 2 pumps, 1 tank"), F.Shop->RemoveUnseated(*F.Net), 5);
+	TestEqual(TEXT("owned == seated: three sheds"), F.Sheds(), 3);
+	TestEqual(TEXT("one pump"), Count(F.Depot, EDepotModule::Pump), 1);
+	TestEqual(TEXT("one tank"), Count(F.Depot, EDepotModule::Tank), 1);
+	TestEqual(TEXT("the plotless depot keeps all five - no plot, nothing to be smaller than"), Count(Legacy, EDepotModule::Shed), 5);
+	TestEqual(TEXT("the two sheds are refunded at the offer's price"), F.Ledger->Balance(), Balance + 2.0 * 40000.0, 1e-6);
+	const FLedgerEntry& Line = F.Ledger->Entries().Last();
+	TestEqual(TEXT("on ONE line"), Line.Amount, 80000.0, 1e-6);
+	TestEqual(TEXT("in the Refund column"), static_cast<int32>(Line.Category), static_cast<int32>(ELedgerCategory::Refund));
+	TestTrue(FString::Printf(TEXT("saying what and why (%s)"), *Line.What.ToString()), Line.What.ToString().Contains(TEXT("2 x Shed")));
+	F.Bus.Drain();
+	if (TestEqual(TEXT("one event per kind removed"), Seen.Num(), 3))
+	{
+		const FModulesRefundedEvent* Sheds = Seen.FindByPredicate([](const FModulesRefundedEvent& E) { return E.Module == EDepotModule::Shed; });
+		const FModulesRefundedEvent* Pumps = Seen.FindByPredicate([](const FModulesRefundedEvent& E) { return E.Module == EDepotModule::Pump; });
+		TestTrue(TEXT("the sheds' names the depot, the count and the credit"),
+			Sheds != nullptr && Sheds->Entity == F.Depot.Index && Sheds->Count == 2 && FMath::IsNearlyEqual(Sheds->Amount, 80000.0));
+		TestTrue(TEXT("a kind the shop does not sell is removed with nothing to refund"),
+			Pumps != nullptr && Pumps->Count == 2 && Pumps->Amount == 0.0);
+	}
+	const int32 Lines = F.Ledger->Entries().Num();
+	TestEqual(TEXT("run again, there is nothing left to repair"), F.Shop->RemoveUnseated(*F.Net), 0);
+	TestEqual(TEXT("and nothing more is posted"), F.Ledger->Entries().Num(), Lines);
+	TestEqual(TEXT("upkeep charges the three standing sheds and the plotless five - none past a plot's ceiling"), F.Shop->DailyUpkeep(*F.Net).Modules, (3.0 + 5.0) * 200.0, 1e-9);
+	return true;
+}
+
+/**
+ * THE KIT SHED IS REFUNDED AT THE SHOP'S PRICE (orchestrator ruling on #469, 2026-09-30): a depot owning only the shed it
+ * was drawn with, on a plot that now seats no shed, loses the shed and is paid FModuleOffer::Price for it - the current
+ * offer, since what it cost is not recorded per module. Its tank and pump seat, and stay.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityKitShedRefundTest, "AirportOps.Model.Facility.RepairRefundsAKitShedAtTheShopPrice",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilityKitShedRefundTest::RunTest(const FString&)
+{
+	FFacilityFixture F;
+	F.ReservedSheds = 0;
+	F.Shop->ApplyModuleRemoval = [&F](FEntityInstanceId Id, EDepotModule Module, int32 Many) { return F.Net->RemoveEntityModules(Id, Module, Many); };
+	if (!TestEqual(TEXT("setup: the depot owns only its kit shed"), F.Sheds(), 1)) { return false; }
+	const double Price = F.Shop->ModuleOffers.FindChecked(EDepotModule::Shed).Price;
+	if (!TestTrue(TEXT("setup: the shop sells sheds"), Price > 0.0)) { return false; }
+	const double Balance = F.Ledger->Balance();
+
+	TestEqual(TEXT("the repair removes the one shed the plot cannot seat"), F.Shop->RemoveUnseated(*F.Net), 1);
+	TestEqual(TEXT("so the depot owns none"), F.Sheds(), 0);
+	TestEqual(TEXT("and is paid the shop's current price for it, though it came with the plot"), F.Ledger->Balance(), Balance + Price, 1e-6);
+	const FLedgerEntry& Line = F.Ledger->Entries().Last();
+	TestEqual(TEXT("on a Refund line"), static_cast<int32>(Line.Category), static_cast<int32>(ELedgerCategory::Refund));
+	TestEqual(TEXT("of exactly one shed's price"), Line.Amount, Price, 1e-6);
+	TestEqual(TEXT("its kit tank and pump seat, and stay"), F.Net->GetEntity(F.Depot)->Modules.Num(), 2);
+	return true;
+}
+
 #endif

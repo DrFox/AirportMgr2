@@ -1412,6 +1412,36 @@ bool URoadEditFacade::AddEntityModule(FEntityInstanceId Entity, EDepotModule Mod
 	return true;
 }
 
+int32 URoadEditFacade::RemoveUnseatedModules(FEntityInstanceId Entity, EDepotModule Module, int32 Count)
+{
+	URoadNetwork* Network = Actor().Network;
+	const FEntityInstance* Instance = Network != nullptr ? Network->GetEntity(Entity) : nullptr;
+	if (Instance == nullptr || !Instance->bAlive || !Instance->IsDepot())
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("RemoveUnseatedModules refused: entity %d is not a live depot"), Entity.Index);
+		return 0;
+	}
+	// REFUSED WHILE A DRAG IS OPEN, AddEntityModule's reason: the ClearHistory below would drop the drag's pending
+	// snapshot. Deferred, not lost: the repair asks again on the next network change it hears.
+	if (bInteractiveEditOpen)
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("RemoveUnseatedModules deferred: depot %d - an interactive edit is open"), Entity.Index);
+		return 0;
+	}
+	// NO SCOPE: a repair is not a step the player can undo (see the header). Notified as a Topology change, AddEntityModule's
+	// kind, so the yard and the drop count are rebuilt from the list as it now stands.
+	const int32 Removed = Network->RemoveEntityModules(Entity, Module, Count);
+	if (Removed == 0)
+	{
+		return 0;
+	}
+	NotifyChanged(EChangeKind::Topology);
+	ClearHistory();
+	UE_LOG(LogRoadMesh, Log, TEXT("Depot %d: %d unseated %s removed; undo history cleared (a repair is a checkpoint)"),
+		Entity.Index, Removed, *UEnum::GetValueAsString(Module));
+	return Removed;
+}
+
 bool URoadEditFacade::SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet)
 {
 	// Indexes the GUIDELINE graph - stale inside a batch that deferred its rebuild.

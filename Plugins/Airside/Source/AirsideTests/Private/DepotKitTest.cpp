@@ -340,7 +340,8 @@ bool FDepotKitCensusSeatsTest::RunTest(const FString& Parameters)
 	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
 	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(nullptr);
 
-	auto Census = [&](const TArray<FVector2D>& Outline, const FVector2D& Frontage, TArrayView<const PlotYard::FKitSpec> WithSpecs)
+	auto Census = [&](const TArray<FVector2D>& Outline, const FVector2D& Frontage, TArrayView<const PlotYard::FKitSpec> WithSpecs,
+		const TArray<EDepotModule>& Modules = { EDepotModule::Shed, EDepotModule::Pump })
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 		FEntityPlacement Placement;
@@ -349,7 +350,7 @@ bool FDepotKitCensusSeatsTest::RunTest(const FString& Parameters)
 		Placement.Position = Frontage;
 		Placement.PoseRole = Depot->PoseRole;
 		Placement.Outline = Outline;
-		Placement.Modules = { EDepotModule::Shed, EDepotModule::Pump };
+		Placement.Modules = Modules;
 		Net->PlaceEntity(Placement);
 		FWarningLogSpy Spy;
 		GLog->AddOutputDevice(&Spy);
@@ -380,6 +381,54 @@ bool FDepotKitCensusSeatsTest::RunTest(const FString& Parameters)
 		const TArray<FString> Lines = Census(Tiny, FVector2D(50.0, 0.0), TArrayView<const PlotYard::FKitSpec>());
 		TestEqual(TEXT("with no plot solve to ask, a depot holding a shed and a pump warns of nothing"), Lines.Num(), 0);
 	}
+	// THE TWO EMPTY DEPOTS, which FDepotCapability tells apart (#461 final review): an UNPLOTTED one with no modules is the
+	// legacy plotless depot, which the census skips - the question does not apply; a PLOTTED one with an empty kit is not
+	// legacy, its plot seats nothing, and it is warned of like any other depot missing a shed.
+	{
+		const TArray<FString> Lines = Census(TArray<FVector2D>(), FVector2D(50.0, 0.0), Specs, TArray<EDepotModule>());
+		TestEqual(TEXT("an unplotted depot with no modules is the legacy exemption: not censused at all"), Lines.Num(), 0);
+	}
+	{
+		const TArray<FString> Lines = Census(Roomy, FVector2D(2500.0, 0.0), Specs, TArray<EDepotModule>());
+		TestTrue(FString::Printf(TEXT("a plotted depot with an empty kit is warned of, owning none (%s)"), *FString::Join(Lines, TEXT(" | "))),
+			Says(Lines, TEXT("no shed placed (0 owned)")));
+		TestTrue(TEXT("and of its missing pump"), Says(Lines, TEXT("no pump placed (0 owned)")));
+	}
+	return true;
+}
+
+/**
+ * THE PLACEMENT'S REFUSAL, WORLD-FREE (#266): DepotKit::WhyUnseated over a reservation whose ceilings are known. Empty when
+ * every module of the mix seats; otherwise naming each kind that does not, as seated-of-owned, and the total.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDepotKitWhyUnseatedTest,
+	"Airside.Build.DepotKitWhyUnseatedNamesWhatDoesNotFit",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDepotKitWhyUnseatedTest::RunTest(const FString& Parameters)
+{
+	// Two tank stands and one pump stand, no shed: KitIndex IS the EDepotModule (DepotKitSpecs walks the enum).
+	PlotYard::FReservation Reservation;
+	PlotYard::FReservedStand Tanks;
+	Tanks.KitIndex = static_cast<int32>(EDepotModule::Tank);
+	Tanks.RunLength = 2;
+	PlotYard::FReservedStand Pump;
+	Pump.KitIndex = static_cast<int32>(EDepotModule::Pump);
+	Reservation.Stands = { Tanks, Pump };
+
+	TestTrue(TEXT("a mix it holds is not refused"),
+		DepotKit::WhyUnseated(Reservation, { EDepotModule::Tank, EDepotModule::Tank, EDepotModule::Pump }).IsEmpty());
+	TestTrue(TEXT("nor is an empty mix - nothing to seat"), DepotKit::WhyUnseated(Reservation, {}).IsEmpty());
+
+	const FString Why = DepotKit::WhyUnseated(Reservation, DepotKit::StarterModules());
+	TestTrue(FString::Printf(TEXT("the starter mix is refused, naming the shed that does not fit (%s)"), *Why), Why.Contains(TEXT("Sheds 0 of 1")));
+	TestFalse(TEXT("and not the kinds that do"), Why.Contains(TEXT("Tanks")) || Why.Contains(TEXT("Pumps")));
+	TestTrue(TEXT("with the count seated out of the mix"), Why.Contains(TEXT("seats 2 of its 3")));
+
+	const FString Pumps = DepotKit::WhyUnseated(Reservation, { EDepotModule::Pump, EDepotModule::Pump, EDepotModule::Shed });
+	TestTrue(FString::Printf(TEXT("every kind short is named (%s)"), *Pumps), Pumps.Contains(TEXT("Pumps 1 of 2")) && Pumps.Contains(TEXT("Sheds 0 of 1")));
+	TestEqual(TEXT("the starter mix is one of each"), DepotKit::StarterModules().Num(), 3);
 	return true;
 }
 

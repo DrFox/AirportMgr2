@@ -481,8 +481,23 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 		// builds, exactly as it did before reservation existed. Only a plot that would place
 		// NOTHING AT ALL is refused, which is what FPlotPlaceTool's own readout already warns
 		// about ("This plot holds nothing") - the same evaluator, the same threshold.
+		// (#266 NARROWED "still builds" to a plot whose STARTER MIX fits - the check below: no
+		// tank room is fine for the ceiling, not for a depot that starts with a tank.)
 		UE_LOG(LogRoadMesh, Warning,
 			TEXT("PlaceEntityInPlot refused: this plot has no room to reserve anything."));
+		return INDEX_NONE;
+	}
+
+	// NOR A PLOT THAT CANNOT SEAT WHAT IT STARTS WITH (#266, owner 2026-09-30): "the modules that count are only the ones
+	// that are placed", so a starter mix the reservation cannot hold would be paid for and dropped - the 550 m2 depot that
+	// built one of its three. The partial fit above is still ordinary for the plot's CEILING (room to grow into); what is
+	// refused is starting with more than it holds. THE TOOL'S READOUT ASKS THE SAME FUNCTION over the same solve, so Build
+	// is never lit over a plot refused here. Refused BEFORE the quote, like the rest: nothing is charged.
+	// ENFORCED BY: Airside.Tool.PlotPlace.RefusesAPlotThatCannotSeatTheStarterMix, Airside.Present.MutatorNotifiesExactlyOnce.PlaceEntityInPlot.Unseated
+	const FString Unseated = DepotKit::WhyUnseated(Reservation, Modules);
+	if (!Unseated.IsEmpty())
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("PlaceEntityInPlot refused: %s"), *Unseated);
 		return INDEX_NONE;
 	}
 

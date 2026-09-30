@@ -268,3 +268,37 @@ TOptional<PlotYard::FReservation> DepotKit::ReservationOf(const FEntityInstance&
 	const EPlotLayout Layout = Depot.Definition != nullptr ? Depot.Definition->Layout : EPlotLayout::Scatter;
 	return PlotLayoutFor(Layout)->Solve(Site, Specs);
 }
+
+TArray<EDepotModule> DepotKit::StarterModules()
+{
+	return { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
+}
+
+FString DepotKit::WhyUnseated(const PlotYard::FReservation& Reservation, TConstArrayView<EDepotModule> Modules)
+{
+	// A PLOT, by construction: the reservation was solved for drawn ground. INDEXED BY EDepotModule, as every spec table
+	// here is (DepotKitSpecs walks the enum), so a kind's ceiling is its own index's.
+	const FDepotCapability Capability = FDepotCapability::Seat(Modules, /*bHasPlot=*/true,
+		[&Reservation](EDepotModule Module) { return Reservation.CeilingFor(static_cast<int32>(Module)); });
+
+	// EVERY KIND THAT DOES NOT FIT, named with its count - "Sheds 0 of 1" - so the player reads WHICH building wants the
+	// room, not only that something does. Labels are DepotKitLabel's, the readout's own kit rows.
+	FString Short;
+	int32 Seated = 0;
+	for (int32 Kind = 0; Kind < FDepotCapability::KindCount; ++Kind)
+	{
+		const EDepotModule Module = static_cast<EDepotModule>(Kind);
+		Seated += Capability.SeatedOf(Module);
+		if (Capability.UnseatedOf(Module) > 0)
+		{
+			Short += FString::Printf(TEXT("%s%s %d of %d"), Short.IsEmpty() ? TEXT("") : TEXT(", "),
+				*DepotKitLabel(Module), Capability.SeatedOf(Module), Capability.OwnedOf(Module));
+		}
+	}
+	if (Short.IsEmpty())
+	{
+		return FString();
+	}
+	return FString::Printf(TEXT("the plot seats %d of its %d starter modules (%s) - draw it larger"),
+		Seated, Modules.Num(), *Short);
+}

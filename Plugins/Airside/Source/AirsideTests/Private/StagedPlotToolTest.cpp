@@ -193,6 +193,10 @@ bool FStagedPlotToolsShareOneSkeletonTest::RunTest(const FString& Parameters)
 	DepotTarget.Definition = UEntityDefinition::MakeFuelDepotTransient();
 
 	FPlotPlaceTool DepotTool(EPlaceableEntity::FuelDepot);
+	// THE ONE KIND THIS TARGET'S KIT TABLE OFFERS (#266): its single spec is index 0, the shed, so the starter mix's tank
+	// and pump would have no ceiling, and a plot that cannot seat what it starts with is refused - Committable false for a
+	// reason that is not this test's. The mix is the table's one kind instead.
+	DepotTool.SetModules({ EDepotModule::Shed });
 	FStagedPlotTool& DepotSeam = DepotTool;
 
 	TArray<int32> DepotTrace;

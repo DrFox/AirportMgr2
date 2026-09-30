@@ -343,8 +343,12 @@ bool FFleetSeedingReopensTest::RunTest(const FString&)
 	TestEqual(TEXT("the Step seeded the starter truck"), Board->GetVehicles().Num(), 1);
 	const FServiceJob* After = Board->GetJobs().FindByPredicate([JobId](const FServiceJob& J) { return J.Id == JobId; });
 	if (!TestNotNull(TEXT("the job is still on the board"), After)) { return false; }
-	TestNotEqual(TEXT("and it was asked again: its old NoVehicles is gone, the vehicle it lacked now exists"),
-		static_cast<int32>(After->Why), static_cast<int32>(EServiceRefusal::NoVehicles));
+	// THE EXACT POST-STATE, not merely "not NoVehicles" (#461 final review): a Why that moved to ANY other value passed the
+	// old assertion, including a job the re-open had left Queued on nothing. Refused again, and named for the road.
+	TestEqual(TEXT("and it was asked again: refused afresh, still Unserviceable"),
+		static_cast<int32>(After->State), static_cast<int32>(EServiceJobState::Unserviceable));
+	TestEqual(TEXT("for the road it has none of - NoRoad - not for the vehicle that now exists"),
+		static_cast<int32>(After->Why), static_cast<int32>(EServiceRefusal::NoRoad));
 	return true;
 }
 

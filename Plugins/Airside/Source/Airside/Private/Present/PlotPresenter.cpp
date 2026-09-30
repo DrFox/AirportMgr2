@@ -9,6 +9,7 @@
 #include "Components/SceneComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Entities/EntityDefinition.h"
+#include "Model/DepotCapability.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Present/DynamicMeshSink.h"
@@ -615,15 +616,20 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 
 		// HOW MANY OF EACH THE PLAYER HAS BOUGHT. Entity.Modules is still the owned list and
 		// still this depot's only record in the save.
-		TArray<int32> Owned;
-		Owned.SetNumZeroed(Specs.Num());
-		for (const EDepotModule Module : Entity.Modules)
+		//
+		// AND HOW MANY OF THOSE THE PLOT SEATS - through FDepotCapability::Seat against this very
+		// reservation's ceilings (#266), so "placed" has ONE implementation: the modules this loop
+		// lights are exactly the ones the job board counts pumps from and the shop counts bays
+		// from. It used to clamp the owned count run by run itself, a second copy of the rule that
+		// agreed with Seat only because both happened to compute min(owned, sum of runs).
+		// ENFORCED BY: Check-Architecture rule 45 (capability-from-the-view scans this file),
+		// Airside.Present.PlotPresenterDrawsExactlyTheSeatedModules
+		const FDepotCapability Capability = FDepotCapability::Seat(Entity,
+			[&Reservation](EDepotModule Module) { return Reservation.CeilingFor(static_cast<int32>(Module)); });
+		int32 SeatedLeft[FDepotCapability::KindCount];
+		for (int32 Kind = 0; Kind < FDepotCapability::KindCount; ++Kind)
 		{
-			const int32 Kit = static_cast<int32>(Module);
-			if (Owned.IsValidIndex(Kit))
-			{
-				++Owned[Kit];
-			}
+			SeatedLeft[Kind] = Capability.Seated[Kind];
 		}
 
 		// MODULES ONLY IN Placed since 2026-09-22 - the fence draws into its own components, so
@@ -631,7 +637,7 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 		// The ghosts go in their own component, so they never enter that count at all.
 		for (const PlotYard::FReservedStand& Stand : Reservation.Stands)
 		{
-			if (!Specs.IsValidIndex(Stand.KitIndex))
+			if (!Specs.IsValidIndex(Stand.KitIndex) || Stand.KitIndex >= FDepotCapability::KindCount)
 			{
 				continue;
 			}
@@ -642,8 +648,11 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 			// A RUN FILLS FROM ONE END. Bays the player owns are drawn solid at that end and
 			// the rest ghosted, so a run visibly GROWS along its length rather than appearing
 			// whole. Boxes, a baked mesh per span, or parts laid bay by bay - see DrawMeshes.
-			const int32 Lit = FMath::Clamp(Owned[Stand.KitIndex], 0, Stand.RunLength);
-			Owned[Stand.KitIndex] -= Lit;
+			// THE SEATED COUNT, dealt out run by run in placement order: Seat's ceiling is the sum
+			// of these runs (FReservation::CeilingFor), so what it seats always finds a run with room.
+			// ENFORCED BY: Airside.Present.PlotPresenterDrawsExactlyTheSeatedModules (lit == seated, per kind)
+			const int32 Lit = FMath::Clamp(SeatedLeft[Stand.KitIndex], 0, Stand.RunLength);
+			SeatedLeft[Stand.KitIndex] -= Lit;
 			const int32 Dark = Stand.RunLength - Lit;
 
 			// Along the run's own width axis, which is the stand's LEFT - StandCorners builds
@@ -703,14 +712,42 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 		}
 
 		// AN OWNED MODULE THAT RESERVED NO STAND IS A DROP. Every stand of a kit already took
-		// what it could hold (the Owned[Kit] -= Lit above), so whatever is left over is a
-		// module the player bought that the reservation never offered any ground - the case
-		// GetDroppedCount's own comment calls a bug rather than a refusal. This is the ++Dropped
-		// the run-length rewrite (61f92fc) deleted along with the old one-module-per-stand loop;
-		// see Airside.Present.PlotPresenterCountsDrops.
-		for (const int32 Leftover : Owned)
+		// what it could hold (the SeatedLeft[Kit] -= Lit above, Seat's own count), so whatever is
+		// owned and not seated is a module the player bought that the reservation never offered
+		// any ground - the case GetDroppedCount's own comment calls a bug rather than a refusal.
+		// This is the ++Dropped the run-length rewrite (61f92fc) deleted along with the old
+		// one-module-per-stand loop; see Airside.Present.PlotPresenterCountsDrops.
+		//
+		// SAID PER PLOT, with its pose, its extents and the kinds (#266): the census line below
+		// names a count and no plot, so the PIE report that started #266 could not be traced back
+		// to a depot from the log. Nothing places a dropping depot any more - this fires when a
+		// plot seats less than it did (a kit, layout or frontage change, an old save) and until the
+		// ops runtime's repair removes and refunds the excess.
+		// ENFORCED BY: Airside.Tool.PlotPlace.RefusesAPlotThatCannotSeatTheStarterMix (a placement),
+		// AirportOps.Model.Facility.UnseatedModulesGrantNeitherBaysNorPumps (a purchase past the ceiling)
+		int32 PlotDropped = 0;
+		FString DroppedKinds;
+		for (int32 Kind = 0; Kind < FDepotCapability::KindCount; ++Kind)
 		{
-			Dropped += Leftover;
+			const EDepotModule Module = static_cast<EDepotModule>(Kind);
+			const int32 Unseated = Capability.UnseatedOf(Module);
+			if (Unseated > 0)
+			{
+				PlotDropped += Unseated;
+				DroppedKinds += FString::Printf(TEXT("%s%s %d of %d"), DroppedKinds.IsEmpty() ? TEXT("") : TEXT(", "),
+					*DepotKitLabel(Module), Capability.SeatedOf(Module), Capability.OwnedOf(Module));
+			}
+		}
+		Dropped += PlotDropped;
+		if (PlotDropped > 0)
+		{
+			const FBox2D Extents(Entity.Outline);
+			UE_LOG(LogAirside, Warning,
+				TEXT("Plots: the plot gated at (%.0f, %.0f), %.1f x %.1f m (%s, %s), seats only %s - %d owned module(s) dropped"),
+				Entity.Position.X, Entity.Position.Y, Extents.GetSize().X / 100.0, Extents.GetSize().Y / 100.0,
+				*GetNameSafe(Entity.Definition),
+				*UEnum::GetValueAsString(Entity.Definition != nullptr ? Entity.Definition->Layout : EPlotLayout::Scatter),
+				*DroppedKinds, PlotDropped);
 		}
 
 		// --- The fence -----------------------------------------------------------------

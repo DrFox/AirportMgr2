@@ -97,6 +97,23 @@ namespace
 		return Actor->Network->PlaceEntity(Placement);
 	}
 
+	/**
+	 * LogAirside at Warning, verbatim - the per-plot drop line (#266). Its own name: DepotKitTest's spy lives in another
+	 * file's anonymous namespace and the module is a unity build. Unbuffered for FLogLineSpy's reason (issue #216).
+	 */
+	struct FPlotDropWarningSpy : public FOutputDevice
+	{
+		TArray<FString> Lines;
+		virtual bool CanBeUsedOnMultipleThreads() const override { return true; }
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& InCategory) override
+		{
+			if (InCategory == FName(TEXT("LogAirside")) && Verbosity == ELogVerbosity::Warning)
+			{
+				Lines.Add(FString(V));
+			}
+		}
+	};
+
 	/** Every instance the plot presenter is holding, in the order it added them. */
 	TArray<FTransform> PlotInstances(const AAirsideBuildingsActor* Buildings)
 	{
@@ -510,7 +527,10 @@ bool FPlotPresenterCountsDropsTest::RunTest(const FString& Parameters)
 	Placement.Outline = DeepPlotAt(0.0);
 	Placement.Modules = Modules;
 	Actor->Network->PlaceEntity(Placement);
+	FPlotDropWarningSpy Spy;
+	GLog->AddOutputDevice(&Spy);
 	Actor->RebuildMesh();
+	GLog->RemoveOutputDevice(&Spy);
 
 	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
 
@@ -538,6 +558,17 @@ bool FPlotPresenterCountsDropsTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("every pump beyond the ceiling is dropped, not silently discarded"),
 		Plots->GetDroppedCount(), 50 - PumpCeiling);
+
+	// AND SAID PER PLOT (#266): the census line names a count and no plot, so the PIE report behind #266 could not be traced
+	// to a depot. The Warning names its pose, its extents, its kit and how many it dropped.
+	const FString Expected = FString::Printf(TEXT("Pumps %d of 50 - %d owned module(s) dropped"), PumpCeiling, 50 - PumpCeiling);
+	const FString* Line = Spy.Lines.FindByPredicate([](const FString& L) { return L.StartsWith(TEXT("Plots: the plot gated at")); });
+	if (TestNotNull(FString::Printf(TEXT("a per-plot drop Warning (%s)"), *FString::Join(Spy.Lines, TEXT(" | "))), Line))
+	{
+		TestTrue(FString::Printf(TEXT("naming the pose, the extents, the kit and the drop (%s)"), **Line),
+			Line->Contains(TEXT("(1000, 0)")) && Line->Contains(TEXT("20.0 x 24.0 m")) && Line->Contains(TEXT("FuelYardBands"))
+			&& Line->Contains(Expected));
+	}
 
 	return true;
 }

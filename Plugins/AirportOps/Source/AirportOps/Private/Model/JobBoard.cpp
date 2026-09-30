@@ -497,8 +497,8 @@ void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, 
 		const int32 WithdrawnId = Vehicle.Id;
 		if (!Fleet().Withdraw(WithdrawnId, EFleetReason::DepotRemoved, Clock.Now()))
 		{
-			// NOT EXPECTED - the vehicle was just read off this array - but a vehicle left behind would be credited again
-			// by every later Step, so it is said rather than assumed away.
+			// NOT EXPECTED - the vehicle was just read off this array - but a vehicle left behind would be retried and
+			// re-released every Step, so it is said rather than assumed away.
 			UE_LOG(LogAirportOps, Warning, TEXT("Fleet: vehicle %d of a removed depot could not be withdrawn"), WithdrawnId);
 		}
 	}

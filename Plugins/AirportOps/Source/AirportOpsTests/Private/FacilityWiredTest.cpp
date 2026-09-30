@@ -10,10 +10,12 @@
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
 #include "Model/OpsDefinition.h"
+#include "Model/OpsEvents.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
+#include "OpsEventsTestListener.h"
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Present/AirsideBuildingsActor.h"
@@ -454,10 +456,21 @@ bool FFacilityCapabilitySeamTest::RunTest(const FString&)
 	Runtime->Attach(Actor);
 	TArray<EDepotModule> Owned;
 	for (int32 I = 0; I < 50; ++I) { Owned.Add(EDepotModule::Shed); Owned.Add(EDepotModule::Pump); }
+	// THROUGH THE MODEL since #266: the gesture (PlaceEntityInPlot) now refuses a plot that cannot seat what it starts with,
+	// so a depot owning more than its plot holds is what only an old save or a content change makes. No Tick below, so
+	// the runtime's repair pass has not run and the excess is still owned when the seat is read.
 	const TArray<FVector2D> Plot = FacilityWiredWidePlot();
-	const int32 Index = Actor->PlaceEntityInPlot(Plot, Plot[0], Plot[1], Owned, EPlaceableEntity::FuelDepot);
-	if (!TestTrue(TEXT("setup: the depot is placed"), Index != INDEX_NONE)) { return false; }
-	const FEntityInstanceId Depot = Actor->Network->EntityIdAt(Index);
+	FEntityPlacement Placement;
+	Placement.Definition = Actor->FuelDepotDefinition;
+	Placement.Anchors = Actor->FuelDepotDefinition->Anchors;
+	Placement.Position = (Plot[0] + Plot[1]) * 0.5;
+	Placement.Heading = UE_DOUBLE_HALF_PI;
+	Placement.PoseRole = EServiceRole::Fuel;
+	Placement.Outline = Plot;
+	Placement.Modules = Owned;
+	const FEntityInstanceId Depot = Actor->Network->PlaceEntity(Placement);
+	if (!TestTrue(TEXT("setup: the depot is placed"), Depot.IsSet())) { return false; }
+	Actor->RebuildMesh();
 	const FEntityInstance& Placed = *Actor->Network->GetEntity(Depot);
 
 	// THE ORACLE IS THE PLOT SOLVE ITSELF, asked here directly: what the presenter draws from.
@@ -494,9 +507,220 @@ bool FFacilityDetachClearsHooksTest::RunTest(const FString&)
 		static_cast<bool>(Runtime->GetJobBoard()->ModuleCeilingOf));
 	TestFalse(TEXT("the ceiling hook is cleared"), static_cast<bool>(Shop->ReservedSlotsOf));
 	TestFalse(TEXT("the module hook is cleared"), static_cast<bool>(Shop->ApplyModulePurchase));
+	TestFalse(TEXT("and the repair's removal hook (#266) - left set, it would remove modules from a field nobody drives"),
+		static_cast<bool>(Shop->ApplyModuleRemoval));
 	const FFacilityQuote Q = Shop->Quote(*TestWorld.Actor->Network, Depot);
 	TestTrue(TEXT("the shed row refuses NotAFacility"),
 		Q.Modules.Num() == 1 && Q.Modules[0].Refusal == EPurchaseRefusal::NotAFacility);
+	return true;
+}
+
+namespace
+{
+	/** LogAirportOps at Warning, verbatim - the repair's line (#266). Unbuffered for FLogLineSpy's reason (issue #216). */
+	struct FRepairWarningSpy : public FOutputDevice
+	{
+		TArray<FString> Lines;
+		virtual bool CanBeUsedOnMultipleThreads() const override { return true; }
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& InCategory) override
+		{
+			if (InCategory == FName(TEXT("LogAirportOps")) && Verbosity == ELogVerbosity::Warning)
+			{
+				Lines.Add(FString(V));
+			}
+		}
+	};
+
+	/** Owned modules of Kind on Depot, read off the model. */
+	int32 FacilityWiredOwned(const ARoadNetworkActor& Actor, FEntityInstanceId Depot, EDepotModule Kind)
+	{
+		const FEntityInstance* Entity = Actor.Network->GetEntity(Depot);
+		int32 Count = 0;
+		for (const EDepotModule Each : Entity != nullptr ? Entity->Modules : TArray<EDepotModule>()) { Count += Each == Kind ? 1 : 0; }
+		return Count;
+	}
+
+	/** Refund lines on the ledger. */
+	int32 FacilityWiredRefunds(const ULedger& Ledger)
+	{
+		return Ledger.Entries().FilterByPredicate([](const FLedgerEntry& E) { return E.Category == ELedgerCategory::Refund; }).Num();
+	}
+}
+
+/**
+ * #266 ITEM 4: THE PURCHASE CEILING IS THE PRESENTER'S SEAT, FOR EVERY MODULE KIND. The shop refuses a module once owned
+ * reaches ReservedSlotsOf (the runtime's plot solve); the presenter stands min(owned, ceiling) of each. If the two ever
+ * read different plots, a Buy would light for a module the presenter then drops - or grey one it would stand. Fifty of ONE
+ * kind per depot, so the presenter's module count is that kind's seat and its drop count the rest.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityCeilingIsTheSeatTest, "AirportOps.Present.Facility.PurchaseCeilingIsThePresentersSeatForEveryKind",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilityCeilingIsTheSeatTest::RunTest(const FString&)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	const UFacilityPurchases* Shop = Runtime->GetFacilityPurchases();
+	if (!TestTrue(TEXT("setup: the runtime wired the shop's ceiling hook"), static_cast<bool>(Shop->ReservedSlotsOf))) { return false; }
+	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
+	const TArray<FVector2D> Plot = FacilityWiredWidePlot();
+	for (int32 Kind = 0; Kind < FDepotCapability::KindCount; ++Kind)
+	{
+		const EDepotModule Module = static_cast<EDepotModule>(Kind);
+		const FString Name = UEnum::GetValueAsString(Module);
+		Actor->ClearNetwork();
+		FEntityPlacement Placement;
+		Placement.Definition = Actor->FuelDepotDefinition;
+		Placement.Anchors = Actor->FuelDepotDefinition->Anchors;
+		Placement.Position = (Plot[0] + Plot[1]) * 0.5;
+		Placement.Heading = UE_DOUBLE_HALF_PI;
+		Placement.PoseRole = EServiceRole::Fuel;
+		Placement.Outline = Plot;
+		for (int32 I = 0; I < 50; ++I) { Placement.Modules.Add(Module); }
+		const FEntityInstanceId Depot = Actor->Network->PlaceEntity(Placement);
+		Actor->RebuildMesh();
+		const FEntityInstance* Placed = Actor->Network->GetEntity(Depot);
+		if (!TestNotNull(*FString::Printf(TEXT("fifty %s: the depot is placed"), *Name), Placed)) { return false; }
+		const int32 Ceiling = Shop->ReservedSlotsOf(Depot, *Placed, Module);
+		if (!TestTrue(*FString::Printf(TEXT("fifty %s: the plot holds some and fewer than fifty - or this proves nothing"), *Name),
+			Ceiling > 0 && Ceiling < 50)) { return false; }
+		TestEqual(*FString::Printf(TEXT("fifty %s: the purchase ceiling is exactly what the presenter stands"), *Name), Plots->GetModuleCount(), Ceiling);
+		TestEqual(*FString::Printf(TEXT("fifty %s: and the rest is what it drops"), *Name), Plots->GetDroppedCount(), 50 - Ceiling);
+	}
+
+	// A PLOTLESS DEPOT HAS NO CEILING TO BUY INTO: the runtime's hook answers 0 for no plot, so nothing can be bought into one
+	// - which is why an unplotted depot WITH modules has no production path (FDepotCapability's legacy note).
+	Actor->ClearNetwork();
+	UEntityDefinition* Plain = Actor->FuelDepotDefinition;
+	const FEntityInstanceId Plotless = Actor->Network->PlaceEntity(Plain, Plain->Anchors, FVector2D(30000.0, 0.0), 0.0, 0.0, EServiceRole::Fuel, 0);
+	TestEqual(TEXT("a plotless depot's shed is refused: no plot, no slot"),
+		static_cast<int32>(Runtime->BuyModule(Plotless, EDepotModule::Shed).Refusal), static_cast<int32>(EPurchaseRefusal::NoSlotReserved));
+	return true;
+}
+
+/**
+ * #266 THE REPAIR, THROUGH THE RUNTIME, ON A NETWORK CHANGE (owner 2026-09-30, option b): a depot whose plot SHRANK under
+ * it - a stand-in for a kit, layout or frontage-recovery change - owns a shed the plot no longer seats. The next network
+ * change runs the ModuleRepair pass: the shed leaves through the facade's door (the presenter drops nothing, undo holds
+ * nothing), its price comes back as a Refund line, the log names the depot and the modules, and the player gets a Warning
+ * toast. Unwired - no pass, no hook, no subscriber - the shed stays owned, unplaced and charged upkeep.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityRepairWiredTest, "AirportOps.Present.Facility.RepairRemovesAndRefundsUnseated",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilityRepairWiredTest::RunTest(const FString&)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	UOpsRuntime* Runtime = nullptr;
+	const FEntityInstanceId Depot = FacilityWiredDepot(TestWorld, Runtime);
+	if (!TestTrue(TEXT("setup: the depot is placed"), Depot.IsSet())) { return false; }
+	if (!TestTrue(TEXT("setup: a second shed is bought"), Runtime->BuyModule(Depot, EDepotModule::Shed).Succeeded())) { return false; }
+	constexpr float Step = 1.0f / 30.0f;
+	Runtime->Tick(Step);
+	ULedger* Ledger = Runtime->GetLedger();
+	if (!TestEqual(TEXT("setup: the attach's catch-up finds nothing to repair on a depot that seats what it owns"), FacilityWiredRefunds(*Ledger), 0)) { return false; }
+	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
+	Runtime->GetEvents()->OnWarning.AddDynamic(Listener, &UOpsEventsTestListener::OnNote);
+
+	// THE PLOT SHRINKS UNDER THE DEPOT: 20 m of frontage centred on the same gate, so the frontage recovered from the pose
+	// is still the road edge and only the room changes.
+	const FVector2D Gate = Actor->Network->GetEntity(Depot)->Position;
+	const TArray<FVector2D> Narrow = { Gate + FVector2D(-1000.0, 0.0), Gate + FVector2D(1000.0, 0.0),
+		Gate + FVector2D(1000.0, 2400.0), Gate + FVector2D(-1000.0, 2400.0) };
+	if (!TestTrue(TEXT("setup: the plot is narrowed"), FRoadNetworkTestAccess(*Actor->Network).SetEntityOutlineForTest(Depot, Narrow))) { return false; }
+
+	// A NETWORK CHANGE - the player lays a road elsewhere - is what the pass listens for. It also moves the edit revision the
+	// runtime's ceiling memo is keyed on, which the test-only outline write above does not (no production path re-plots).
+	const uint32 Revision = Actor->Network->GetGuidelineRevision();
+	const int32 A = Actor->PlaceNode(FVector2D(-30000.0, 30000.0));
+	const int32 B = Actor->PlaceNode(FVector2D(-10000.0, 30000.0));
+	static_cast<IRoadEditTarget*>(Actor)->ConnectNodes(A, B, ERoadKind::ServiceRoad, INDEX_NONE);
+	if (!TestTrue(TEXT("setup: laying a road moved the guideline revision - the change the runtime publishes"),
+		Actor->Network->GetGuidelineRevision() != Revision)) { return false; }
+	const int32 Seats = Runtime->GetFacilityPurchases()->ReservedSlotsOf(Depot, *Actor->Network->GetEntity(Depot), EDepotModule::Shed);
+	if (!TestTrue(FString::Printf(TEXT("setup: the narrow plot seats fewer than the two sheds owned (%d)"), Seats), Seats < 2)) { return false; }
+	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
+	if (!TestEqual(TEXT("setup: before the pass, the presenter drops the shed the plot cannot seat"), Plots->GetDroppedCount(), 2 - Seats)) { return false; }
+	const double Balance = Ledger->Balance();
+
+	FRepairWarningSpy Spy;
+	GLog->AddOutputDevice(&Spy);
+	Runtime->Tick(Step);
+	GLog->RemoveOutputDevice(&Spy);
+
+	TestEqual(TEXT("the pass removed the unseated sheds: owned == placed"), FacilityWiredOwned(*Actor, Depot, EDepotModule::Shed), Seats);
+	TestEqual(TEXT("through the facade's door - the presenter was rebuilt and drops nothing"), Plots->GetDroppedCount(), 0);
+	TestFalse(TEXT("and the repair left nothing to undo"), Actor->GetEditFacade()->CanUndo());
+	TestEqual(TEXT("refunded at the shed's price"), Ledger->Balance(), Balance + (2 - Seats) * 40000.0, 1e-6);
+	TestEqual(TEXT("on one Refund line"), FacilityWiredRefunds(*Ledger), 1);
+	const FString Expected = FString::Printf(TEXT("depot %d at"), Depot.Index);
+	TestTrue(FString::Printf(TEXT("the log names the depot and the modules (%s)"), *FString::Join(Spy.Lines, TEXT(" | "))),
+		Spy.Lines.ContainsByPredicate([&Expected](const FString& L) { return L.Contains(TEXT("Repair: ")) && L.Contains(Expected) && L.Contains(TEXT("owned 2 Shed")); }));
+	TestTrue(FString::Printf(TEXT("the player is toasted a Warning (%s)"), *FString::Join(Listener->Seen, TEXT(" | "))),
+		Listener->CountOf(TEXT("note:No room on its plot")) == 1);
+	TestEqual(TEXT("upkeep charges only the standing sheds"), Runtime->GetFacilityPurchases()->DailyUpkeep(*Actor->Network).Modules, Seats * 200.0, 1e-9);
+
+	Runtime->Tick(Step);
+	TestEqual(TEXT("once repaired, the next frame repairs nothing"), FacilityWiredRefunds(*Ledger), 1);
+	return true;
+}
+
+/**
+ * #266 THE REPAIR ON ATTACH AND ON LOAD: a depot owning more sheds than its plot seats - the state an old save or a kit
+ * change leaves - is repaired on the first frame after the runtime attaches, and again on the first frame after a LOAD
+ * that brings the over-owned depot back. Both ride the catch-up MarkAllDirty, which is what makes a load's repair land
+ * AFTER the ledger is restored: run inside the restore, the refund would be overwritten by the saved balance.
+ *
+ * THE SAVE IS ONE FROM BEFORE THE REPAIR EXISTED: SaveToSlot drains the bus first, so a save made by this build is always
+ * repaired - a property worth having, and the reason the removal hook is unset while saving here, as a build without #266
+ * had none. The runtime is then attached afresh, as a new session is.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityRepairAfterLoadTest, "AirportOps.Present.Facility.RepairRunsAfterALoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilityRepairAfterLoadTest::RunTest(const FString&)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	Actor->PlaceNode(FVector2D(0.0, 40000.0));
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	const TArray<FVector2D> Plot = FacilityWiredWidePlot();
+	const int32 Index = Actor->PlaceEntityInPlot(Plot, Plot[0], Plot[1], DepotKit::StarterModules(), EPlaceableEntity::FuelDepot);
+	if (!TestTrue(TEXT("setup: the depot is placed"), Index != INDEX_NONE)) { return false; }
+	const FEntityInstanceId Depot = Actor->Network->EntityIdAt(Index);
+	for (int32 I = 0; I < 20; ++I) { Actor->Network->AddEntityModule(Depot, EDepotModule::Shed); }
+	Actor->RebuildMesh();
+
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	const int32 Seats = Runtime->GetFacilityPurchases()->ReservedSlotsOf(Depot, *Actor->Network->GetEntity(Depot), EDepotModule::Shed);
+	if (!TestTrue(FString::Printf(TEXT("setup: the plot seats fewer than the twenty-one sheds (%d)"), Seats), Seats > 0 && Seats < 21)) { return false; }
+	const FString Slot = TEXT("AirportOpsTest_RepairAfterLoad");
+	Runtime->GetFacilityPurchases()->ApplyModuleRemoval = nullptr;
+	if (!TestTrue(TEXT("setup: saved while over-owned"), Runtime->SaveToSlot(Slot))) { return false; }
+	if (!TestEqual(TEXT("setup: with no removal hook the save's own drain removed nothing"), FacilityWiredOwned(*Actor, Depot, EDepotModule::Shed), 21)) { return false; }
+	ULedger* Ledger = Runtime->GetLedger();
+	const double Saved = Ledger->Balance();
+
+	Runtime->Attach(Actor);
+	TestEqual(TEXT("setup: the new session opens at the saved balance"), Ledger->Balance(), Saved, 1e-6);
+	constexpr float Step = 1.0f / 30.0f;
+	Runtime->Tick(Step);
+	TestEqual(TEXT("the attach's first frame repairs: owned == placed"), FacilityWiredOwned(*Actor, Depot, EDepotModule::Shed), Seats);
+	TestEqual(TEXT("and refunds the excess"), Ledger->Balance(), Saved + (21 - Seats) * 40000.0, 1e-6);
+
+	if (!TestTrue(TEXT("the over-owned save loads"), Runtime->LoadFromSlot(Slot))) { return false; }
+	TestEqual(TEXT("setup: the load brought the twenty-one sheds back"), FacilityWiredOwned(*Actor, Depot, EDepotModule::Shed), 21);
+	TestEqual(TEXT("setup: and the balance from before the refund"), Ledger->Balance(), Saved, 1e-6);
+	Runtime->Tick(Step);
+	TestEqual(TEXT("the load's first frame repairs again: owned == placed"), FacilityWiredOwned(*Actor, Depot, EDepotModule::Shed), Seats);
+	TestEqual(TEXT("refunded once, on top of the restored balance"), Ledger->Balance(), Saved + (21 - Seats) * 40000.0, 1e-6);
+	TestEqual(TEXT("on one Refund line - the loaded ledger had none"), FacilityWiredRefunds(*Ledger), 1);
+	TestEqual(TEXT("and the presenter drops nothing"), TestWorld.Buildings->GetPlotPresenter()->GetDroppedCount(), 0);
 	return true;
 }
 

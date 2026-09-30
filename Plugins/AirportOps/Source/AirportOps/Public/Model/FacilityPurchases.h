@@ -169,6 +169,13 @@ public:
 	TFunction<bool(FEntityInstanceId Id, EDepotModule Module)> ApplyModulePurchase;
 
 	/**
+	 * Remove up to Count of Module from the depot, rebuild its yard, push no undo step and clear the history -
+	 * URoadEditFacade::RemoveUnseatedModules in production; returns how many went. UNSET removes nothing, so
+	 * RemoveUnseated refunds nothing: a refund with no removal would be free money. ApplyModulePurchase's pattern.
+	 */
+	TFunction<int32(FEntityInstanceId Id, EDepotModule Module, int32 Count)> ApplyModuleRemoval;
+
+	/**
 	 * Vehicle bays Depot's SEATED modules grant (#443, ruled 2026-09-30): the modules the plot could not seat grant
 	 * nothing, so the card never quotes a bay the player cannot see. With no ceiling hook (a world-free shop) the owned
 	 * list stands - see FDepotCapability::Of.
@@ -187,6 +194,33 @@ public:
 	 * ENFORCED BY: AirportOps.Model.Facility.UpkeepSumsModulesAndFleet
 	 */
 	FFacilityUpkeep DailyUpkeep(const URoadNetwork& Network) const;
+
+	/**
+	 * THE REPAIR (#266, owner 2026-09-30, option b: "there must never be unplaced modules"): every live depot that owns
+	 * more of a kind than its plot SEATS has the excess removed (ApplyModuleRemoval) and refunded here, one ELedgerCategory::
+	 * Refund line per depot and kind, with a Warning log line naming the depot and the modules and an FModulesRefundedEvent
+	 * for the toast. Returns how many modules went. owned == placed afterwards, so upkeep (DailyUpkeep, over the owned list)
+	 * never charges for a module that is not standing.
+	 *
+	 * WHY HERE AND NOT IN AIRSIDE: the removal and the refund are one act - removing without paying back takes the player's
+	 * money, paying back without removing is money for nothing - and only this service holds both the module prices and a
+	 * door to the network. Airside answers the question (the seat, through ReservedSlotsOf - its one plot solve) and makes
+	 * the write (the facade door); this decides and pays. THE MONEY DOOR FOR A REMOVED MODULE, as BuyModule is for a
+	 * bought one: the removal it pays for has no other production caller (Check-Architecture rule 4 row 'module removal').
+	 *
+	 * THE REFUND IS THE CURRENT OFFER PRICE, NOT THE PRICE PAID (orchestrator ruling on #469, 2026-09-30, following the
+	 * owner's "remove and refund"): what a module cost is not recorded per module, so the one figure there is to pay back is
+	 * FModuleOffer::Price as the shop quotes it now. A KIT SHED IS REFUNDED TOO - one that came with the plot rather than
+	 * being bought alone is refunded at that same current price. A kind the shop does not sell (no FModuleOffer - the tank
+	 * and pump this slice) has no price to refund: it is removed with 0 posted and the log says so.
+	 * ENFORCED BY: AirportOps.Model.Facility.RepairRefundsAKitShedAtTheShopPrice
+	 *
+	 * RUN BY UOpsRuntime's "ModuleRepair" bus pass: on attach and after a load (MarkAllDirty, the catch-up), and on every
+	 * FNetworkChangedEvent - the moments a plot's seat can change. Plotless depots and an unset ceiling hook are left alone
+	 * (FDepotCapability::Of: no solve, nothing to be smaller than).
+	 * ENFORCED BY: AirportOps.Model.Facility.RepairRemovesAndRefundsTheExcess, AirportOps.Present.Facility.RepairRemovesAndRefundsUnseated
+	 */
+	int32 RemoveUnseated(const URoadNetwork& Network);
 
 	/** "No space", "Can't afford" - the disabled button's reason. The wording is the contract. */
 	static FText RefusalText(EPurchaseRefusal Why);

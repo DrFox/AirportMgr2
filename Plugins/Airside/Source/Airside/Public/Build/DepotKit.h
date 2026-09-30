@@ -120,4 +120,30 @@ namespace DepotKit
 	 */
 	AIRSIDE_API TOptional<PlotYard::FReservation> ReservationOf(const FEntityInstance& Depot,
 		TArrayView<const PlotYard::FKitSpec> Specs);
+
+	/**
+	 * What a depot STARTS with - one shed, one tank, one pump, the concept sheet's Tier 1 depot and the smallest that
+	 * works. FPlotPlaceTool's default mix, and what the content test seats on the smallest plot the tool accepts (#266).
+	 * HERE, ONE LIST, rather than a literal in the tool and a copy in the test: the test would go on passing for a mix
+	 * the tool no longer sold.
+	 * ENFORCED BY: Airside.Content.SmallestAcceptedPlotSeatsTheStarterMix
+	 */
+	AIRSIDE_API TArray<EDepotModule> StarterModules();
+
+	/**
+	 * Why a plot with this Reservation cannot take Modules - the mix PlaceEntityInPlot would store - or empty when every
+	 * one of them seats. THE PLACEMENT'S HALF OF "there must never be unplaced modules" (#266, owner 2026-09-30: refuse too
+	 * small a plot; neither shrink the mix nor charge for what would be dropped).
+	 *
+	 * ONE RULE, TWO CALLERS, over ONE SOLVE: FPlotPlaceTool's readout (the warning and the grey Build) and
+	 * URoadEditFacade::PlaceEntityInPlot's commit both call this with the reservation they already hold - the tool's
+	 * memoised ReservationFor and the facade's ReserveForPlot, the identical PlotLayoutFor(Layout)->Solve (#182). NOT ON
+	 * IRoadEditTarget::WhyPlotRefused: that is the outline alone, and asking the facade from the readout would solve the
+	 * plot a second time every hover frame for an answer the tool's memo already has.
+	 *
+	 * THROUGH FDepotCapability::Seat, the list overload - so what the preview promises to seat and what the presenter
+	 * stands are decided by the same function.
+	 * ENFORCED BY: Airside.Tool.PlotPlace.RefusesAPlotThatCannotSeatTheStarterMix
+	 */
+	AIRSIDE_API FString WhyUnseated(const PlotYard::FReservation& Reservation, TConstArrayView<EDepotModule> Modules);
 }

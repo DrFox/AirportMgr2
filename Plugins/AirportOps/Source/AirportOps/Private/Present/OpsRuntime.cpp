@@ -312,6 +312,23 @@ void UOpsRuntime::WireBus()
 	Bus.ResetWiring();
 	Bus.BeginWiring();
 
+	// THE UNPLACED-MODULE REPAIR (#266, owner 2026-09-30, option b: "there must never be unplaced modules"), a pass - see
+	// UFacilityPurchases::RemoveUnseated. REGISTERED FIRST, so a drain that repairs runs the job board's pass after it and
+	// the board bids with the pumps that are standing. DIRTIED by the attach's and a load's MarkAllDirty (the catch-up:
+	// an old save, a level whose kits changed since it was built) and by every network change, the other moment a plot's
+	// seat can move. Not by a purchase: the shop refuses one past the ceiling, so it can never leave an excess.
+	// ENFORCED BY: AirportOps.Present.Facility.RepairRemovesAndRefundsUnseated, AirportOps.Present.Facility.RepairRunsAfterALoad;
+	// the purchase half by AirportOps.Model.Facility.UnseatedModulesGrantNeitherBaysNorPumps (a buy past the ceiling: NoSlotReserved)
+	Bus.RegisterPass(TEXT("ModuleRepair"), [this]()
+	{
+		if (Target != nullptr && Target->Network != nullptr)
+		{
+			FacilityPurchases->RemoveUnseated(*Target->Network);
+		}
+	});
+	Bus.Subscribe<FNetworkChangedEvent>(EOpsTier::Sim, TEXT("ModuleRepair"),
+		[this](const FNetworkChangedEvent&) { Bus.MarkDirty(TEXT("ModuleRepair")); });
+
 	// SIM: the boards, job board first - the order OnAgentPhase kept by hand before the bus.
 	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("JobBoard"), [this](const FAgentPhaseEvent& E)
 	{
@@ -336,6 +353,10 @@ void UOpsRuntime::WireBus()
 		[this](const FFleetChangedEvent&) { DirtyJobBoard(); });
 	Bus.Subscribe<FFacilityUpgradedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
 		[this](const FFacilityUpgradedEvent&) { DirtyJobBoard(); });
+	// A MODULE REMOVED BY THE REPAIR (#266): the capability did not change - an unseated module granted nothing - but the
+	// board's pass is where a changed depot is looked at, and a repair is rare enough that asking costs nothing.
+	Bus.Subscribe<FModulesRefundedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
+		[this](const FModulesRefundedEvent&) { DirtyJobBoard(); });
 	// A PUSH NO LONGER BLOCKED (Airside's push watch, bridged in Attach): the refused departure it names can go now.
 	// What bDepartureWaiting used to find by re-running the whole Step every frame (ops push-ground-freed).
 	// ENFORCED BY: AirportOps.Present.PushGroundFreed.DepartsTheFrameAfter
@@ -575,6 +596,19 @@ void UOpsRuntime::WireBus()
 		const FModuleOffer* Offer = FacilityPurchases->ModuleOffers.Find(E.Module);
 		const FString Name = Offer != nullptr ? Offer->DisplayName.ToString() : UEnum::GetValueAsString(E.Module);
 		Events->NotifyNotification(FString::Printf(TEXT("Bought %s \u2014 %s"), *Name, *Pricing->Format(E.Amount).ToString()));
+	});
+	// THE REPAIR'S TOAST, A WARNING (#266): the player did not ask for it, and the depot now holds less than it did. The log's
+	// Warning (RemoveUnseated's) carries the depot and the counts; this is what the player reads.
+	// ENFORCED BY: AirportOps.Present.Facility.RepairRemovesAndRefundsUnseated ("the toast"), AirportMgr.UI.ToastsSayAlertsAndRefusals
+	Bus.Subscribe<FModulesRefundedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"), [this](const FModulesRefundedEvent& E)
+	{
+		const FModuleOffer* Offer = FacilityPurchases->ModuleOffers.Find(E.Module);
+		// THE OFFER'S OWN WORDS, singular or plural as data (FModuleOffer::PluralName), not an appended "s".
+		const FString Name = Offer == nullptr ? UEnum::GetValueAsString(E.Module)
+			: (E.Count == 1 ? Offer->DisplayName : Offer->PluralName).ToString();
+		Events->NotifyWarning(E.Amount > 0.0
+			? FString::Printf(TEXT("No room on its plot \u2014 %d %s removed, %s refunded"), E.Count, *Name, *Pricing->Format(E.Amount).ToString())
+			: FString::Printf(TEXT("No room on its plot \u2014 %d %s removed"), E.Count, *Name));
 	});
 
 	Bus.EndWiring();
@@ -854,6 +888,15 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 			URoadEditFacade* Facade = Actor != nullptr ? Actor->GetEditFacade() : nullptr;
 			return Facade != nullptr && Facade->AddEntityModule(Id, Module);
 		};
+		// AND THE REPAIR'S WRITE (#266): unseated modules leave through the facade's door, which rebuilds the yard and
+		// checkpoints undo without pushing a step - UFacilityPurchases::RemoveUnseated refunds what this removed.
+		// ENFORCED BY: AirportOps.Present.Facility.RepairRemovesAndRefundsUnseated
+		FacilityPurchases->ApplyModuleRemoval = [WeakActor](FEntityInstanceId Id, EDepotModule Module, int32 Count)
+		{
+			ARoadNetworkActor* Actor = WeakActor.Get();
+			URoadEditFacade* Facade = Actor != nullptr ? Actor->GetEditFacade() : nullptr;
+			return Facade != nullptr ? Facade->RemoveUnseatedModules(Id, Module, Count) : 0;
+		};
 	}
 
 	// THE LITRES A FLIGHT WAS OFFERED AT reach its fuel demand through the board - see
@@ -1057,6 +1100,7 @@ void UOpsRuntime::Detach()
 	FacilityPurchases->ReservedSlotsOf = nullptr;
 	JobBoard->ModuleCeilingOf = nullptr;
 	FacilityPurchases->ApplyModulePurchase = nullptr;
+	FacilityPurchases->ApplyModuleRemoval = nullptr;
 	ReservationMemo.Reset();
 	ReservationMemoNetwork.Reset();
 	Target = nullptr;

@@ -944,6 +944,16 @@ public:
 	bool AddEntityModule(FEntityInstanceId Entity, EDepotModule Module);
 
 	/**
+	 * Remove up to Count of Module from a live DEPOT's Modules, the LAST owned first, and return how many went - the one
+	 * write the unplaced-module repair makes (#266). 0, nothing changed, for a dead or unset handle, a non-depot or a
+	 * Count below 1. A pure data write, AddEntityModule's sibling: no rebuild, no undo, no money -
+	 * URoadEditFacade::RemoveUnseatedModules is the door that adds the rebuild and the checkpoint, UFacilityPurchases the
+	 * refund. WHICH of a kind goes does not matter: a module's place in the yard is re-derived from the count, never stored.
+	 * ENFORCED BY: Airside.Model.EntityModules.RemoveTakesTheLastOfAKind; Check-Architecture rule 4 row 'module removal' (callers)
+	 */
+	int32 RemoveEntityModules(FEntityInstanceId Entity, EDepotModule Module, int32 Count);
+
+	/**
 	 * Re-point an entity at Definition. False for a dead entity.
 	 *
 	 * A PURE POINTER WRITE, which is all Model/ may do with a UEntityDefinition (forward
