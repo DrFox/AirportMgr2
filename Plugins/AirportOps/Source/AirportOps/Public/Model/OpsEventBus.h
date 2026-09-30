@@ -317,6 +317,43 @@ struct AIRPORTOPS_API FFlightCancelledEvent
 };
 
 /**
+ * A runway's strip was held and is not now - Airside's UGroundTraffic::OnRunwayFreed, bridged by UOpsRuntime::Attach.
+ * DERIVED by Airside's diff of the arrival queue's own predicate, so every way a runway frees - a take-off, a landing
+ * vacating, a taxiing crossing clearing, a despawn, a deletion - is this one event (ops batch 3 §5).
+ * ENFORCED BY: AirportOps.Present.Bus.FreedIsBridged
+ */
+struct AIRPORTOPS_API FRunwayFreedEvent
+{
+	/** The strip's seed as Airside's runway summary names it - any member walks the whole chain. */
+	FRoadSegmentId Seed;
+	static const TCHAR* EventName() { return TEXT("RunwayFreed"); }
+	FString Describe() const;
+};
+
+/** Stand pose nodes that were held (a flight's reservation, an aircraft's goal or body) and are not now - Airside's
+ *  UGroundTraffic::OnStandsFreed, bridged like FRunwayFreedEvent. */
+struct AIRPORTOPS_API FStandsFreedEvent
+{
+	TArray<FGuidelineNodeId> PoseNodes;
+	static const TCHAR* EventName() { return TEXT("StandsFreed"); }
+	FString Describe() const;
+};
+
+/**
+ * A flight came due and joined the arrival queue - UFlightBoard::Enqueue, its one site (a Clock.At callback, or the
+ * load's RearmSchedules for one already overdue). The queue pass hears it; before PR D the queue was ticked every
+ * frame and needed no word.
+ * ENFORCED BY: AirportOps.Model.FlightBoard.EnqueuePublishesInbound
+ */
+struct AIRPORTOPS_API FFlightInboundEvent
+{
+	int32 FlightId = 0;
+	FName AirlineId;
+	static const TCHAR* EventName() { return TEXT("FlightInbound"); }
+	FString Describe() const;
+};
+
+/**
  * EVERY EVENT THERE IS, as one closed list. Subscribe<T> and Publish<T> are compile-checked
  * against it, and the wiring test walks it - "lists that must agree are ONE list".
  * FInstancedStruct was rejected: an open set has no answer to "which events exist?".
@@ -325,7 +362,8 @@ using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChanged
 	FOfferExpiredEvent, FOfferDeclinedEvent, FFlightAirborneEvent, FDayEndedEvent, FAirlineSatisfactionEvent,
 	FNetworkChangedEvent, FAlertRaisedEvent, FAlertClearedEvent, FAlertsResetEvent, FBuildRefusedEvent, FLandRefusedEvent,
 	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent, FOfferAcceptedEvent,
-	FTurnaroundEndedEvent, FAirportStatusChangedEvent, FFlightCancelledEvent>;
+	FTurnaroundEndedEvent, FAirportStatusChangedEvent, FFlightCancelledEvent, FRunwayFreedEvent, FStandsFreedEvent,
+	FFlightInboundEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec
@@ -431,6 +469,12 @@ public:
 	TArray<FName> SubscribersOf(SIZE_T TypeIndex) const;
 
 	int32 QueuedCount() const { return Queue.Num(); }
+
+	/** Whether Pass is marked to run in the next round - for a test pinning who marks it (an attach, a load). */
+	bool IsDirtyForTest(FName Pass) const
+	{
+		return Passes.ContainsByPredicate([Pass](const FPass& Each) { return Each.Name == Pass && Each.bDirty; });
+	}
 
 private:
 	struct FHandler

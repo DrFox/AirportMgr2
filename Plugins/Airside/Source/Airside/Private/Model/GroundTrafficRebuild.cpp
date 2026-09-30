@@ -441,6 +441,44 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		}
 	}
 
+	// THE STAND HOLDS, SNAPSHOTTED BY ENTITY before the release below takes them (PR D review I1). A hold is
+	// AirportOps' accepted flight - no agent, a negative holder - and a Node claim like any other, so the release
+	// dropped it and only a load ever put it back: every edit in play left the next accept free to double-book the
+	// stand. This model made the reservation, so it keeps it through its own rebuild rather than asking ops to
+	// re-make it synchronously. Keyed by ENTITY, then re-held on that entity's pose after the release; a stand
+	// pose is a non-derived node, so it is the same handle unless the stand itself went.
+	// ENFORCED BY: Airside.Model.Traffic.RebuildKeepsStandHolds, AirportOps.Present.RuntimeEdit.KeepsAcceptedStandHold
+	TArray<TPair<int32, FEntityInstanceId>> StandHolds;
+	{
+		TMap<FGuidelineNodeId, FEntityInstanceId> StandAtPose;
+		const TArray<FEntityInstance>& Entities = Network.GetEntities();
+		for (int32 Index = 0; Index < Entities.Num(); ++Index)
+		{
+			if (Entities[Index].IsStandCandidate())
+			{
+				StandAtPose.Add(Entities[Index].PoseNode, Network.EntityIdAt(Index));
+			}
+		}
+		for (const FTrafficClaim& Claim : Occupancy.GetClaims())
+		{
+			// NEGATIVE HOLDER = NOT AN AGENT: agent ids count up from 1 - see HoldStand.
+			if (Claim.AgentId >= 0 || Claim.Resource.Kind != ETrafficResourceKind::Node)
+			{
+				continue;
+			}
+			if (const FEntityInstanceId* Stand = StandAtPose.Find(Claim.Resource.Node))
+			{
+				StandHolds.Emplace(Claim.AgentId, *Stand);
+			}
+			else
+			{
+				// ITS STAND IS GONE: nothing to re-hold. The flight's Stand still names the dead entity, which is
+				// what the ops HeldStandLost alert reads - the player is told there.
+				UE_LOG(LogAirsideTraffic, Log, TEXT("Stand hold of holder %d dropped by the rebuild: its stand is gone"), Claim.AgentId);
+			}
+		}
+	}
+
 	// THE GUIDELINE CLAIMS ONLY - NOT Clear(), which would take the runway holds with them.
 	// See the header, and FTrafficOccupancy::ReleaseGuidelineClaims for the reason the two
 	// kinds part company here. AFTER the re-resolution and not before it, because the replans
@@ -460,6 +498,18 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 			Pass.ClaimGoalNode(Agent, Network);
 		}
 	}
+	// AND THE FLIGHTS' HOLDS, on the same stands - after the agents' goals, which are bodies and routes already
+	// committed. A refusal would mean an agent's goal and a flight's hold named one stand before the rebuild too,
+	// which HoldStand refuses at the door; said as a Warning, not assumed away.
+	for (const TPair<int32, FEntityInstanceId>& Hold : StandHolds)
+	{
+		const FEntityInstance* Stand = Network.GetEntity(Hold.Value);
+		if (Stand == nullptr || !Stand->PoseNode.IsSet() || !HoldStand(Hold.Key, Stand->PoseNode))
+		{
+			UE_LOG(LogAirsideTraffic, Warning, TEXT("Stand hold of holder %d on stand %d could not be re-made after the rebuild"),
+				Hold.Key, Hold.Value.Index);
+		}
+	}
 	bStandsMayHaveFreed = true;
 
 	// RE-RESOLVED EXCLUDES THE STRANDED. An agent whose ground was deleted was not
@@ -473,6 +523,12 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 	UE_LOG(LogAirsideTraffic, Log,
 		TEXT("Graph rebuilt: %d agents re-resolved, %d replanned, %d truncated, %d stranded"),
 		LastRebuild.ReResolved, Replanned, Truncated, Stranded);
+
+	// LAST: every claim this rebuild keeps or drops has settled, so the freed diff reads the table as the next
+	// planner will. A deleted runway or stand is reported here rather than at the next Advance - the player may
+	// delete and press 7 in one breath, the reason the stand claims above come back at once.
+	// ENFORCED BY: Airside.Model.Traffic.RunwayFreed.DeletedRunway, Airside.Model.Traffic.RunwayFreed.StandsDiff
+	DiffFreedom(Network, /*bRebuilt*/ true);
 }
 
 FRouteQuery FPlanReResolver::QueryFor(ERouteErrand Errand, FGuidelineNodeId Start, FGuidelineNodeId Goal,

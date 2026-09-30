@@ -147,6 +147,35 @@ struct AIRSIDE_API FTestAirport
 	FGuidelineNodeId Pose(FEntityInstanceId Stand) const;
 };
 
+/**
+ * TWO RUNWAYS, BOTH USED (samples/2runways.png, 2026-09-29). Two parallel strips drawn along +X - A at y 0, B
+ * at y -40000 - each split at one exit, and ONE straight taxiway joining the two exits. The stands sit beside it
+ * nearer A (y -10000 and -16000), so with nothing held A is always the shorter taxi: whatever makes B win in a
+ * test is the rule under test, never geometry. FTestAirport's own sizing (exit at 1.2 N, far end at 3 N, N the
+ * landing distance) and its stand placement, doubled.
+ *
+ * MOVED HERE from RunwayUseTest.cpp's namespace on 2026-09-30 (ops batch 3 PR D): AirportOpsTests' "the second
+ * runway gets its flight one frame later" needs the same field, and a second copy is how two fixtures drift.
+ */
+struct AIRSIDE_API FTestTwoRunways
+{
+	URoadNetwork* Net = nullptr;
+	FRoadSegmentId A;
+	FRoadSegmentId B;
+	TArray<FEntityInstanceId> Stands;
+
+	FGuidelineNodeId Pose(int32 Index) const;
+	static bool IsA(const FRunwayEnd& End) { return FMath::Abs(End.Threshold.Y) < 1.0; }
+	static bool IsB(const FRunwayEnd& End) { return FMath::Abs(End.Threshold.Y + 40000.0) < 1.0; }
+
+	void SetUse(FRoadSegmentId Seed, ERunwayUse Use) const;
+	/** Every surface of Seed's strip claimed OCCUPIED by AgentId, straight into the table. */
+	void Hold(struct FTrafficOccupancy& Occupancy, FRoadSegmentId Seed, int32 AgentId) const;
+
+	/** Builds onto ExistingNet if given (an actor's own network), else a fresh transient URoadNetwork. */
+	static FTestTwoRunways Build(const FAirframe& Airframe, URoadNetwork* ExistingNet = nullptr);
+};
+
 /** Guideline-graph and road-graph builders shared by every fixture in the module. */
 namespace TestGraph
 {

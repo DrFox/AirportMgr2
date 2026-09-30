@@ -28,6 +28,8 @@ void UAirsideTraffic::PostInitProperties()
 	{
 		Model->OnAgentPhaseChanged.AddUObject(this, &UAirsideTraffic::OnModelPhaseChanged);
 		Model->OnArrivalRefused.AddUObject(this, &UAirsideTraffic::OnModelArrivalRefused);
+		Model->OnRunwayFreed.AddUObject(this, &UAirsideTraffic::OnModelRunwayFreed);
+		Model->OnStandsFreed.AddUObject(this, &UAirsideTraffic::OnModelStandsFreed);
 	}
 }
 
@@ -50,6 +52,16 @@ void UAirsideTraffic::OnModelPhaseChanged(int32 AgentId, EAgentPhase From, EAgen
 void UAirsideTraffic::OnModelArrivalRefused(EArrivalRefusal Why)
 {
 	OnArrivalRefused.Broadcast(Why);
+}
+
+void UAirsideTraffic::OnModelRunwayFreed(FRoadSegmentId Seed)
+{
+	OnRunwayFreed.Broadcast(Seed);
+}
+
+void UAirsideTraffic::OnModelStandsFreed(const TArray<FGuidelineNodeId>& PoseNodes)
+{
+	OnStandsFreed.Broadcast(PoseNodes);
 }
 
 void UAirsideTraffic::SpawnView(int32 AgentId)

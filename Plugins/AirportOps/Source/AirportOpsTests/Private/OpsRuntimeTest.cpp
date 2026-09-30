@@ -554,29 +554,10 @@ bool FOpsRuntimeRearmsRepeatersOnLoadTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FOpsRuntimeTicksTheQueueTest,
-	"AirportOps.Present.RuntimeTicksTheQueue",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FOpsRuntimeTicksTheQueueTest::RunTest(const FString& Parameters)
-{
-	// THE SEAM, at the composition (review I2): the queue exists only if the runtime wires a
-	// sequencer into its board and ticks the queue every frame.
-	FAirsideTestWorld TestWorld;
-	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
-	// A NETWORK, which a fresh actor lacks until its first edit - and Tick reaches the model
-	// only through one.
-	TestWorld.Actor->PlaceNode(FVector2D(0.0, 0.0));
-	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
-	Runtime->Attach(TestWorld.Actor);
-	TestNotNull(TEXT("the board has a sequencer"), Runtime->GetFlightBoard()->Sequencer.Get());
-	const int32 Before = Runtime->GetFlightBoard()->TickQueueCallsForTest();
-	Runtime->Tick(0.1);
-	Runtime->Tick(0.1);
-	TestEqual(TEXT("every runtime tick ticks the queue"), Runtime->GetFlightBoard()->TickQueueCallsForTest() - Before, 2);
-	return true;
-}
+// AirportOps.Present.RuntimeTicksTheQueue - "every runtime tick ticks the queue" - WENT with ops batch 3 PR D: the
+// queue is the bus's "ArrivalQueue" pass now, and the seam it pinned (the sequencer wired, the queue reached from the
+// runtime) is ArrivalQueuePassTest.cpp's, which measures the opposite of what it asserted - a quiet queue runs
+// nothing (AirportOps.Present.ArrivalQueue.QuietQueueRunsNothing) and each event runs it once (.EachEventDirtiesIt).
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FOpsRuntimeWiresLitresTest,

@@ -315,4 +315,59 @@ bool FQueueReholdTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FQueueChurnFreedStandTest, "AirportOps.Model.ArrivalQueue.StandFreedByChurnIsNotStale",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FQueueChurnFreedStandTest::RunTest(const FString& Parameters)
+{
+	// THE CLEARANCE CACHE'S KNOCK-ON (PR D review): ClearanceFor caches NoFreeStand against OccupancyRevision, and a
+	// stand freed by claim churn - a body rolling off the pose node - moves no revision. The pass then runs on the
+	// StandsFreed event. It must not read the stale refusal: the stand-less flight's re-reserve (HoldStand, which does
+	// bump the revision) comes first and invalidates it. Pinned: a HoldStand without its bump turns this red.
+	FQueueRig Rig;
+	UFlight* Flight = Holding(Rig, QueueAirframe().Wingspan, 1.0);
+	const FGuidelineNodeId Pose = Rig.Airport.Net->GetEntity(Rig.Airport.Stands[0])->PoseNode;
+	Rig.Traffic->OccupancyForTest().Assert(FTrafficClaim::Make(77, FTrafficResource::OfNode(Pose), /*bOccupied*/ true, 2));
+	Rig.Traffic->Advance(0.05, Rig.Airport.Net);
+	const uint32 Revision = Rig.Traffic->OccupancyRevision();
+	Rig.Tick();
+	TestEqual(TEXT("a body on the only stand: nothing cleared"), Rig.Dispatched, 0);
+	TestFalse(TEXT("and no stand held"), Flight->Stand.IsSet());
+
+	Rig.Traffic->OccupancyForTest().ReleaseAll(77);
+	Rig.Traffic->Advance(0.05, Rig.Airport.Net);
+	TestEqual(TEXT("the body rolled off with no revision bump - the cache's blind spot"), Rig.Traffic->OccupancyRevision(), Revision);
+	Rig.Tick();
+	TestTrue(TEXT("the pass takes the stand"), Flight->Stand.IsSet());
+	TestEqual(TEXT("and clears the flight - not the cached NoFreeStand"), Rig.Dispatched, 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FQueueDeadStandTest, "AirportOps.Model.ArrivalQueue.DeadStandReservesWhenOneFrees",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FQueueDeadStandTest::RunTest(const FString& Parameters)
+{
+	// PR C'S FOLLOW-UP: a holding flight whose stand was DELETED keeps the dead Stand (HeldStandLost's evidence), so
+	// "no stand" alone never re-reserved it - it waited on a stand that will never come back. A dead stand is no stand.
+	FQueueRig Rig(2);
+	Rig.HoldRunway();
+	UFlight* Holding = Rig.Accepted(1.0);
+	UFlight* Later = Rig.Accepted(100000.0);
+	if (!TestTrue(TEXT("both accepted, one stand each"), Holding != nullptr && Later != nullptr
+		&& Holding->Stand.IsSet() && Later->Stand.IsSet() && Holding->Stand != Later->Stand)) { return false; }
+	Rig.Clock->Advance(2.0);
+	if (!TestEqual(TEXT("the first is holding"), Holding->Phase, EFlightPhase::Inbound)) { return false; }
+
+	const FEntityInstanceId Dead = Holding->Stand;
+	Rig.Airport.Net->RemoveEntity(Dead);
+	TestTrue(TEXT("its stand is gone"), UStandAllocator::HeldStandIsGone(*Holding, *Rig.Airport.Net));
+	Rig.Tick();
+	TestEqual(TEXT("no stand is free, so it keeps the dead one"), Holding->Stand, Dead);
+
+	Rig.Traffic->ReleaseHold(Later->HolderId());
+	Rig.Tick();
+	TestEqual(TEXT("a stand frees: the holding flight takes it"), Holding->Stand, Later->Stand);
+	TestTrue(TEXT("and holds it"), Rig.StandHeldFor(*Holding));
+	return true;
+}
+
 #endif

@@ -387,16 +387,15 @@ namespace ArrivalPlanner
 		}
 	}
 
+	bool IsChainHeld(const URoadNetwork& Network, FRoadSegmentId Seed, const FTrafficOccupancy* Occupancy)
+	{
+		// No agent of our own to be occupying anything: nothing has been dispatched yet, so
+		// bCountOwnOccupied is false - see FTrafficOccupancy::IsAnyHeld.
+		return Occupancy != nullptr && Occupancy->IsAnyHeld(Network.RunwaySurfaces(Seed), 0, false);
+	}
+
 	namespace
 	{
-		/** Is any segment of Seed's strip held. No agent of our own to be occupying anything:
-		 *  nothing has been dispatched yet, so bCountOwnOccupied is false - see
-		 *  FTrafficOccupancy::IsAnyHeld. */
-		bool IsChainHeld(const URoadNetwork& Network, FRoadSegmentId Seed, const FTrafficOccupancy* Occupancy)
-		{
-			return Occupancy != nullptr && Occupancy->IsAnyHeld(Network.RunwaySurfaces(Seed), 0, false);
-		}
-
 		/**
 		 * Every runway an arrival may land on - its ERunwayUse says it takes arrivals - each at its
 		 * END IN USE, nearest Near first. Nearest-first because the old rule was "the runway nearest

@@ -140,6 +140,26 @@ FString FFlightCancelledEvent::Describe() const
 	return FString::Printf(TEXT("flight %d, airline %s, %s"), FlightId, *AirlineId.ToString(), *UEnum::GetValueAsString(Reason));
 }
 
+FString FRunwayFreedEvent::Describe() const
+{
+	return FString::Printf(TEXT("runway seed %d"), Seed.Index);
+}
+
+FString FStandsFreedEvent::Describe() const
+{
+	FString Poses;
+	for (const FGuidelineNodeId& Pose : PoseNodes)
+	{
+		Poses += (Poses.IsEmpty() ? TEXT("") : TEXT(", ")) + FString::FromInt(Pose.Index);
+	}
+	return FString::Printf(TEXT("%d stand(s), pose node(s) %s"), PoseNodes.Num(), *Poses);
+}
+
+FString FFlightInboundEvent::Describe() const
+{
+	return FString::Printf(TEXT("flight %d, airline %s"), FlightId, *AirlineId.ToString());
+}
+
 FString FOpsEventBus::Describe(const FOpsEvent& Event)
 {
 	return Visit([](const auto& Each) { return Each.Describe(); }, Event);

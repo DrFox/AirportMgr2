@@ -209,6 +209,17 @@ public:
 	/** How many plot solves ReservedSlotsOf has run - see its memo. */
 	int32 ReservationSolvesForTest() const { return ReservationSolves; }
 
+	/** Whether the arrival queue's safety net (QueueSafetyHandle) is booked on the clock. */
+	bool IsQueueSafetyNetArmedForTest() const { return QueueSafetyHandle != INDEX_NONE; }
+
+	/**
+	 * Game seconds between the arrival queue's safety runs - see RunArrivalQueue. 30 (ops event bus spec §2): long
+	 * enough that a stranded flight is a visible defect rather than a smooth fallback, short enough that one never
+	 * holds for minutes in play. At x1 on the default scenario (2400 real s of daylight for 14 h, 480 of night for 10 h)
+	 * 30 game s is about 1.4 real s by day and 0.4 by night (2026-09-30).
+	 */
+	static constexpr double QueueSafetySeconds = 30.0;
+
 	/**
 	 * Every airline with its fleet resolved to airframes, built once at Attach. What the
 	 * generator ticks over and what the inbox's demand strip samples - one list, so the strip
@@ -293,6 +304,48 @@ private:
 	 */
 	int32 JobBoardDeadlineHandle = INDEX_NONE;
 	void ArmJobBoardDeadline();
+
+	/**
+	 * THE ARRIVAL QUEUE'S PASS (ops batch 3 §5), in place of the per-frame UFlightBoard::TickQueue call: run when an
+	 * event that can let a holding flight land dirties it - a runway or stand freed, an accept, a flight joining the
+	 * queue, the network or the airport's status changing, the speed (a paused pass consumed its dirt) - and at a load.
+	 *
+	 * ONE CLEARANCE A FRAME, across the drain's rounds too: a flight cleared this frame defers any second run to the
+	 * next frame (MarkDirtyNextDrain), and the new agent's Arriving phase event is what dirties it - so a second runway
+	 * gets its flight one frame later, with the first one's claim already in the table.
+	 * ENFORCED BY: AirportOps.Present.ArrivalQueue.SecondRunwayNextFrame, AirportOps.Present.ArrivalQueue.EachEventDirtiesIt
+	 */
+	void RunArrivalQueue();
+
+	/** Marks the pass dirty FOR AN EVENT - every dirtier in WireBus comes through here, so the pass can tell a run an
+	 *  event asked for (bQueueCovered) from a run only the safety net asked for. */
+	void DirtyArrivalQueue();
+
+	/**
+	 * THE SAFETY NET (ops event bus spec §2): while flights hold, Clock.Every(QueueSafetySeconds) runs the pass
+	 * anyway. If THAT run - one no event asked for - clears a flight, an event that should have covered it is missing,
+	 * and it says so as a Warning, which a test fails on. A missing event becomes a named defect, not a stuck airport.
+	 * Armed and cancelled by the pass itself from FQueueTick::Waiting; a paused clock fires nothing. Removed once
+	 * quiet in play.
+	 * ENFORCED BY: AirportOps.Present.ArrivalQueue.SafetyNetCatchesAMissedEvent, AirportOps.Present.ArrivalQueue.CrossingClearDispatchesNextFrame
+	 */
+	void ArmQueueSafetyNet(bool bWaiting);
+	int32 QueueSafetyHandle = INDEX_NONE;
+	/** Set by the net's clock entry; read and cleared by the next run of the pass. */
+	bool bQueueSafetyDue = false;
+	/** Set by DirtyArrivalQueue; read and cleared by the next run of the pass. */
+	bool bQueueCovered = false;
+
+	/** Counts UOpsRuntime::Tick's drains - "this frame" for ONE CLEARANCE A FRAME. QueueClearedFrame is the frame the
+	 *  pass last cleared a flight in. Session counters, never saved. */
+	uint64 DrainFrame = 0;
+	uint64 QueueClearedFrame = TNumericLimits<uint64>::Max();
+
+	/** Airside's derived OnRunwayFreed / OnStandsFreed, bridged onto the bus - bound in Attach, removed in Detach. */
+	FDelegateHandle RunwayFreedHandle;
+	FDelegateHandle StandsFreedHandle;
+	void OnRunwayFreed(FRoadSegmentId Seed);
+	void OnStandsFreed(const TArray<FGuidelineNodeId>& PoseNodes);
 
 	/**
 	 * What FNetworkChangedEvent compares against - see UOpsRuntime::Tick. Not saved: a load swaps the

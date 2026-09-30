@@ -270,6 +270,15 @@ namespace ArrivalPlanner
 		const FTrafficOccupancy* Occupancy);
 
 	/**
+	 * Is any segment of Seed's strip held - by anyone, a reservation included. False with no occupancy. Asked by
+	 * IsRunwayBusy, by Plan's free-before-held ranking and by UGroundTraffic's OnRunwayFreed diff (ops batch 3
+	 * §5): public since 2026-09-30 so the diff can call this function rather than carry a copy of it, and "freed"
+	 * means "what the queue asks just turned false". The tests measure the diff against this function's answer
+	 * tick by tick (Airside.Model.Traffic.RunwayFreed.*); no test can see a second copy that happens to agree.
+	 */
+	AIRSIDE_API bool IsChainHeld(const URoadNetwork& Network, FRoadSegmentId Seed, const FTrafficOccupancy* Occupancy);
+
+	/**
 	 * The user-facing sentence for a refused plan - the same wording DispatchArrival used to
 	 * log inline, now read off the plan instead of re-derived from it, so the actor logs
 	 * from the SAME decision it acted on rather than a second opinion about why.

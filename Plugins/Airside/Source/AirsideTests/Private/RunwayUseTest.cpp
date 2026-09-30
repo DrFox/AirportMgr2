@@ -19,86 +19,11 @@
  * nearest the longest strip's threshold and every departure to the shortest taxi, so the second
  * runway sat empty. Now each planner asks every runway its ERunwayUse allows and prefers a free
  * one, then one the player dedicated, then the shorter taxi.
+ *
+ * THE FIELD MOVED to Testing/AirsideTestGraph.h as FTestTwoRunways on 2026-09-30 (ops batch 3 PR D), when
+ * AirportOpsTests needed it too; its own comment there carries the geometry's reasons.
  */
-namespace RunwayUseTest
-{
-	/**
-	 * Two parallel strips drawn along +X - A at y 0, B at y -40000 - each split at one exit, and
-	 * ONE straight taxiway joining the two exits. The stands sit beside it nearer A (y -10000 and
-	 * -16000), so with nothing held A is always the shorter taxi: whatever makes B win in a test
-	 * is the rule under test, never geometry. FTestAirport's own sizing (exit at 1.2 N, far end at
-	 * 3 N, N the landing distance) and its stand placement, doubled.
-	 */
-	struct FTwoRunways
-	{
-		URoadNetwork* Net = nullptr;
-		FRoadSegmentId A;
-		FRoadSegmentId B;
-		TArray<FEntityInstanceId> Stands;
-
-		FGuidelineNodeId Pose(int32 Index) const
-		{
-			const FEntityInstance* E = Net->GetEntity(Stands[Index]);
-			return E != nullptr ? E->PoseNode : FGuidelineNodeId();
-		}
-		static bool IsA(const FRunwayEnd& End) { return FMath::Abs(End.Threshold.Y) < 1.0; }
-		static bool IsB(const FRunwayEnd& End) { return FMath::Abs(End.Threshold.Y + 40000.0) < 1.0; }
-
-		void SetUse(FRoadSegmentId Seed, ERunwayUse Use) const
-		{
-			FRunwayFacts Facts = Net->RunwayFactsFor(Seed);
-			Facts.Use = Use;
-			Net->SetRunwayFacts(Seed, Facts);
-		}
-		void Hold(FTrafficOccupancy& Occupancy, FRoadSegmentId Seed, int32 AgentId) const
-		{
-			for (const FTrafficResource& Surface : Net->RunwaySurfaces(Seed))
-			{
-				Occupancy.Assert(FTrafficClaim::Make(AgentId, Surface, /*bOccupied*/ true, 2));
-			}
-		}
-
-		static FTwoRunways Build(const FAirframe& Airframe)
-		{
-			FTwoRunways Out;
-			Out.Net = NewObject<URoadNetwork>(GetTransientPackage());
-			const double Needed = FLandingRun::RequiredLandingDistance(
-				Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
-			const double ExitX = Needed * 1.2;
-			const double FarX = Needed * 3.0;
-			URoadProfile* Runway = TestProfiles::Runway();
-			URoadProfile* Taxiway = TestProfiles::Taxiway();
-
-			auto Strip = [&](double Y, FRoadNodeId& OutExit)
-			{
-				const FRoadNodeId Threshold = Out.Net->AddNode(FVector2D(0.0, Y));
-				OutExit = Out.Net->AddNode(FVector2D(ExitX, Y));
-				const FRoadNodeId Far = Out.Net->AddNode(FVector2D(FarX, Y));
-				const FRoadSegmentId Seed = TestGraph::Lay(*Out.Net, Threshold, OutExit, Runway);
-				TestGraph::Lay(*Out.Net, OutExit, Far, Runway);
-				return Seed;
-			};
-			FRoadNodeId ExitA, ExitB;
-			Out.A = Strip(0.0, ExitA);
-			Out.B = Strip(-40000.0, ExitB);
-			const FRoadNodeId Middle = Out.Net->AddNode(FVector2D(ExitX, -20000.0));
-			TestGraph::Lay(*Out.Net, ExitA, Middle, Taxiway);
-			TestGraph::Lay(*Out.Net, Middle, ExitB, Taxiway);
-			TestGraph::Derive(*Out.Net);
-
-			// FACING EAST, so the lead-in casts west onto the taxiway - FTestAirport::Build's reason.
-			for (const double Y : { -10000.0, -16000.0 })
-			{
-				UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-				Out.Stands.Add(Out.Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(ExitX + 9000.0, Y), 0.0));
-			}
-			FAnchorLink::Build(*Out.Net, UAirsideSettings::ResolveLargestServiceVehicle());
-			return Out;
-		}
-	};
-}
-
-using RunwayUseTest::FTwoRunways;
+using FTwoRunways = FTestTwoRunways;
 
 /**
  * AN ARRIVAL TAKES THE FREE RUNWAY. Nothing held: A, the shorter taxi. A held: B - it used to be
