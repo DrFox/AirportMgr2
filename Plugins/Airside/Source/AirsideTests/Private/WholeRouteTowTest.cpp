@@ -824,4 +824,73 @@ bool FTowWholeRouteSolvesAnOpeningReverseFromTheSeedTest::RunTest(const FString&
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLiveTowSeedTest, "Airside.Model.Tow.LiveTowSeed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLiveTowSeedTest::RunTest(const FString& Parameters)
+{
+	using namespace WholeRouteTowFixture;
+	// ONE SEED BUILDER (issue #429, #313): FRoadAgent::LiveTowSeed replaced five hand-built FTowSeeds in three modules.
+	// What it answers is what they answered - the axles BY VIEW, the cab's pose as SHOWN (LastMotion), the follower's
+	// speed and Travelled - and LiveTowSeedAtRest is UJobBoard's and ARigYard's reading: at rest, the steered axle's
+	// distance up the route. And it is UNSET wherever a caller must judge unseeded: no trailer, an aircraft, a fold.
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId Start = Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId Goal = Node(*Net, 0.0, 8000.0);
+	Edge(*Net, Start, Goal);
+	const FRoutePlan North = Route(*Net, Start, Goal, &Rig);
+	if (!TestTrue(TEXT("a straight run north for the rig"), North.IsValid())) { return false; }
+
+	FRoadAgent Agent;
+	Agent.StartDrive(North, Rig);
+	FAgentMotion Motion;
+	EAgentEvent Event = EAgentEvent::None;
+	for (int32 Tick = 0; Tick < 30; ++Tick) { Agent.Advance(1.0 / 30.0, Motion, Event); }
+	if (!TestTrue(TEXT("rolling, its chain laid"), Agent.Follower.Speed > 0.0 && Agent.TowAxles.Num() == Rig.Tow.Num())) { return false; }
+
+	const TOptional<FTowSeed> Live = Agent.LiveTowSeed();
+	if (!TestTrue(TEXT("a tow on the road has a live seed"), Live.IsSet())) { return false; }
+	TestTrue(TEXT("its axles are a VIEW of the agent's chain, not a copy"),
+		Live->Axles.GetData() == Agent.TowAxles.GetData() && Live->Axles.Num() == Agent.TowAxles.Num());
+	TestEqual(TEXT("the cab's heading as shown"), Live->Heading, Agent.LastMotion.Heading);
+	TestEqual(TEXT("the follower's speed"), Live->Speed, Agent.Follower.Speed);
+	TestEqual(TEXT("Travelled along its own plan"), Live->Travelled, Agent.Follower.Travelled);
+	TestTrue(TEXT("the cab's body origin"), Live->Origin.IsSet() && Live->Origin.GetValue() == Agent.LastMotion.Position);
+
+	const FGuidelineNode* StartNode = Net->GetGuidelineNode(Start);
+	const FVector2D Steered = Agent.LastMotion.Position
+		+ FVector2D(FMath::Cos(Agent.LastMotion.Heading), FMath::Sin(Agent.LastMotion.Heading)) * Rig.Chassis.SteerAxleX;
+	const TOptional<FTowSeed> AtRest = Agent.LiveTowSeedAtRest(StartNode);
+	if (!TestTrue(TEXT("at rest: seeded"), AtRest.IsSet())) { return false; }
+	TestEqual(TEXT("at rest: speed zero"), AtRest->Speed, 0.0);
+	TestEqual(TEXT("at rest: Travelled is the steered axle's distance from the route's start"),
+		AtRest->Travelled, FVector2D::Distance(StartNode->Position, Steered));
+	TestEqual(TEXT("at rest: the same pose"), AtRest->Heading, Live->Heading);
+	TestEqual(TEXT("a start that does not resolve reads as zero, as both hand-built callers did"),
+		Agent.LiveTowSeedAtRest(nullptr)->Travelled, 0.0);
+
+	FRoadAgent Bowser;
+	Bowser.StartDrive(North, UAirsideSettings::ResolveDefaultVehicle());
+	TestFalse(TEXT("a rigid vehicle has no seed"), Bowser.LiveTowSeed().IsSet());
+	FRoadAgent Plane;
+	Plane.StartTaxi(North, TestAirframes::GroundOnly());
+	TestFalse(TEXT("nor an aircraft"), Plane.LiveTowSeed().IsSet());
+
+	// A FOLD: three same-hand quarters, driven unjudged - Airside.Model.Tow.WholeRouteFoldRefused's loop, which the
+	// router refuses because the agent folds on it.
+	const FGraph Loop = Bends({ 1, 1, 1 });
+	const FRoutePlan Folding = Route(*Loop.Net, Loop.Start, Loop.Goal, nullptr);
+	FRoadAgent Folded;
+	Folded.StartDrive(Folding, Rig);
+	Event = EAgentEvent::None;
+	for (int32 Tick = 0; Tick < 30 * 600 && Folded.GetJackknifedLink() == INDEX_NONE && Event != EAgentEvent::Parked; ++Tick)
+	{
+		Folded.Advance(1.0 / 30.0, Motion, Event);
+	}
+	if (!TestTrue(TEXT("the rig folds on three quarters"), Folded.GetJackknifedLink() != INDEX_NONE)) { return false; }
+	TestFalse(TEXT("and a folded tow gives no seed: it is going nowhere"), Folded.LiveTowSeed().IsSet());
+	return true;
+}
+
 #endif

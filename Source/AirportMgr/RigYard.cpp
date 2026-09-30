@@ -179,18 +179,14 @@ bool FRigYard::PlanTo(const URoadNetwork& Network, FGuidelineNodeId From, ERigYa
 	// OUT OF A BAY, judged from where the tow IS: its trailer axle on the bay end (the route's
 	// start), its steered axle a chain's length up the exit - where RedirectAgent seats it - not a
 	// chain laid straight back behind the bay end into the grass.
-	if (Parked != nullptr && Parked->TowAxles.Num() > 0)
+	//
+	// AIRSIDE'S SEED, NOT A COPY OF IT (issue #429, #313): FRoadAgent::LiveTowSeedAtRest, which UJobBoard's tow uses
+	// too - this block and that one were the same eleven lines, and a change to how a tow is judged had to find both.
+	// The agent's own chassis is the Vehicle it was dispatched with (Dispatch hands this same FVehicle to
+	// DispatchAgent), so the steered axle is measured from the same wheelbase this read by hand.
+	if (Parked != nullptr)
 	{
-		const FGuidelineNode* Start = Network.GetGuidelineNode(From);
-		const FVector2D Steered = Parked->LastMotion.Position
-			+ FVector2D(FMath::Cos(Parked->LastMotion.Heading), FMath::Sin(Parked->LastMotion.Heading)) * Vehicle.Chassis.SteerAxleX;
-		FTowSeed Seed;
-		Seed.Axles = Parked->TowAxles;
-		Seed.Heading = Parked->LastMotion.Heading;
-		Seed.Speed = 0.0;
-		Seed.Travelled = Start != nullptr ? FVector2D::Distance(Start->Position, Steered) : 0.0;
-		Seed.Origin = Parked->LastMotion.Position;
-		Query.TowSeed = Seed;
+		Query.TowSeed = Parked->LiveTowSeedAtRest(Network.GetGuidelineNode(From));
 	}
 	OutPlan = RouteSearch::Find(Network, Query);
 	if (OutPlan.IsValid() && Via.IsSet())

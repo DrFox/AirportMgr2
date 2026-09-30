@@ -307,20 +307,13 @@ bool UJobBoard::DriveVehicleTo(FServiceVehicle& Vehicle, FGuidelineNodeId Goal, 
 	// reverse-first plan outright. THE SAME FOR A JOB LEG as for the way home: a vehicle chained stand
 	// to stand backs off the first stand exactly as it would to go home.
 	// ENFORCED BY: AirportOps.Fuel.TowServesCodeB (the tow gets home)
-	if (OwnVehicle.HasTrailer() && Truck->TowAxles.Num() == OwnVehicle.Tow.Num())
-	{
-		const FVector2D Steered = Truck->LastMotion.Position
-			+ FVector2D(FMath::Cos(Truck->LastMotion.Heading), FMath::Sin(Truck->LastMotion.Heading)) * OwnVehicle.Chassis.SteerAxleX;
-		const FGuidelineNode* StartNode = Network.GetGuidelineNode(Query.Start);
-		FTowSeed& Seed = Query.TowSeed.Emplace();
-		Seed.Axles = Truck->TowAxles;
-		Seed.Heading = Truck->LastMotion.Heading;
-		Seed.Speed = 0.0;
-		// HOW FAR ALONG THE ROUTE THE STEERED AXLE ALREADY IS - zero at a service point, where it
-		// parked on the node the route starts from; RigYard's reading of the same thing.
-		Seed.Travelled = StartNode != nullptr ? FVector2D::Distance(StartNode->Position, Steered) : 0.0;
-		Seed.Origin = Truck->LastMotion.Position;
-	}
+	//
+	// AIRSIDE BUILDS THE SEED (issue #429, #313): FRoadAgent::LiveTowSeedAtRest - the axles, the cab's pose, at rest,
+	// and HOW FAR ALONG THE ROUTE THE STEERED AXLE ALREADY IS: zero at a service point, where it parked on the node the
+	// route starts from; RigYard's reading of the same thing, which was this block character for character. Unset
+	// for a truck with no trailer, as the guard here was; and for a folded tow, which a Parked truck never is (a fold
+	// holds its agent where it folded, short of any arrival).
+	Query.TowSeed = Truck->LiveTowSeedAtRest(Network.GetGuidelineNode(Query.Start));
 	FRoutePlan Plan = RouteSearch::Find(Network, Query);
 
 	// HOME EVEN IF IT DOES NOT FIT (review of 2026-09-24). The way out was chosen for a road this truck
