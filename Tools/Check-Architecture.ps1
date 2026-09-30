@@ -1480,6 +1480,10 @@ $ranRules.Add('refusal-is-announced')
 # second production caller of TickQueue( - back in Tick, or anywhere else - is the per-frame poll
 # returning beside the pass, and the quiet airport's zero-cost with it. The one legal caller is
 # UOpsRuntime::RunArrivalQueue; tests call it directly on a bare board and are exempt.
+# HARDENED in PR D's review (M3): any `TickQueue(` call - member, bare (from inside UFlightBoard) or
+# spaced - and any `&X::TickQueue` taken as a pointer; the definition line alone is exempt; a
+# comment is stripped before matching; and "which function am I in" is re-read at EVERY column-0
+# definition, free functions included, so nothing after RunArrivalQueue inherits its exemption.
 $queuePassFile = Join-Path $Root 'Plugins\AirportOps\Source\AirportOps\Private\Present\OpsRuntime.cpp'
 if (-not (Test-Path $queuePassFile)) {
     $failures.Add("queue-is-a-pass: $queuePassFile is named by rule 33 but does not exist - update the rule")
@@ -1494,13 +1498,17 @@ foreach ($queueTree in @((Join-Path $Root 'Plugins\AirportOps\Source\AirportOps'
     foreach ($file in Get-Sources $queueTree @('.cpp')) {
         if ($file.Name -like '*Test.cpp') { continue }
         $lines = Get-Content -LiteralPath $file.FullName
-        # WHICH FUNCTION each call sits in: the nearest preceding definition line at column 0.
+        # WHICH FUNCTION each call sits in: the nearest preceding column-0 definition line - a member
+        # (X::Y() or a free function (Y(), whichever; a free function resets it like anything else.
         $current = ''
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $line = $lines[$i]
-            if ($line -match '^[A-Za-z].*\b(\w+::\w+)\(') { $current = $Matches[1] }
-            if ($line -match '^\s*(//|\*)') { continue }
-            if ($line -match '(->|\.)TickQueue\(' -and $current -ne 'UOpsRuntime::RunArrivalQueue') {
+            if ($line -match '^\s*(\*|/\*)') { continue }
+            $code = ($line -replace '//.*$', '')
+            if ($code -match '^[A-Za-z_][\w:<>,\*& ]*?\b((?:\w+::)?~?\w+)\s*\(') { $current = $Matches[1] }
+            $isDefinition = $code -match '^[A-Za-z_].*\bUFlightBoard::TickQueue\s*\('
+            $isCall = (-not $isDefinition) -and ($code -match '\bTickQueue\s*\(' -or $code -match '&\s*\w+::TickQueue\b')
+            if ($isCall -and $current -ne 'UOpsRuntime::RunArrivalQueue') {
                 $failures.Add("queue-is-a-pass: $($file.Name):$($i + 1) calls TickQueue( from $current - the queue runs only as the ArrivalQueue pass (UOpsRuntime::RunArrivalQueue)")
             }
         }
