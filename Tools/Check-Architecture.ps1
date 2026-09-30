@@ -586,6 +586,24 @@ $AllowedCallers = @(
         ProdAllowed = @('Private\Present\RoadEditFacade.cpp', 'Private\Present\RoadEditFacadeSurfaces.cpp', 'Private\Present\RoadEditHistory.cpp', 'Public\Present\RoadEditHistory.h')
         TestExempt  = $true
         ProdReason  = 'edit through a URoadEditFacade mutator (CommitAndNotify / CommitPurchase / CommitDisposal), so the edit is committed, notified and - on a refusal - rolled back; extend this row and rule 40 if a new file must open a scope'
+    },
+    @{
+        # A SEGMENT'S PROFILE IS READ THROUGH URoadNetwork::ProfileFor (#459). A null FRoadSegment::Profile is legal and
+        # means the network's default (a level load has always produced one; a save game's load does on purpose since
+        # #459). Five readers dereferenced or null-tested the raw field: one crashed on the null a new-process load
+        # left (StandTurnOffMarkingBuilder), four answered as if the road had no profile. The shape is `.Profile->` or
+        # `.Profile == / != nullptr`, a ternary arm, a copy or an argument - `.Profile` followed by `->`, a null test,
+        # `:`, `;` or `)`. Grep on 2026-09-30 found that on FRoadSegment alone, bar URoadSurfacePresenter's
+        # FSurfaceSettings::Profile (excluded by name); it also found a SIXTH raw reader the issue's list missed
+        # (EditTool's guide half-widths). ProfileFor itself reads the field and the graph surgery copies it
+        # (RoadNetwork.cpp); the rebuild census counts own-profile against fallback on purpose (RoadRebuildCensus.cpp);
+        # RoadHeal copies an arm's raw profile into the heal plan, where null still means the default
+        # (FRoadDeletionPlan::HealProfile) - a copy, not a read of a width.
+        Name        = 'FRoadSegment::Profile read raw'
+        Pattern     = '(?<!Settings)(\.|->)Profile\s*(->|[!=]=\s*nullptr|:|;|\))'
+        ProdAllowed = @('Private\Model\RoadNetwork.cpp', 'Private\Debug\RoadRebuildCensus.cpp', 'Private\Tool\RoadHeal.cpp')
+        TestExempt  = $true
+        ProdReason  = "read a segment's profile through URoadNetwork::ProfileFor - a null one is legal and means the network's default (#459)"
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -2051,7 +2069,8 @@ $ranRules.Add('scope-refusal-rolls-back')
 # the pre-load money until the next fee. UJobBoard and UFlightBoard each bumped in their own Serialize, a rule nothing
 # stated. So: a class under $ops\Public whose base list names IOpsPersistent and which declares a Revision() accessor
 # must declare `void Serialize(FArchive& Ar) override` (whose body bumps on IsLoading - pinned by
-# AirportOps.Model.Save.RestoreMovesTheRevisions for the ledger, FlightSave.RestoreRetiresReplacedFlights for the board).
+# AirportMgr.UI.LedgerPanelGate for the ledger and AirportOps.Model.FlightSave.PreV6BlobRestoresNoFlights for the board -
+# both straight through OpsSave::DeserializeObject, so no OnBeforeRestore bump can stand in for the one in Serialize).
 # It reads the declaration, not the body: a Serialize that forgets to bump is the tests' to catch. Fails if it finds no
 # persistent class with a revision at all - it moved, and must not check nothing.
 $revisionOwners = @{}

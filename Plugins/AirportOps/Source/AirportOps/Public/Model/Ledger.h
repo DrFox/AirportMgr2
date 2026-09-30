@@ -180,7 +180,8 @@ public:
 	/**
 	 * A RESTORE IS A CHANGE: the tagged pass, then RevisionCount bumped on a load - UJobBoard::Serialize's idiom, and
 	 * for its reason: OpsSave::DeserializeObject restores this object without any other hook a view could notice.
-	 * ENFORCED BY: AirportOps.Model.Save.RestoreMovesTheRevisions, Check-Architecture rule 41 (persistent-revision-bumps-on-load)
+	 * ENFORCED BY: AirportMgr.UI.LedgerPanelGate (straight through OpsSave::DeserializeObject, so no OnBeforeRestore
+	 * bump can stand in for this one), Check-Architecture rule 41 (persistent-revision-bumps-on-load)
 	 */
 	virtual void Serialize(FArchive& Ar) override;
 

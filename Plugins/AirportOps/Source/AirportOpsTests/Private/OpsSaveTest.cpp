@@ -432,4 +432,44 @@ bool FOpsSaveNoFlightsBlobRetiresBoardTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * #459: THE ACTOR'S FALLBACK PROFILE IS SAVED AS "THE DEFAULT", NOT AS A PATH. It lives in the transient package, so its
+ * path names nothing in any other process - and in this one, possibly something else. OpsSave writes it as null, which
+ * URoadNetwork::ProfileFor reads as DefaultProfile and the loading actor re-resolves. Measured in the same process, where a
+ * written path WOULD re-find the live object: so a null after the round trip proves nothing was written. Every OTHER
+ * reference is still written as before - a test's transient runway round-trips in-process, and content assets anywhere.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsSaveFallbackProfileAsDefaultTest,
+	"AirportOps.Model.Save.FallbackProfileIsSavedAsTheDefault",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsSaveFallbackProfileAsDefaultTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>();
+	URoadProfile* Fallback = TestProfiles::Taxiway();   // stands in for ARoadNetworkActor::ResolveProfile's: transient
+	URoadProfile* Other = TestProfiles::Runway();       // a transient profile that is NOT the default
+	Net->DefaultProfile = Fallback;
+	const FRoadSegmentId Laid = Net->AddStraightSegment(Net->AddNode(FVector2D(0.0, 0.0)), Net->AddNode(FVector2D(20000.0, 0.0)), Fallback);
+	const FRoadSegmentId Strip = Net->AddStraightSegment(Net->AddNode(FVector2D(0.0, -50000.0)), Net->AddNode(FVector2D(60000.0, -50000.0)), Other);
+	if (!TestTrue(TEXT("the default is the network's transient default - or nothing below is measured"),
+		Net->TransientDefaultProfile() == Fallback)) { return false; }
+
+	FOpsSnapshot Snapshot;
+	OpsSave::Capture(TArray<IOpsPersistent*>(), *Net, Snapshot);
+	URoadNetwork* Loaded = NewObject<URoadNetwork>();
+	if (!TestTrue(TEXT("restore succeeds"), OpsSave::Restore(Snapshot, TArray<IOpsPersistent*>(), *Loaded))) { return false; }
+
+	const FRoadSegment* LoadedLaid = Loaded->GetSegment(Laid);
+	const FRoadSegment* LoadedStrip = Loaded->GetSegment(Strip);
+	if (!TestTrue(TEXT("both roads came back"), LoadedLaid != nullptr && LoadedStrip != nullptr)) { return false; }
+	TestNull(TEXT("the road laid with the fallback came back with no profile of its own - 'the default' - though the fallback "
+		"is alive in this process, so a written path would have re-found it"), LoadedLaid->Profile.Get());
+	TestNull(TEXT("and so did DefaultProfile, for the loading actor to re-resolve"), Loaded->DefaultProfile.Get());
+	TestTrue(TEXT("any other reference is written as before - the runway's profile round-trips"), LoadedStrip->Profile == Other);
+	TestTrue(TEXT("and the saving network is untouched - the save wrote, it did not edit"),
+		Net->GetSegment(Laid)->Profile == Fallback && Net->DefaultProfile == Fallback);
+	return true;
+}
+
 #endif

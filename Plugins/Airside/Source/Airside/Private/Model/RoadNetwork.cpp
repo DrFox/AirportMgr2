@@ -1562,13 +1562,18 @@ void URoadNetwork::Serialize(FArchive& Ar)
 	}
 }
 
+URoadProfile* URoadNetwork::TransientDefaultProfile() const
+{
+	return DefaultProfile != nullptr && DefaultProfile->IsIn(GetTransientPackage()) ? DefaultProfile.Get() : nullptr;
+}
+
 int32 URoadNetwork::RepointTransientDefaultProfile(URoadProfile* Default)
 {
 	// ONLY WHEN THE SAVED DEFAULT WAS A TRANSIENT OBJECT, AND NOT ALREADY THIS ACTOR'S - see the header. A content-asset
 	// default resolves to itself in every session, and a segment naming it keeps it; the same session's same actor
 	// re-finds its own fallback, which is already right.
-	URoadProfile* Saved = DefaultProfile;
-	if (Default == nullptr || Saved == nullptr || Saved == Default || !Saved->IsIn(GetTransientPackage()))
+	URoadProfile* Saved = TransientDefaultProfile();
+	if (Default == nullptr || Saved == nullptr || Saved == Default)
 	{
 		return 0;
 	}

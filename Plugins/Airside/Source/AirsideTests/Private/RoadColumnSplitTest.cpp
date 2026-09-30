@@ -263,4 +263,33 @@ bool FMatchingGapIsWithinOneKindTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * #459: A ROAD WITH NO PROFILE OF ITS OWN IS WHAT ITS NETWORK'S DEFAULT SAYS. A null FRoadSegment::Profile is legal - a
+ * level load has always produced one, and a save game's load does now on purpose - and URoadNetwork::ProfileFor is how
+ * every reader asks. ReferenceOf read the raw field, and so named a service road with no profile of its own "taxiway" by
+ * omission. World-free: a network, a default that admits vehicles, and one road without a profile.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FNullProfileReadsAsTheDefaultTest,
+	"Airside.Tool.NullProfileReadsAsTheDefault",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FNullProfileReadsAsTheDefaultTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const TArray<URoadProfile*> Tiers = TestProfiles::ServiceTiers();
+	if (!TestTrue(TEXT("a service-road profile to be the default"), Tiers.Num() > 0 && Tiers[0] != nullptr)) { return false; }
+	Net->DefaultProfile = Tiers[0];
+	const FRoadSegmentId Road = Net->AddStraightSegment(Net->AddNode(FVector2D(0.0, 0.0)),
+		Net->AddNode(FVector2D(20000.0, 0.0)), nullptr);
+	if (!TestTrue(TEXT("control: the road has no profile of its own"),
+		Net->GetSegment(Road) != nullptr && Net->GetSegment(Road)->Profile == nullptr)) { return false; }
+
+	SnapGuide::EReference Column = SnapGuide::EReference::World;
+	TestTrue(TEXT("the road classifies"), RoadNaming::ReferenceOf(*Net, Road, Column));
+	TestEqual(TEXT("as what the network's default admits - a service road - not a taxiway by omission"),
+		static_cast<int32>(Column), static_cast<int32>(SnapGuide::EReference::ServiceRoad));
+	return true;
+}
+
 #endif

@@ -27,9 +27,11 @@ bool RoadNaming::ReferenceOf(const URoadNetwork& Network, FRoadSegmentId Segment
 	// IsServiceRoad asks and for the reason its comment gives: the segment carries no
 	// ERoadKind, only a profile, and "a truck may drive here" is exactly what a GroundVehicle
 	// guideline means.
-	if (Road->Profile != nullptr)
+	// THROUGH ProfileFor (#459): a road with no profile of its own is what the network's default admits - read raw,
+	// a service road without one was named "taxiway" by omission.
+	if (const URoadProfile* Profile = Network.ProfileFor(*Road))
 	{
-		for (const FProfileGuideline& Guideline : Road->Profile->Guidelines)
+		for (const FProfileGuideline& Guideline : Profile->Guidelines)
 		{
 			if (Guideline.Class == ETraversalClass::GroundVehicle)
 			{

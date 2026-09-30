@@ -545,6 +545,16 @@ int32 ARoadNetworkActor::RepairLoadedNetwork(ELoadedFrom From)
 		return 0;
 	}
 
+	// THE DEFAULT, RE-RESOLVED WHEN THE LOAD BROUGHT NONE (#459): a save game writes the actor's transient fallback
+	// as null (OpsSave, URoadNetwork::TransientDefaultProfile), and a level save always has - so a road with no
+	// profile of its own means "this actor's default", and this makes ProfileFor answer live from here on, before
+	// the rebuild that would set it anyway. BOTH PATHS: DefaultProfile is overwritten by every rebuild, so this pins
+	// nothing (unlike re-pointing the roads themselves - see RepointTransientDefaultProfile below).
+	if (Network->DefaultProfile == nullptr)
+	{
+		Network->DefaultProfile = ResolveProfile();
+	}
+
 	// OUTLINES FIRST: a stand saved before stands had them gets its Code C box, and only a
 	// stand with an outline has a letter to rebind by (below). Then the numbers. The pair
 	// URoadNetwork::PostLoad runs for a LEVEL, which a save game never gets - OpsSave::Restore

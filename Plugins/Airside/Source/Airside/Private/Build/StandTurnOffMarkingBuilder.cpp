@@ -45,7 +45,10 @@ namespace
 			}
 			FPavedTaxiway Paved;
 			GuidelineGeom::Sample(A, Segments[Index].Control, B, Paved.Centre);
-			Paved.HalfWidth = Segments[Index].Profile->GetMaxHalfWidth();
+			// THROUGH ProfileFor (#459): a road with no profile of its own is legal and means the network's
+			// default - read raw, this dereferenced the null a new-process load leaves. HasStrip has already
+			// proved ProfileFor non-null (TaxiwayStrip::StripWidthOf's own reading).
+			Paved.HalfWidth = Network.ProfileFor(Segments[Index])->GetMaxHalfWidth();
 			for (const FVector2D& P : Paved.Centre)
 			{
 				Paved.Bounds += P;

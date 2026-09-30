@@ -381,7 +381,9 @@ bool FEditTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget
 		for (const FRoadSegmentId Arm : Dragged.Incident)
 		{
 			const FRoadSegment* Segment = Network->GetSegment(Arm);
-			const URoadProfile* Profile = Segment != nullptr ? Segment->Profile : nullptr;
+			// THROUGH ProfileFor (#459, the sixth raw reader, found by the lint row that replaced the issue's list of
+			// five): an arm with no profile of its own is the network's default width, not no width.
+			const URoadProfile* Profile = Segment != nullptr ? Network->ProfileFor(*Segment) : nullptr;
 			if (Profile != nullptr && Profile->GetTotalWidth() > Widest)
 			{
 				Widest = Profile->GetTotalWidth();

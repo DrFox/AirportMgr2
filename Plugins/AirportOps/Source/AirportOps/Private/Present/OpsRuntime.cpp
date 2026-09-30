@@ -1369,8 +1369,12 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 		return false;
 	}
 	// Agents first: they were never saved, and one mid-taxi on a network about to be
-	// replaced would be following a polyline through pavement that no longer exists.
-	Target->GetTraffic()->ClearAgents();
+	// replaced would be following a polyline through pavement that no longer exists. NULL-CHECKED like every other
+	// GetTraffic() below (the flight restore's model): an actor with no traffic presenter has no agents to clear.
+	if (Target->GetTraffic() != nullptr)
+	{
+		Target->GetTraffic()->ClearAgents();
+	}
 	// THE QUEUE GOES WITH THEM, before Restore and whether or not it succeeds. The Gone events
 	// ClearAgents just queued name agents that no longer exist, and handling them after the
 	// boards are restored would un-hold restored flights' stands; a failed Restore must not leave

@@ -268,8 +268,26 @@ public:
 	 *
 	 * A UPROPERTY, so pointing it at an authored asset makes the whole network survive a
 	 * round trip. Null is still legal and still means what it meant before.
+	 *
+	 * A NULL SEGMENT PROFILE IS LEGAL, AND MEANS "THE DEFAULT" (#459, decided rather than left to each reader): a level
+	 * load has always produced it, and a save game's load produces it on purpose now - OpsSave writes the actor's
+	 * transient fallback as null (TransientDefaultProfile below) because no other process can resolve its path. So
+	 * EVERY reader asks ProfileFor, never FRoadSegment::Profile: five read it raw until #459, one crashed on a null
+	 * (StandTurnOffMarkingBuilder) and four answered as if the road had no width (a plot built over the carriageway,
+	 * a stand letter missing, a snap with no half-width).
+	 * ENFORCED BY: Check-Architecture rule 4 ('FRoadSegment::Profile read raw' - RoadNetwork.cpp and the rebuild census only)
 	 */
 	UPROPERTY() TObjectPtr<URoadProfile> DefaultProfile;
+
+	/**
+	 * DefaultProfile when it is an object in the TRANSIENT package - ARoadNetworkActor::ResolveProfile's fallback,
+	 * made on demand from the actor's own FallbackWidth - else null. The one reference this network holds that no
+	 * other process can re-find by path. ONE SPELLING of "the default is transient" for both of its readers: OpsSave,
+	 * which writes it as null (so a load answers "the default", re-resolved by the loading actor, #459), and
+	 * RepointTransientDefaultProfile, which repairs a snapshot that wrote its path anyway.
+	 * ENFORCED BY: AirportOps.Model.Save.FallbackProfileIsSavedAsTheDefault
+	 */
+	URoadProfile* TransientDefaultProfile() const;
 
 	/**
 	 * A LOADED network whose DefaultProfile is a TRANSIENT-PACKAGE object other than Default: DefaultProfile, and every
@@ -285,9 +303,11 @@ public:
 	 * or a test since, whichever same-named transient profile that process happens to hold. That last is the one this
 	 * repairs: a road following a profile some other actor or session made. BY IDENTITY WITH THE SAVED DEFAULT, because
 	 * both pointers were written as the same path and re-found as the same object, whichever that turned out to be.
-	 * RE-POINTED, NOT NULLED - null would mean the same through ProfileFor, but several readers dereference
-	 * FRoadSegment::Profile directly (StandTurnOffMarkingBuilder, PlotGesture, RoadNaming), and nulling crashed the
-	 * first on the first load that tried it. A SEGMENT WHOSE PROFILE IS NOT THE SAVED DEFAULT IS LEFT ALONE - an
+	 * RE-POINTED, NOT NULLED - null means the same through ProfileFor, but five readers dereferenced FRoadSegment::
+	 * Profile raw until #459 (StandTurnOffMarkingBuilder, PlotGesture, RoadNaming, RoadSnap, StandPlotTool), and
+	 * nulling crashed the first on the first load that tried it; re-pointing keeps a repaired road exactly as concrete
+	 * as it was laid. SINCE #459 a save no longer writes the path this repairs (OpsSave writes TransientDefaultProfile
+	 * as null), so this is for a snapshot written before that. A SEGMENT WHOSE PROFILE IS NOT THE SAVED DEFAULT IS LEFT ALONE - an
 	 * authored width tier is a content asset and resolves correctly, and a road drawn deliberately narrow stays
 	 * narrow - and so is every segment when the saved default was a content asset, or came back null (nothing
 	 * resolved: ProfileFor's fallback, as after a level load).
@@ -298,7 +318,8 @@ public:
 	/**
 	 * The profile that governs Segment - its own, or DefaultProfile when it has none.
 	 *
-	 * THE ONLY WAY the solver, the mesh builder or the guideline builder should ask. They previously each
+	 * THE ONLY WAY ANY READER SHOULD ASK - the solver, the mesh builder, the guideline builder, and since #459 the
+	 * tools and the marking builders too (see DefaultProfile: a null segment profile is legal). They previously each
 	 * tested Segment->Profile themselves and each treated null as "skip" - the solver by
 	 * taking zero half-widths, the builder by dropping the segment - so a null profile
 	 * produced a collapsed junction AND no ribbon, from two independent decisions that
