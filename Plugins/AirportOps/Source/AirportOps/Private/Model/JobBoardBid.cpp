@@ -333,14 +333,12 @@ ServiceBid::FResult UJobBoard::BidFor(const FServiceVehicle& Vehicle, const FSer
 	// WHERE AND WHEN THE CURRENT STEP LEAVES IT, and with what on board.
 	const double Now = Clock.Now();
 	const FRoadAgent* Agent = Vehicle.AgentId != 0 ? Traffic.FindAgent(Vehicle.AgentId) : nullptr;
+	// WHAT IS LEFT OF THE LEG IT IS DRIVING, at cruise - Airside's answer (UGroundTraffic::RemainingDriveSeconds, #429),
+	// which used to be read here off the follower's plan and distance. Movement seconds, converted to the bid's one clock.
+	// ENFORCED BY: AirportOps.Service.Bid.OutVehiclePricesItsRemainingDrive
 	auto RemainingDrive = [&]() -> double
 	{
-		if (Agent == nullptr || !Agent->Follower.Plan.IsValid())
-		{
-			return 0.0;
-		}
-		const double Left = FMath::Max(Agent->Follower.Plan.Length - Agent->Follower.Travelled, 0.0);
-		return Left / FMath::Max(Type.Vehicle.Chassis.Ground.Taxi.SpeedCap, 1.0) * GamePerMovement;
+		return Agent != nullptr ? Traffic.RemainingDriveSeconds(Vehicle.AgentId) * GamePerMovement : 0.0;
 	};
 	const FServiceJob* Current = Vehicle.CurrentJob != 0 ? FindJob(Vehicle.CurrentJob) : nullptr;
 

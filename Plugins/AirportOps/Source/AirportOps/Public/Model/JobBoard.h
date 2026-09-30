@@ -621,18 +621,6 @@ public:
 	/** How many vehicles are at their facility being refilled right now. */
 	int32 RefillingForTest() const;
 
-	/**
-	 * Whether a route home found UNGATED (DriveVehicleTo's too-narrow fallback) may be driven: yes,
-	 * unless the vehicle tows something the route folds (VehicleFit::JudgePlan,
-	 * EFitRefusal::TrailerFolds) - a scuffed kerb is accepted, a jack-knife is not (review of
-	 * 9441ccf1). OutWhy, when given and the answer is no, names the fold. Static and public so the
-	 * rule is testable on a road that folds; the fuel fixture has none. Seed is the live chain and cab,
-	 * so a route home opening with a reverse is solved from where the tow is; a reverse it cannot back
-	 * is refused like a fold.
-	 */
-	static bool MayDriveUngated(const FRoutePlan& Plan, const FVehicle& Vehicle, const URoadNetwork& Network,
-		FString* OutWhy = nullptr, const FTowSeed* Seed = nullptr);
-
 	/** Puts a vehicle on the board without the placeholder fleet or the traffic model - for OpsSave's
 	 *  and the re-bid tests. ITS HOME COUNTS AS SEEDED: a test that places a depot's vehicles by hand
 	 *  means those to be the fleet, and SeedStarterFleets must not add the placeholder's beside them. */
@@ -812,7 +800,11 @@ private:
 	/**
 	 * Move the vehicle's agent to Goal - WAS UFuelService::SendTruckHome, which knew one goal only.
 	 * Returns whether it is now on its way (or, for the last-leg case, will turn there on arrival).
-	 * See the body for the three starts (no agent, on the road, parked) and why each is different.
+	 * No agent: a fresh dispatch from its depot. Otherwise PICK THE GOAL'S ROUTE KIND, CALL
+	 * UGroundTraffic::SendAgentTo, MAP THE OUTCOME to the vehicle's state and the player's line (#429):
+	 * how a vehicle turns on the road, finishes a reverse, leaves a stand or is rescued is Airside's,
+	 * chosen by phase there. What stays here is purpose - that a truck may drive HOME down a road it
+	 * does not quite fit but never to a job, and that one nothing can move home is retired.
 	 */
 	bool DriveVehicleTo(FServiceVehicle& Vehicle, FGuidelineNodeId Goal, bool bToFacility,
 		UGroundTraffic& Traffic, const URoadNetwork& Network);

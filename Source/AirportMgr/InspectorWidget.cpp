@@ -443,12 +443,13 @@ void UInspectorWidget::PaintVerbs(const FInspectorCardView& View, const FSelecti
 		const bool bUnstick = Has(EInspectorVerbs::Unstick);
 		UnstickMenu->SetVisibility(bUnstick ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 		// LIT WHEN IT LOOKS STUCK - Selected is the Accent fill (UUiButton::LookFor), the one "look at
-		// me" this style has. Read off the model agent: LooksStuck also asks Stranded, which
+		// me" this style has. Read off the model agent: IsStuck - the one definition of stuck, Airside's (#429;
+		// UAgentRescue::LooksStuck until then, a third spelling) - also asks Stranded, which
 		// FAgentFacts::Hold (the stall clock only while waiting on someone) does not carry. Per tick and outside the
 		// view on purpose: it moves with the stall clock, which no card key holds.
 		const FRoadAgent* Agent = bUnstick && Target.GetGroundTraffic() != nullptr
 			? Target.GetGroundTraffic()->FindAgent(Selection.Id) : nullptr;
-		bUnstickHighlighted = Agent != nullptr && UAgentRescue::LooksStuck(*Agent, UnstickHighlightSeconds);
+		bUnstickHighlighted = Agent != nullptr && Agent->IsStuck(UnstickHighlightSeconds);
 		if (UUiButton* B = UnstickMenu->GetButton())
 		{
 			B->SetState(true, bUnstickHighlighted);

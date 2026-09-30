@@ -1612,7 +1612,8 @@ bool FFuelTowNeverDrivenHomeIntoAFoldTest::RunTest(const FString& Parameters)
 {
 	// THE UNGATED FALLBACK IS FOR A SCUFFED KERB, NOT A JACK-KNIFE (review of 9441ccf1): a truck
 	// that does not fit the road home drives it anyway (FuelTruckGetsHomeWhenTooNarrow), UNLESS it
-	// tows something that route folds - UJobBoard::MayDriveUngated, the rule SendTruckHome asks.
+	// tows something that route folds - VehicleFit::MayDriveUngated, the rule SendTruckHome asked (UJobBoard's until #429
+	// moved it to Airside with UGroundTraffic::SendAgentTo, its one production asker).
 	// On a hand-drawn road, because the fuel fixture's roads turn left and right and fold nothing:
 	// three same-hand quarters (the turn of a dead-end balloon) fold the rig; two - a U - do not.
 	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
@@ -1655,7 +1656,7 @@ bool FFuelTowNeverDrivenHomeIntoAFoldTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("an ungated plan"), Plan.IsValid())) { continue; }
 
 		FString Why;
-		const bool bMay = UJobBoard::MayDriveUngated(Plan, Rig, *Net, &Why);
+		const bool bMay = VehicleFit::MayDriveUngated(Plan, Rig, *Net, &Why);
 		AddInfo(FString::Printf(TEXT("%d quarters: rig %s %s"), Quarters, bMay ? TEXT("may drive") : TEXT("may not:"), *Why));
 		if (Quarters == 3)
 		{
@@ -1666,7 +1667,7 @@ bool FFuelTowNeverDrivenHomeIntoAFoldTest::RunTest(const FString& Parameters)
 		{
 			TestTrue(TEXT("a road its trailer holds is driven ungated, as for any truck"), bMay);
 		}
-		TestTrue(TEXT("a rigid truck is always driven home ungated - nothing to fold"), UJobBoard::MayDriveUngated(Plan, Bowser, *Net));
+		TestTrue(TEXT("a rigid truck is always driven home ungated - nothing to fold"), VehicleFit::MayDriveUngated(Plan, Bowser, *Net));
 	}
 	return true;
 }
@@ -4065,6 +4066,79 @@ bool FFuelLifecycleStepEndSettlesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the Step settled it - heading home, not left Deciding on the hydrant"), After->State, EServiceVehicleState::ToFacility);
 	TestTrue(TEXT("on its own agent"), After->AgentId != 0);
 	TestTrue(TEXT("and that is a row of the invariant table, settled"), FServiceVehicleLifecycle::Violation(*After, /*bSettled=*/true).IsEmpty());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FServiceBidOutVehicleRemainingDriveTest, "AirportOps.Service.Bid.OutVehiclePricesItsRemainingDrive",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FServiceBidOutVehicleRemainingDriveTest::RunTest(const FString& Parameters)
+{
+	// A VEHICLE OUT ON ITS LEG IS FREE WHEN THE LEG ENDS, and the bid takes what is left of the leg from Airside
+	// (UGroundTraffic::RemainingDriveSeconds, #429 - it read the follower's plan and distance itself before). So between
+	// two bids a moment apart - same vehicle, same job, nothing else changed - the finish moves by exactly the clock's
+	// advance LESS the drive the vehicle made meanwhile, in game seconds. With the remainder unwired (0) it moves by the
+	// whole of the clock's advance; with a stale one, by that and not less. The drive the vehicle made is Airside's own
+	// figure read twice, so this pins that the bid ASKS it, not how it is worked out (Airside.Model.Traffic.
+	// RemainingDriveSeconds pins that).
+	FFuelFixture Fixture;
+	Fixture.bSecondStand = true;
+	Fixture.Build(/*bWithRoad=*/true);
+	UJobBoard& Board = *Fixture.Service;
+	const FName Bowser = Board.VehiclesFor(EIcaoCode::C).TypeCode;
+	Board.StarterFleet = { Bowser };
+	Board.DriveSecondsOverride = [](FGuidelineNodeId From, FGuidelineNodeId To, FName) { return From == To ? 0.0 : 180.0; };
+	if (!TestTrue(TEXT("an aircraft parked at the first stand"), Fixture.ParkAircraftAt(Fixture.StandPose) != 0)) { return false; }
+
+	// UNDER WAY TO IT, with seconds of the leg still to go - so the moment between the two bids is all driving.
+	int32 OutId = 0;
+	int32 AgentId = 0;
+	auto UnderWay = [&Fixture, &OutId, &AgentId]()
+	{
+		const FServiceVehicle* V = Fixture.Service->GetVehicles().FindByPredicate(
+			[](const FServiceVehicle& Each) { return Each.State == EServiceVehicleState::ToJob && Each.AgentId != 0; });
+		const FRoadAgent* Agent = V != nullptr ? Fixture.Traffic->FindAgent(V->AgentId) : nullptr;
+		OutId = V != nullptr ? V->Id : 0;
+		AgentId = Agent != nullptr ? Agent->Id : 0;
+		return Agent != nullptr && Agent->Phase == EAgentPhase::Taxiing
+			&& Agent->Follower.Speed >= 0.5 * Agent->Chassis().Ground.Taxi.SpeedCap
+			&& Fixture.Traffic->RemainingDriveSeconds(Agent->Id) > 2.0;
+	};
+	if (!TestTrue(TEXT("the bowser is out on its leg, moving, with more than two seconds to go"), Fixture.AdvanceUntil(UnderWay, 240.0))) { return false; }
+	int32 JobId = 0;
+	{
+		FServiceJob& Job = Board.AddJobForTest(903, EServiceJobState::Open, EServiceRefusal::None, 0);
+		Job.Stand = Fixture.Stand2;
+		Job.QuantityOwed = 300.0;
+		JobId = Job.Id;
+	}
+
+	const double FirstAt = Fixture.Clock->Now();
+	const double FirstLeft = Fixture.Traffic->RemainingDriveSeconds(AgentId);
+	const ServiceBid::FResult First = Board.BidForTest(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock, OutId, JobId);
+	// THE TRAFFIC AND THE CLOCK ONLY, in Advance's order - NOT the board's Step, which awards the open job in between
+	// (measured: the second bid then priced it queued twice, 90 s later) and changes what is being compared.
+	for (int32 Tick = 0; Tick < 9; ++Tick)
+	{
+		Fixture.Traffic->Advance(1.0 / 30.0, Fixture.Net);
+		Fixture.Clock->Advance(1.0 / 30.0);
+	}
+	if (!TestTrue(TEXT("still out on the same leg"), UnderWay())) { return false; }
+	const double SecondAt = Fixture.Clock->Now();
+	const double SecondLeft = Fixture.Traffic->RemainingDriveSeconds(AgentId);
+	const ServiceBid::FResult Second = Board.BidForTest(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock, OutId, JobId);
+	if (!TestTrue(TEXT("both bids reach the job"), First.bReachable && Second.bReachable)) { return false; }
+
+	// GAME SECONDS PER MOVEMENT SECOND, the bid's own conversion (BidFor's GamePerMovement).
+	const double GamePerMovement = Fixture.Clock->GameSecondsPerRealSecond(Fixture.Clock->TimeOfDay());
+	const double ClockMoved = SecondAt - FirstAt;
+	const double Driven = (FirstLeft - SecondLeft) * GamePerMovement;
+	AddInfo(FString::Printf(TEXT("clock moved %.3f s, drove %.3f s of its leg; finish %.3f then %.3f"),
+		ClockMoved, Driven, First.Finish, Second.Finish));
+	if (!TestTrue(TEXT("the vehicle made a real part of its leg in between"), Driven > 0.2 * ClockMoved)) { return false; }
+	TestEqual(TEXT("the finish moved by the clock's advance less the drive it made - the bid asked Airside what is left"),
+		Second.Finish - First.Finish, ClockMoved - Driven, 0.02 * ClockMoved);
 	return true;
 }
 

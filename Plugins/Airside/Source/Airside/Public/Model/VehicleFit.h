@@ -223,6 +223,21 @@ namespace VehicleFit
 		const FTowSeed* Seed = nullptr);
 
 	/**
+	 * Whether a route found UNGATED (UGroundTraffic::SendAgentTo's too-narrow fallback, ENarrowRoad::DriveAnyway) may be
+	 * driven: yes, unless the vehicle tows something the route folds (JudgePlan, EFitRefusal::TrailerFolds) - a scuffed
+	 * kerb is accepted, a jack-knife is not (review of 9441ccf1). OutWhy, when given and the answer is no, names the fold.
+	 * Seed is the live chain and cab, so a route that opens with a reverse is solved from where the tow is; a reverse it
+	 * cannot back is refused like a fold.
+	 *
+	 * HERE SINCE issue #429, from UJobBoard: it is a rule about what a body can drive, which is Airside's, and its one
+	 * production asker moved here with the rest of "send it home from wherever it is". Public, so the rule is testable on
+	 * a road that folds (the fuel fixture has none).
+	 * ENFORCED BY: AirportOps.Ops.FuelTowNeverDrivenHomeIntoAFold
+	 */
+	AIRSIDE_API bool MayDriveUngated(const FRoutePlan& Plan, const FVehicle& Vehicle, const URoadNetwork& Network,
+		FString* OutWhy = nullptr, const FTowSeed* Seed = nullptr);
+
+	/**
 	 * How far, uu, a solved tow reverse's final steered axle lies off Remainder's line - the one
 	 * exit check FRoadAgent (at arm) and JudgePlan (ahead of time) both make, so the router never
 	 * admits a reverse the agent then refuses. OutAlong, when given, is the steered axle's distance

@@ -984,6 +984,18 @@ $AllowedCallers = @(
         ProdAllowed = @()
         TestExempt  = $true
         ProdReason  = 'ask IsShown() and let the host own the state (UUiWindowHost::Toggle, FUiWindowSpec::bToggled, OnShownChanged) - a panel keeping its own flag is the copy that parts from the window (#447)'
+    },
+    @{
+        # ONE DEFINITION OF STUCK (#429): FRoadAgent::IsStoppedAndWaiting feeds the stall clock, HasStalledFor is a
+        # stalled waiter past a bound, IsStuck adds Stranded - all three in RoadAgent.h. "Stuck" was spelled three ways
+        # in two modules (the accrual rule, the resolver's waiter test, the Unstick button's `stall >= Seconds`), and the
+        # copies disagreed on the bound and on whether a blocker had to be named. The stall clock COMPARED to a bound
+        # anywhere else is a fourth spelling. Reading it as a value (InspectFacts' Hold.StalledSeconds) is not.
+        Name        = 'stall clock compared'
+        Pattern     = 'GetStalledSeconds\s*\(\s*\)\s*[<>]|(?<![-<>])[<>]=?\s*[\w.>-]*GetStalledSeconds\s*\('
+        ProdAllowed = @('Public\Model\RoadAgent.h')
+        TestExempt  = $true
+        ProdReason  = 'ask FRoadAgent::IsStuck (or HasStalledFor for a wait-for edge) - the one definition of stuck, whose bound and blocker test the copies had drifted from (#429)'
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -3248,13 +3260,16 @@ $ranRules.Add('one-airport-lookup')
 # and in ops the deadlock resolver's replan called directly (ReplanAt - the Unstick copying the resolver's ban).
 # Comments and string literals are stripped first (rule 34's stripper), so a WHY comment may name them.
 #
+# PART 2 (#429) EMPTIED OPS: UGroundTraffic::SendAgentTo chooses how a vehicle turns, finishes or is rescued;
+# ReplanAroundBlocker / ReplanFromNextNode are the Unstick's replans (the resolver's own step and bound);
+# ReofferStand / RescueToStand its stand; RemainingDriveSeconds the bid's ETA. So in AirportOps it also bans what
+# computing a splice point or a ban needs - the plan-geometry statics (UGroundTraffic::CurrentStep / StepFromNode /
+# StepStart) and the refusal an agent is held by (GetBlockedStep / GetBlockedResource): with those, the Unstick
+# could copy the resolver's ban again, which is how its copy lost the resolver's upper bound.
+#
 # THE ALLOW-LIST IS PER FILE AND PER TOKEN, and every entry is a debt with its payer named:
 # - RigTestCourseTest.cpp reads Follower.Travelled for its speed-limit probe until #301 moves the course's checks
 #   onto Airside's own accessors.
-# - JobBoardDrive.cpp, JobBoard.h (MayDriveUngated's seed parameter), JobBoardBid.cpp (the bid's ETA) and
-#   AgentRescue.cpp (the Unstick's replan) are #429 PART 2: SendAgentTo, RemainingDriveSeconds and
-#   ReplanAroundBlocker take them over, and part 2 deletes these rows. A token NOT listed for a file fails there
-#   already - JobBoardDrive.cpp may not build a seed (TowSeed.Emplace) again, which part 1 removed.
 # A LISTED TOKEN THAT NO LONGER APPEARS FAILS TOO: an allow-list entry that allows nothing is a pin loosened for
 # free, and the next writer in that file would be waved through by it. Delete the entry with the code.
 $routeInternals = @(
@@ -3263,14 +3278,15 @@ $routeInternals = @(
     @{ Token = 'RerouteAgent(';      Pattern = '\bRerouteAgent\s*\(';     OpsOnly = $false },
     @{ Token = 'Follower.Travelled'; Pattern = '\bFollower\.Travelled\b'; OpsOnly = $false },
     @{ Token = 'Follower.Plan';      Pattern = '\bFollower\.Plan\b';      OpsOnly = $false },
-    @{ Token = 'ReplanAt(';          Pattern = '\bReplanAt\s*\(';         OpsOnly = $true }
+    @{ Token = 'ReplanAt(';          Pattern = '\bReplanAt\s*\(';         OpsOnly = $true },
+    @{ Token = 'CurrentStep(';       Pattern = '\bCurrentStep\s*\(';      OpsOnly = $true },
+    @{ Token = 'StepFromNode(';      Pattern = '\bStepFromNode\s*\(';     OpsOnly = $true },
+    @{ Token = 'StepStart(';         Pattern = '\bStepStart\s*\(';        OpsOnly = $true },
+    @{ Token = 'GetBlockedStep(';    Pattern = '\bGetBlockedStep\s*\(';   OpsOnly = $true },
+    @{ Token = 'GetBlockedResource('; Pattern = '\bGetBlockedResource\s*\('; OpsOnly = $true }
 )
 $routeInternalsAllowed = @{
     'Source\AirportMgr\RigTestCourseTest.cpp'                         = @('Follower.Travelled')
-    'AirportOps\Private\Model\JobBoardDrive.cpp'                      = @('FTowSeed', 'RerouteAgent(', 'Follower.Plan', 'Follower.Travelled')
-    'AirportOps\Public\Model\JobBoard.h'                              = @('FTowSeed')
-    'AirportOps\Private\Model\JobBoardBid.cpp'                        = @('Follower.Plan', 'Follower.Travelled')
-    'AirportOps\Private\Model\AgentRescue.cpp'                        = @('Follower.Plan', 'Follower.Travelled', 'ReplanAt(')
 }
 $routeInternalsSeen = @{}
 $gameModule = Join-Path $Root 'Source\AirportMgr'

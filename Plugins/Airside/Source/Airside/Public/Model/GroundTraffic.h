@@ -8,6 +8,7 @@
 #include "Model/RoadAgent.h"
 #include "Model/RoadTraffic.h"
 #include "Model/RunwayQuery.h"
+#include "Model/SendAgent.h"
 #include "Model/TrafficOccupancy.h"
 #include "Model/TrafficRules.h"
 #include "GroundTraffic.generated.h"
@@ -81,7 +82,10 @@ struct FGraphRebuildSummary
  *   - GroundTrafficRebuild.cpp   OnGraphRebuilt (kept here: it is tick-order orchestration,
  *                                not mechanism) plus FPlanReResolver - ReplanAt,
  *                                ReResolvePlan, SpliceReplan (§4, §6), which both
- *                                OnGraphRebuilt and FDeadlockResolver call into.
+ *                                OnGraphRebuilt and FDeadlockResolver call into;
+ *   - GroundTrafficSend.cpp      SendAgentTo, ReofferStand, RescueToStand and RemainingDriveSeconds
+ *                                (issue #429): the operations that CHOOSE which route change an
+ *                                agent gets by its phase, so no caller outside this class does.
  *
  * UGroundTraffic keeps the registry, dispatch, tick order and events; it owns one FClaimPass
  * (constructed fresh per Arbitrate call - it carries no state of its own), one
@@ -360,6 +364,32 @@ public:
 		FGuidelineNodeId BannedNode = FGuidelineNodeId());
 
 	/**
+	 * THE DEADLOCK RESOLVER'S PER-AGENT STEP, for one named agent (issue #429) - the player's Unstick "Replan" of an
+	 * agent held at a block. The SAME two calls the resolver makes of each cycle member (FDeadlockResolver::
+	 * IsTurnableAtItsBlock, then TurnAtItsBlock): turnable only where the resolver would turn it - stopped at the node
+	 * its refused step leaves from, within gap + half a footprint + that node's reach, and not refused the runway it is
+	 * going to - and then spliced there with what refused it banned (the node, or the step's edge).
+	 *
+	 * ONE BAN, AND ONE BOUND. AirportOps' rescue used to copy the ban from its internals, and the copy had no upper
+	 * bound: it turned an agent a whole edge short of its block round it from a node it was nowhere near. A fix to the
+	 * resolver's ban (a bar, a runway) reached the resolver and not the button. Not a cycle, no retry window, no stamp:
+	 * the player asked for this agent, now.
+	 * ENFORCED BY: Airside.Model.Traffic.ReplanAroundBlocker.MatchesTheResolver,
+	 * AirportOps.Model.AgentRescue.ReplanHonoursTheResolverBound
+	 */
+	EBlockerReplan ReplanAroundBlocker(int32 AgentId, const URoadNetwork& Network);
+
+	/**
+	 * A FRESH SEARCH FROM THE NODE AHEAD, no ban: ReplanAt at the step after the one the agent is on, to its own goal,
+	 * under today's congestion. For an agent the player asks to replan that is not held where the resolver would turn
+	 * it (ReplanAroundBlocker's NotAtItsBlock) - not held at all, held inside the step it was refused, or a whole edge
+	 * short of it. ReplanAt's own refusal of "the route it already has" is the answer that there is nothing better.
+	 * ENFORCED BY: AirportOps.Model.AgentRescue.Replan (on its best route: refused),
+	 * AirportOps.Model.AgentRescue.ReplanHonoursTheResolverBound (far from its block: this, not a ban)
+	 */
+	ENextNodeReplan ReplanFromNextNode(int32 AgentId, const URoadNetwork& Network);
+
+	/**
 	 * Re-points every agent's route at the graph that has just been rebuilt. Spec §6.
 	 *
 	 * BY POSITION, NEVER BY HANDLE, and that is forced rather than chosen:
@@ -429,6 +459,62 @@ public:
 	 * ENFORCED BY: Airside.Model.Traffic.RescueStranded.Rejoins, .Refuses, .NewGoal
 	 */
 	bool RescueStranded(int32 AgentId, const URoadNetwork& Network, FGuidelineNodeId Goal);
+
+	/**
+	 * SENDS AN AGENT TO Goal FROM WHATEVER IT IS DOING NOW (issue #429) - and chooses HOW by its phase, which is the
+	 * choice callers outside this class used to make by reading the agent's internals. QueryTemplate says what kind of
+	 * route (errand, rules and congestion, the vehicle gate, a wingspan); this sets where each search starts, its goal
+	 * and a tow's seed. One row per phase:
+	 *   - TAXIING, its goal already Goal: AlreadyGoing.
+	 *   - TAXIING, a VEHICLE: turned at the first node AHEAD whose route to Goal holds (RerouteAgent: it keeps moving,
+	 *     and a tow's whole new route is judged from its live chain), trying each node on in turn; its old goal and the
+	 *     nodes past it are never turn points. None holds: FinishesLeg - it arrives, and the caller sends it on from
+	 *     there (only the chain that ARRIVES at a service point can solve the reverse off it).
+	 *   - TAXIING, an AIRCRAFT: its route extended from where it ends (ExtendRoute: a stand re-offer's taxi-in, speed
+	 *     and heading carried on). RerouteAgent refuses aircraft - their runway and departure arming are RedirectAgent's
+	 *     and ReplanAt's - so nothing turns one mid-route. Refused: FinishesLeg.
+	 *   - PARKED, or STRANDED WHILE AWAITING A STAND (standing where its wait began - #396): Redirected from rest at its
+	 *     goal node, a tow's judgement seeded from where it stands (FRoadAgent::LiveTowSeedAtRest).
+	 *   - STRANDED otherwise: Rescued onto pavement near it (RescueStranded), or NoPavement.
+	 *   - REVERSING, MANOEUVRING, or taxiing on a route that is not drivable: FinishesMotion.
+	 *   - ARRIVING, DEPARTING, GONE, or no such agent: NotSendable.
+	 *
+	 * ENarrowRoad::DriveAnyway: a search the vehicle gate refuses TooNarrow is repeated ungated (and said, once, in
+	 * FSendAgentResult::bNarrow); from rest, an ungated route that folds the tow is not driven (VehicleFit::
+	 * MayDriveUngated), and on the move RerouteAgent's own whole-route judge refuses it. Cause is what a Redirected
+	 * phase change is announced with (RedirectAgent's parameter).
+	 *
+	 * NOTHING HERE IS ABOUT PURPOSE: which goal, whether a narrow road is worth driving, what to do with a vehicle
+	 * nothing can move - those are the caller's, told by the outcome.
+	 * ENFORCED BY: AirportOps.Fuel.TowRecalledMidRouteGetsHome, AirportOps.Fuel.TruckRecalledMidRouteGetsHome,
+	 * AirportOps.Fuel.TowRecalledOnItsLastLegGetsHome, AirportOps.Fuel.TowRecalledWhileReversingGetsHome,
+	 * AirportOps.Ops.FuelTruckGetsHomeWhenTooNarrow, AirportOps.Ops.FuelTowNeverDrivenHomeIntoAFold,
+	 * AirportOps.Model.AgentRescue.StrandedVehicleReleasesJobs, Airside.Model.Traffic.SendAgentTo.ByPhase
+	 */
+	FSendAgentResult SendAgentTo(int32 AgentId, FGuidelineNodeId Goal, const FRouteQuery& QueryTemplate,
+		const URoadNetwork& Network, ENarrowRoad Narrow = ENarrowRoad::Refuse, EAgentEvent Cause = EAgentEvent::Redirected);
+
+	/**
+	 * ONE WAITING AIRCRAFT OFFERED A STAND (issue #429) - ReofferStands' move for each waiter, and the player's Unstick
+	 * "find a stand" for one parked waiting for one: the best free stand it fits reachable from its goal node (where it
+	 * waits, or where its route ends - ArrivalPlanner::ChooseStand, the one stand choice), and then SendAgentTo with a
+	 * taxi-in query, which picks the verb by phase (a moving waiter extended in place, a standing one redirected).
+	 * Cause is what a redirect is announced with: ReOffered for the pass, Rescued for the player's.
+	 * ENFORCED BY: Airside.Model.Traffic.ReofferTaxiingWaiterDoesNotJump,
+	 * Airside.Model.Traffic.ReofferRefusedExtensionKeepsWaiting
+	 */
+	FStandOffer ReofferStand(int32 AgentId, const URoadNetwork& Network, EAgentEvent Cause = EAgentEvent::ReOffered);
+
+	/**
+	 * THE PLAYER'S "FIND A STAND" FOR A STRANDED AIRCRAFT (issue #429, from AirportOps' UAgentRescue): the stand is CHOSEN
+	 * from a node near it - the node ahead on its dead route when that node still exists (the way it was facing, off any
+	 * runway it was leaving), else the nearest within StandSearchRadius - and DRIVEN to by RescueStranded from whatever
+	 * pavement it hops onto. Always the rescue, never ReofferStand's restart from its goal node: that node may be the
+	 * stand that went, which is how an aircraft comes to be stranded awaiting one. Sent, NoFreeStand (said in the log,
+	 * with the node searched from), or NoPavement.
+	 * ENFORCED BY: AirportOps.Model.AgentRescue.AircraftFindStand
+	 */
+	FStandOffer RescueToStand(int32 AgentId, const URoadNetwork& Network);
 
 	/**
 	 * Removes an agent immediately, announcing <phase> -> Gone. For a service vehicle that
@@ -573,6 +659,16 @@ public:
 	 * reaching Agent->Follower.Plan.Polyline itself (#104).
 	 */
 	const TArray<FVector2D>& RemainingRoute(int32 AgentId) const;
+
+	/**
+	 * How long AgentId's route has left to drive, in MOVEMENT seconds at its own cruise (its chassis' Taxi.SpeedCap, at
+	 * least 1 uu/s) - what is left of the plan past Travelled. 0 for no such agent or no drivable plan. CRUISE ONLY, like
+	 * every drive time the service bid compares: acceleration, corners and a service reverse lengthen the real drive for
+	 * every vehicle alike, so the ranking holds without the number being a promise. For AirportOps' bid, which read the
+	 * follower's plan and distance itself (issue #429); the caller converts movement to game seconds.
+	 * ENFORCED BY: Airside.Model.Traffic.RemainingDriveSeconds, AirportOps.Service.Bid.OutVehiclePricesItsRemainingDrive
+	 */
+	double RemainingDriveSeconds(int32 AgentId) const;
 
 	/**
 	 * RemainingRoute cut into forward and reverse runs (FRoutePlan::DescribeRuns), for the route
@@ -974,6 +1070,10 @@ private:
 	 * keeps waiting and is asked again the next time something frees - or when it stops at the end
 	 * of its route (#455), which is what asks it again if nothing else does; it is never redirected
 	 * while it is moving.
+	 *
+	 * THAT PHASE TABLE IS SendAgentTo's NOW (issue #429), reached per waiter through ReofferStand -
+	 * the same table a service vehicle's recall is sent by, so the next caller of "send it there
+	 * from wherever it is" cannot choose a verb by hand again, which is how the #435 teleport came.
 	 * ENFORCED BY: Airside.Model.Traffic.ReofferTaxiingWaiterDoesNotJump (the extension),
 	 * Airside.Model.Traffic.ReofferRefusedExtensionKeepsWaiting (the refusal)
 	 */

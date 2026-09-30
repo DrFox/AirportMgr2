@@ -1046,6 +1046,28 @@ public:
 		return IsOnRoute() && WaitingOn != 0 && SpeedAlongPlan() < KINDA_SMALL_NUMBER;
 	}
 
+	/**
+	 * A STALLED WAITER PAST Seconds: the clock IsStoppedAndWaiting feeds has run longer than Seconds, and the agent still
+	 * names whom it waits on. FDeadlockResolver::FindCycles' edge (Seconds = Rules.StallSeconds - the id -> WaitingOn
+	 * edge needs the WaitingOn half), and the stall half of IsStuck below. STRICTLY longer, as the resolver always read it.
+	 * ENFORCED BY: Airside.Model.Traffic.IsStuckIsOneDefinition; Check-Architecture rule 4 ('stall clock compared')
+	 */
+	bool HasStalledFor(double Seconds) const { return WaitingOn != 0 && StalledSeconds > Seconds; }
+
+	/**
+	 * STUCK - THE ONE DEFINITION (#429): Stranded (its route died under it; nothing automatic moves it again), or a
+	 * stalled waiter past Seconds. It was spelled three ways in two modules - the stall clock's own accrual rule
+	 * (GroundTraffic.cpp), the resolver's waiter test (GroundTrafficDeadlock.cpp) and the Unstick button's "looks stuck"
+	 * (AgentRescue.cpp, `Stranded || stall >= Seconds`, which neither asked who was waited on nor agreed on the bound).
+	 * Now the clock's rule is IsStoppedAndWaiting, the waiter is HasStalledFor, and this is what the player is shown.
+	 *
+	 * Seconds IS THE ASKER'S, deliberately: the inspector lights the Unstick button at its own UnstickHighlightSeconds,
+	 * not the resolver's StallSeconds (3 s), which a queue at any hold bar passes every time. What "stuck" MEANS is
+	 * fixed here; how long before it is worth the player's attention is a presentation knob.
+	 * ENFORCED BY: Airside.Model.Traffic.IsStuckIsOneDefinition; Check-Architecture rule 4 ('stall clock compared')
+	 */
+	bool IsStuck(double Seconds) const { return Phase == EAgentPhase::Stranded || HasStalledFor(Seconds); }
+
 private:
 	/** SimSeconds of the last replan attempt by the deadlock resolver; -1e9 = never.
 	 *  PRIVATE, WRITTEN ONLY THROUGH StampResolveAttempt (issue #295) - FDeadlockResolver::

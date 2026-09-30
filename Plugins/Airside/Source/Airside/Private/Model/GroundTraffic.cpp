@@ -1955,43 +1955,30 @@ void UGroundTraffic::ReofferStands(const URoadNetwork& Network)
 	// By id, not by reference: RedirectAgent writes into Agents and broadcasts.
 	for (const int32 Id : Waiting)
 	{
-		const FRoadAgent* Agent = FindAgent(Id);
-		if (Agent == nullptr || Agent->AsAircraft() == nullptr)
-		{
-			continue;
-		}
-		FRoutePlan Route;
-		const FGuidelineNodeId Stand = ArrivalPlanner::ChooseStand(Network, Agent->GoalNode, *Agent->AsAircraft(), &Occupancy, Id, &Route);
-		if (!Stand.IsSet() || !Route.IsValid())
-		{
-			continue;
-		}
-
-		// THE PHASE CHOOSES THE VERB (issue #435). Route starts at Agent->GoalNode, which for a
-		// TAXIING waiter is where its truncated route ENDS - a node ahead of the aircraft. Handed to
-		// RedirectAgent that is a restart from rest at the new route's first point: the aircraft
+		// THE PHASE CHOOSES THE VERB (issue #435), and SendAgentTo is where it chooses since #429 - reached through
+		// ReofferStand, the one waiter's move the player's Unstick makes too. The route to the stand starts at the
+		// waiter's GoalNode, which for a TAXIING waiter is where its truncated route ENDS - a node ahead of the
+		// aircraft. Handed to RedirectAgent that was a restart from rest at the new route's first point: the aircraft
 		// jumped to the end of the route it had not driven (9271 uu on the first frame, measured 2026-09-30 on
-		// Airside.Model.Traffic.ReofferTaxiingWaiterDoesNotJump). ExtendRoute splices the tail onto
-		// the live plan with Travelled, Speed and Heading kept, and its precondition - the tail
-		// starts where the live plan ends - is the very thing that made the route above.
+		// Airside.Model.Traffic.ReofferTaxiingWaiterDoesNotJump). ExtendRoute splices the tail onto the live plan with
+		// Travelled, Speed and Heading kept, and its precondition - the tail starts where the live plan ends - is the
+		// very thing that made the route. A PARKED OR STRANDED waiter is standing at GoalNode, so the restart is where
+		// it already is, and RedirectAgent is the only verb that gets a stopped aircraft going: they keep it.
 		//
-		// A PARKED OR STRANDED waiter is standing at GoalNode, so the restart is where it already
-		// is, and RedirectAgent is the only verb that gets a stopped aircraft going: they keep it.
-		//
-		// NEVER RedirectAgent AS THE FALLBACK when the extension is refused (a tail that does not
-		// join, a plan that died between the search and here): that is the teleport again, in the
-		// one case nothing has measured. It keeps waiting, and the next freed stand asks again - or its own stop
-		// at the end of the route does (AdvanceOnce's Parked case, #455), which is what asks it if no stand frees.
-		const bool bMoving = Agent->Phase == EAgentPhase::Taxiing;
 		// ReOffered, NOT Redirected: the flight board keeps it in its taxi IN whatever its stand does next (review M1).
-		const bool bSent = bMoving ? ExtendRoute(Id, &Network, Route) : RedirectAgent(Id, &Network, Route, EAgentEvent::ReOffered);
-		if (!bSent && bMoving)
+		const FStandOffer Offer = ReofferStand(Id, Network, EAgentEvent::ReOffered);
+
+		// A MOVING WAITER WHOSE EXTENSION WAS REFUSED (a tail that does not join, a plan that died between the search and
+		// here) is never redirected instead - that is the teleport again, in the one case nothing has measured. It keeps
+		// waiting, and the next freed stand asks again - or its own stop at the end of the route does (AdvanceOnce's
+		// Parked case, #455), which is what asks it if no stand frees.
+		if (Offer.Outcome == EStandOffer::NotSent && Offer.Send.Outcome == ESendOutcome::FinishesLeg)
 		{
 			UE_LOG(LogAirsideTraffic, Log,
 				TEXT("Agent %d: a stand freed at node %d, but its route could not be extended from where it ends; it keeps waiting"),
-				Id, Stand.Index);
+				Id, Offer.Stand.Index);
 		}
-		if (bSent)
+		if (Offer.Outcome == EStandOffer::Sent)
 		{
 			// NOT Agents[FindIndex(Id)] HERE (issue #193): RedirectAgent already cleared
 			// bAwaitingStand itself, before its own OnAgentPhaseChanged broadcast - see its
@@ -2001,9 +1988,9 @@ void UGroundTraffic::ReofferStands(const URoadNetwork& Network)
 			// from Agents (the contract AdvanceOnce states; Airside.Model.Traffic.
 			// ReofferStandsRetireReentrancy is one), so FindIndex(Id) here would
 			// return INDEX_NONE and Agents[INDEX_NONE] would be an out-of-bounds write. Id and
-			// Stand.Index are plain values, not indices into Agents, so the log below is safe
+			// Offer.Stand.Index are plain values, not indices into Agents, so the log below is safe
 			// whether or not the agent survived its own redirect.
-			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d: a stand freed; sent to the stand at node %d"), Id, Stand.Index);
+			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d: a stand freed; sent to the stand at node %d"), Id, Offer.Stand.Index);
 		}
 	}
 	// RedirectAgent re-raised the flag on releasing the old goal; nothing else has changed
