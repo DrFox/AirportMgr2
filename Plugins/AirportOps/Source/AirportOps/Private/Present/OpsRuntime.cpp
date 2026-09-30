@@ -43,10 +43,26 @@ UOpsRuntime::UOpsRuntime()
 	OfferGenerator = CreateDefaultSubobject<UOfferGenerator>(TEXT("OfferGenerator"));
 	FlightBoard->Generator = OfferGenerator;
 
-	// The money, and the same forwarding shape: this class gains two pointers and a line in
-	// Attach, and every decision about what things cost lives in UPricing, not here.
+	// The money, and the same forwarding shape: this class gains two pointers and the wiring
+	// below, and every decision about what things cost lives in UPricing, not here.
 	Ledger = CreateDefaultSubobject<ULedger>(TEXT("Ledger"));
 	Pricing = CreateDefaultSubobject<UPricing>(TEXT("Pricing"));
+
+	// THE MONEY, wired in one breath, so none of these is the one somebody forgot to connect.
+	// Each of the three posts to the ledger for its own part of a flight: the generator prices
+	// the offer, the board banks landing and parking, the fuel service banks a completed fuelling.
+	// HERE, NOT IN Attach, since #425: every pointer is one of this runtime's own subobjects, constant for its
+	// life, and Transient on the object that holds it - a save must not carry a path to it - so nothing sets it
+	// again after a load, and an unattached runtime is wired too. OfferGenerator->Airport, below, is the precedent.
+	// ENFORCED BY: AirportOps.Present.FlightBoardIsComposedByTheRuntime
+	OfferGenerator->Pricing = Pricing;
+	FlightBoard->Ledger = Ledger;
+	FlightBoard->Pricing = Pricing;
+	FlightBoard->Fuel = JobBoard;
+	JobBoard->Ledger = Ledger;
+	JobBoard->Pricing = Pricing;
+	Ledger->Pricing = Pricing;
+	Ledger->Clock = Clock;
 
 	// The airlines' mood - the bus's first Reaction (spec 2026-09-29 §3), forwarded like the rest.
 	Airlines = CreateDefaultSubobject<UAirlineRoster>(TEXT("Airlines"));
@@ -841,14 +857,8 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		UE_LOG(LogAirportOps, Log, TEXT("Fuel vehicles by stand letter: %s"), *PerLetter.TrimEnd());
 	}
 
-	// THE MONEY, wired in one breath like the scenario figures above, so none of these is the
-	// one somebody forgot to connect. Each of the three posts to the ledger for its own part of
-	// a flight: the generator prices the offer, the board banks landing and parking, the fuel
-	// service banks a completed fuelling.
-	OfferGenerator->Pricing = Pricing;
-	FlightBoard->Ledger = Ledger;
-	FlightBoard->Pricing = Pricing;
-	FlightBoard->Fuel = JobBoard;
+	// THE BUS, per attach, like the scenario figures above - Detach takes it back. The money these
+	// objects post is wired once, in the constructor (#425), and a load no longer overwrites it.
 	FlightBoard->Bus = &Bus;
 	Alerts->Bus = &Bus;
 	Ledger->Bus = &Bus;
@@ -865,11 +875,7 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	{
 		Airport->Reseat(*Target->Network);
 	}
-	JobBoard->Ledger = Ledger;
-	JobBoard->Pricing = Pricing;
 	JobBoard->Bus = &Bus;
-	Ledger->Pricing = Pricing;
-	Ledger->Clock = Clock;
 
 	// THE LEDGER IS THE PURSE the build tools spend from. Handed to the facade here and
 	// nowhere else, so design-time building - which has no runtime and therefore no purse -

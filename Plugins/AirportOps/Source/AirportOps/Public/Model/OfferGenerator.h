@@ -104,8 +104,11 @@ public:
 	 * THE OFFER IS PRICED, NOT THE LANDING. See MakeOffer - the fee is fixed here so the inbox
 	 * row can show what accepting it is worth, and so the player's lever moves NEW offers only.
 	 * Its DemandFactor is also read every tick - see RateAt.
+	 *
+	 * Set by UOpsRuntime's constructor. TRANSIENT for Airport's reason below (#425): saved, it was a path to the
+	 * runtime's subobject, which a later session's load resolved to null - and every later offer went unpriced.
 	 */
-	UPROPERTY() TObjectPtr<UPricing> Pricing = nullptr;
+	UPROPERTY(Transient) TObjectPtr<UPricing> Pricing = nullptr;
 
 	/**
 	 * Which aeroplane this generator picks, next, and every other draw it makes (thresholds,

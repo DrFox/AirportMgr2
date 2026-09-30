@@ -9,10 +9,13 @@
 #include "Model/FlightBoard.h"
 #include "Model/JobBoard.h"
 #include "Model/GroundTraffic.h"
+#include "Model/OfferGenerator.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
+#include "Serialization/MemoryWriter.h"
+#include "Serialization/ObjectAndNameAsStringProxyArchive.h"
 #include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -564,6 +567,237 @@ bool FFlightUnchargedLandingTest::RunTest(const FString& Parameters)
 	Rig.Board->OnAgentPhase(*Traffic, *Net, *Rig.Clock, Flight->AgentId, EAgentPhase::Gone, EAgentPhase::Arriving);
 	const int32 Rows = Ledger->Entries().FilterByPredicate([](const FLedgerEntry& E) { return E.Category == ELedgerCategory::LandingFee; }).Num();
 	TestEqual(TEXT("saved uncharged, it is charged exactly once when it lands"), Rows, 1);
+	return true;
+}
+
+namespace
+{
+	/** An open offer with figures a restore must bring back. */
+	UFlight* ByValueOffer(UFlightBoard& Board, USimClock& Clock, const TCHAR* Callsign)
+	{
+		UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+		Flight->Airframe.Wingspan = 3400.0;
+		Flight->Callsign = Callsign;
+		Flight->LandingFee = 1234.0;
+		Flight->OfferWindowSeconds = 60.0;
+		Flight->OfferSecondsLeft = 60.0;
+		Board.AddOffer(Clock, Flight);
+		return Flight;
+	}
+}
+
+/**
+ * ISSUE #425's PIN. The "Flights" blob held object PATHS: FObjectAndNameAsStringProxyArchive writes a UObject reference
+ * as its path and re-finds it on load. In one session the path found the LIVE flight, so a load "restored" whatever the
+ * flight was NOW (every test above passed that way - its original was still alive); in the next session it found
+ * nothing, so every flight was dropped and the board's Allocator came back null, refusing every accept with no log.
+ * THE NEXT SESSION, SIMULATED: capture, mutate the originals as the player would after saving, then destroy every object
+ * of the saving "session" - collected, not merely unreferenced - and restore into fresh ones.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightSaveRestoresByValueTest,
+	"AirportOps.Model.FlightSave.RestoresByValue",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightSaveRestoresByValueTest::RunTest(const FString& Parameters)
+{
+	FOpsSnapshot Snapshot;
+	int32 DeclinedLaterId = 0;
+	int32 DrainedLaterId = 0;
+	int32 DeclinedBeforeId = 0;
+	TWeakObjectPtr<UFlight> OriginalDeclinedLater;
+	TWeakObjectPtr<UFlight> OriginalDrainedLater;
+	TArray<UObject*> SavingSession;
+	{
+		USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+		UFlightBoard* Board = SaveTestBoard();
+		UJobBoard* Fuel = NewObject<UJobBoard>(GetTransientPackage());
+		ULedger* Ledger = NewObject<ULedger>(GetTransientPackage());
+		UPricing* Pricing = NewObject<UPricing>(GetTransientPackage());
+		UOfferGenerator* Generator = NewObject<UOfferGenerator>(GetTransientPackage());
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		Ledger->Clock = Clock;
+		Ledger->Pricing = Pricing;
+		Board->Ledger = Ledger;
+		Board->Pricing = Pricing;
+		Fuel->Ledger = Ledger;
+		Fuel->Pricing = Pricing;
+		Generator->Pricing = Pricing;
+
+		UFlight* DeclinedLater = ByValueOffer(*Board, *Clock, TEXT("PIN 1"));
+		UFlight* DrainedLater = ByValueOffer(*Board, *Clock, TEXT("PIN 2"));
+		UFlight* DeclinedBefore = ByValueOffer(*Board, *Clock, TEXT("PIN 3"));
+		Board->Decline(*Clock, *DeclinedBefore);   // into History before the save: History is saved by value too
+		DeclinedLaterId = DeclinedLater->Id;
+		DrainedLaterId = DrainedLater->Id;
+		DeclinedBeforeId = DeclinedBefore->Id;
+		OriginalDeclinedLater = DeclinedLater;
+		OriginalDrainedLater = DrainedLater;
+
+		TArray<IOpsPersistent*> Persistents = OpsSaveTest::Persistents(*Clock, *Board, *Fuel, *Ledger, *Pricing);
+		Persistents.Add(Generator);
+		OpsSave::Capture(Persistents, *Net, Snapshot);
+
+		// AFTER THE SAVE, as the player would: a same-session load used to bring these states back, not the saved ones.
+		Board->Decline(*Clock, *DeclinedLater);
+		DrainedLater->OfferSecondsLeft = 1.0;
+
+		SavingSession = { Clock, Board, Board->Allocator.Get(), Fuel, Ledger, Pricing, Generator, Net,
+			DeclinedLater, DrainedLater, DeclinedBefore };
+	}
+
+	// THE SAVING SESSION ENDS. Garbage AND collected: a path the load re-finds must find nothing, as it would in a new
+	// process. Nothing below may be created before this line - a raw local is no GC root, and would go with them.
+	for (UObject* Each : SavingSession)
+	{
+		Each->MarkAsGarbage();
+	}
+	CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+	if (!TestFalse(TEXT("the saving session's flights are destroyed, not merely unreferenced - else this measures nothing"),
+		OriginalDeclinedLater.IsValid(/*bEvenIfGarbage*/ true))) { return false; }
+
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	UFlightBoard* Board = SaveTestBoard();
+	UStandAllocator* OwnAllocator = Board->Allocator;
+	UJobBoard* Fuel = NewObject<UJobBoard>(GetTransientPackage());
+	ULedger* Ledger = NewObject<ULedger>(GetTransientPackage());
+	UPricing* Pricing = NewObject<UPricing>(GetTransientPackage());
+	UOfferGenerator* Generator = NewObject<UOfferGenerator>(GetTransientPackage());
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	Ledger->Clock = Clock;
+	Ledger->Pricing = Pricing;
+	Board->Ledger = Ledger;
+	Board->Pricing = Pricing;
+	Fuel->Ledger = Ledger;
+	Fuel->Pricing = Pricing;
+	Generator->Pricing = Pricing;
+	TArray<IOpsPersistent*> Persistents = OpsSaveTest::Persistents(*Clock, *Board, *Fuel, *Ledger, *Pricing);
+	Persistents.Add(Generator);
+	if (!TestTrue(TEXT("restore succeeds"), OpsSave::Restore(Snapshot, Persistents, *Net))) { return false; }
+
+	// THE WIRING IS NOT STATE: each pointer stays what this session wired, not a path to the last session's object.
+	TestTrue(TEXT("the board keeps its own allocator - #425 left it null, and Accept refused every offer silently"),
+		Board->Allocator.Get() == OwnAllocator && OwnAllocator != nullptr);
+	TestTrue(TEXT("and its own ledger and pricing"), Board->Ledger.Get() == Ledger && Board->Pricing.Get() == Pricing);
+	TestTrue(TEXT("the ledger keeps its own clock and pricing"), Ledger->Clock.Get() == Clock && Ledger->Pricing.Get() == Pricing);
+	TestTrue(TEXT("the job board keeps its own ledger and pricing"), Fuel->Ledger.Get() == Ledger && Fuel->Pricing.Get() == Pricing);
+	TestTrue(TEXT("the generator keeps its own pricing"), Generator->Pricing.Get() == Pricing);
+
+	TestEqual(TEXT("both offers open at the save come back - #425 dropped every flight in a new session"),
+		Board->Offers().Num(), 2);
+	TestEqual(TEXT("and are counted as pending"), Board->PendingOfferCount(), 2);
+
+	UFlight* Declined = Board->FindByIdForTest(DeclinedLaterId);
+	if (TestNotNull(TEXT("the offer declined after the save is back"), Declined))
+	{
+		TestEqual(TEXT("as the save had it - Offered, not the later Decline"), Declined->Phase, EFlightPhase::Offered);
+		TestEqual(TEXT("with its callsign"), Declined->Callsign, FString(TEXT("PIN 1")));
+		TestEqual(TEXT("and its fee"), Declined->LandingFee, 1234.0, 1e-9);
+		TestTrue(TEXT("a distinct object, not the saving session's"), TWeakObjectPtr<UFlight>(Declined) != OriginalDeclinedLater);
+		TestTrue(TEXT("owned by the board that restored it"), Declined->GetOuter() == Board);
+	}
+	UFlight* Drained = Board->FindByIdForTest(DrainedLaterId);
+	if (TestNotNull(TEXT("the offer drained after the save is back"), Drained))
+	{
+		TestEqual(TEXT("with the seconds it had AT THE SAVE"), Drained->OfferSecondsLeft, 60.0, 1e-9);
+		TestTrue(TEXT("a distinct object too"), TWeakObjectPtr<UFlight>(Drained) != OriginalDrainedLater);
+	}
+	UFlight* Retired = Board->FindByIdForTest(DeclinedBeforeId);
+	if (TestNotNull(TEXT("the flight in History at the save is back"), Retired))
+	{
+		TestEqual(TEXT("still Declined"), Retired->Phase, EFlightPhase::Declined);
+		TestEqual(TEXT("and in History, not the live list"), Board->GetHistoryCountForTest(), 1);
+	}
+
+	// TRANSIENT IS A SAVE FLAG, NOT A LIFETIME ONE: the board's arrays still hold the restored flights through a
+	// collection. The board is rooted for it - a raw local is no GC root - and nothing above is used after it.
+	const TWeakObjectPtr<UFlight> Held = Declined;
+	Board->AddToRoot();
+	CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+	Board->RemoveFromRoot();
+	TestTrue(TEXT("a collection keeps the restored flights - a Transient array is still a reference"), Held.IsValid());
+	return true;
+}
+
+/**
+ * #425's OTHER HALF: a load into the SAME board replaces every flight with a new object, so anything still holding a
+ * pre-load one - a viewmodel row, the inspector's cached lookup, the board's own indices - must be re-pointed, not left
+ * reading the pre-load state. The board retires the replaced flights (a weak pointer reads null at once) and moves its
+ * Revision, which every viewmodel keys its re-read on.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightSaveRestoreRetiresReplacedFlightsTest,
+	"AirportOps.Model.FlightSave.RestoreRetiresReplacedFlights",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightSaveRestoreRetiresReplacedFlightsTest::RunTest(const FString& Parameters)
+{
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	UFlightBoard* Board = SaveTestBoard();
+	UJobBoard* Fuel = NewObject<UJobBoard>(GetTransientPackage());
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UFlight* PreLoad = ByValueOffer(*Board, *Clock, TEXT("PIN 4"));
+	const int32 Id = PreLoad->Id;
+	const TWeakObjectPtr<UFlight> Reader = PreLoad;
+
+	FOpsSnapshot Snapshot;
+	OpsSave::Capture(OpsSaveTest::Persistents(*Clock, *Board, *Fuel), *Net, Snapshot);
+	Board->Decline(*Clock, *PreLoad);
+	const uint32 RevisionBefore = Board->Revision();
+	if (!TestTrue(TEXT("restore succeeds"), OpsSave::Restore(Snapshot, OpsSaveTest::Persistents(*Clock, *Board, *Fuel), *Net)))
+	{
+		return false;
+	}
+
+	UFlight* Restored = Board->FindByIdForTest(Id);
+	if (!TestNotNull(TEXT("the board finds the flight by id"), Restored)) { return false; }
+	TestTrue(TEXT("and it is the restored object, not the pre-load one"), Restored != PreLoad);
+	TestEqual(TEXT("carrying the saved phase"), Restored->Phase, EFlightPhase::Offered);
+	TestTrue(TEXT("the inbox lists the restored object"), Board->Offers().Num() == 1 && Board->Offers()[0] == Restored);
+	TestFalse(TEXT("a reader still holding the pre-load flight reads null, not the pre-load state"), Reader.IsValid());
+	TestNotEqual(TEXT("the revision moved, so every viewmodel keyed on it re-reads the board"), Board->Revision(), RevisionBefore);
+	return true;
+}
+
+/**
+ * #452 REVIEW: the pre-v6 path. A blob from before #425 is the board's tags and nothing after them - its flights were
+ * paths, which the Transient arrays' tags are now skipped for. It restores NO flights and says so; and the load still
+ * retires the board's own pre-load flights and moves Revision, so nothing keeps showing them as if they had loaded.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightSavePreV6BlobRestoresNoFlightsTest,
+	"AirportOps.Model.FlightSave.PreV6BlobRestoresNoFlights",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightSavePreV6BlobRestoresNoFlightsTest::RunTest(const FString& Parameters)
+{
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	UFlightBoard* Board = SaveTestBoard();
+	UFlight* PreLoad = ByValueOffer(*Board, *Clock, TEXT("PIN 5"));
+	const int32 Id = PreLoad->Id;
+	const TWeakObjectPtr<UFlight> Reader = PreLoad;
+
+	// A PRE-v6 BLOB, written as OpsSave::SerializeObject wrote one then: the same archive, the tagged pass ALONE -
+	// UObject::Serialize, not the board's override, so no by-value section follows the tags.
+	TArray<uint8> Bytes;
+	{
+		FMemoryWriter Writer(Bytes, /*bIsPersistent*/ true);
+		FObjectAndNameAsStringProxyArchive Ar(Writer, /*bInLoadIfFindFails*/ false);
+		Board->UObject::Serialize(Ar);
+	}
+	if (!TestTrue(TEXT("the tags alone serialised to something"), Bytes.Num() > 0)) { return false; }
+
+	const uint32 RevisionBefore = Board->Revision();
+	AddExpectedMessagePlain(TEXT("no flights by value"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	OpsSave::DeserializeObject(*Board, Bytes);
+
+	TestEqual(TEXT("no offer is restored - a pre-v6 blob holds none by value"), Board->Offers().Num(), 0);
+	TestEqual(TEXT("nothing live either"), Board->Live().Num(), 0);
+	TestEqual(TEXT("nor in History"), Board->GetHistoryCountForTest(), 0);
+	TestEqual(TEXT("and none counted as pending"), Board->PendingOfferCount(), 0);
+	TestNull(TEXT("the pre-load flight is no longer found by id"), Board->FindByIdForTest(Id));
+	TestFalse(TEXT("and a reader still holding it reads null - retired, not left showing"), Reader.IsValid());
+	TestNotEqual(TEXT("the revision moved, so every viewmodel re-reads the now-empty board"), Board->Revision(), RevisionBefore);
 	return true;
 }
 

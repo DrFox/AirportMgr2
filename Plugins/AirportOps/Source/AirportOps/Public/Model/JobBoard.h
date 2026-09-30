@@ -244,11 +244,12 @@ public:
 		int32 AgentId, EAgentPhase From, EAgentPhase To);
 
 	/**
-	 * The money, or null in a test that does not care. Set by UOpsRuntime::Attach, in the same
+	 * The money, or null in a test that does not care. Set by UOpsRuntime's constructor, in the same
 	 * breath as the board's and the generator's, so none of them is the one left unconnected.
+	 * TRANSIENT (#425): wiring, not state - saved, each was a path a later session resolved to null.
 	 */
-	UPROPERTY() TObjectPtr<ULedger> Ledger = nullptr;
-	UPROPERTY() TObjectPtr<UPricing> Pricing = nullptr;
+	UPROPERTY(Transient) TObjectPtr<ULedger> Ledger = nullptr;
+	UPROPERTY(Transient) TObjectPtr<UPricing> Pricing = nullptr;
 
 	/**
 	 * Where a turnaround's end is announced (FTurnaroundEndedEvent). Set by UOpsRuntime::Attach beside the

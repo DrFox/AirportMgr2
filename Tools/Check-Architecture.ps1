@@ -1694,6 +1694,103 @@ foreach ($key in $passAllowed.Keys) {
 }
 $ranRules.Add('pass-dirtied-through-funnel')
 
+# --- 37. A PERSISTENT OBJECT SAVES NO POINTER TO A RUNTIME OBJECT -------------------------------
+# Issue #425: OpsSave writes every non-Transient UPROPERTY of an IOpsPersistent through FObjectAndNameAsStringProxyArchive,
+# which writes a UObject reference as its PATH and re-finds it by path on load. For a content asset that is right; for a
+# runtime object it is an address no later session can resolve. The flight board's flights and its six wiring pointers
+# all came back null in a new process - silently, because null is a working state for every one of them (no Allocator:
+# every accept refused) - and the Transient exception had been applied at one site (UOfferGenerator::Airport) by hand.
+# So, in a class whose base list names IOpsPersistent - OR a class a persistent owner saves BY VALUE through the same
+# archive, named in $savedByValueClasses (UFlight: UFlightBoard::Serialize writes its tagged properties inline) - a
+# UPROPERTY whose declaration holds an object pointer (TObjectPtr<, TWeakObjectPtr<, TLazyObjectPtr<, TScriptInterface<,
+# FWeakObjectPtr, a raw T*, bare or in a container) must be UPROPERTY(Transient ...) or be listed in
+# $persistentRefAllowed as Class::Member - CONTENT ASSETS ONLY. A runtime object that IS state is saved by value by its
+# owner, not by pointer. NOT SEEN, deliberately: a pointer inside a saved USTRUCT member (FEntityInstance::Definition is
+# content, rebound on load by RebindStandDefinitions), and a class that inherits IOpsPersistent through another class.
+# HARDENED in #452's review, so it cannot pass by reading nothing: comments and string literals are stripped (rule 34's
+# stripper) BEFORE a declaration is looked for, so `UPROPERTY() // note` reads the next line; a UPROPERTY( whose
+# parentheses do not close on its line fails rather than being skipped; the classes matched must equal the count of
+# `public IOpsPersistent` base mentions in code (a base list wrapped onto a second line is otherwise missed); and it
+# fails if it finds no persistent class, a $savedByValueClasses entry that matches no class, or a stale allow-list entry.
+$persistentRefAllowed = @()   # 'UClass::Member' - content assets only; empty on 2026-09-30
+$savedByValueClasses = @('UFlight')   # saved inline by an IOpsPersistent owner - see UFlightBoard::Serialize
+$persistentPointerPattern = 'TObjectPtr<|TWeakObjectPtr<|TLazyObjectPtr<|TScriptInterface<|\bFWeakObjectPtr\b|\b[A-Z]\w*\s*\*'
+$persistentClassCount = 0
+$persistentBaseMentions = 0
+$savedByValueSeen = @{}
+$persistentAllowedSeen = @{}
+# The text between UPROPERTY's own parentheses and the rest of the line after them, or $null when they do not close on
+# this line. BALANCED, not [^)]*: meta=(ClampMin="0") nests a pair inside the specifier list.
+function Split-ArchUProperty([string] $Code) {
+    $at = [regex]::Match($Code, '^\s*UPROPERTY\s*\(')
+    if (-not $at.Success) { return $null }
+    $depth = 1
+    for ($c = $at.Index + $at.Length; $c -lt $Code.Length; $c++) {
+        if ($Code[$c] -eq '(') { $depth++ }
+        elseif ($Code[$c] -eq ')') {
+            $depth--
+            if ($depth -eq 0) {
+                return @($Code.Substring($at.Index + $at.Length, $c - $at.Index - $at.Length), $Code.Substring($c + 1))
+            }
+        }
+    }
+    return $null
+}
+foreach ($file in Get-Sources (Join-Path $ops 'Public') @('.h')) {
+    $lines = Get-Content -LiteralPath $file.FullName
+    $inClass = ''
+    $inBlock = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        $persistentBaseMentions += ([regex]::Matches($code, '\bpublic\s+IOpsPersistent\b')).Count
+        $classMatch = [regex]::Match($code, '^\s*class\s+(?:\w+_API\s+)?(\w+)\s*:([^{;]*)')
+        if ($classMatch.Success) {
+            $name = $classMatch.Groups[1].Value
+            if ($classMatch.Groups[2].Value -match '\bpublic\s+IOpsPersistent\b') { $inClass = $name; $persistentClassCount++; continue }
+            if ($savedByValueClasses -contains $name) { $inClass = $name; $savedByValueSeen[$name] = $true; continue }
+        }
+        if ($inClass -eq '') { continue }
+        # The class's own closing brace is the one at column 0; a nested struct's is indented.
+        if ($code -match '^};') { $inClass = ''; continue }
+        if ($code -notmatch '^\s*UPROPERTY\s*\(') { continue }
+        $parts = Split-ArchUProperty $code
+        if ($null -eq $parts) {
+            $failures.Add("persistent-refs-transient: $($file.Name):$($i + 1) $inClass has a UPROPERTY( that does not close on its line - rule 37 reads one line; put the specifiers on one line")
+            continue
+        }
+        $spec = $parts[0]
+        # The declaration: the rest of this line, or the next line when the macro stands alone (comments already gone).
+        $decl = $parts[1].Trim()
+        if ($decl -eq '' -and $i + 1 -lt $lines.Count) {
+            $lookahead = $inBlock
+            $decl = (Strip-ArchCode $lines[$i + 1] ([ref]$lookahead)).Trim()
+        }
+        if ($decl -notmatch $persistentPointerPattern) { continue }
+        if ($spec -match '\bTransient\b') { continue }
+        $member = [regex]::Match($decl, '(\w+)\s*(?:\[[^\]]*\])?\s*(?:=[^;]*)?;').Groups[1].Value
+        $key = "$($inClass)::$member"
+        if ($persistentRefAllowed -contains $key) { $persistentAllowedSeen[$key] = $true; continue }
+        $failures.Add("persistent-refs-transient: $($file.Name):$($i + 1) $key is a saved object pointer on a class OpsSave saves - it is written as a PATH, which a later session resolves to null (#425). Mark it UPROPERTY(Transient) and wire it in UOpsRuntime's constructor; save runtime state by value; allow-list content assets only")
+    }
+}
+if ($persistentClassCount -eq 0) {
+    $failures.Add("persistent-refs-transient: found no class deriving IOpsPersistent under $ops\Public - it moved; update rule 37, do not let it check nothing")
+}
+if ($persistentClassCount -ne $persistentBaseMentions) {
+    $failures.Add("persistent-refs-transient: $persistentBaseMentions 'public IOpsPersistent' base mention(s) in code but $persistentClassCount class line(s) matched - a base list wraps onto a second line, or IOpsPersistent is inherited outside Public/; put the class head on one line or update rule 37")
+}
+foreach ($byValue in $savedByValueClasses) {
+    if (-not $savedByValueSeen.ContainsKey($byValue)) {
+        $failures.Add("persistent-refs-transient: $byValue is listed as saved by value but no 'class $byValue :' was found under $ops\Public - it moved or went; update rule 37")
+    }
+}
+foreach ($allowed in $persistentRefAllowed) {
+    if (-not $persistentAllowedSeen.ContainsKey($allowed)) {
+        $failures.Add("persistent-refs-transient: allow-list entry $allowed matches no saved pointer - it moved or went; update rule 37")
+    }
+}
+$ranRules.Add('persistent-refs-transient')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

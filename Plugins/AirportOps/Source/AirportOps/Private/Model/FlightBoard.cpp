@@ -24,6 +24,127 @@ namespace FlightBoardText
 	}
 }
 
+namespace FlightBoardSave
+{
+	/**
+	 * One list of flights BY VALUE (#425): a count, then each flight's own tagged properties - UObject::Serialize
+	 * through the same proxy archive the board itself goes through, so a flight is saved by exactly the rule every
+	 * blob is (its non-Transient UPROPERTYs), and ends with the tag terminator that lets the next one follow it.
+	 * Loading makes each a NEW UFlight owned by Board. A NULL ENTRY IS NOT WRITTEN: it has no value to save, and every
+	 * reader of these lists already skips one.
+	 */
+	void SerializeFlights(FArchive& Ar, UFlightBoard& Board, TArray<TObjectPtr<UFlight>>& List)
+	{
+		if (Ar.IsLoading())
+		{
+			int32 Count = 0;
+			Ar << Count;
+			// A NEGATIVE COUNT, OR ONE READ PAST THE END, IS A CORRUPT BLOB: the loop would fill flights with garbage.
+			// No Reserve(Count) either, for the same reason - a corrupt count must not become a huge allocation.
+			if (Ar.IsError() || Count < 0)
+			{
+				Ar.SetError();
+				return;
+			}
+			for (int32 Index = 0; Index < Count && !Ar.IsError(); ++Index)
+			{
+				UFlight* Flight = NewObject<UFlight>(&Board);
+				Flight->Serialize(Ar);
+				// HALF-READ IS NOT RESTORED: the archive failed inside this flight, so its fields are part saved values,
+				// part defaults - an offer with no id, or an accepted flight with no stand. Dropped, and so not counted in
+				// the corrupt-blob Error, which reports only the flights read whole (#452 review).
+				if (Ar.IsError())
+				{
+					Flight->MarkAsGarbage();
+					break;
+				}
+				List.Add(Flight);
+			}
+			return;
+		}
+		TArray<UFlight*> Present;
+		for (const TObjectPtr<UFlight>& Each : List)
+		{
+			if (Each != nullptr)
+			{
+				Present.Add(Each);
+			}
+		}
+		int32 Count = Present.Num();
+		Ar << Count;
+		for (UFlight* Each : Present)
+		{
+			Each->Serialize(Ar);
+		}
+	}
+}
+
+void UFlightBoard::Serialize(FArchive& Ar)
+{
+	// THE BOARD'S OWN FIELDS FIRST, by the tagged pass (MaxDays, ApproachFocus, NextFlightId). Flights and History
+	// are Transient, so it skips them - and so does an old blob's "Flights"/"History" tags on load: a Transient
+	// property's saved tag is passed over, which is what makes a v5 blob load at all.
+	Super::Serialize(Ar);
+
+	// ONLY A SAVE OR A LOAD CARRIES THE FLIGHTS. A reference collector or a memory count calls Serialize too, and writes
+	// nothing anyone reads back; the garbage collector does not come through here at all (it walks the Transient
+	// arrays by reflection, which is why Transient costs the flights nothing in lifetime).
+	// ENFORCED BY: AirportOps.Model.FlightSave.RestoresByValue ("a collection keeps the restored flights")
+	if (!(Ar.IsSaving() || Ar.IsLoading()) || Ar.IsObjectReferenceCollector() || Ar.IsCountingMemory())
+	{
+		return;
+	}
+
+	if (!Ar.IsLoading())
+	{
+		FlightBoardSave::SerializeFlights(Ar, *this, Flights);
+		FlightBoardSave::SerializeFlights(Ar, *this, History);
+		return;
+	}
+
+	// RETIRED, NOT MERELY DROPPED: a viewmodel row, the inspector's cached lookup, a test's local - anything still
+	// holding a flight this load replaces - must read null from here on, not the pre-load state, which is exactly the
+	// wrong answer #425 was (a same-session load "restored" each flight as it was NOW). Garbage makes every weak
+	// pointer to it null at once; the object itself lives until the next collection, so a raw pointer is not dangling.
+	for (TArray<TObjectPtr<UFlight>>* List : { &Flights, &History })
+	{
+		for (const TObjectPtr<UFlight>& Each : *List)
+		{
+			if (Each != nullptr)
+			{
+				Each->MarkAsGarbage();
+			}
+		}
+		List->Reset();
+	}
+
+	if (Ar.AtEnd())
+	{
+		// A BLOB FROM BEFORE v6 ends at the board's tags: its flights were saved as object paths (#425), which name
+		// objects no later session has. Nothing to restore, and said once rather than read as an empty board.
+		UE_LOG(LogAirportOps, Warning,
+			TEXT("Restore: this Flights blob has no flights by value (a snapshot before v6 saved only their paths, #425) - none restored"));
+	}
+	else
+	{
+		FlightBoardSave::SerializeFlights(Ar, *this, Flights);
+		FlightBoardSave::SerializeFlights(Ar, *this, History);
+		if (Ar.IsError())
+		{
+			// SAID, NOT SWALLOWED: OpsSave::Restore reports success regardless, and a board short of flights is
+			// otherwise indistinguishable from one that had fewer.
+			UE_LOG(LogAirportOps, Error, TEXT("Restore: the Flights blob is corrupt - kept the %d flight(s) read whole before it failed"),
+				Flights.Num() + History.Num());
+		}
+	}
+
+	// THE INDICES NAMED THE REPLACED OBJECTS, and a restore is a change (UJobBoard::Serialize's idiom): every viewmodel
+	// keyed on Revision re-reads, which is what re-points it at the restored flights.
+	RebuildIndices();
+	++RevisionCount;
+	UE_LOG(LogAirportOps, Log, TEXT("Restore: %d flight(s) live, %d in history, by value"), Flights.Num(), History.Num());
+}
+
 bool UFlightBoard::DefaultApproachFocus(const URoadNetwork& Network, FVector2D& OutFocus)
 {
 	const FAirsideCapability Airport = AirsideCapability::Summarise(Network);
@@ -726,6 +847,7 @@ void UFlightBoard::RebuildIndices()
 	// than at every FindByAgent/FindById/PendingOfferCount call, which is the whole point of
 	// maintaining them at all.
 	//
+	// CALLED FROM Serialize's LOAD TOO since #425 (the flights these maps named were replaced there).
 	// CALLED FROM BOTH OnAfterRestore AND RearmSchedules, not just the first: OpsSave::Restore
 	// calls OnAfterRestore, but FFlightSurvivesASaveTest - and anything else that goes through
 	// OpsSave::SerializeObject/DeserializeObject directly rather than the full Restore - never
@@ -1002,6 +1124,7 @@ void UFlightBoard::RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& N
 	// DeserializeObject, which FFlightSurvivesASaveTest uses on purpose to isolate the clock's
 	// own re-arm from the rest of Restore - would otherwise re-arm a Schedule
 	// callback whose eventual FindById(Id) found nothing, because ById was still empty.
+	// (Serialize's load rebuilds them first since #425; this stays the one rebuild every load path reaches.)
 	RebuildIndices();
 
 	// SNAPSHOT, NOT A LIVE ITERATION: DispatchNow below mutates the board, and a range-based

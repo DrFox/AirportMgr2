@@ -127,15 +127,18 @@ public:
 	bool CanPay(double Price) const;
 
 	/**
-	 * What things cost, and what dates an entry. Both set by the ops runtime at attach.
+	 * What things cost, and what dates an entry. Both set by the ops runtime (see below).
 	 *
 	 * THE CLOCK IS NOT OPTIONAL FOR A PURSE. IBuildPurse hands no time down - Airside has no
 	 * notion of game time - so a ledger that could not date its own entries would write every
 	 * build at time zero, and the roll-up and the determinism test would both quietly stop
 	 * meaning anything. Null is tolerated (a test that only checks arithmetic) and dates to 0.
+	 *
+	 * SET BY UOpsRuntime's CONSTRUCTOR, AND TRANSIENT (#425): wiring, not state. Saved, each was a path to the runtime's
+	 * subobject, which a later session's load resolved to null - so every entry after it dated to 0.
 	 */
-	UPROPERTY() TObjectPtr<UPricing> Pricing = nullptr;
-	UPROPERTY() TObjectPtr<USimClock> Clock = nullptr;
+	UPROPERTY(Transient) TObjectPtr<UPricing> Pricing = nullptr;
+	UPROPERTY(Transient) TObjectPtr<USimClock> Clock = nullptr;
 
 	/** Where Post announces money moving (ops alerts spec 2026-09-29 §2). Set by UOpsRuntime::Attach;
 	 *  null in a bare NewObject, and Post checks. Raw: the runtime owns both. */

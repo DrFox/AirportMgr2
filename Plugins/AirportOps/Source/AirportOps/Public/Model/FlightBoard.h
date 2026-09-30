@@ -104,6 +104,26 @@ public:
 	virtual void OnAfterRestore(int32 SnapshotVersion) override;
 
 	/**
+	 * THE FLIGHTS, BY VALUE (#425). Flights and History are Transient, so the tagged-property pass skips them, and this
+	 * writes each flight's own tagged properties inline after the board's; a load re-creates every one as a NEW UFlight
+	 * owned by this board. The "Flights" blob used to hold only their PATHS - OpsSave's proxy archive writes an object
+	 * reference as its path - which in the same session re-found the LIVE flight (a load restored its state now, not at
+	 * the save) and in the next session found nothing (every flight dropped, silently: every loop null-checks).
+	 *
+	 * A CUSTOM Serialize AND NOT A USTRUCT RECORD, the issue's other option: UFlight stays a UObject, so every reader of
+	 * one - the viewmodels' weak pointers, the inspector's lookup, ById/ByAgent, the sequencer, the job board's litres
+	 * lookup - is untouched, where a record would have changed every one of them for the save's sake. And each flight
+	 * is still written by its OWN reflection, so a UPROPERTY added to UFlight is saved with no edit here - OpsSave's rule.
+	 *
+	 * A LOAD RETIRES THE FLIGHTS IT REPLACES (MarkAsGarbage), rebuilds the indices and moves Revision - HERE, not in
+	 * OnAfterRestore, for UJobBoard::Serialize's reason: OpsSave::DeserializeObject restores a board without calling it.
+	 * A reader still holding a pre-load flight then reads null rather than the pre-load state, and every viewmodel keyed
+	 * on Revision re-reads the board.
+	 * ENFORCED BY: AirportOps.Model.FlightSave.RestoresByValue, AirportOps.Model.FlightSave.RestoreRetiresReplacedFlights
+	 */
+	virtual void Serialize(FArchive& Ar) override;
+
+	/**
 	 * How many game days a terminal flight (Declined, Expired, Departed, Cancelled, Withdrawn) is kept in History
 	 * before RollUp forgets it outright.
 	 *
@@ -158,27 +178,34 @@ public:
 	 */
 	uint32 Revision() const { return RevisionCount; }
 
-	UPROPERTY() TObjectPtr<UStandAllocator> Allocator = nullptr;
+	/**
+	 * THE WIRING, TRANSIENT - this and the five pointers below (#425). Each is one of UOpsRuntime's own subobjects, set
+	 * once by its constructor, and none is state. Saved, each was a PATH to that subobject, which a later session's
+	 * load resolved to null - silently, since null is a working state for every one of them: with no Allocator,
+	 * Accept refuses every offer. A test's own board wires them by hand, and a load now leaves them as wired.
+	 * ENFORCED BY: Tools/Check-Architecture.ps1 rule 37 (persistent-refs-transient), AirportOps.Model.FlightSave.RestoresByValue
+	 */
+	UPROPERTY(Transient) TObjectPtr<UStandAllocator> Allocator = nullptr;
 
 	/** Who of the holding flights is cleared next. Null = strict first come. See UArrivalSequencer. */
-	UPROPERTY() TObjectPtr<UArrivalSequencer> Sequencer = nullptr;
-	UPROPERTY() TObjectPtr<UOfferGenerator> Generator = nullptr;
+	UPROPERTY(Transient) TObjectPtr<UArrivalSequencer> Sequencer = nullptr;
+	UPROPERTY(Transient) TObjectPtr<UOfferGenerator> Generator = nullptr;
 
 	/**
-	 * The money, or null in a test that does not care about it. Set by UOpsRuntime::Attach.
+	 * The money, or null in a test that does not care about it. Set by UOpsRuntime's constructor (#425; was Attach).
 	 *
 	 * NULL IS A WORKING STATE, not a bug to guard against at every call: dozens of existing
 	 * board tests drive flights through their whole lifecycle and have no interest in fees, and
 	 * making them all construct a ledger would be churn for nothing.
 	 */
-	UPROPERTY() TObjectPtr<ULedger> Ledger = nullptr;
-	UPROPERTY() TObjectPtr<UPricing> Pricing = nullptr;
+	UPROPERTY(Transient) TObjectPtr<ULedger> Ledger = nullptr;
+	UPROPERTY(Transient) TObjectPtr<UPricing> Pricing = nullptr;
 
 	/**
 	 * Asked whether the airport could fuel an offer, for FOfferVerdict::bFuelServable. Null in
-	 * a test that does not care - fuel then reads as servable. Set by UOpsRuntime::Attach.
+	 * a test that does not care - fuel then reads as servable. Set by UOpsRuntime's constructor (#425; was Attach).
 	 */
-	UPROPERTY() TObjectPtr<UJobBoard> Fuel = nullptr;
+	UPROPERTY(Transient) TObjectPtr<UJobBoard> Fuel = nullptr;
 
 	/**
 	 * Where this board publishes what happened to its flights - an offer lapsing or declined, a flight
@@ -481,8 +508,10 @@ private:
 	 * moment they get there - see MoveToHistory - rather than staying here forever, which is
 	 * what made FindByAgent, FindById, Offers(), Live() and every save cost O(every flight
 	 * this session has ever seen) instead of O(what is actually happening) - issue #188.
+	 *
+	 * TRANSIENT BUT SAVED - by value, in Serialize (#425). The tagged pass would write only each flight's path.
 	 */
-	UPROPERTY() TArray<TObjectPtr<UFlight>> Flights;
+	UPROPERTY(Transient) TArray<TObjectPtr<UFlight>> Flights;
 
 	/**
 	 * Terminal flights MoveToHistory has retired, in the order they arrived here.
@@ -491,9 +520,10 @@ private:
 	 * ULedger::RollUp. SAVED like Flights (see IOpsPersistent's class comment: a model
 	 * object's non-Transient UPROPERTYs ARE its saved state) - now that it is bounded, keeping
 	 * it in the save is cheap, and a player who just watched a flight leave should still find
-	 * it if a "recent departures" view ever reads this.
+	 * it if a "recent departures" view ever reads this. Transient since #425 for Flights' reason:
+	 * Serialize writes it by value, which the tagged pass (a path per flight) never did.
 	 */
-	UPROPERTY() TArray<TObjectPtr<UFlight>> History;
+	UPROPERTY(Transient) TArray<TObjectPtr<UFlight>> History;
 
 	UPROPERTY() int32 NextFlightId = 1;
 
@@ -554,7 +584,8 @@ private:
 	 *
 	 * NOT UPROPERTYs: a restored flight's own Id/AgentId fields are the saved truth, and these
 	 * are rebuilt from Flights and History in OnAfterRestore - the same split ArrivalHandles
-	 * above already uses for the clock's handles.
+	 * above already uses for the clock's handles. (And in Serialize's load, since #425: the flights they
+	 * pointed at are replaced there, and a map left naming the pre-load objects would answer with them.)
 	 */
 	TMap<int32, TObjectPtr<UFlight>> ByAgent;
 	TMap<int32, TObjectPtr<UFlight>> ById;
@@ -585,7 +616,7 @@ private:
 
 	/**
 	 * Rebuilds ByAgent, ById and OfferedCount from scratch off Flights and History. Called
-	 * from OnAfterRestore AND from RearmSchedules - see RearmSchedules's own comment on why a
+	 * from Serialize's load (#425), OnAfterRestore AND RearmSchedules - see RearmSchedules's own comment on why a
 	 * board deserialised without going through OpsSave::Restore still needs this before its
 	 * re-armed clock callbacks can find anything by id.
 	 */
