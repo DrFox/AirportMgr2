@@ -12,7 +12,9 @@
 #include "Model/OpsAlerts.h"
 #include "Model/OpsEventBus.h"
 #include "Model/RoadAgent.h"
+#include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoadTraffic.h"
 #include "Model/RouteSearch.h"
 #include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
@@ -308,6 +310,76 @@ bool FOpsAlertsResetTest::RunTest(const FString&)
 	F.Recompute();
 	TestEqual(TEXT("and the next recompute raises again everything still true - nothing is saved, nothing is lost"),
 		F.RaisedOf(EAlertKind::Overdrawn), 2);
+	return true;
+}
+
+// A DEADLOCK RING NOBODY IN CAN TURN OUT OF IS NOT ALWAYS MADE OF AIRCRAFT (issue #455). The alert used to be
+// all-aircraft only and said "{0} aircraft deadlocked" for every ring it raised; since #455 a ring can include a truck
+// backing along a bay's leg (or an aeroplane being pushed), members with no second line. The text must say what is in
+// the ring, not call the truck an aircraft. A bay is laid far off on the airport's own network - three one-way legs,
+// the middle one a reverse - the truck is driven until it is Reversing, and a wait is staged between it and the
+// airport's aircraft through the traffic model's own scripting door, as the inspector's deadlock test stages one.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsAlertsDeadlockTruckTest, "AirportOps.Model.Alerts.DeadlockWithAReversingTruckDoesNotCallItAnAircraft",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsAlertsDeadlockTruckTest::RunTest(const FString&)
+{
+	FAlertsField F;
+	if (!TestTrue(TEXT("an aircraft taxiing in"), F.Build())) { return false; }
+	URoadNetwork& Net = *F.Airport.Net;
+
+	const FGuidelineNodeId Approach = TestGraph::Node(Net, -90000.0, -84000.0);
+	const FGuidelineNodeId Service = TestGraph::Node(Net, -90000.0, -88000.0);
+	const FGuidelineNodeId Cleared = TestGraph::Node(Net, -90000.0, -85500.0);
+	const FGuidelineNodeId Exit = TestGraph::Node(Net, -82000.0, -85500.0);
+	auto Lay = [&Net](FGuidelineNodeId From, FGuidelineNodeId To, bool bReverse)
+	{
+		FGuidelineEdge Edge;
+		Edge.A = From;
+		Edge.B = To;
+		Edge.Control = (Net.GetGuidelineNode(From)->Position + Net.GetGuidelineNode(To)->Position) * 0.5;
+		Edge.AllowedTraffic = FTrafficMask::Only(ETraversalClass::GroundVehicle);
+		Edge.Direction = EGuidelineDir::AToB;
+		Edge.Width = 400.0;
+		Edge.bDerived = false;
+		Edge.bReverseLeg = bReverse;
+		return Net.AddGuidelineEdge(MoveTemp(Edge));
+	};
+	Lay(Approach, Service, false);
+	Lay(Service, Cleared, true);
+	Lay(Cleared, Exit, false);
+	const FRoutePlan Route = TestGraph::Probe(Net, Approach, Exit, ETraversalClass::GroundVehicle);
+	if (!TestTrue(TEXT("the bay routes as arrive, reverse, depart"),
+		Route.IsValid() && Route.Steps.Num() == 3 && Route.Steps[1].bReverseLeg)) { return false; }
+
+	FVehicle Vehicle = UAirsideSettings::ResolveDefaultVehicle();
+	Vehicle.Chassis = UAirsideSettings::ResolveLargestServiceVehicle();
+	const int32 Truck = F.Traffic->DispatchAgent(F.Airport.Net, Route, Vehicle, ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("the truck is dispatched"), Truck > 0)) { return false; }
+	bool bReversing = false;
+	for (int32 Tick = 0; Tick < 6000 && !bReversing; ++Tick)
+	{
+		F.Traffic->Advance(0.05, F.Airport.Net);
+		const FRoadAgent* T = F.Traffic->FindAgent(Truck);
+		bReversing = T != nullptr && T->Phase == EAgentPhase::Reversing;
+	}
+	if (!TestTrue(TEXT("and it backs off the service point"), bReversing)) { return false; }
+
+	// THE RING: the truck waits on the aircraft, the aircraft on the truck, both past the stall threshold.
+	FGroundTrafficTestAccess Access(*F.Traffic);
+	Access.ScriptWait(Truck, FTrafficResource::OfNode(Cleared), F.Plane, F.Traffic->Rules.StallSeconds * 2.0);
+	Access.ScriptWait(F.Plane, FTrafficResource::OfNode(Approach), Truck, F.Traffic->Rules.StallSeconds * 2.0);
+	F.Recompute();
+
+	if (!TestEqual(TEXT("the ring through a reversing truck raises one Deadlock alert"), F.RaisedOf(EAlertKind::Deadlock), 1)) { return false; }
+	FString Text;
+	for (const FOpsAlert& Alert : F.Raised)
+	{
+		if (Alert.Key.Kind == EAlertKind::Deadlock) { Text = Alert.Text.ToString(); }
+	}
+	TestTrue(*FString::Printf(TEXT("it counts the aircraft as one ('%s')"), *Text), Text.Contains(TEXT("1 aircraft")));
+	TestTrue(*FString::Printf(TEXT("and the truck as a vehicle, not a second aircraft ('%s')"), *Text),
+		Text.Contains(TEXT("1 vehicle")) && !Text.Contains(TEXT("2 aircraft")));
+	TestTrue(TEXT("and gives the remedy the inspector's card gives"), Text.Contains(UOpsAlerts::DeadlockRemedy().ToString()));
 	return true;
 }
 

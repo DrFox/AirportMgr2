@@ -937,6 +937,32 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 
 	case EAgentPhase::Reversing:
 	{
+		// A ROUTE THE REBUILD KILLED UNDER A BACKING VEHICLE ENDS THE BACK-OUT WHERE IT STANDS (#455). The rebuild's
+		// Strand marks Follower.Plan Unreachable when no live node holds the position the span's own END is at - the
+		// pavement the truck is backing along went with it - and, until this arm, the truck simply carried on: it
+		// finished the span holding nothing (Strand released its claims), and the handover below cut the remainder
+		// with RouteSearch::Section, which writes Result = Found over the dead marker, so the truck then drove that
+		// remainder on handles the rebuild had freed. Stopped here it is what a TAXIING agent is when its plan dies
+		// under it (see the Taxiing arm's Stranded): standing where it stopped, at no goal, until it is retired or
+		// rescued. The phase change reaches every listener through AdvanceOnce's broadcast like any other.
+		// ENFORCED BY: Airside.Model.Traffic.RebuildDuringReverseStrandsWhenTheSpanEndIsGone
+		if (Follower.Plan.Result == ERouteResult::Unreachable)
+		{
+			Phase = EAgentPhase::Stranded;
+			ResumeStep = INDEX_NONE;
+			Follower.Speed = 0.0;
+			// The run's own speed too: DescribeMotion answers Stranded with zero, but a reader of the run itself
+			// (a test, a future panel) must not see a truck still reporting the pace it was backing at.
+			Reverse.Speed = 0.0;
+			TowReverse.Speed = 0.0;
+			LastMotion = DescribeMotion(At, Heading);
+			OutMotion = LastMotion;
+			UE_LOG(LogAirsideTraffic, Warning,
+				TEXT("Agent %d stranded mid-reverse at (%.0f, %.0f): the rebuild deleted the ground at the span's end; it waits here to be retired."),
+				Id, At.X, At.Y);
+			return true;
+		}
+
 		// PLAYED BACK, NOT TRACKED. See FReverseRun's header for why reversing is solved once
 		// and walked rather than steered: a heading error going backwards GROWS.
 		FVector2D BackAt = At;
@@ -1128,8 +1154,14 @@ void FRoadAgent::Park(const FVector2D& At, double Heading, FAgentMotion& OutMoti
 	OutMotion = LastMotion;
 }
 
-bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMotion& OutMotion)
+bool FRoadAgent::PendingReverseSpan(int32& OutFirst, int32& OutLast, FRoutePlan& OutSpan)
 {
+	// TAXIING ONLY: a reversing agent is already playing its span and every other phase is off the follower.
+	if (Phase != EAgentPhase::Taxiing)
+	{
+		return false;
+	}
+
 	// ASKED OF THE PLAN, NOT THE NETWORK, because this struct is world-free - the mark
 	// rides on FRouteStep::bReverseLeg, copied there by the search.
 	//
@@ -1142,20 +1174,82 @@ bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMot
 	// whole route every substep to learn nothing. NextReverseLegRun answers the identical
 	// question from a list precomputed once in Start/Replace - see its own comment for why
 	// it still finds a run's second step if the first one failed to arm.
-	int32 From = INDEX_NONE;
-	int32 To = INDEX_NONE;
-	if (!Follower.NextReverseLegRun(From, To))
+	if (!Follower.NextReverseLegRun(OutFirst, OutLast))
 	{
 		return false;
 	}
 
-	const double SpanStart = From == 0 ? 0.0 : Follower.Plan.Steps[From - 1].EndDistance;
+	const double SpanStart = OutFirst == 0 ? 0.0 : Follower.Plan.Steps[OutFirst - 1].EndDistance;
 	if (Follower.Travelled + UE_DOUBLE_KINDA_SMALL_NUMBER < SpanStart)
 	{
 		return false;
 	}
 
-	const FRoutePlan Span = RouteSearch::Section(Follower.Plan, From, To);
+	OutSpan = RouteSearch::Section(Follower.Plan, OutFirst, OutLast);
+	return true;
+}
+
+bool FRoadAgent::ReverseSpanSteps(int32& OutFirst, int32& OutLast) const
+{
+	if (Phase != EAgentPhase::Reversing)
+	{
+		return false;
+	}
+
+	// THE RUN'S OWN COPY OF THE SPAN counts its steps, and the span ENDS where the remainder begins (ResumeStep is
+	// the step after it) - or where the route does, when the reverse is the last thing the route does. The plan a
+	// rebuild has since truncated keeps every step up to and including the span (a failure at or after ResumeStep is
+	// what truncates), so both readings of "where the span ends" agree on a plan that still has a remainder.
+	const FRoutePlan& Run = Vehicle.HasTrailer() ? TowReverse.Plan : Reverse.Plan;
+	const int32 Count = Run.Steps.Num();
+	OutLast = Follower.Plan.Steps.IsValidIndex(ResumeStep) ? ResumeStep - 1 : Follower.Plan.Steps.Num() - 1;
+	OutFirst = OutLast - Count + 1;
+	return Count > 0 && OutFirst >= 0 && Follower.Plan.Steps.IsValidIndex(OutLast);
+}
+
+bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMotion& OutMotion)
+{
+	int32 From = INDEX_NONE;
+	int32 To = INDEX_NONE;
+	FRoutePlan Span;
+	if (!PendingReverseSpan(From, To, Span))
+	{
+		return false;
+	}
+
+	// THE GROUND MUST BE FREE BEFORE THE REVERSE BEGINS (#455). UGroundTraffic::GateReverseLeg has just asked the
+	// table about the whole span and, if anyone else holds any of it, REFUSED this agent there - so a refusal AT A STEP
+	// OF THE SPAN is the signal this reads (WaitingOn naming the holder, BlockedStep in [From, To]), the same one the
+	// claim pass leaves for the ground in front of a taxi. KEYED ON THE STEP, not on WaitingOn alone: a refusal
+	// somewhere else on the route - or one left over from a route the agent has since been redirected off - says
+	// nothing about this span's ground, and must neither hold the arm nor name a holder that is not the one in the way.
+	// ENFORCED BY: Airside.Model.Traffic.ReverseWaitsForHeldGround (held ground: still Taxiing, waiting on the holder),
+	// Airside.Model.Traffic.ReverseIgnoresARefusalElsewhereOnTheRoute (a refusal off the span does not hold it)
+	//
+	// The vehicle stays TAXIING where it stands, at the span's start, and asks again next frame: it does not arm a
+	// reverse that would begin into held ground, be refused a few metres on and sit in the span across the lane it
+	// was meant to clear. That is the push's rule (DepartAgent grants a push whole or withholds it) applied to the
+	// other manoeuvre with no second way out. An agent nobody has arbitrated for has WaitingOn 0 and arms exactly as
+	// before M2.
+	//
+	// SAID ONCE PER HOLDER, through the same LastReverseRefusal a tow's refusal is said through, so a wait that lasts
+	// a minute is a line and not a thousand. Follower.Speed is zeroed and the pose held for the reason the refused
+	// arm below gives: what the panel reads must be a vehicle standing still.
+	if (WaitingOn != 0 && BlockedStep >= From && BlockedStep <= To)
+	{
+		const FString Why = FString::Printf(TEXT("the ground it backs over is held by agent %d"), WaitingOn);
+		// NOT SAID BEFORE THE AGENT HAS AN ID (a dispatch's own pose, Id 0): the line would name "agent 0", and
+		// remembering it would keep the first real line - the first tick, with the id - from being said.
+		if (Id != 0 && Why != LastReverseRefusal)
+		{
+			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d: reverse leg waits - %s."), Id, *Why);
+			LastReverseRefusal = Why;
+		}
+		Follower.Speed = 0.0;
+		LastMotion = DescribeMotion(At, Heading);
+		OutMotion = LastMotion;
+		return true;
+	}
 
 	// A VEHICLE WITH A TRAILER backs through TowReverse instead - solved from where its chain IS.
 	if (Vehicle.HasTrailer())
@@ -1169,6 +1263,8 @@ bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMot
 		// Follower.Plan is what it is read from.
 		ResumeStep = Follower.Plan.Steps.IsValidIndex(To + 1) ? To + 1 : INDEX_NONE;
 		Phase = EAgentPhase::Reversing;
+		// A WAIT AT THE SPAN'S START ENDS HERE, so the next one is said again (see the gate above).
+		LastReverseRefusal.Reset();
 
 		// ZEROED for the reason the Parked branch zeroes it: DescribeMotion
 		// reads Follower.Speed for GroundSpeed in every phase that has no

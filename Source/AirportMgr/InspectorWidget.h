@@ -194,7 +194,7 @@ class AIRPORTMGR_API UInspectorWidget : public UAirportMgrPanelWidget
 
 public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TitleText;
-	/** "Deadlocked with G-HDVK - the layout needs another way round", in Style->Warning; collapsed
+	/** "Deadlocked with G-HDVK - the layout needs another way round or out", in Style->Warning; collapsed
 	 *  unless the aircraft is in a ring UGroundTraffic::CurrentDeadlocks reports. */
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> DeadlockText;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> FactsText;

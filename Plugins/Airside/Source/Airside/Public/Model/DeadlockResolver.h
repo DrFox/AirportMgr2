@@ -54,16 +54,32 @@ struct AIRSIDE_API FDeadlockResolver
 	 * own comments). OutCycles is reset first.
 	 *
 	 * ONE DEFINITION, used by Resolve (which acts on each cycle) and by UGroundTraffic::CurrentDeadlocks
-	 * (which reports the all-aircraft ones to the player), so the two cannot disagree about what a jam is.
+	 * (which reports the ones it filters to the player - see AlertCycles), so the two cannot disagree about what a jam is.
+	 * A REVERSING OR PUSHING MEMBER IS ONE (#455): a stopped, refused agent on any route accrues the stall clock
+	 * (FRoadAgent::IsStoppedAndWaiting), so it is an edge here like any waiter's - it can be waited ON, and it is
+	 * never a candidate for a replan (CanReplanAtBlockedStep asks IsReplannable).
 	 * ENFORCED BY: Airside.Model.Traffic.DeadlockResolverStandalone (Resolve acting on these cycles),
-	 * Airside.Model.Traffic.Deadlock.MixedCycleIsNotAnAlert (the alert's filter over the same cycles)
+	 * Airside.Model.Traffic.Deadlock.MixedCycleIsNotAnAlert (the alert's filter over the same cycles),
+	 * Airside.Model.Traffic.Deadlock.CycleThroughAReversingTruckIsAnAlert
 	 */
 	static void FindCycles(TConstArrayView<FRoadAgent> Agents, const FTrafficRules& Rules, FCycleScratch& Scratch,
 		TArray<TArray<int32>>& OutCycles);
 
-	/** FindCycles, keeping only cycles every member of which is found and is an aircraft - Resolve's own
-	 *  bAllAircraft test. What the ops Deadlock alert shows. */
-	static void AllAircraftCycles(TConstArrayView<FRoadAgent> Agents, const TMap<int32, int32>& AgentIndex,
+	/**
+	 * FindCycles, DROPPING every cycle that has a member the resolver can send round by another route: a member that
+	 * is not an aircraft and CAN BE TURNED where it stands (FRoadAgent::CanBeTurnedAtItsBlock - the same predicate
+	 * CanReplanAtBlockedStep chooses candidates by) - a Taxiing van or truck not waiting at a bay's reverse leg. What
+	 * is left is every cycle whose members are each an aircraft (replannable or not: an aircraft-only cycle is a layout
+	 * the player must fix whatever the resolver manages) or an agent that cannot be turned. A member nobody can find
+	 * drops the cycle too: a lookup miss must not promote a cycle to an alert. What the ops Deadlock alert shows.
+	 *
+	 * WAS AllAircraftCycles, and the rename is the correction (#455). "A cycle a van is in can be broken by the van
+	 * going round; one made only of aircraft is a LAYOUT the player must fix" - true of a TAXIING van, and false of
+	 * a truck backing along a bay's leg or an aeroplane being pushed, which have no second line to go round by. A
+	 * cycle through one of those is as much the player's to fix as an aircraft-only one, and the old filter dropped
+	 * it because its member was not an aircraft.
+	 */
+	static void AlertCycles(TConstArrayView<FRoadAgent> Agents, const TMap<int32, int32>& AgentIndex,
 		const FTrafficRules& Rules, TArray<TArray<int32>>& OutCycles);
 
 	/**
@@ -153,9 +169,10 @@ private:
 	/**
 	 * Can this member of a cycle turn where it stands? Spec §5's refined resolver rule.
 	 *
-	 * True only for a Taxiing agent that is STOPPED, was refused something (BlockedStep), and
-	 * is AT the node that step leaves from - within Gap + Footprint/2 short of it and not
-	 * past it. The alternative to a banned edge is another edge OUT of that node, so an agent
+	 * True only for a Taxiing agent that is STOPPED, was refused something (BlockedStep) that is
+	 * not a reverse leg's step (#455: a truck waiting to back out has no other line off the
+	 * service point), and is AT the node that step leaves from - within Gap + Footprint/2 short
+	 * of it and not past it. The alternative to a banned edge is another edge OUT of that node, so an agent
 	 * that has already entered the edge cannot take it without reversing, and one still a
 	 * whole edge short of the node would be replanned from a node it is nowhere near.
 	 */

@@ -90,8 +90,9 @@ bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, int32 SpliceStep, FGuidelineEd
 	// no move to make and the deadlock resolver must never pick one. That is exactly why
 	// UGroundTraffic::DepartAgent grants the whole push up front instead of letting
 	// arbitration stop it half way: clearance makes the manoeuvre atomic, which is what lets
-	// this guard stay as narrow as it is.
-	if (Agent.Phase != EAgentPhase::Taxiing || !Plan.IsValid()
+	// this guard stay as narrow as it is. IsReplannable is that guard's name (#455): the one predicate
+	// the resolver's candidate test and the alert's filter ask too, so the three cannot disagree.
+	if (!Agent.IsReplannable() || !Plan.IsValid()
 		|| SpliceStep < 0 || SpliceStep > Plan.Steps.Num())
 	{
 		return false;
@@ -381,20 +382,20 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 			//
 			// FROM ResumeStep, NOT FROM THE SPAN'S START, and that is a decision rather than a
 			// shortcut. The span is played from FReverseRun's own snapshot of it, which nothing here
-			// touches; re-resolving it as well would let a failure inside it replan or truncate the
-			// route from under the STEP INDEX the handover cuts the remainder by, and the truck
-			// would pick up somewhere it is not. What that costs, accepted 2026-09-30: the span's
-			// own steps keep the handles they had, so a rebuild that freed them leaves this truck's
-			// hold on the span pointing at nothing until it has backed out - the state it was in
-			// for the whole leg before this change, for the rest of one leg rather than the whole
-			// of it. The remainder, the goal and every claim after the back-out are live.
+			// touches; re-resolving it with ReResolvePlan would let a failure inside it replan or
+			// truncate the route from under the STEP INDEX the handover cuts the remainder by, and the
+			// truck would pick up somewhere it is not. The span's own steps are re-pointed by a separate
+			// pass that cannot do either (ReResolveSpan, below - #455, which closed the gap this comment
+			// used to accept: until then a rebuild that freed the span's handles left this truck's hold
+			// on it pointing at nothing until it had backed out).
 			//
 			// WHAT A FAILURE HERE DOES, stated because it differs by where it lands: a step after the
 			// span that will not re-resolve is replanned or TRUNCATED, and the truck then parks at the
 			// span's end on a live goal (Airside.Model.Traffic.RebuildDuringReverseTruncatesTheRemainder);
-			// but when the span's own END node is freed with no live node at its position, Strand
-			// marks the route dead while the agent stays Reversing, and that case is not handled
-			// here - see that test's comment, and #455.
+			// but when the span's own END node is freed with no live node at its position, Strand marks
+			// the route dead, and the reversing agent - which the rebuild leaves in its phase - ends the
+			// back-out where it stands and is Stranded (FRoadAgent::Advance's Reversing arm, #455).
+			// ENFORCED BY: Airside.Model.Traffic.RebuildDuringReverseStrandsWhenTheSpanEndIsGone
 			Plan = &Agent.Follower.Plan;
 			FromStep = Agent.GetResumeStep();
 		}
@@ -430,6 +431,34 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 			if (Ends.IsSet())
 			{
 				Agent.SetGoal(Ends);
+			}
+		}
+
+		// THE SPAN A REVERSING AGENT IS BACKING ALONG, re-pointed at the live graph BEFORE the remainder is (#455):
+		// the claim pass holds a reversing vehicle's whole span through these very steps, so a span left on freed
+		// handles is a truck holding nothing for the rest of the leg. Handles only - see ReResolveSpan for why it
+		// can neither replan nor move a step - and before ReResolvePlan below, whose re-point of the span's last
+		// To (the node the remainder leaves) then has the last word. A reverse that ends the route has no
+		// remainder and no arm above, and needs this most: nothing else would touch its steps.
+		// ENFORCED BY: Airside.Model.Traffic.RebuildDuringReverseKeepsTheSpanLive,
+		// Airside.Model.Traffic.RebuildDuringAReverseThatEndsTheRoute
+		if (Agent.Phase == EAgentPhase::Reversing && Agent.Follower.Plan.IsValid())
+		{
+			int32 SpanFirst = INDEX_NONE;
+			int32 SpanLast = INDEX_NONE;
+			if (Agent.ReverseSpanSteps(SpanFirst, SpanLast))
+			{
+				// THE RESULT IS NOT ACTED ON, deliberately: false means a span step did not re-resolve (a split
+				// under the span, the ground otherwise moved), and ReResolveSpan has already logged which and
+				// left that step - and the ones after it - on the handles they had. It is not fatal because the
+				// alternatives are worse: stranding stops a truck mid-leg for a bookkeeping miss on ground that
+				// is usually still there, and a replan would move the route from under the handover's step
+				// index. A span whose END node is gone, with a remainder to drive, is the case that IS fatal, and
+				// it is not reported here: the remainder's ReResolvePlan below finds no node at the span's end
+				// and Strands, which the reversing agent acts on (FRoadAgent::Advance). A reverse that ends the
+				// route has no remainder to strand it and parks at the old end. Not in the summary's counts
+				// either - they are one per agent, and the agent is counted once, by that call.
+				(void)PlanReResolver.ReResolveSpan(Agent, Agent.Follower.Plan, SpanFirst, SpanLast, Context, NodeIndex);
 			}
 		}
 
@@ -633,6 +662,85 @@ FRouteQuery FPlanReResolver::QueryFor(ERouteErrand Errand, FGuidelineNodeId Star
 
 namespace
 {
+	// COINCIDENT NODES ARE ONE PLACE HELD TWICE, and position alone cannot tell them apart. At a
+	// straight-through node where both arms have the same lane offset, each arm's lane end sits
+	// on the shared cut line - the same point - joined by a zero-length turn path; the plan
+	// steps through both. FindNearestNode breaks the tie by slot order, so it hands back the
+	// SAME node for both positions (or the wrong one of the pair), no edge joins Prev to it, and
+	// the step "fails" on a graph that lost nothing. That failure then replans to the goal and
+	// drops every via point the route carried: a lone node placed off the rig course re-routed
+	// the utility past all three dead ends (2026-09-25, PIE and
+	// AirportMgr.RigCourse.RebuildKeepsTheCourse). So a position resolves to the node found AND
+	// its twins - the nodes a zero-length edge joins it to - and the step takes whichever of
+	// them its edge actually reaches. Twins by EDGE, not by a second spatial query: the builder
+	// joins every such pair with its turn path, and a coincident node nothing joins is not the
+	// same place for routing anyway.
+	// ENFORCED BY: AirportMgr.RigCourse.RebuildKeepsTheCourse, Airside.Model.Traffic.RebuildCoincidentTwins,
+	// Airside.Model.Traffic.RebuildTwinAtCurrentStep (the Prev re-point), Airside.Model.Traffic.RebuildGoalIsATwin
+	constexpr double TwinTolerance = 1.0;
+	void ReResolveTwinsOf(const URoadNetwork& Network, FGuidelineNodeId Node, TArray<FGuidelineNodeId, TInlineAllocator<4>>& Out)
+	{
+		Out.Reset();
+		Out.Add(Node);
+		const FGuidelineNode* Here = Network.GetGuidelineNode(Node);
+		if (Here == nullptr)
+		{
+			return;
+		}
+		for (const FGuidelineEdgeId EdgeId : Here->Incident)
+		{
+			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(EdgeId);
+			const FGuidelineNodeId Other = Edge == nullptr ? FGuidelineNodeId() : (Edge->A == Node ? Edge->B : Edge->A);
+			const FGuidelineNode* There = Other.IsSet() ? Network.GetGuidelineNode(Other) : nullptr;
+			if (There != nullptr && Other != Node && !Out.Contains(Other)
+				&& FVector2D::Distance(There->Position, Here->Position) <= TwinTolerance)
+			{
+				Out.Add(Other);
+			}
+		}
+	}
+
+	// THE EDGE IS IDENTIFIED BY ITS TWO ENDS, never by its geometry. Two guideline nodes have at
+	// most one line between them that this class can mean, and matching a Bezier control point
+	// across a rebuild would be a second evaluator of the very thing that was just regenerated -
+	// see the guideline graph's "samples ONCE".
+	//
+	// ForEachOutgoingGuideline, not GetOutgoingGuidelines (#190): a re-resolve runs once per
+	// agent per rebuild, on the same edit path RouteSearch's own switch (#171) already stopped
+	// paying a fresh TArray<FGuidelineEdgeId> per node expansion. Visit has no early-exit signal,
+	// so every outgoing edge is still visited - the `if (Rejoined.IsSet())` guard below is what
+	// keeps a node with more than one candidate from letting a later edge overwrite the first
+	// match, the same effect the old loop's `break` had.
+	bool ReResolveEdgeBetween(const URoadNetwork& Network, ETraversalClass Class, FGuidelineNodeId From, FGuidelineNodeId To, FGuidelineEdgeId& Rejoined, bool& bReversed)
+	{
+		Network.ForEachOutgoingGuideline(From, Class, [&](FGuidelineEdgeId Candidate)
+		{
+			if (Rejoined.IsSet())
+			{
+				return;
+			}
+
+			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Candidate);
+			if (Edge == nullptr)
+			{
+				return;
+			}
+
+			const FGuidelineNodeId Other = (Edge->A == From) ? Edge->B : Edge->A;
+			if (Other == To)
+			{
+				Rejoined = Candidate;
+
+				// Re-derived from the LIVE edge and never carried over from the dead step:
+				// the builder is free to have laid this one down A-to-B where the old one
+				// ran B-to-A, and a stale flag would reverse the sampled points under an
+				// agent that is already driving them.
+				bReversed = (Edge->B == From);
+			}
+		});
+		return Rejoined.IsSet();
+	}
+
 	/**
 	 * How far a driving vehicle may be moved sideways onto a lane running its way after a
 	 * drive-side flip, uu: two Wide lanes (2 x 450), rounded up. The flip moves every lane by
@@ -1023,83 +1131,16 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		Plan.Steps[FromStep - 1].To = Prev;
 	}
 
-	// COINCIDENT NODES ARE ONE PLACE HELD TWICE, and position alone cannot tell them apart. At a
-	// straight-through node where both arms have the same lane offset, each arm's lane end sits
-	// on the shared cut line - the same point - joined by a zero-length turn path; the plan
-	// steps through both. FindNearestNode breaks the tie by slot order, so it hands back the
-	// SAME node for both positions (or the wrong one of the pair), no edge joins Prev to it, and
-	// the step "fails" on a graph that lost nothing. That failure then replans to the goal and
-	// drops every via point the route carried: a lone node placed off the rig course re-routed
-	// the utility past all three dead ends (2026-09-25, PIE and
-	// AirportMgr.RigCourse.RebuildKeepsTheCourse). So a position resolves to the node found AND
-	// its twins - the nodes a zero-length edge joins it to - and the step takes whichever of
-	// them its edge actually reaches. Twins by EDGE, not by a second spatial query: the builder
-	// joins every such pair with its turn path, and a coincident node nothing joins is not the
-	// same place for routing anyway.
-	// ENFORCED BY: AirportMgr.RigCourse.RebuildKeepsTheCourse, Airside.Model.Traffic.RebuildCoincidentTwins,
-	// Airside.Model.Traffic.RebuildTwinAtCurrentStep (the Prev re-point), Airside.Model.Traffic.RebuildGoalIsATwin
-	constexpr double TwinTolerance = 1.0;
+	// THE TWIN AND EDGE-BETWEEN RULES ARE FILE-LEVEL FUNCTIONS NOW (#455), moved with their comments above
+	// ReResolveSpan, which re-points a reversing agent's span by the very same rules; these two are
+	// the walk's own names for them, so the loop below reads as it always did.
 	auto TwinsOf = [&Network](FGuidelineNodeId Node, TArray<FGuidelineNodeId, TInlineAllocator<4>>& Out)
 	{
-		Out.Reset();
-		Out.Add(Node);
-		const FGuidelineNode* Here = Network.GetGuidelineNode(Node);
-		if (Here == nullptr)
-		{
-			return;
-		}
-		for (const FGuidelineEdgeId EdgeId : Here->Incident)
-		{
-			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(EdgeId);
-			const FGuidelineNodeId Other = Edge == nullptr ? FGuidelineNodeId() : (Edge->A == Node ? Edge->B : Edge->A);
-			const FGuidelineNode* There = Other.IsSet() ? Network.GetGuidelineNode(Other) : nullptr;
-			if (There != nullptr && Other != Node && !Out.Contains(Other)
-				&& FVector2D::Distance(There->Position, Here->Position) <= TwinTolerance)
-			{
-				Out.Add(Other);
-			}
-		}
+		ReResolveTwinsOf(Network, Node, Out);
 	};
-
-	// THE EDGE IS IDENTIFIED BY ITS TWO ENDS, never by its geometry. Two guideline nodes have at
-	// most one line between them that this class can mean, and matching a Bezier control point
-	// across a rebuild would be a second evaluator of the very thing that was just regenerated -
-	// see the guideline graph's "samples ONCE".
-	//
-	// ForEachOutgoingGuideline, not GetOutgoingGuidelines (#190): a re-resolve runs once per
-	// agent per rebuild, on the same edit path RouteSearch's own switch (#171) already stopped
-	// paying a fresh TArray<FGuidelineEdgeId> per node expansion. Visit has no early-exit signal,
-	// so every outgoing edge is still visited - the `if (Rejoined.IsSet())` guard below is what
-	// keeps a node with more than one candidate from letting a later edge overwrite the first
-	// match, the same effect the old loop's `break` had.
 	auto EdgeBetween = [&Network, &Agent](FGuidelineNodeId From, FGuidelineNodeId To, FGuidelineEdgeId& Rejoined, bool& bReversed)
 	{
-		Network.ForEachOutgoingGuideline(From, Agent.Class, [&](FGuidelineEdgeId Candidate)
-		{
-			if (Rejoined.IsSet())
-			{
-				return;
-			}
-
-			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Candidate);
-			if (Edge == nullptr)
-			{
-				return;
-			}
-
-			const FGuidelineNodeId Other = (Edge->A == From) ? Edge->B : Edge->A;
-			if (Other == To)
-			{
-				Rejoined = Candidate;
-
-				// Re-derived from the LIVE edge and never carried over from the dead step:
-				// the builder is free to have laid this one down A-to-B where the old one
-				// ran B-to-A, and a stale flag would reverse the sampled points under an
-				// agent that is already driving them.
-				bReversed = (Edge->B == From);
-			}
-		});
-		return Rejoined.IsSet();
+		return ReResolveEdgeBetween(Network, Agent.Class, From, To, Rejoined, bReversed);
 	};
 
 	// The first step that could NOT be re-resolved, or the step count when every one could.
@@ -1361,6 +1402,109 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		TEXT("Agent %d truncated by the rebuild: %d of %d steps survive, %.0f uu to the last live node"),
 		Agent.Id, Failed, WasSteps, Plan.Length);
 	return EReResolve::Truncated;
+}
+
+bool FPlanReResolver::ReResolveSpan(FRoadAgent& Agent, FRoutePlan& Plan, int32 First, int32 Last,
+	const FTrafficContext& Context, const FGuidelineNodeIndex& NodeIndex)
+{
+	const URoadNetwork& Network = Context.Network;
+	const double Radius = Context.Rules.ResolveRadius;
+	if (First < 0 || Last < First || !Plan.Steps.IsValidIndex(Last))
+	{
+		return false;
+	}
+
+	// THE WALK ReResolvePlan MAKES, SPAN ONLY AND WITH NO FAILURE BRANCH: the same position lookups, the same twins
+	// and the same edge-between rule (they are the file-level functions above, shared, not copied), and where
+	// ReResolvePlan would replan, truncate or strand this stops and says so. The reason is on the declaration: the
+	// span is played from the reverse run's own snapshot and the handover cuts the remainder by a step index, so
+	// nothing here may move either.
+	// ENFORCED BY: Airside.Model.Traffic.RebuildDuringReverseKeepsTheSpanLive (the step count and every EndDistance
+	// come out unchanged, the handles live)
+	const int32 FromVertex = First == 0 ? 0 : Plan.Steps[First - 1].EndVertex;
+	FGuidelineNodeId Prev = Plan.Polyline.IsValidIndex(FromVertex)
+		? RouteSearch::FindNearestNode(Network, Plan.Polyline[FromVertex], Agent.Class, Radius, &NodeIndex)
+		: FGuidelineNodeId();
+	if (!Prev.IsSet())
+	{
+		UE_LOG(LogAirsideTraffic, Log,
+			TEXT("Agent %d: the reverse span's start did not re-resolve - no live node where step %d begins; the span keeps the handles it had"),
+			Agent.Id, First);
+		return false;
+	}
+
+	// THE NODE THE SPAN LEAVES FROM is re-pointed as ReResolvePlan re-points the current step's, for the reason its
+	// comment gives: the tail-node claim and the crossing arm read StepFromNode(Plan, step) every tick, and a backing
+	// truck is on the span's first step from the moment it arms.
+	auto RepointStart = [&Plan, First](FGuidelineNodeId Node)
+	{
+		if (First == 0)
+		{
+			Plan.Start = Node;
+		}
+		else
+		{
+			Plan.Steps[First - 1].To = Node;
+		}
+	};
+	RepointStart(Prev);
+
+	for (int32 Step = First; Step <= Last; ++Step)
+	{
+		const int32 EndVertex = Plan.Steps[Step].EndVertex;
+		FGuidelineNodeId Next = Plan.Polyline.IsValidIndex(EndVertex)
+			? RouteSearch::FindNearestNode(Network, Plan.Polyline[EndVertex], Agent.Class, Radius, &NodeIndex)
+			: FGuidelineNodeId();
+
+		FGuidelineEdgeId Rejoined;
+		bool bReversed = false;
+		if (Next.IsSet())
+		{
+			TArray<FGuidelineNodeId, TInlineAllocator<4>> NextTwins;
+			ReResolveTwinsOf(Network, Next, NextTwins);
+			// The FIRST step's start is a position lookup, so it may hold the wrong twin; every later Prev was
+			// chosen by the edge that reached it and is exact - ReResolvePlan's rule, for its reason.
+			TArray<FGuidelineNodeId, TInlineAllocator<4>> PrevTwins;
+			if (Step == First)
+			{
+				ReResolveTwinsOf(Network, Prev, PrevTwins);
+			}
+			else
+			{
+				PrevTwins.Add(Prev);
+			}
+			for (const FGuidelineNodeId From : PrevTwins)
+			{
+				for (const FGuidelineNodeId To : NextTwins)
+				{
+					if (!Rejoined.IsSet() && ReResolveEdgeBetween(Network, Agent.Class, From, To, Rejoined, bReversed))
+					{
+						Next = To;
+						if (From != Prev)
+						{
+							Prev = From;
+							RepointStart(Prev);
+						}
+					}
+				}
+			}
+		}
+
+		if (!Rejoined.IsSet())
+		{
+			UE_LOG(LogAirsideTraffic, Log,
+				TEXT("Agent %d: reverse span step %d did not re-resolve - from node %d to %s; it keeps the handles it had from here on"),
+				Agent.Id, Step, Prev.Index,
+				Next.IsSet() ? *FString::Printf(TEXT("node %d, no edge between them"), Next.Index) : TEXT("no live node"));
+			return false;
+		}
+
+		Plan.Steps[Step].Edge = Rejoined;
+		Plan.Steps[Step].To = Next;
+		Plan.Steps[Step].bReversed = bReversed;
+		Prev = Next;
+	}
+	return true;
 }
 
 bool UGroundTraffic::RescueStranded(int32 AgentId, const URoadNetwork& Network, FGuidelineNodeId Goal)

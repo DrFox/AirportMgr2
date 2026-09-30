@@ -117,7 +117,21 @@ bool UGroundTraffic::ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 
 bool FDeadlockResolver::CanReplanAtBlockedStep(const FRoadAgent& Agent, const URoadNetwork* Network,
 	const FTrafficRules& Rules, FNodeReachCache& Reach) const
 {
-	if (Agent.Phase != EAgentPhase::Taxiing
+	// CanBeTurnedAtItsBlock, THE ONE PREDICATE (#455) - see it for why a push and a reverse are not candidates, and for
+	// the alert (AlertCycles) that asks it too and so has to agree with this. Speed stays the follower's: a replannable
+	// agent is a Taxiing one, whose speed IS Follower.Speed.
+	//
+	// A REFUSAL AT A REVERSE LEG'S STEP IS NOT A TURN, and the predicate is what makes it so. A truck refused the
+	// ground of the reverse leg it is about to arm (UGroundTraffic::GateReverseLeg) is Taxiing, stopped, with
+	// BlockedStep on that reverse step and ToNode ~0 - it passes every test below - and the leg is the only line off
+	// the service point: a replan spliced there does not go round the block, it sends a service truck forward out of a
+	// bay it is meant to leave backwards (ReplanAt has no reverse-leg handling; it treats the step as any other). Such a
+	// truck is waited out, as a reversing or pushed member is. DECIDED, NOT MERELY LEFT: the alternative, pinning what a
+	// forward replan out of a bay does, would bless it. And it is the ALERT'S predicate too, not this function's own
+	// extra test: a separate guard here would let the resolver refuse to turn a truck that AlertCycles still counted as
+	// a way out, and a ring of two such trucks waits for ever with no alert.
+	// ENFORCED BY: Airside.Model.Traffic.Deadlock.ResolverDoesNotReplanATruckOutOfItsBay
+	if (!Agent.CanBeTurnedAtItsBlock()
 		|| Agent.Follower.Speed >= KINDA_SMALL_NUMBER
 		|| Agent.GetBlockedStep() < 0)
 	{
@@ -159,17 +173,21 @@ void FDeadlockResolver::FindCycles(TConstArrayView<FRoadAgent> Agents, const FTr
 {
 	OutCycles.Reset();
 
-	// ONE EDGE PER STALLED WAITER. StalledSeconds only accrues while an agent is Taxiing,
-	// stopped and naming a blocker (see FRoadAgent::Advance's caller in AdvanceOnce), and
+	// ONE EDGE PER STALLED WAITER. StalledSeconds only accrues while an agent is ON A ROUTE,
+	// stopped and naming a blocker (FRoadAgent::IsStoppedAndWaiting, read by AdvanceOnce), and
 	// FClaimPass::Run clears WaitingOn for an agent that is off a route (the arm that gives it
 	// HoldRunwayOnly) - so a parked or retired agent cannot contribute an edge, and a cycle
 	// through one is not representable rather than merely unlikely.
 	//
-	// A REVERSING AGENT IS NOT OFF A ROUTE since issue #434, so that second half no longer keeps
-	// it out of the wait map: a refused reverse names its blocker like any other wait. Whether it
-	// can be a stalled waiter here, and what the resolver may then do with a member it cannot
-	// replan, is #455. The outcome two vehicles reach at a span's end without either is pinned by
-	// Airside.Model.Traffic.ReversingTruckAndVanMeetingAtTheSpanEnd.
+	// A ROUTE IS A TAXI, A PUSH OR A REVERSE (#455): a refused reversing truck or pushed aeroplane
+	// is an edge here like any waiter, so a cycle THROUGH one is representable - it can be waited
+	// on, and it is reported (AlertCycles). What the resolver may then do with a member it cannot
+	// replan is nothing: CanReplanAtBlockedStep asks CanBeTurnedAtItsBlock, so such a member is never a
+	// candidate and the cycle is broken, if at all, by another member turning. This comment used
+	// to say the first half was the whole story; it was not since #434, when a reverse stopped
+	// being off a route. The outcome two vehicles reach at a span's end without either turning is
+	// pinned by Airside.Model.Traffic.ReversingTruckAndVanMeetingAtTheSpanEnd.
+	// ENFORCED BY: Airside.Model.Traffic.ReversingTruckStallsWhenItsSpanIsRefused (the clock runs for a reverse)
 	//
 	// MEMBER, NOT A LOCAL (issue #190) - now Scratch, the caller's: see FCycleScratch. Reset here,
 	// not left with whatever the last call found.
@@ -250,20 +268,36 @@ void FDeadlockResolver::FindCycles(TConstArrayView<FRoadAgent> Agents, const FTr
 	}
 }
 
-void FDeadlockResolver::AllAircraftCycles(TConstArrayView<FRoadAgent> Agents, const TMap<int32, int32>& AgentIndex,
+void FDeadlockResolver::AlertCycles(TConstArrayView<FRoadAgent> Agents, const TMap<int32, int32>& AgentIndex,
 	const FTrafficRules& Rules, TArray<TArray<int32>>& OutCycles)
 {
 	FCycleScratch Scratch;
 	FindCycles(Agents, Rules, Scratch, OutCycles);
-	// THE SAME TEST AS Resolve's bAllAircraft, and for its reason: a cycle a van or a truck is in can be
-	// broken by the vehicle going round; one made only of aircraft is a LAYOUT the player must fix. A
-	// member nobody can find is not an aircraft - a lookup miss must not promote a cycle to an alert.
+	// A CYCLE A TAXIING VAN OR TRUCK IS IN can be broken by the vehicle going round; one nobody in can be turned
+	// out of is a LAYOUT the player must fix - Resolve's bAllAircraft is the same idea in its narrower, aircraft-only
+	// wording, kept for the severity of its log lines. THE TEST WAS "every member is an aircraft" until #455, and it
+	// was wrong for a member that is not one and cannot go round either: a truck backing along a bay's leg and an
+	// aeroplane being pushed have no second line (CanBeTurnedAtItsBlock is the one place that says so, and the place
+	// the resolver's candidate test asks), and a cycle through one dropped out of the alert for being made of vehicles.
+	// A truck gate-refused at its bay's reverse leg has none either: two of them waiting on each other's ground are a
+	// ring nothing can turn, and were counted as a way out by the replannable test alone. A member nobody can find still
+	// makes the cycle no alert - a lookup miss must not promote a cycle to one.
+	// ENFORCED BY: Airside.Model.Traffic.Deadlock.CycleThroughAReversingTruckIsAnAlert,
+	// Airside.Model.Traffic.Deadlock.RingOfTwoGateRefusedTrucksIsAnAlert,
+	// Airside.Model.Traffic.Deadlock.MixedCycleIsNotAnAlert (a taxiing van still is turnable)
 	OutCycles.RemoveAll([&Agents, &AgentIndex](const TArray<int32>& Cycle)
 		{
 			return Cycle.ContainsByPredicate([&Agents, &AgentIndex](int32 Id)
 				{
 					const int32* At = AgentIndex.Find(Id);
-					return At == nullptr || !Agents.IsValidIndex(*At) || Agents[*At].Class != ETraversalClass::Aircraft;
+					if (At == nullptr || !Agents.IsValidIndex(*At))
+					{
+						return true;
+					}
+					const FRoadAgent& Member = Agents[*At];
+					// A member that CAN be turned where it is stopped - not an aircraft, and taxiing, and not refused
+					// at a reverse leg's step - is the way out.
+					return Member.Class != ETraversalClass::Aircraft && Member.CanBeTurnedAtItsBlock();
 				});
 		});
 }
@@ -331,8 +365,18 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const TMap<int32, in
 		// below would have chosen gives up its reservations instead. It keeps the ground its
 		// body is on (ReleaseReservations, not ReleaseAll - see that function), and re-claims
 		// on its next pass, by which time the other member has taken what it needed: the
-		// yielder is the lowest-ranked, highest-id member, and Arbitrate asks higher ranks
-		// first and lower ids first, so the others always claim before it does.
+		// yielder is the lowest-ranked, highest-id REPLANNABLE member, and Arbitrate asks higher
+		// ranks first and lower ids first, so the others always claim before it does.
+		//
+		// ONLY A REPLANNABLE MEMBER MAY YIELD (#455). A reversing truck holds its whole span and a
+		// pushed aeroplane its whole push as reservations from the first frame, precisely so that
+		// the manoeuvre is "granted whole" and cannot be stopped half way; ReleaseReservations on
+		// one of them drops exactly that hold, and the next pass would have to win it back against
+		// whoever the yield just let in. Since #455 such a member CAN be in a cycle (it accrues the
+		// stall clock), and being the lowest rank it is the one an unfiltered order picks. A cycle
+		// with no replannable member is not yielded at all: it falls through to the replan path
+		// below, finds no candidate and says so, on the retry cadence, like any jam nobody can turn.
+		// ENFORCED BY: Airside.Model.Traffic.Deadlock.ReservationYieldSkipsAReversingAndAPushedMember
 		//
 		// GUARDED BY YieldedAt: a cycle that re-forms within a retry window of yielding is
 		// one a yield could not settle - the other member is also refused something a third
@@ -348,10 +392,18 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const TMap<int32, in
 			// into releasing anything.
 			bAllReservations = bAllReservations && Blocking != nullptr && !Blocking->bOccupied;
 		}
-		const double* LastYield = YieldedAt.Find(Key);
-		if (bAllReservations && (LastYield == nullptr || *LastYield < SimSeconds - Rules.RetrySeconds))
+		TArray<int32> ByYieldOrder;
+		for (const int32 Id : Cycle)
 		{
-			TArray<int32> ByYieldOrder = Cycle;
+			const FRoadAgent* Member = FindAgentIn(Agents, AgentIndex, Id);
+			if (Member != nullptr && Member->IsReplannable())
+			{
+				ByYieldOrder.Add(Id);
+			}
+		}
+		const double* LastYield = YieldedAt.Find(Key);
+		if (bAllReservations && ByYieldOrder.Num() > 0 && (LastYield == nullptr || *LastYield < SimSeconds - Rules.RetrySeconds))
+		{
 			ByYieldOrder.Sort([&Agents, &AgentIndex](const int32 A, const int32 B)
 			{
 				const int32 RankA = RankOf(Agents, AgentIndex, A);
@@ -525,5 +577,5 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const TMap<int32, in
 
 void UGroundTraffic::CurrentDeadlocks(TArray<TArray<int32>>& Out) const
 {
-	FDeadlockResolver::AllAircraftCycles(Agents, AgentIndex, Rules, Out);
+	FDeadlockResolver::AlertCycles(Agents, AgentIndex, Rules, Out);
 }

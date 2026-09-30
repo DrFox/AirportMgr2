@@ -109,6 +109,31 @@ struct AIRSIDE_API FPlanReResolver
 		const FTrafficContext& Context, const FGuidelineNodeIndex& NodeIndex);
 
 	/**
+	 * Re-points the steps First..Last of Plan - the SPAN a reversing agent is backing along - at the live graph, IN
+	 * PLACE and HANDLES ONLY: each step's Edge, To and bReversed, found by where its end sits and which live edge joins
+	 * the two ends, by the rules ReResolvePlan uses (twins included). No replan, no truncation, no strand and no change to
+	 * the step indices, EndVertex or EndDistance: the reverse is played from FReverseRun's own snapshot of the span and
+	 * the rebuild's Reversing arm hands the handover a step index to cut the remainder by, so a re-resolve that could
+	 * REPLAN would move the route from under both (#455, and the reason #453 left the span alone).
+	 *
+	 * WHY IT IS NEEDED AT ALL: the claim pass holds a reversing vehicle's whole span through Follower.Plan's steps
+	 * (FRoadAgent::ReverseSpanEnd), so a span whose handles are freed holds NOTHING - for the rest of the leg the
+	 * truck is invisible to whoever drives at it, which is #434's first problem again for one leg.
+	 *
+	 * True when every step of the span now names a live edge. False when one did not resolve: the steps before it are
+	 * re-pointed, the rest keep the handles they had, and it says so in the log - the caller does not strand on it (a
+	 * split under the span leaves the ground in place, and stopping a truck mid-leg for a book-keeping miss would be the
+	 * worse defect).
+	 *
+	 * CALLED BEFORE ReResolvePlan for the remainder, not after: that call re-points the span's last To (the node the
+	 * remainder leaves, found by position and twin) and so has the last word on which twin the span ends at, and a
+	 * reverse with no remainder keeps the To this call wrote.
+	 * ENFORCED BY: Airside.Model.Traffic.RebuildDuringReverseKeepsTheSpanLive
+	 */
+	bool ReResolveSpan(FRoadAgent& Agent, FRoutePlan& Plan, int32 First, int32 Last,
+		const FTrafficContext& Context, const FGuidelineNodeIndex& NodeIndex);
+
+	/**
 	 * The query an AGENT's re-route runs: For(Errand, Start, Goal, its wingspan, its class),
 	 * plus its body when it is a vehicle (spec 2026-09-23 §6). ONE SEAM for every re-route -
 	 * ReplanAt, the rebuild's re-resolve and the drive-side rejoin - so none of them can send a

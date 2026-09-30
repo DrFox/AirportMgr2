@@ -36,7 +36,7 @@ namespace
 
 FText UOpsAlerts::DeadlockRemedy()
 {
-	return NSLOCTEXT("OpsAlerts", "DeadlockRemedy", "the layout needs another way round");
+	return NSLOCTEXT("OpsAlerts", "DeadlockRemedy", "the layout needs another way round or out");
 }
 
 void UOpsAlerts::Reset()
@@ -163,8 +163,14 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 		}
 	}
 
-	// ALL-AIRCRAFT DEADLOCKS - the class the resolver's own comment calls "a DESIGN problem the player must be
-	// told about". Keyed by the lowest member, as the resolver keys a jam.
+	// DEADLOCKS NOBODY IN THE RING CAN TURN OUT OF - the class the resolver's own comment calls "a DESIGN problem
+	// the player must be told about". Keyed by the lowest member, as the resolver keys a jam.
+	//
+	// NOT ALWAYS ALL AIRCRAFT (#455): a ring can now include a truck backing along a bay's leg, or an aeroplane being
+	// pushed - members with no second line - so the text says what is in it (the count by class) instead of calling
+	// every member an aircraft, and the remedy is worded for a way round OR OUT. The focus stays on the lowest-id
+	// member whatever it is: the Show button takes the player to the jam, and any member of a ring is in it.
+	// ENFORCED BY: AirportOps.Model.Alerts.DeadlockWithAReversingTruckDoesNotCallItAnAircraft
 	if (Sources.Traffic != nullptr)
 	{
 		TArray<TArray<int32>> Cycles;
@@ -176,9 +182,30 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 				continue;
 			}
 			const int32 Lowest = FMath::Min(Cycle);
-			FOpsAlert& Alert = Found.Add_GetRef(OpsAlertOf(EAlertKind::Deadlock, Lowest, NAME_None,
-				FText::Format(NSLOCTEXT("OpsAlerts", "Deadlock", "{0} aircraft deadlocked - {1}"),
-					FText::AsNumber(Cycle.Num()), DeadlockRemedy())));
+			int32 Aircraft = 0;
+			for (const int32 Member : Cycle)
+			{
+				const FRoadAgent* Who = Sources.Traffic->FindAgent(Member);
+				Aircraft += (Who != nullptr && Who->Class == ETraversalClass::Aircraft) ? 1 : 0;
+			}
+			const int32 Vehicles = Cycle.Num() - Aircraft;
+			FText Text;
+			if (Vehicles == 0)
+			{
+				Text = FText::Format(NSLOCTEXT("OpsAlerts", "Deadlock", "{0} aircraft deadlocked - {1}"),
+					FText::AsNumber(Aircraft), DeadlockRemedy());
+			}
+			else if (Aircraft == 0)
+			{
+				Text = FText::Format(NSLOCTEXT("OpsAlerts", "DeadlockVehicles", "{0} {0}|plural(one=vehicle,other=vehicles) deadlocked - {1}"),
+					Vehicles, DeadlockRemedy());
+			}
+			else
+			{
+				Text = FText::Format(NSLOCTEXT("OpsAlerts", "DeadlockMixed", "{0} aircraft and {1} {1}|plural(one=vehicle,other=vehicles) deadlocked - {2}"),
+					Aircraft, Vehicles, DeadlockRemedy());
+			}
+			FOpsAlert& Alert = Found.Add_GetRef(OpsAlertOf(EAlertKind::Deadlock, Lowest, NAME_None, Text));
 			if (const FRoadAgent* Agent = Sources.Traffic->FindAgent(Lowest))
 			{
 				OpsAlertFocusAgent(Alert, *Agent);

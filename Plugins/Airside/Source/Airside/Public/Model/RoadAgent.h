@@ -357,6 +357,34 @@ public:
 	int32 GetResumeStep() const { return ResumeStep; }
 
 	/**
+	 * The steps of Follower.Plan the reverse being played covers, OutFirst..OutLast inclusive, while Phase is
+	 * Reversing - the SPAN, as GetResumeStep is where the route's remainder begins. False for any other phase.
+	 *
+	 * DERIVED, NOT STORED beside ResumeStep, as ReverseSpanEnd is: the run holds its own copy of the span
+	 * (Reverse.Plan / TowReverse.Plan), whose step count is the span's, and the span ends where the remainder
+	 * begins - or where the route does, when the reverse is the last thing it does. A stored pair would be a
+	 * second copy of where the span sits, one a rebuild's truncation could leave disagreeing with the plan it
+	 * indexes. Read by OnGraphRebuilt's Reversing arm (#455), which re-resolves the span's handles in place.
+	 * ENFORCED BY: Airside.Model.Traffic.RebuildDuringReverseKeepsTheSpanLive (the span's own steps come out live)
+	 */
+	bool ReverseSpanSteps(int32& OutFirst, int32& OutLast) const;
+
+	/**
+	 * The reverse span a TAXIING agent is standing at the start of - the one TryArmReverseLeg would arm this frame -
+	 * as its steps (OutFirst..OutLast) and cut out of the route (OutSpan). False for any other agent, and for one
+	 * whose next reverse leg is still ahead of it.
+	 *
+	 * ONE QUESTION, TWO ASKERS (#455): TryArmReverseLeg asks it to arm, and UGroundTraffic::GateReverseLeg asks it to
+	 * learn WHICH GROUND the arm would take, before the arm is allowed. Written twice, "is the follower at the start
+	 * of a reverse run" would be a fact two places must keep agreeing about - and the gate is only a gate for as long
+	 * as it and the arm mean the same span.
+	 *
+	 * NON-CONST: NextReverseLegRun advances a memo cursor past spans already behind the follower (idempotent - asking
+	 * twice in a frame is asking once).
+	 */
+	bool PendingReverseSpan(int32& OutFirst, int32& OutLast, FRoutePlan& OutSpan);
+
+	/**
 	 * RPM at or above which a powerback may begin. Copied from FTrafficRules at StartPushback
 	 * because this struct is world-free and cannot read the rules for itself - the same
 	 * reason ShutdownPause is a copy rather than a lookup. Zero for anything on a tug bar.
@@ -707,6 +735,45 @@ public:
 			|| Phase == EAgentPhase::Reversing;
 	}
 
+	/**
+	 * Whether the deadlock resolver may send this agent along another route: a TAXI, and nothing else on a route.
+	 * A push and a reverse have no other line to be sent along (the lead-in and the bay's leg are the only way off),
+	 * which is why UGroundTraffic::DepartAgent grants a push whole and the claim pass holds a reverse's whole span:
+	 * a jam they are part of can be WAITED OUT, never turned round (#455).
+	 *
+	 * ONE PREDICATE FOR THE PLACES THAT ASK: ReplanAt's guard and FDeadlockResolver::CanReplanAtBlockedStep spelled it
+	 * `Phase == Taxiing`, and FDeadlockResolver::AlertCycles spelled it "is an aircraft" - the two answers only
+	 * looked alike while every agent on a route was a taxi. ReplanAt's guard and the yield's candidate list ask it
+	 * directly (a reversing truck or pushed aeroplane must not give up the hold that makes its manoeuvre whole); the
+	 * resolver's candidate test and the alert's filter ask CanBeTurnedAtItsBlock, which is this plus WHERE the agent
+	 * is refused - so the two that decide whether a jam is the player's cannot disagree about who can be turned.
+	 * ENFORCED BY: Check-Architecture.ps1 rule 46 (the resolver's file spells no `Phase == Taxiing`)
+	 * ENFORCED BY: Airside.Model.Traffic.IsOnRouteClassifiesEveryPhase (the replannable column names every phase)
+	 */
+	bool IsReplannable() const { return Phase == EAgentPhase::Taxiing; }
+
+	/**
+	 * Whether the deadlock resolver can turn this agent where it stands: replannable (a taxi), and not refused AT A
+	 * REVERSE LEG'S STEP. A truck gate-refused the ground of the reverse leg it is about to arm
+	 * (UGroundTraffic::GateReverseLeg) is Taxiing and stopped with BlockedStep on that step, and the leg is the only
+	 * line off the service point: a replan spliced there would send it forward out of a bay it leaves backwards, so it is
+	 * waited out like a reversing or pushed member (#455). A block that names no step (INDEX_NONE) or a step that is not
+	 * a reverse leg is an ordinary taxi's, and turnable.
+	 *
+	 * THE ONE PREDICATE FOR "CAN THIS MEMBER OF A RING GO ROUND": FDeadlockResolver::CanReplanAtBlockedStep asks it to
+	 * choose a candidate and FDeadlockResolver::AlertCycles asks it to decide whether a ring is the player's. Two
+	 * spellings would let the resolver refuse to turn a truck the alert then counts as a way out - a ring that can wait
+	 * for ever and raises no alert.
+	 * ENFORCED BY: Airside.Model.Traffic.Deadlock.RingOfTwoGateRefusedTrucksIsAnAlert (the alert)
+	 * ENFORCED BY: Airside.Model.Traffic.Deadlock.ResolverDoesNotReplanATruckOutOfItsBay (the resolver)
+	 * ENFORCED BY: Check-Architecture.ps1 rule 46 (both still ask it)
+	 */
+	bool CanBeTurnedAtItsBlock() const
+	{
+		return IsReplannable()
+			&& !(Follower.Plan.Steps.IsValidIndex(BlockedStep) && Follower.Plan.Steps[BlockedStep].bReverseLeg);
+	}
+
 	/** Stable identity for the agent's lifetime, assigned by UGroundTraffic::Admit. 0 means
 	 *  unassigned and is never handed out. Was FAgentSlot::Id before the Mediator moved to
 	 *  Model/ and the slot struct went with the view pointer it existed to carry.
@@ -861,6 +928,24 @@ public:
 
 	/** Read-only outside AccrueStall/ResetStall - see StalledSeconds' own comment. */
 	double GetStalledSeconds() const { return StalledSeconds; }
+
+	/**
+	 * Whether this agent is a STALLED WAITER right now - the one question the stall clock asks each tick: on a route,
+	 * refused by somebody (WaitingOn) and not moving along it. AdvanceOnce accrues StalledSeconds while it holds and
+	 * resets the clock when it does not, and FDeadlockResolver::FindCycles reads the clock.
+	 *
+	 * ON A ROUTE AND ON THE SPEED ALONG THE PLAN, NOT "Taxiing" AND Follower.Speed (#455). The clock was fed for a
+	 * Taxiing agent alone, so a refused reversing truck or a refused push was invisible to the wait-for graph however
+	 * long it stood: a cycle through one was unrepresentable, which is what #453 made reachable by holding a reverse's
+	 * whole span. And Follower.Speed is ZERO for the whole of a reverse (the follower is parked while FReverseRun plays
+	 * the span), so widening the phase alone would have counted a truck backing at full speed as stopped.
+	 * SpeedAlongPlan answers for whichever struct is driving.
+	 * ENFORCED BY: Airside.Model.Traffic.StalledWaiterClassifiesEveryPhase
+	 */
+	bool IsStoppedAndWaiting() const
+	{
+		return IsOnRoute() && WaitingOn != 0 && SpeedAlongPlan() < KINDA_SMALL_NUMBER;
+	}
 
 private:
 	/** SimSeconds of the last replan attempt by the deadlock resolver; -1e9 = never.
@@ -1183,7 +1268,9 @@ private:
 	/**
 	 * The last tow-reverse refusal logged, so a vehicle stalled at a reverse leg it cannot make
 	 * says why ONCE per reason rather than every tick it re-tries (TryArmReverseLeg re-tries each
-	 * tick, as the rigid arm always has). Cleared when a reverse arms.
+	 * tick, as the rigid arm always has). Cleared when a reverse arms. ALSO THE LAST WAIT FOR HELD
+	 * GROUND (#455), said once per holder through the same string: both are "this reverse cannot
+	 * begin yet, and this is why".
 	 */
 	FString LastReverseRefusal;
 
@@ -1229,6 +1316,11 @@ private:
 	 * handover: arms FReverseRun, or stops the agent and says why it refused. Split out of
 	 * Advance (issue #174 - Advance was 462 lines, and this block alone was over a hundred
 	 * of them) with NO change to what it does: same scan, same conditions, same log lines.
+	 *
+	 * WAITS WHILE THE SPAN'S GROUND IS HELD (#455): the arbiter's refusal (WaitingOn, set by
+	 * UGroundTraffic::GateReverseLeg for the whole span) stops the arm and leaves the agent
+	 * Taxiing at the span's start - see the gate for why, and PendingReverseSpan for the "at the
+	 * span's start" question both share.
 	 *
 	 * RETURNS WHETHER IT HANDLED THE FRAME, not whether a reverse armed - true covers both
 	 * the armed case and the refused-and-stopped one, because either way Advance's caller

@@ -17,6 +17,7 @@
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Model/RunwayQuery.h"
+#include "Model/TrafficClaims.h"
 #include "Model/TrafficOccupancy.h"
 #include "Profiles/RoadProfile.h"
 
@@ -134,7 +135,7 @@ bool FTrafficNodeYieldTest::RunTest(const FString& Parameters)
 	// than their combined half-lengths. The real safety property - the yielder stayed off the
 	// node while the blocker held it - is what Airside.Model.Traffic.TruckCrossesTaxiway
 	// measures directly. This assertion's job is only to catch a van that drove through.
-	const double Reserved = Traffic->Rules.VehicleGap + Traffic->Rules.AircraftFootprint * 0.5;
+	const double Reserved = Traffic->Rules.GapFor(ETraversalClass::GroundVehicle) + Traffic->Rules.AircraftFootprint * 0.5;
 	TestTrue(
 		FString::Printf(
 			TEXT("never closer than the %.0f uu the crossing rule reserves (measured %.0f)"),
@@ -239,14 +240,14 @@ bool FTrafficCarFollowingTest::RunTest(const FString& Parameters)
 		TEXT("CarFollowing measured: %d ticks, min centre-to-centre gap %.0f uu (from dispatch), ")
 		TEXT("%.0f uu once the follower was under way, floor %.0f uu, caught up %d"),
 		Ticks, MinGap, MinGapUnderWay,
-		Traffic->Rules.AircraftFootprint * 0.5 + Traffic->Rules.AircraftGap - 50.0,
+		Traffic->Rules.AircraftFootprint * 0.5 + Traffic->Rules.GapFor(ETraversalClass::Aircraft) - 50.0,
 		bFollowerCaughtUp ? 1 : 0);
 
 	TestTrue(TEXT("the follower did catch the leader (otherwise this measures nothing)"), bFollowerCaughtUp);
 	// The follower's CENTRE stops Gap behind the leader's TAIL (leader centre - Footprint/2),
 	// so centre-to-centre is Footprint/2 + Gap: nose to tail is exactly the gap.
 	TestTrue(FString::Printf(TEXT("centre-to-centre never below footprint/2 + gap once under way (%.0f)"), MinGapUnderWay),
-		MinGapUnderWay >= Traffic->Rules.AircraftFootprint * 0.5 + Traffic->Rules.AircraftGap - 50.0);
+		MinGapUnderWay >= Traffic->Rules.AircraftFootprint * 0.5 + Traffic->Rules.GapFor(ETraversalClass::Aircraft) - 50.0);
 	return true;
 }
 
@@ -441,6 +442,15 @@ bool FTrafficBoxEntryFirstOnlyTest::RunTest(const FString& Parameters)
 	// The stop point the arbiter offers while the van is still on the run-up, in route
 	// distance. 20500 is the held node less the van's gap; 20100 would be the second box's
 	// START less the gap, which is the chained rule's answer and 400 uu too early.
+	//
+	// THE GAP IS ASKED OF THE RULES, NOT TYPED (#455 item 6): those two figures were written for a
+	// VehicleGap of 300, and GapFor floors a vehicle's gap at half its footprint (334.75 + 1) so that a
+	// refused vehicle stops outside the zone where its own claim is an occupancy. The 400 uu that separates
+	// the two rules is the point of the test and does not move; the 36 uu the gap grew by does, so both are
+	// measured against GapFor. The default figures below are what they were at a gap of 300, for a reader
+	// who has the old log.
+	const double VanGap = Traffic->Rules.GapFor(ETraversalClass::GroundVehicle);
+	const double HeldNodeAt = 20800.0;
 	double EarliestStopPointOffered = TNumericLimits<double>::Max();
 	bool bBlockedBeforeTheBoxes = false;
 	bool bStoppedBeforeTheBoxes = false;
@@ -471,15 +481,15 @@ bool FTrafficBoxEntryFirstOnlyTest::RunTest(const FString& Parameters)
 
 	// THE DISCRIMINATING ASSERTION.
 	TestTrue(FString::Printf(
-		TEXT("while before the first box the stop point offered is the HELD NODE less the gap (20500), ")
-		TEXT("never a later box's start (20100): %.0f"), EarliestStopPointOffered),
-		EarliestStopPointOffered >= 20499.0);
+		TEXT("while before the first box the stop point offered is the HELD NODE less the gap (20500 at a gap of 300), ")
+		TEXT("never a later box's start (20100 at a gap of 300): %.0f"), EarliestStopPointOffered),
+		EarliestStopPointOffered >= HeldNodeAt - VanGap - 1.0);
 
 	TestFalse(TEXT("and it never came to rest before the first box"), bStoppedBeforeTheBoxes);
 	TestTrue(FString::Printf(TEXT("it entered the first box (%.0f uu)"), Agent->Follower.Travelled),
 		Agent->Follower.Travelled > 20000.0);
-	TestTrue(FString::Printf(TEXT("and stopped a gap short of the box whose end is held (%.0f uu, want 20100)"), Agent->Follower.Travelled),
-		Agent->Follower.Travelled <= 20101.0);
+	TestTrue(FString::Printf(TEXT("and stopped a gap short of the box whose end is held (%.0f uu, want %.0f)"), Agent->Follower.Travelled, 20400.0 - VanGap),
+		Agent->Follower.Travelled <= 20400.0 - VanGap + 1.0);
 	TestTrue(TEXT("stopped"), Agent->Follower.Speed < 1e-6);
 	TestEqual(TEXT("waiting on the phantom"), Agent->GetWaitingOn(), Phantom);
 	return true;
@@ -1407,7 +1417,7 @@ bool FTrafficDeadlockRingTest::RunTest(const FString& Parameters)
 	// apart and pointing at right angles, which is a queue and not a collision. Measured
 	// 453 on the first run of this fixture.
 	TestTrue(FString::Printf(TEXT("never closer than two vans queued at one corner (%.0f uu)"), MinSeparation),
-		MinSeparation >= Traffic->Rules.VehicleGap * FMath::Sqrt(2.0) - 1.0);
+		MinSeparation >= Traffic->Rules.GapFor(ETraversalClass::GroundVehicle) * FMath::Sqrt(2.0) - 1.0);
 	return true;
 }
 
@@ -1476,7 +1486,7 @@ bool FTrafficDeadlockMixedClassTest::RunTest(const FString& Parameters)
 	// the geometry was drawn around rather than fueltruck1's 620.
 	Traffic->Rules.VehicleFootprint = 500.0;
 	Traffic->Rules.AircraftFootprint = Traffic->Rules.VehicleFootprint;
-	Traffic->Rules.AircraftGap = Traffic->Rules.VehicleGap;
+	Traffic->Rules.AircraftGap = Traffic->Rules.GapFor(ETraversalClass::GroundVehicle);
 	const int32 V1 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	const int32 V2 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, B, D, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	const int32 P3 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, C, A, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
@@ -1535,7 +1545,7 @@ bool FTrafficDeadlockMixedClassTest::RunTest(const FString& Parameters)
 	}
 	// The corner bound, as in DeadlockRing: a gap short of one corner on two arms.
 	TestTrue(FString::Printf(TEXT("never closer than two vans queued at one corner (%.0f uu)"), MinSeparation),
-		MinSeparation >= Traffic->Rules.VehicleGap * FMath::Sqrt(2.0) - 1.0);
+		MinSeparation >= Traffic->Rules.GapFor(ETraversalClass::GroundVehicle) * FMath::Sqrt(2.0) - 1.0);
 	return true;
 }
 
@@ -3947,13 +3957,16 @@ bool FTrafficReversingHoldsItsSpanTest::RunTest(const FString& Parameters)
 	// backing toward it is refused by the truck and waits on it. Before the fix the truck held
 	// nothing, so the van was never refused at all.
 	//
-	// ASSERTED AS A REFUSAL, NOT AS "THE VAN NEVER GETS THE NODE", because it does get it: the far
-	// node is held as a RESERVATION (the truck's centre is still metres away), and a vehicle refused
-	// at a node stops VehicleGap (300) short of it - inside the half footprint (335) at which its own
-	// claim turns OCCUPIED, which the table lets take a reservation. So the van, being nearer the
-	// node, wins it a few seconds later and the truck is the one held (measured 2026-09-30, tick
-	// 288 of this loop). That is how every vehicle-against-vehicle node meets, a push's whole-span
-	// hold included, and it is not what this test is about; the issue's pin is the refusal.
+	// ASSERTED AS A REFUSAL, and that is still all this test is about. It used to have to say why it
+	// did NOT assert "the van never gets the node", because it did get it: the far node is held as a
+	// RESERVATION (the truck's centre is still metres away), and a vehicle refused at a node stopped
+	// VehicleGap (300) short of it - inside the half footprint (335) at which its own claim turns
+	// OCCUPIED, which the table lets take a reservation. So the van, being nearer the node, won it a
+	// few seconds later and the truck was the one held (measured 2026-09-30, tick 288 of this loop).
+	// That is fixed (#455 item 6: GapFor floors a gap at half the footprint, so the refused van waits
+	// OUTSIDE that zone and the reserver keeps the node) - pinned by
+	// Airside.Model.Traffic.ReservedNodeKeepsItsReserver and, for this very pair, by the truck never
+	// waiting on the van in ReversingTruckAndVanMeetingAtTheSpanEnd.
 	const int32 Van = Traffic->DispatchAgent(Bay.Net,
 		TestGraph::Probe(*Bay.Net, Bay.Side, Bay.Cleared, ETraversalClass::GroundVehicle),
 		TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
@@ -4067,14 +4080,23 @@ bool FTrafficRebuildDuringReverseTest::RunTest(const FString& Parameters)
  * as the truck, so that once it stands on the node it needs the edge the truck has reserved just
  * past the span, while the truck needs the node the van is standing on.
  *
- * THE ANSWER, measured 2026-09-30: NO. The van drives on across the node, the truck resumes ("Agent 1
- * resumes") and finishes backing out, both inside 60 s of game time. What does happen is that both
- * bodies stand on the node at once (the pass logs "overlaps"), which is the gap-below-half-footprint
- * behaviour the span test's comment describes; that and the stall accounting for a reversing agent
- * are #455's, and this test is what would go red if a change turned the overlap into a hold.
+ * THE ANSWER, measured 2026-09-30: NO. The van drove on across the node, the truck resumed ("Agent 1
+ * resumes") and finished backing out, both inside 60 s of game time. What happened was that both
+ * bodies stood on the node at once (the pass logged "overlaps"): the gap-below-half-footprint
+ * behaviour the span test's comment describes, in which the refused van, nearer the node, took it from
+ * the truck's reservation and the truck was the one held.
  *
- * ASSERTED ON OUTCOME, up to 60 s of game time: the truck finishes backing out and the van drives
- * through to the exit. A permanent mutual hold fails both.
+ * AND SINCE #455 (item 6) THE RESERVER KEEPS ITS NODE: GapFor floors a gap at half the footprint, so
+ * the refused van waits outside the zone where its own claim is an occupancy and the truck is never
+ * refused by it. The order is the other way round - the truck finishes backing out and drives on, THEN
+ * the van crosses. The truck waiting on the van is now asserted FALSE, where it used to be the proof that they met.
+ *
+ * ASSERTED ON AN END STATE (review of #466): the truck backs out, drives the exit and PARKS; the van crosses the far
+ * node and is either parked too or stands waiting on that parked truck, because the exit node is both vehicles' goal
+ * and a goal somebody stands on is not one anyone parks on. A permanent hold of the van after it crossed is neither,
+ * and fails. MEASURED 2026-09-30: 66.2 s of game time after the van's dispatch, the van waiting on the parked truck,
+ * so the bound is 100 s (about 1.5x), not a round guess - the 60 s it used to be was the old order, where the van
+ * won the race for the node.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FTrafficReversingTruckAndVanMeetingAtTheSpanEndTest,
@@ -4101,31 +4123,44 @@ bool FTrafficReversingTruckAndVanMeetingAtTheSpanEndTest::RunTest(const FString&
 	const int32 Van = Traffic->DispatchAgent(Bay.Net, VanRoute, TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	if (!TestTrue(TEXT("the van is dispatched"), Van > 0)) { return false; }
 
+	// THE VAN HAS CROSSED THE FAR NODE once it is a little way along the exit step: its first step ends there.
+	const double VanCrosses = VanRoute.Steps[0].EndDistance + 100.0;
+	// MEASURED (see the comment above the test): the bound is about 1.5x the time this takes, not a round guess.
+	constexpr double MeetingBoundSeconds = 100.0;
 	bool bVanWaitedOnTruck = false;
 	bool bTruckWaitedOnVan = false;
-	const bool bBothDone = RunUntil(*Traffic, *Bay.Net, 60.0, [&]()
+	int32 Ticks = 0;
+	// THE END STATE (#455, review of #466): the truck has finished - backed out, driven the exit and PARKED - and the van
+	// has crossed the far node and is either parked too or stands waiting on that parked truck for the exit node they
+	// share as a goal. A permanent hold of the van after it crossed is neither, and fails.
+	const bool bBothDone = RunUntil(*Traffic, *Bay.Net, MeetingBoundSeconds, [&]()
 	{
+		++Ticks;
 		const FRoadAgent* V = Traffic->FindAgent(Van);
 		const FRoadAgent* T = Traffic->FindAgent(Truck);
 		if (V == nullptr || T == nullptr) { return true; }
 		bVanWaitedOnTruck |= T->Phase == EAgentPhase::Reversing && V->GetWaitingOn() == Truck;
 		bTruckWaitedOnVan |= T->Phase == EAgentPhase::Reversing && T->GetWaitingOn() == Van;
-		return T->Phase != EAgentPhase::Reversing && V->Phase == EAgentPhase::Parked;
+		return T->Phase == EAgentPhase::Parked && V->Follower.Travelled > VanCrosses
+			&& (V->Phase == EAgentPhase::Parked || V->GetWaitingOn() == Truck);
 	});
 
 	const FRoadAgent* V = Traffic->FindAgent(Van);
 	const FRoadAgent* T = Traffic->FindAgent(Truck);
 	if (!TestTrue(TEXT("both agents are still there"), V != nullptr && T != nullptr)) { return false; }
-	AddInfo(FString::Printf(TEXT("van waited on truck: %d, truck waited on van: %d; truck phase %d at reverse travelled %.0f, van phase %d, %d cycle(s) seen, %d yield(s)"),
-		bVanWaitedOnTruck ? 1 : 0, bTruckWaitedOnVan ? 1 : 0, static_cast<int32>(T->Phase), T->Reverse.Travelled, static_cast<int32>(V->Phase),
-		Traffic->GetCyclesDetectedForTest(), Traffic->GetYieldsForTest()));
-	// THE TWO MET, or the outcome below proves nothing: each was refused by the other while the truck
-	// was still backing. A van that arrives after the truck has gone would pass these vacuously.
+	AddInfo(FString::Printf(TEXT("done in %.2f s of game time after the van's dispatch; van waited on truck: %d, truck waited on van: %d; truck phase %d at reverse travelled %.0f, van phase %d waiting on %d, %d cycle(s) seen, %d yield(s)"),
+		Ticks * 0.05, bVanWaitedOnTruck ? 1 : 0, bTruckWaitedOnVan ? 1 : 0, static_cast<int32>(T->Phase), T->Reverse.Travelled, static_cast<int32>(V->Phase),
+		V->GetWaitingOn(), Traffic->GetCyclesDetectedForTest(), Traffic->GetYieldsForTest()));
+	// THE TWO MET, or the outcome below proves nothing: the van was refused by the truck while the truck
+	// was still backing. A van that arrives after the truck has gone would pass this vacuously.
 	TestTrue(TEXT("the van was refused by the reversing truck"), bVanWaitedOnTruck);
-	TestTrue(TEXT("and the truck by the van"), bTruckWaitedOnVan);
-	TestTrue(TEXT("the truck finished backing out (it is not held for good by the van)"), T->Phase != EAgentPhase::Reversing);
-	TestTrue(TEXT("and the van drove through to the exit (it is not held for good by the truck)"), V->Phase == EAgentPhase::Parked);
-	TestTrue(TEXT("both, inside 60 s of game time"), bBothDone);
+	TestFalse(TEXT("and the truck was NOT refused by the van: it reserved the node first and keeps it (#455 item 6; red while the refused van stopped inside the occupied zone)"),
+		bTruckWaitedOnVan);
+	TestTrue(TEXT("the truck finished: backed out, drove the exit and parked (it is not held for good by the van)"), T->Phase == EAgentPhase::Parked);
+	TestTrue(TEXT("and the van crossed the far node and drove on (it is not held for good by the truck)"), V->Follower.Travelled > VanCrosses);
+	TestTrue(TEXT("and it is parked, or waits on the truck now parked on their shared exit - not held by anything else"),
+		V->Phase == EAgentPhase::Parked || (V->GetWaitingOn() == Truck && T->Phase == EAgentPhase::Parked));
+	TestTrue(TEXT("all of it inside the bound"), bBothDone);
 	return true;
 }
 
@@ -4145,20 +4180,24 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FTrafficIsOnRouteClassifiesEveryPhaseTest::RunTest(const FString& Parameters)
 {
+	// bReplannable IS THE SECOND COLUMN (#455): the deadlock resolver, ReplanAt and the alert's filter all ask
+	// IsReplannable, and the answer is a taxi and nothing else - a push and a reverse have no other line to be sent
+	// along. Named per phase here so a phase added is decided for both questions, not just the first.
 	struct FPhaseAnswer
 	{
 		EAgentPhase Phase;
 		bool bOnRoute;
+		bool bReplannable;
 	};
 	const FPhaseAnswer Table[] = {
-		{ EAgentPhase::Arriving,    false },   // on the runway: FLandingRun, the strip's claims only
-		{ EAgentPhase::Taxiing,     true },
-		{ EAgentPhase::Departing,   false },   // on the runway: FTakeoffRun
-		{ EAgentPhase::Parked,      false },   // stands on its own node
-		{ EAgentPhase::Manoeuvring, true },    // a push walks its lead-in
-		{ EAgentPhase::Reversing,   true },    // a back-out walks a span of its route
-		{ EAgentPhase::Gone,        false },
-		{ EAgentPhase::Stranded,    false },   // its route died
+		{ EAgentPhase::Arriving,    false, false },   // on the runway: FLandingRun, the strip's claims only
+		{ EAgentPhase::Taxiing,     true,  true },
+		{ EAgentPhase::Departing,   false, false },   // on the runway: FTakeoffRun
+		{ EAgentPhase::Parked,      false, false },   // stands on its own node
+		{ EAgentPhase::Manoeuvring, true,  false },   // a push walks its lead-in: the only line off the stand
+		{ EAgentPhase::Reversing,   true,  false },   // a back-out walks a span of its route: the bay's only leg
+		{ EAgentPhase::Gone,        false, false },
+		{ EAgentPhase::Stranded,    false, false },   // its route died
 	};
 
 	const UEnum* Enum = StaticEnum<EAgentPhase>();
@@ -4180,6 +4219,7 @@ bool FTrafficIsOnRouteClassifiesEveryPhaseTest::RunTest(const FString& Parameter
 		FRoadAgent Agent;
 		Agent.Phase = Phase;
 		TestEqual(*FString::Printf(TEXT("IsOnRoute for %s"), *Name), Agent.IsOnRoute(), Answer->bOnRoute);
+		TestEqual(*FString::Printf(TEXT("IsReplannable for %s"), *Name), Agent.IsReplannable(), Answer->bReplannable);
 	}
 	return true;
 }
@@ -4393,10 +4433,9 @@ bool FTrafficReofferRefusedExtensionKeepsWaitingTest::RunTest(const FString& Par
  *  - the summary says one route was truncated, not stranded or replanned.
  *  - after backing out, with nothing left to drive, the truck parks at the span's end on a live goal.
  *
- * WHAT IS NOT PINNED, stated so nobody reads it in: a rebuild that also frees the span's END node
- * takes the Strand path instead. Strand marks Follower.Plan unreachable while the agent stays
- * Reversing, and RouteSearch::Section rebuilds the remainder as Found, so the truck drives that
- * remainder on stale geometry after backing out - what it did before the arm existed (#455).
+ * A rebuild that also frees the span's END node takes the Strand path instead, and is pinned by
+ * RebuildDuringReverseStrandsWhenTheSpanEndIsGone (#455): the truck stops where it stands and is
+ * Stranded, rather than backing out and driving the remainder on the handles the rebuild freed.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FTrafficRebuildDuringReverseTruncatesTheRemainderTest,
@@ -4479,13 +4518,25 @@ bool FTrafficRebuildDuringAReverseThatEndsTheRouteTest::RunTest(const FString& P
 
 	Bay.Net->RemoveGuidelineNode(Bay.Cleared);
 	const FGuidelineNodeId Cleared = TestGraph::Node(*Bay.Net, 0.0, 4500.0);
-	Bay.Lay(Bay.Service, Cleared, true);
+	const FGuidelineEdgeId ReverseEdge = Bay.Lay(Bay.Service, Cleared, true);
 	Traffic->OnGraphRebuilt(*Bay.Net);
 
 	const FRoadAgent* Agent = Traffic->FindAgent(Truck);
 	if (!TestNotNull(TEXT("the truck survives the rebuild"), Agent)) { return false; }
 	TestEqual(TEXT("still reversing"), Agent->Phase, EAgentPhase::Reversing);
 	TestTrue(TEXT("its goal is live, and is the redrawn node"), Agent->GoalNode == Cleared && Bay.Net->GetGuidelineNode(Agent->GoalNode) != nullptr);
+
+	// THE SPAN IS THE WHOLE ROUTE HERE, AND NOTHING BUT ReResolveSpan TOUCHES IT (#455, review of #466): with no
+	// remainder there is no arm to re-resolve one, so without the span pass every step of the route the truck holds
+	// keeps its freed handles for the rest of the leg. Asked while it is STILL reversing, before any handover.
+	int32 Dead = 0;
+	for (const FRouteStep& Step : Agent->Follower.Plan.Steps)
+	{
+		Dead += (Bay.Net->GetGuidelineEdge(Step.Edge) == nullptr || Bay.Net->GetGuidelineNode(Step.To) == nullptr) ? 1 : 0;
+	}
+	TestEqual(TEXT("every step of the route names a live edge and node while it is still reversing (red without ReResolveSpan)"), Dead, 0);
+	TestTrue(TEXT("the span is the redrawn reverse edge, ending at the redrawn node"),
+		Agent->Follower.Plan.Steps.Last().Edge == ReverseEdge && Agent->Follower.Plan.Steps.Last().To == Cleared);
 
 	if (!TestTrue(TEXT("it finishes backing out"), RunUntil(*Traffic, *Bay.Net, 60.0, [&]()
 		{
@@ -4496,6 +4547,807 @@ bool FTrafficRebuildDuringAReverseThatEndsTheRouteTest::RunTest(const FString& P
 	if (!TestNotNull(TEXT("the truck is still there"), Agent)) { return false; }
 	TestEqual(TEXT("and parks"), Agent->Phase, EAgentPhase::Parked);
 	TestTrue(TEXT("on the live goal"), Agent->GoalNode == Cleared);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// THE REVERSE-LEG FOLLOW-UPS #453 LEFT (issue #455): stall accounting, the ground-free gate before a reverse arms,
+// the span's handles across a mid-reverse edit, the strand case, and the waiter whose extension was refused.
+namespace
+{
+	/**
+	 * A CLAIM BY AN AGENT THAT EXISTS ONLY IN THE TABLE, so nothing ever releases it: STANDING on Node (occupied), so
+	 * no rank can take it away - the phantom the BoxEntry tests hold a node with. What a test needs when it wants
+	 * ground another vehicle holds for as long as it likes, without staging a second vehicle to sit there.
+	 */
+	void HoldNodeAsPhantom(UGroundTraffic& Traffic, int32 PhantomId, FGuidelineNodeId Node)
+	{
+		FTrafficClaim Sitting;
+		Sitting.AgentId = PhantomId;
+		Sitting.Resource = FTrafficResource::OfNode(Node);
+		Sitting.bOccupied = true;
+		FTrafficClaim Blocker;
+		Traffic.OccupancyForTest().TryClaim(Sitting, Blocker);
+	}
+
+	/** Ticks until the agent has stopped at SpanStart (the serve leg's end), or is no longer Taxiing - armed anyway. */
+	bool TickUntilAtSpanStart(UGroundTraffic& Traffic, const URoadNetwork& Net, int32 AgentId, double SpanStart)
+	{
+		return RunUntil(Traffic, Net, 90.0, [&]()
+		{
+			const FRoadAgent* Agent = Traffic.FindAgent(AgentId);
+			return Agent == nullptr || Agent->Phase != EAgentPhase::Taxiing
+				|| (Agent->Follower.Travelled >= SpanStart - 1.0 && Agent->Follower.Speed < 1.0);
+		});
+	}
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A REFUSED REVERSING TRUCK ACCRUES THE STALL CLOCK, AND ONE THAT IS MOVING DOES NOT (issue #455, item 1).
+ *
+ * The clock was fed for a Taxiing agent alone: `Phase == Taxiing && WaitingOn && Follower.Speed == 0`. A truck
+ * backing along a bay's leg was refused since #453 made the claim pass hold its whole span, but it never stalled -
+ * the clock could not run - so a cycle through it was unrepresentable however long it stood. And Follower.Speed is
+ * ZERO for the whole leg (the follower is parked while FReverseRun plays the span), so the obvious widening, "any
+ * on-route phase", would have counted a truck backing at full speed as stopped. The clock reads SpeedAlongPlan.
+ *
+ * A phantom stands on the span's far node a moment after the truck arms: it is refused by it (WaitingOn) while still
+ * backing toward the stop - and the clock must NOT run then. Once it has stopped short, it must.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficReversingTruckStallsWhenItsSpanIsRefusedTest,
+	"Airside.Model.Traffic.ReversingTruckStallsWhenItsSpanIsRefused",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficReversingTruckStallsWhenItsSpanIsRefusedTest::RunTest(const FString& Parameters)
+{
+	FBackingBay Bay = FBackingBay::Build();
+	if (!TestTrue(TEXT("the bay routes as arrive, reverse, depart"), Bay.RouteIsTheThreeLegs())) { return false; }
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Truck = Traffic->DispatchAgent(Bay.Net, Bay.Route, Bay.Truck, ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("the truck is dispatched"), Truck > 0)) { return false; }
+	if (!TestTrue(TEXT("and backs off the service point"), TickUntilReversing(*Traffic, *Bay.Net, Truck))) { return false; }
+	for (int32 Tick = 0; Tick < 10; ++Tick)
+	{
+		Traffic->Advance(0.05, Bay.Net);
+	}
+
+	constexpr int32 Phantom = 900;
+	HoldNodeAsPhantom(*Traffic, Phantom, Bay.Cleared);
+
+	// REFUSED AND STILL MOVING: two seconds on, it has been told it cannot have the far node and is backing toward
+	// the stop it was given. A stalled waiter is one that has STOPPED; this one has not.
+	for (int32 Tick = 0; Tick < 40; ++Tick)
+	{
+		Traffic->Advance(0.05, Bay.Net);
+	}
+	const FRoadAgent* T = Traffic->FindAgent(Truck);
+	if (!TestNotNull(TEXT("the truck is still there"), T)) { return false; }
+	TestEqual(TEXT("still reversing"), T->Phase, EAgentPhase::Reversing);
+	TestEqual(TEXT("refused the far node by the phantom"), T->GetWaitingOn(), Phantom);
+	TestTrue(TEXT("and still backing toward its stop (speed along the plan is not zero)"), T->SpeedAlongPlan() > 1.0);
+	TestEqual(TEXT("so the stall clock has not run: a moving agent is not stalled, whatever it waits on"), T->GetStalledSeconds(), 0.0);
+
+	// STOPPED SHORT: the reverse plays at 100 uu/s toward a stop well inside its 2500 uu span.
+	const bool bStalled = RunUntil(*Traffic, *Bay.Net, 60.0, [&]()
+	{
+		const FRoadAgent* P = Traffic->FindAgent(Truck);
+		return P == nullptr || P->GetStalledSeconds() > Traffic->Rules.StallSeconds;
+	});
+	TestTrue(TEXT("once it has stopped short the stall clock runs past StallSeconds (red while only a Taxiing agent accrued)"), bStalled);
+	T = Traffic->FindAgent(Truck);
+	if (!TestNotNull(TEXT("the truck is still there after the wait"), T)) { return false; }
+	TestEqual(TEXT("still reversing"), T->Phase, EAgentPhase::Reversing);
+	TestTrue(TEXT("and stopped"), T->SpeedAlongPlan() < 1.0e-3);
+	TestEqual(TEXT("still refused by the phantom"), T->GetWaitingOn(), Phantom);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * WHICH PHASES ARE STALLED WAITERS, NAMED FOR EVERY PHASE (issue #455, item 1).
+ *
+ * FRoadAgent::IsStoppedAndWaiting is what AdvanceOnce accrues the stall clock on: on a route, refused by somebody, and
+ * not moving ALONG THE PLAN. A taxi, a push and a reverse qualify when stopped; none of them does while moving,
+ * because each is measured by the struct that is driving it (Follower, Pushback, Reverse) - reading the follower for
+ * a reverse says "stopped" for the whole leg. Every other phase is off a route and cannot be one. Exhaustive over the
+ * enum, so a phase added is decided here.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficStalledWaiterClassifiesEveryPhaseTest,
+	"Airside.Model.Traffic.StalledWaiterClassifiesEveryPhase",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficStalledWaiterClassifiesEveryPhaseTest::RunTest(const FString& Parameters)
+{
+	FGuidelineNodeId Node;
+	Node.Index = 7;
+
+	const UEnum* Enum = StaticEnum<EAgentPhase>();
+	if (!TestNotNull(TEXT("EAgentPhase reflects"), Enum)) { return false; }
+	for (int32 Index = 0; Index < Enum->NumEnums(); ++Index)
+	{
+		const FString Name = Enum->GetNameStringByIndex(Index);
+		if (Name.EndsWith(TEXT("_MAX"))) { continue; }
+		const EAgentPhase Phase = static_cast<EAgentPhase>(Enum->GetValueByIndex(Index));
+
+		FRoadAgent Agent;
+		Agent.Phase = Phase;
+		Agent.Refuse(INDEX_NONE, FTrafficResource::OfNode(Node), TNumericLimits<double>::Max(), 5);
+		const bool bOnRoute = Phase == EAgentPhase::Taxiing || Phase == EAgentPhase::Manoeuvring || Phase == EAgentPhase::Reversing;
+		TestEqual(*FString::Printf(TEXT("a %s that is stopped and refused is a stalled waiter exactly when it is on a route"), *Name),
+			Agent.IsStoppedAndWaiting(), bOnRoute);
+
+		// NOT WAITING: nothing refuses it.
+		Agent.ClearArbitration();
+		TestFalse(*FString::Printf(TEXT("a %s that nobody refuses is not one"), *Name), Agent.IsStoppedAndWaiting());
+	}
+
+	// MOVING, each by its own driver: the speed that says so is the driving struct's, not the follower's.
+	struct FMoving
+	{
+		EAgentPhase Phase;
+		const TCHAR* Driver;
+	};
+	for (const FMoving& Case : { FMoving{ EAgentPhase::Taxiing, TEXT("the follower") },
+		FMoving{ EAgentPhase::Manoeuvring, TEXT("the push") }, FMoving{ EAgentPhase::Reversing, TEXT("the reverse run") } })
+	{
+		FRoadAgent Agent;
+		Agent.Phase = Case.Phase;
+		Agent.Refuse(INDEX_NONE, FTrafficResource::OfNode(Node), TNumericLimits<double>::Max(), 5);
+		switch (Case.Phase)
+		{
+		case EAgentPhase::Taxiing:     Agent.Follower.Speed = 50.0; break;
+		case EAgentPhase::Manoeuvring: Agent.Pushback.Speed = 50.0; break;
+		default:                       Agent.Reverse.Speed = 50.0; break;
+		}
+		TestFalse(*FString::Printf(TEXT("refused but still moving under %s is not stalled"), Case.Driver), Agent.IsStoppedAndWaiting());
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A REVERSE WAITS FOR HELD GROUND; IT DOES NOT START INTO IT AND SIT MID-SPAN (issue #455, item 2).
+ *
+ * DepartAgent grants a push whole or withholds it (IsPushGroundFree) because a manoeuvre with no second way out that
+ * can be stopped half way blocks a taxiway with nothing able to act on it. A reverse leg is the same kind of
+ * manoeuvre and had no such gate: TryArmReverseLeg armed whenever the steered axle reached the span's start, the claim
+ * pass then held the whole span and refused the truck a few metres on, and it sat in the span across the lane it was
+ * meant to clear.
+ *
+ * A phantom stands on the span's FAR node before the truck is even dispatched, where the truck's ordinary window (a
+ * gap and a half footprint ahead) cannot see it - so only a gate over the WHOLE span can refuse it. The truck
+ * drives its serve leg to the service point and must stop there: still Taxiing, waiting on the phantom (visible to
+ * the inspector and the wait-for graph as any waiter is), not moved by a centimetre over ten seconds. Then the
+ * phantom goes and it arms.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficReverseWaitsForHeldGroundTest,
+	"Airside.Model.Traffic.ReverseWaitsForHeldGround",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficReverseWaitsForHeldGroundTest::RunTest(const FString& Parameters)
+{
+	FBackingBay Bay = FBackingBay::Build();
+	if (!TestTrue(TEXT("the bay routes as arrive, reverse, depart"), Bay.RouteIsTheThreeLegs())) { return false; }
+	const double SpanStart = Bay.Route.Steps[0].EndDistance;
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	constexpr int32 Phantom = 900;
+	HoldNodeAsPhantom(*Traffic, Phantom, Bay.Cleared);
+	const int32 Truck = Traffic->DispatchAgent(Bay.Net, Bay.Route, Bay.Truck, ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("the truck is dispatched"), Truck > 0)) { return false; }
+	TestTrue(TEXT("it drives the serve leg to the service point"), TickUntilAtSpanStart(*Traffic, *Bay.Net, Truck, SpanStart));
+
+	const FRoadAgent* T = Traffic->FindAgent(Truck);
+	if (!TestNotNull(TEXT("the truck is still there"), T)) { return false; }
+	TestEqual(TEXT("it has NOT armed the reverse: still Taxiing at the span's start (red while nothing gated the arm)"),
+		T->Phase, EAgentPhase::Taxiing);
+	for (int32 Tick = 0; Tick < 20; ++Tick)
+	{
+		Traffic->Advance(0.05, Bay.Net);
+	}
+	T = Traffic->FindAgent(Truck);
+	TestEqual(TEXT("and waits on whoever holds the span, which is what the inspector and the wait-for graph read"),
+		T->GetWaitingOn(), Phantom);
+	TestEqual(TEXT("refused at the reverse step, the second of the route's three"), T->GetBlockedStep(), 1);
+	TestTrue(TEXT("on the span's far node - the one thing in the span the ordinary window could not see"),
+		T->GetBlockedResource().Kind == ETrafficResourceKind::Node && T->GetBlockedResource().Node == Bay.Cleared);
+
+	// IT WAITS, IT DOES NOT CREEP.
+	const FVector2D Held = T->LastMotion.Position;
+	for (int32 Tick = 0; Tick < 200; ++Tick)
+	{
+		Traffic->Advance(0.05, Bay.Net);
+	}
+	T = Traffic->FindAgent(Truck);
+	TestEqual(TEXT("ten seconds on it is still Taxiing"), T->Phase, EAgentPhase::Taxiing);
+	TestTrue(*FString::Printf(TEXT("and has not moved (%.2f uu)"), FVector2D::Distance(Held, T->LastMotion.Position)),
+		FVector2D::Distance(Held, T->LastMotion.Position) < 1.0);
+	TestEqual(TEXT("no reverse was played"), T->Reverse.Travelled, 0.0);
+	TestTrue(TEXT("and a wait that lasts is a stalled waiter, on the clock like any other"), T->GetStalledSeconds() > Traffic->Rules.StallSeconds);
+
+	// LET GO: the phantom leaves and the very next frames arm it.
+	Traffic->OccupancyForTest().ReleaseAll(Phantom);
+	TestTrue(TEXT("it arms the reverse once the span is free"), RunUntil(*Traffic, *Bay.Net, 5.0, [&]()
+	{
+		const FRoadAgent* P = Traffic->FindAgent(Truck);
+		return P != nullptr && P->Phase == EAgentPhase::Reversing;
+	}));
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A ROUTE THAT OPENS WITH A REVERSE, DISPATCHED INTO HELD GROUND, WAITS (issue #455, item 2 - the dispatch's own site).
+ *
+ * The gate before a reverse arms has three call sites, because a reverse arms in three places: the tick, a dispatch's
+ * zero-second pose and a redirect's. This is the dispatch: AdmitDispatched runs Advance(0) before the agent is in the
+ * table, before any claim pass, so without the gate a route opening with its reverse leg armed it into held ground
+ * at once. The CONTROL is the same dispatch with the ground free, which arms in that same pose - the premise that
+ * makes "it did not" mean something.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficReverseFromDispatchWaitsForHeldGroundTest,
+	"Airside.Model.Traffic.ReverseFromDispatchWaitsForHeldGround",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficReverseFromDispatchWaitsForHeldGroundTest::RunTest(const FString& Parameters)
+{
+	FBackingBay Bay = FBackingBay::Build();
+	const FRoutePlan Home = TestGraph::Probe(*Bay.Net, Bay.Service, Bay.Exit, ETraversalClass::GroundVehicle);
+	if (!TestTrue(TEXT("the route from the service point opens with the reverse leg and then drives out"),
+		Home.IsValid() && Home.Steps.Num() == 2 && Home.Steps[0].bReverseLeg && !Home.Steps[1].bReverseLeg)) { return false; }
+
+	UGroundTraffic* Free = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Control = Free->DispatchAgent(Bay.Net, Home, Bay.Truck, ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("control: the dispatch is admitted"), Control > 0)) { return false; }
+	if (!TestEqual(TEXT("control: into FREE ground it arms the reverse in the dispatch's own pose"),
+		Free->FindAgent(Control)->Phase, EAgentPhase::Reversing)) { return false; }
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	constexpr int32 Phantom = 900;
+	HoldNodeAsPhantom(*Traffic, Phantom, Bay.Cleared);
+	const int32 Truck = Traffic->DispatchAgent(Bay.Net, Home, Bay.Truck, ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("the same dispatch is admitted with the span's far node held"), Truck > 0)) { return false; }
+	const FRoadAgent* T = Traffic->FindAgent(Truck);
+	TestEqual(TEXT("but it did NOT arm: Taxiing at the service point (red while the dispatch's own Advance armed unasked)"),
+		T->Phase, EAgentPhase::Taxiing);
+	TestEqual(TEXT("waiting on the phantom that holds the span"), T->GetWaitingOn(), Phantom);
+	for (int32 Tick = 0; Tick < 20; ++Tick)
+	{
+		Traffic->Advance(0.05, Bay.Net);
+	}
+	TestEqual(TEXT("and it keeps waiting through the ticks that follow"), Traffic->FindAgent(Truck)->Phase, EAgentPhase::Taxiing);
+
+	Traffic->OccupancyForTest().ReleaseAll(Phantom);
+	TestTrue(TEXT("it arms the moment the span is free"), RunUntil(*Traffic, *Bay.Net, 5.0, [&]()
+	{
+		const FRoadAgent* P = Traffic->FindAgent(Truck);
+		return P != nullptr && P->Phase == EAgentPhase::Reversing;
+	}));
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A REDIRECT INTO A REVERSE, INTO HELD GROUND, WAITS (issue #455, item 2 - the redirect's own site).
+ *
+ * The stand service cycle's route home OPENS with its reverse leg, and a parked truck is sent along it by
+ * RedirectAgent, whose zero-second Advance is where the back-out arms - with no claim pass run and so no notion that
+ * anything else already held the leg. This is THE production path of the gate. Same shape as the dispatch's test:
+ * a control that arms into free ground, then held ground that does not, then released.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficReverseFromRedirectWaitsForHeldGroundTest,
+	"Airside.Model.Traffic.ReverseFromRedirectWaitsForHeldGround",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficReverseFromRedirectWaitsForHeldGroundTest::RunTest(const FString& Parameters)
+{
+	FBackingBay Bay = FBackingBay::Build();
+	const FRoutePlan ToService = TestGraph::Probe(*Bay.Net, Bay.Approach, Bay.Service, ETraversalClass::GroundVehicle);
+	const FRoutePlan Home = TestGraph::Probe(*Bay.Net, Bay.Service, Bay.Exit, ETraversalClass::GroundVehicle);
+	if (!TestTrue(TEXT("the routes to the service point, and home from it (reverse first), exist"),
+		ToService.IsValid() && Home.IsValid() && Home.Steps.Num() == 2 && Home.Steps[0].bReverseLeg)) { return false; }
+
+	// A TRUCK PARKED AT THE SERVICE POINT, in each of two models: one where the ground is free and one where it is not.
+	auto ParkAtService = [&](UGroundTraffic& Traffic, int32& OutTruck) -> bool
+	{
+		OutTruck = Traffic.DispatchAgent(Bay.Net, ToService, Bay.Truck, ETraversalClass::GroundVehicle, 1.0);
+		return OutTruck > 0 && RunUntil(Traffic, *Bay.Net, 90.0, [&]()
+		{
+			const FRoadAgent* P = Traffic.FindAgent(OutTruck);
+			return P != nullptr && P->Phase == EAgentPhase::Parked;
+		});
+	};
+
+	UGroundTraffic* Free = NewObject<UGroundTraffic>(GetTransientPackage());
+	int32 Control = 0;
+	if (!TestTrue(TEXT("control: the truck parks at the service point"), ParkAtService(*Free, Control))) { return false; }
+	if (!TestTrue(TEXT("control: it is sent home"), Free->RedirectAgent(Control, Bay.Net, Home))) { return false; }
+	if (!TestEqual(TEXT("control: into FREE ground the redirect arms the reverse in its own pose"),
+		Free->FindAgent(Control)->Phase, EAgentPhase::Reversing)) { return false; }
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	int32 Truck = 0;
+	if (!TestTrue(TEXT("the truck parks at the service point"), ParkAtService(*Traffic, Truck))) { return false; }
+	constexpr int32 Phantom = 900;
+	HoldNodeAsPhantom(*Traffic, Phantom, Bay.Cleared);
+	if (!TestTrue(TEXT("it is sent home with the span's far node held"), Traffic->RedirectAgent(Truck, Bay.Net, Home))) { return false; }
+	const FRoadAgent* T = Traffic->FindAgent(Truck);
+	TestEqual(TEXT("but it did NOT arm: Taxiing at the service point (red while the redirect's own Advance armed unasked)"),
+		T->Phase, EAgentPhase::Taxiing);
+	TestEqual(TEXT("waiting on the phantom that holds the span"), T->GetWaitingOn(), Phantom);
+	for (int32 Tick = 0; Tick < 20; ++Tick)
+	{
+		Traffic->Advance(0.05, Bay.Net);
+	}
+	TestEqual(TEXT("and it keeps waiting through the ticks that follow"), Traffic->FindAgent(Truck)->Phase, EAgentPhase::Taxiing);
+
+	Traffic->OccupancyForTest().ReleaseAll(Phantom);
+	TestTrue(TEXT("it arms the moment the span is free"), RunUntil(*Traffic, *Bay.Net, 5.0, [&]()
+	{
+		const FRoadAgent* P = Traffic->FindAgent(Truck);
+		return P != nullptr && P->Phase == EAgentPhase::Reversing;
+	}));
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * AN EDIT MID-REVERSE LEAVES EVERY STEP OF THE SPAN LIVE, AND THE TRUCK'S HOLD ON IT (issue #455, item 3).
+ *
+ * #453's Reversing arm re-resolved the route from ResumeStep - the remainder - and deliberately not the span being
+ * backed along, because a re-resolve that could replan or truncate would move the route from under the step index
+ * the handover cuts the remainder by. So after an edit that freed the span's handles, the claim pass (which holds a
+ * reversing vehicle's whole span through those very steps) held nothing for the rest of the leg. ReResolveSpan
+ * re-points them: handles only, no replan, no step moved.
+ *
+ * The far node and the exit are redrawn on the same spots mid-reverse, as RebuildDuringReverse does, and this asks the
+ * question that test could not - at the moment of the edit, while the truck is STILL REVERSING: every step of the
+ * route names a live edge and node, the span is the redrawn edge, the step count and every EndDistance are what they
+ * were, and after a few claim passes the truck holds the LIVE reverse edge and far node, where another agent would
+ * meet it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficRebuildDuringReverseKeepsTheSpanLiveTest,
+	"Airside.Model.Traffic.RebuildDuringReverseKeepsTheSpanLive",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficRebuildDuringReverseKeepsTheSpanLiveTest::RunTest(const FString& Parameters)
+{
+	FBackingBay Bay = FBackingBay::Build();
+	if (!TestTrue(TEXT("the bay routes as arrive, reverse, depart"), Bay.RouteIsTheThreeLegs())) { return false; }
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Truck = Traffic->DispatchAgent(Bay.Net, Bay.Route, Bay.Truck, ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("the truck is dispatched"), Truck > 0)) { return false; }
+	if (!TestTrue(TEXT("and backs off the service point"), TickUntilReversing(*Traffic, *Bay.Net, Truck))) { return false; }
+	for (int32 Tick = 0; Tick < 200; ++Tick)
+	{
+		Traffic->Advance(0.05, Bay.Net);
+	}
+	if (!TestEqual(TEXT("still reversing when the edit lands"), Traffic->FindAgent(Truck)->Phase, EAgentPhase::Reversing)) { return false; }
+	const TArray<FRouteStep> Before = Traffic->FindAgent(Truck)->Follower.Plan.Steps;
+
+	Bay.Net->RemoveGuidelineNode(Bay.Cleared);
+	Bay.Net->RemoveGuidelineNode(Bay.Exit);
+	const FGuidelineNodeId Cleared = TestGraph::Node(*Bay.Net, 0.0, 4500.0);
+	const FGuidelineNodeId Exit = TestGraph::Node(*Bay.Net, FBackingBay::ExitX, FBackingBay::ExitY);
+	const FGuidelineEdgeId ReverseEdge = Bay.Lay(Bay.Service, Cleared, true);
+	const FGuidelineEdgeId ExitEdge = Bay.Lay(Cleared, Exit, false);
+	Traffic->OnGraphRebuilt(*Bay.Net);
+
+	const FRoadAgent* Agent = Traffic->FindAgent(Truck);
+	if (!TestNotNull(TEXT("the truck survives the rebuild"), Agent)) { return false; }
+	TestEqual(TEXT("still reversing: this is the state BEFORE the handover the older test waits for"), Agent->Phase, EAgentPhase::Reversing);
+	const FRoutePlan& Plan = Agent->Follower.Plan;
+	if (!TestEqual(TEXT("the route has the steps it had"), Plan.Steps.Num(), Before.Num())) { return false; }
+
+	int32 Dead = 0;
+	int32 Moved = 0;
+	for (int32 Step = 0; Step < Plan.Steps.Num(); ++Step)
+	{
+		Dead += (Bay.Net->GetGuidelineEdge(Plan.Steps[Step].Edge) == nullptr || Bay.Net->GetGuidelineNode(Plan.Steps[Step].To) == nullptr) ? 1 : 0;
+		Moved += FMath::IsNearlyEqual(Plan.Steps[Step].EndDistance, Before[Step].EndDistance, 1.0e-6) ? 0 : 1;
+	}
+	TestEqual(TEXT("EVERY step of the route names a live edge and node, the span's own included (red while the span kept its freed handles)"), Dead, 0);
+	TestEqual(TEXT("and no step moved: the handover cuts the remainder by these indices and distances"), Moved, 0);
+	TestTrue(TEXT("the span is the redrawn reverse edge"), Plan.Steps[1].Edge == ReverseEdge);
+	TestTrue(TEXT("and ends at the redrawn far node"), Plan.Steps[1].To == Cleared);
+	TestTrue(TEXT("where the remainder, on the redrawn exit edge, leaves from"), Plan.Steps[2].Edge == ExitEdge);
+
+	// AND THE CLAIM IS ON THE LIVE GROUND: a few passes on, another agent asking for the reverse edge or the far
+	// node is told the truck holds it.
+	for (int32 Tick = 0; Tick < 5; ++Tick)
+	{
+		Traffic->Advance(0.05, Bay.Net);
+	}
+	TestEqual(TEXT("still reversing after the passes"), Traffic->FindAgent(Truck)->Phase, EAgentPhase::Reversing);
+	int32 Holder = 0;
+	TestTrue(TEXT("a second agent is refused the LIVE reverse edge"),
+		Traffic->GetOccupancy().IsHeld(FTrafficResource::OfEdge(ReverseEdge), 999, &Holder));
+	TestEqual(TEXT("held by the truck"), Holder, Truck);
+	Holder = 0;
+	TestTrue(TEXT("and the live far node"), Traffic->GetOccupancy().IsHeld(FTrafficResource::OfNode(Cleared), 999, &Holder));
+	TestEqual(TEXT("held by the truck too"), Holder, Truck);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A REBUILD THAT DELETES THE SPAN'S END NODE MID-REVERSE STRANDS THE TRUCK WHERE IT STANDS (issue #455, item 4).
+ *
+ * When no live node holds the position the span's own end is at, the Reversing arm's ReResolvePlan strands: it marks
+ * Follower.Plan unreachable, and the agent stayed Reversing - so it finished the span holding nothing, the handover cut
+ * the remainder with RouteSearch::Section (which writes Result = Found over the dead marker) and the truck drove that
+ * remainder on the handles the rebuild had freed. What it does now is what a Taxiing agent does when its plan dies
+ * under it: stops where it stands and is Stranded, until it is retired or rescued.
+ *
+ * ASSERTED: the rebuild reports one route stranded; a frame later the phase is Stranded, the phase change was
+ * broadcast (the ops layer's jobs are freed by it, not by polling); it has not moved more than a frame's worth of
+ * back-out; and in the thirty seconds after it never drives (never Taxiing).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficRebuildDuringReverseStrandsWhenTheSpanEndIsGoneTest,
+	"Airside.Model.Traffic.RebuildDuringReverseStrandsWhenTheSpanEndIsGone",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficRebuildDuringReverseStrandsWhenTheSpanEndIsGoneTest::RunTest(const FString& Parameters)
+{
+	FBackingBay Bay = FBackingBay::Build();
+	if (!TestTrue(TEXT("the bay routes as arrive, reverse, depart"), Bay.RouteIsTheThreeLegs())) { return false; }
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Truck = Traffic->DispatchAgent(Bay.Net, Bay.Route, Bay.Truck, ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("the truck is dispatched"), Truck > 0)) { return false; }
+	if (!TestTrue(TEXT("and backs off the service point"), TickUntilReversing(*Traffic, *Bay.Net, Truck))) { return false; }
+	for (int32 Tick = 0; Tick < 200; ++Tick)
+	{
+		Traffic->Advance(0.05, Bay.Net);
+	}
+	if (!TestEqual(TEXT("still reversing when the edit lands"), Traffic->FindAgent(Truck)->Phase, EAgentPhase::Reversing)) { return false; }
+	const FVector2D StoppedAt = Traffic->FindAgent(Truck)->LastMotion.Position;
+
+	int32 HeardStranded = 0;
+	const FDelegateHandle Listener = Traffic->OnAgentPhaseChanged.AddLambda([&](int32 Id, EAgentPhase From, EAgentPhase To)
+	{
+		HeardStranded += (Id == Truck && From == EAgentPhase::Reversing && To == EAgentPhase::Stranded) ? 1 : 0;
+	});
+
+	// THE SPAN'S END GOES, and nothing replaces it: no live node holds where the reverse leg ends.
+	Bay.Net->RemoveGuidelineNode(Bay.Cleared);
+	Traffic->OnGraphRebuilt(*Bay.Net);
+	TestEqual(TEXT("the rebuild strands the route: no node holds where the span ends"), Traffic->GetLastRebuildSummaryForTest().Stranded, 1);
+
+	bool bDrove = false;
+	for (int32 Tick = 0; Tick < 600; ++Tick)
+	{
+		Traffic->Advance(0.05, Bay.Net);
+		const FRoadAgent* P = Traffic->FindAgent(Truck);
+		if (P == nullptr) { break; }
+		bDrove |= P->Phase == EAgentPhase::Taxiing;
+	}
+	Traffic->OnAgentPhaseChanged.Remove(Listener);
+
+	const FRoadAgent* After = Traffic->FindAgent(Truck);
+	if (!TestNotNull(TEXT("the truck is still there"), After)) { return false; }
+	TestEqual(TEXT("it is Stranded (red while it went on reversing and then drove the dead remainder)"), After->Phase, EAgentPhase::Stranded);
+	TestFalse(TEXT("and it never drove on, across thirty seconds"), bDrove);
+	TestEqual(TEXT("the phase change Reversing -> Stranded was broadcast once"), HeardStranded, 1);
+	const double Wandered = FVector2D::Distance(StoppedAt, After->LastMotion.Position);
+	TestTrue(*FString::Printf(TEXT("and it stopped where it stood, not at the span's end (%.0f uu on; a frame of back-out is 5)"), Wandered),
+		Wandered < 20.0);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A WAITER WHOSE EXTENSION WAS REFUSED IS OFFERED A STAND AGAIN WHEN IT STOPS (issue #455, item 5).
+ *
+ * ReofferStands consumes bStandsMayHaveFreed whether or not it placed anyone, and a Taxiing waiter whose
+ * ExtendRoute was refused was told it keeps waiting and is asked again "when something frees". The stand it was
+ * offered was already free, so nothing freed: the aircraft taxied to the end of its truncated route, parked there
+ * still waiting, and sat beside a free stand for good. Its own stop is the retry.
+ *
+ * The refusal is staged as ReofferRefusedExtensionKeepsWaiting stages it (the goal pointed off the plan's end), and
+ * then the cause CLEARS - the goal goes back where the plan ends, as a tail that joins on the next look would - which
+ * is the transient refusal the issue describes. Nothing frees a stand from then on. It must get the stand anyway.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficReofferRefusedExtensionRetriesWhenItStopsTest,
+	"Airside.Model.Traffic.ReofferRefusedExtensionRetriesWhenItStops",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficReofferRefusedExtensionRetriesWhenItStopsTest::RunTest(const FString& Parameters)
+{
+	FTaxiingWaiter W;
+	if (!W.Build(*this)) { return false; }
+	const FRoadAgent* Waiter = W.Traffic->FindAgent(W.Id);
+	const FGuidelineNodeId LiveEnd = Waiter->GoalNode;
+	const FGuidelineNodeId Start = Waiter->Follower.Plan.Start;
+	if (!TestTrue(TEXT("the plan's start is a live node other than where it ends"),
+		Start.IsSet() && Start != LiveEnd && W.Air.Net->GetGuidelineNode(Start) != nullptr)) { return false; }
+	FGroundTrafficTestAccess Access(*W.Traffic);
+	if (!TestTrue(TEXT("the goal is moved off the plan's end"), Access.SetGoal(W.Id, Start))) { return false; }
+
+	// THE REFUSAL: the tick's re-offer cannot extend it, and consumes the freed flag.
+	W.Traffic->Advance(0.05, W.Air.Net);
+	TestFalse(TEXT("the refused pass consumed the freed flag: nothing asks again unless something frees"), W.Traffic->StandsMayHaveFreedForTest());
+	Waiter = W.Traffic->FindAgent(W.Id);
+	if (!TestNotNull(TEXT("the aircraft is still there"), Waiter)) { return false; }
+	if (!TestTrue(TEXT("still Taxiing and still waiting: it was not redirected"), Waiter->Phase == EAgentPhase::Taxiing && Waiter->bAwaitingStand)) { return false; }
+
+	// THE CAUSE CLEARS: the plan's end is its goal again. No stand frees from here on.
+	if (!TestTrue(TEXT("the goal is put back at the plan's end"), Access.SetGoal(W.Id, LiveEnd))) { return false; }
+
+	const bool bPlaced = RunUntil(*W.Traffic, *W.Air.Net, 600.0, [&]()
+	{
+		const FRoadAgent* P = W.Traffic->FindAgent(W.Id);
+		return P != nullptr && P->Phase == EAgentPhase::Parked && !P->bAwaitingStand;
+	});
+	const FRoadAgent* Done = W.Traffic->FindAgent(W.Id);
+	if (!TestNotNull(TEXT("the aircraft is still there at the end"), Done)) { return false; }
+	TestTrue(TEXT("it stopped at the end of its route and was offered the stand that had appeared, and parked on it (red: it sat waiting beside a free stand)"),
+		bPlaced && Done->GoalNode == W.Air.Pose(W.Placed));
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A NODE ONE VEHICLE HOLDS AS A RESERVATION STAYS ITS RESERVER'S AGAINST A NEARER CLAIMANT (issue #455, item 6).
+ *
+ * A vehicle refused a node stops VehicleGap short of it, measured from its CENTRE - and the claim it then makes on
+ * that node turns OCCUPIED once the centre is within half a footprint of it, plus the node's reach (FClaimPass:
+ * `|End - T| < F * 0.5 + ExcessTo`, the reach cancelling against StopWithinFor's own). With
+ * VehicleGap 300 and half a VehicleFootprint 334.75 the refused vehicle stops INSIDE the zone where its own claim is an
+ * occupancy, and the table's rule that presence beats a reservation (a body already standing there is never moved)
+ * hands it the node the other vehicle reserved first. Measured on #453's span test: the van, being nearer, took the
+ * truck's span-end node and the truck stopped 188 uu short; this is the same defect with neither vehicle reversing.
+ *
+ * TWO VANS ARE SENT TO THE SAME NODE FROM TWO ROADS, AT EQUAL DISTANCE, the lower id first in the arbitration order
+ * and so first to reserve it. The one that reserved it must be the one that gets it: it parks there, and the other
+ * is left waiting on it. An END node and not a crossing one on purpose - the box-entry rule stops a vehicle well short
+ * of a junction, and it is the plain end-node rule (a gap short of the node itself) that reaches the threshold.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficReservedNodeKeepsItsReserverTest,
+	"Airside.Model.Traffic.ReservedNodeKeepsItsReserver",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficReservedNodeKeepsItsReserverTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId West = TestGraph::Node(*Net, -3000.0, 0.0);
+	const FGuidelineNodeId South = TestGraph::Node(*Net, 0.0, -3000.0);
+	const FGuidelineNodeId Goal = TestGraph::Node(*Net, 0.0, 0.0);
+	TestGraph::Join(*Net, West, Goal, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, South, Goal, { EGuidelineDir::AToB });
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Reserver = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, West, Goal, ETraversalClass::GroundVehicle),
+		TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 Claimant = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, South, Goal, ETraversalClass::GroundVehicle),
+		TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("both vans are dispatched, the reserver first (it is asked first, and reserves the node first)"),
+		Reserver > 0 && Claimant > Reserver)) { return false; }
+
+	// THE PASS SAYS WHEN TWO BODIES ARE BOTH STANDING ON ONE NODE ("overlaps ... both are standing on it"): the
+	// refused van stopping inside the occupied zone is exactly that, a body 300 uu from a node another is parked on.
+	struct FSpy : public FOutputDevice
+	{
+		int32 Overlaps = 0;
+		virtual bool CanBeUsedOnMultipleThreads() const override { return true; }
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category) override
+		{
+			if (Category != FName(TEXT("LogAirsideTraffic"))) { return; }
+			Overlaps += FString(V).Contains(TEXT("both are standing on it")) ? 1 : 0;
+		}
+	} Spy;
+
+	bool bClaimantWaitedOnReserver = false;
+	bool bReserverWaitedOnClaimant = false;
+	GLog->AddOutputDevice(&Spy);
+	RunUntil(*Traffic, *Net, 60.0, [&]()
+	{
+		const FRoadAgent* R = Traffic->FindAgent(Reserver);
+		const FRoadAgent* C = Traffic->FindAgent(Claimant);
+		if (R == nullptr || C == nullptr) { return true; }
+		bClaimantWaitedOnReserver |= C->GetWaitingOn() == Reserver;
+		bReserverWaitedOnClaimant |= R->GetWaitingOn() == Claimant;
+		return R->Phase == EAgentPhase::Parked || C->Phase == EAgentPhase::Parked;
+	});
+	// A FEW SECONDS MORE, so the loser has stopped wherever it is going to stop.
+	for (int32 Tick = 0; Tick < 100; ++Tick)
+	{
+		Traffic->Advance(0.05, Net);
+	}
+	GLog->RemoveOutputDevice(&Spy);
+
+	const FRoadAgent* R = Traffic->FindAgent(Reserver);
+	const FRoadAgent* C = Traffic->FindAgent(Claimant);
+	if (!TestTrue(TEXT("both vans are still there"), R != nullptr && C != nullptr)) { return false; }
+	TestTrue(TEXT("they met: the claimant was refused the node the reserver held (or this proves nothing)"), bClaimantWaitedOnReserver);
+	TestEqual(TEXT("the RESERVER got the node: it is the one that parked on it (red while the refused van stopped inside the occupied zone and took it)"),
+		R->Phase, EAgentPhase::Parked);
+	TestFalse(TEXT("and the reserver was never refused by the claimant"), bReserverWaitedOnClaimant);
+	TestEqual(TEXT("the claimant is still Taxiing, waiting for a node that is taken"), C->Phase, EAgentPhase::Taxiing);
+	TestEqual(TEXT("on the reserver"), C->GetWaitingOn(), Reserver);
+	TestEqual(TEXT("and it waits OUTSIDE the zone where its own claim would be an occupancy: no two bodies on the node at once"),
+		Spy.Overlaps, 0);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * THE RESOLVER DOES NOT REPLAN A TRUCK OUT OF ITS BAY (issue #455, review of #466).
+ *
+ * A truck refused the ground of the reverse leg it is about to arm (UGroundTraffic::GateReverseLeg) is Taxiing and
+ * stopped, with BlockedStep on the reverse step and ToNode ~0: it passed each of CanReplanAtBlockedStep's checks, and
+ * ReplanAt has no reverse-leg handling, so a ring it was in could have it spliced out of the bay - forwards, along
+ * whatever road leaves the service point - instead of waited out. DECIDED: a refusal at a reverse step is not a turn.
+ *
+ * THE BAY GETS A FORWARD ROAD OUT (Service -> Alt -> Exit), so a replan around the banned reverse edge EXISTS - without
+ * that the resolver fails to replan the truck for want of a road and this proves nothing. The CONTROL is the same
+ * truck with the step not marked as a reverse leg: the resolver replans it, which is what makes "did not" mean
+ * something. Staged bare, as DeadlockResolverStandalone stages a ring: Refuse + AccrueStall on hand-built agents, and
+ * OCCUPIED claims, so the cycle is a deadlock and not a yield of reservations.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficResolverDoesNotReplanATruckOutOfItsBayTest,
+	"Airside.Model.Traffic.Deadlock.ResolverDoesNotReplanATruckOutOfItsBay",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficResolverDoesNotReplanATruckOutOfItsBayTest::RunTest(const FString& Parameters)
+{
+	FBackingBay Bay = FBackingBay::Build();
+	if (!TestTrue(TEXT("the bay routes as arrive, reverse, depart"), Bay.RouteIsTheThreeLegs())) { return false; }
+	const FGuidelineNodeId Alt = TestGraph::Node(*Bay.Net, 4000.0, 2000.0);
+	Bay.Lay(Bay.Service, Alt, false);
+	Bay.Lay(Alt, Bay.Exit, false);
+
+	// Returns the resolver after one Resolve over a truck waiting at the start of its reverse leg (refused the far
+	// node by an aircraft) and that aircraft (refused the service point by the truck).
+	auto Resolve = [&](bool bMarkedReverse, FRoadAgent& OutTruck, FDeadlockResolver& OutResolver)
+	{
+		FTrafficRules Rules;
+		FTrafficOccupancy Occupancy;
+		auto Stand = [&Occupancy](int32 Agent, FGuidelineNodeId Node)
+		{
+			FTrafficClaim Claim;
+			Claim.AgentId = Agent;
+			Claim.Resource = FTrafficResource::OfNode(Node);
+			Claim.bOccupied = true;
+			FTrafficClaim Blocker;
+			Occupancy.TryClaim(Claim, Blocker);
+		};
+		Stand(2, Bay.Cleared);
+		Stand(1, Bay.Service);
+
+		TArray<FRoadAgent> Agents;
+		Agents.SetNum(2);
+		FRoadAgent& Truck = Agents[0];
+		Truck.Id = 1;
+		Truck.StampRules(Rules, 1.0);
+		Truck.StartDrive(Bay.Route, Bay.Truck);
+		Truck.Class = ETraversalClass::GroundVehicle;
+		Truck.SetGoalFrom(Bay.Route);
+		Truck.Follower.Travelled = Bay.Route.Steps[0].EndDistance;
+		Truck.Follower.Speed = 0.0;
+		if (!bMarkedReverse)
+		{
+			Truck.Follower.Plan.Steps[1].bReverseLeg = false;
+		}
+		Truck.Refuse(1, FTrafficResource::OfNode(Bay.Cleared), TNumericLimits<double>::Max(), 2);
+		Truck.AccrueStall(10.0);
+		FRoadAgent& Plane = Agents[1];
+		Plane.Id = 2;
+		Plane.Refuse(INDEX_NONE, FTrafficResource::OfNode(Bay.Service), TNumericLimits<double>::Max(), 1);
+		Plane.AccrueStall(10.0);
+
+		TMap<int32, int32> AgentIndex;
+		AgentIndex.Add(1, 0);
+		AgentIndex.Add(2, 1);
+		FNodeReachCache Reach;
+		FRunwayChainCache Chains;
+		FPlanReResolver PlanReResolver;
+		OutResolver.Resolve(Agents, AgentIndex, FTrafficContext{ *Bay.Net, Rules, Occupancy, Reach, Chains, 100.0 }, PlanReResolver);
+		OutTruck = Agents[0];
+	};
+
+	FRoadAgent Control;
+	FDeadlockResolver ControlResolver;
+	Resolve(false, Control, ControlResolver);
+	if (!TestEqual(TEXT("control: the same truck, its step not a reverse leg, IS replanned - the forward road out exists and the resolver takes it"),
+		ControlResolver.LastResolvedAgent, 1)) { return false; }
+	TestTrue(TEXT("control: and its route changed"), Control.Follower.Plan.Steps.Num() != Bay.Route.Steps.Num()
+		|| Control.Follower.Plan.Steps[1].Edge != Bay.Route.Steps[1].Edge);
+
+	FRoadAgent Truck;
+	FDeadlockResolver Resolver;
+	Resolve(true, Truck, Resolver);
+	TestEqual(TEXT("refused at the reverse step, the truck is NOT replanned (red while CanReplanAtBlockedStep let a reverse step through)"),
+		Resolver.LastResolvedAgent, 0);
+	bool bSameRoute = Truck.Follower.Plan.Steps.Num() == Bay.Route.Steps.Num();
+	for (int32 Step = 0; bSameRoute && Step < Bay.Route.Steps.Num(); ++Step)
+	{
+		bSameRoute = Truck.Follower.Plan.Steps[Step].Edge == Bay.Route.Steps[Step].Edge;
+	}
+	TestTrue(TEXT("and it keeps the route it had: still backing out of its bay"), bSameRoute);
+	TestEqual(TEXT("the jam was seen and left, on the resolver's cadence"), Resolver.CyclesSeen.Num(), 1);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * THE WAIT BEFORE A REVERSE IS A REFUSAL AT THE SPAN, NOT ANY REFUSAL (issue #455, review of #466).
+ *
+ * TryArmReverseLeg waited on `WaitingOn != 0`, which says nothing about WHERE the refusal was: one left on the agent
+ * by another part of the route - or by the route it has just been redirected off - held the arm, and named a holder
+ * that was not in the way. It is keyed on a refusal at a step of the span now, and RedirectAgent clears the agent's
+ * arbitration before the gate.
+ *
+ * TWO HALVES. BARE: an agent at the span's start refused at step 0 (outside the span) arms; refused at step 1 (the
+ * span) does not. STALE: a parked truck carrying a refusal AT the span's step - what a Taxiing agent redirected
+ * mid-wait would carry, staged through ScriptWait - is redirected into free ground and arms, because the redirect
+ * cleared what the old route left.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficReverseIgnoresARefusalElsewhereOnTheRouteTest,
+	"Airside.Model.Traffic.ReverseIgnoresARefusalElsewhereOnTheRoute",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficReverseIgnoresARefusalElsewhereOnTheRouteTest::RunTest(const FString& Parameters)
+{
+	FBackingBay Bay = FBackingBay::Build();
+	if (!TestTrue(TEXT("the bay routes as arrive, reverse, depart"), Bay.RouteIsTheThreeLegs())) { return false; }
+	const double SpanStart = Bay.Route.Steps[0].EndDistance;
+
+	// BARE: the agent stands at the span's start and is asked to arm, with a refusal at the step named.
+	auto Armed = [&](int32 RefusedStep) -> bool
+	{
+		FTrafficRules Rules;
+		FRoadAgent Truck;
+		Truck.Id = 1;
+		Truck.StampRules(Rules, 1.0);
+		Truck.StartDrive(Bay.Route, Bay.Truck);
+		Truck.Class = ETraversalClass::GroundVehicle;
+		Truck.Follower.Travelled = SpanStart;
+		Truck.Follower.Speed = 0.0;
+		Truck.Refuse(RefusedStep, FTrafficResource::OfNode(Bay.Cleared), TNumericLimits<double>::Max(), 900);
+		FAgentMotion Motion;
+		EAgentEvent Event;
+		Truck.Advance(0.0, Motion, Event);
+		return Truck.Phase == EAgentPhase::Reversing;
+	};
+	TestTrue(TEXT("a refusal at step 0 - the serve leg, off the span - does not hold the arm (red while any WaitingOn did)"), Armed(0));
+	TestTrue(TEXT("and one at INDEX_NONE, which names no step, does not either"), Armed(INDEX_NONE));
+	TestFalse(TEXT("control: a refusal at step 1, the reverse step itself, holds it"), Armed(1));
+
+	// STALE: a parked truck with a refusal at the span's step, sent home into FREE ground.
+	const FRoutePlan ToService = TestGraph::Probe(*Bay.Net, Bay.Approach, Bay.Service, ETraversalClass::GroundVehicle);
+	const FRoutePlan Home = TestGraph::Probe(*Bay.Net, Bay.Service, Bay.Exit, ETraversalClass::GroundVehicle);
+	if (!TestTrue(TEXT("the routes to the service point, and home from it (reverse first), exist"),
+		ToService.IsValid() && Home.IsValid() && Home.Steps.Num() == 2 && Home.Steps[0].bReverseLeg)) { return false; }
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Truck = Traffic->DispatchAgent(Bay.Net, ToService, Bay.Truck, ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("the truck is dispatched"), Truck > 0)) { return false; }
+	if (!TestTrue(TEXT("and parks at the service point"), RunUntil(*Traffic, *Bay.Net, 90.0, [&]()
+		{
+			const FRoadAgent* P = Traffic->FindAgent(Truck);
+			return P != nullptr && P->Phase == EAgentPhase::Parked;
+		}))) { return false; }
+	// A REFUSAL LEFT AT STEP 0 OF THE NEW ROUTE, which is the reverse step: exactly the index the old route's refusal
+	// could coincide with. Nobody holds anything - the holder is a name in a stale field.
+	if (!TestTrue(TEXT("a stale refusal is left on it"),
+		FGroundTrafficTestAccess(*Traffic).ScriptWait(Truck, FTrafficResource::OfNode(Bay.Cleared), 900, 0.0, 0))) { return false; }
+	if (!TestTrue(TEXT("it is sent home"), Traffic->RedirectAgent(Truck, Bay.Net, Home))) { return false; }
+	TestEqual(TEXT("and arms the reverse at once: the redirect cleared the old route's refusal (red while a stale WaitingOn held the arm)"),
+		Traffic->FindAgent(Truck)->Phase, EAgentPhase::Reversing);
 	return true;
 }
 

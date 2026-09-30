@@ -291,4 +291,46 @@ bool FServiceLinkRadiusIsLevelAuthoredTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A CLASS'S GAP IS NEVER LESS THAN HALF ITS FOOTPRINT, WHATEVER THE KNOBS SAY (issue #455, item 6).
+ *
+ * FTrafficRules::GapFor is what the claim pass stops a refused vehicle short of a node by, and a gap under half the
+ * footprint stops it inside the zone where its own claim turns occupied. VehicleGap's default (300) is under half
+ * of VehicleFootprint's (669.5), and the footprint is authored from the mesh and has moved four times, so the floor is
+ * asserted for the defaults AND for a tuned pair - and a gap above the floor is used as it stands. HERE, IN THE FORWARDERS
+ * TEST FILE, because it reads the raw fields to set up and check the premise, and this is the one test file the raw-read
+ * lint row (Check-Architecture.ps1 rule 4, 'FTrafficRules Vehicle/AircraftGap') allows to.
+ * The premise is asserted too: at the defaults the raw field IS under the floor, or this would pass without the fix.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficRulesGapClearsHalfTheFootprintTest,
+	"Airside.Model.Traffic.RulesGapClearsHalfTheFootprint",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficRulesGapClearsHalfTheFootprintTest::RunTest(const FString& Parameters)
+{
+	FTrafficRules Rules;
+	TestTrue(TEXT("premise: the authored vehicle gap is under half the vehicle footprint at the defaults"),
+		Rules.VehicleGap < Rules.VehicleFootprint * 0.5);
+	for (const ETraversalClass Class : { ETraversalClass::Aircraft, ETraversalClass::GroundVehicle })
+	{
+		TestTrue(*FString::Printf(TEXT("the default gap for class %d is over half its footprint"), static_cast<int32>(Class)),
+			Rules.GapFor(Class) > Rules.FootprintFor(Class) * 0.5);
+	}
+	TestEqual(TEXT("an aircraft's gap is its authored 1500: already over the floor"), Rules.GapFor(ETraversalClass::Aircraft), 1500.0);
+
+	// TUNED: a tiny gap and a big footprint. The floor moves with the footprint, not with a typed number.
+	Rules.VehicleGap = 10.0;
+	Rules.VehicleFootprint = 850.0;
+	TestTrue(TEXT("a level that tuned the gap down and the footprint up still gets a gap over half the footprint"),
+		Rules.GapFor(ETraversalClass::GroundVehicle) > 425.0);
+
+	// ABOVE THE FLOOR IT IS USED AS IT STANDS.
+	Rules.VehicleGap = 900.0;
+	TestEqual(TEXT("a gap above the floor is the gap"), Rules.GapFor(ETraversalClass::GroundVehicle), 900.0);
+	return true;
+}
+
 #endif

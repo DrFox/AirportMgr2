@@ -606,6 +606,21 @@ $AllowedCallers = @(
         ProdAllowed = @('Private\Model\RoadNetwork.cpp', 'Private\Debug\RoadRebuildCensus.cpp', 'Private\Tool\RoadHeal.cpp')
         TestExempt  = $true
         ProdReason  = "read a segment's profile through URoadNetwork::ProfileFor - a null one is legal and means the network's default (#459)"
+    },
+    @{
+        # A CLASS'S GAP IS READ THROUGH FTrafficRules::GapFor, NEVER RAW (#455). GapFor floors it at half the footprint
+        # (a refused vehicle must stop outside the zone where its own claim turns occupied), so a raw read of
+        # VehicleGap/AircraftGap is the authored figure and not the one in force - the yardstick two tests were
+        # measuring with, 36 uu short, until this row. The pattern is a READ: an assignment (`.VehicleGap = 777.0`, the
+        # header's own default) is not, and a comment line is skipped by the loop. TrafficForwardersTest is the one test
+        # allowed to read it - it asserts the knob REACHES the model, which is a statement about the field itself -
+        # and the GapFor floor's own unit test lives there for the same reason.
+        Name        = 'FTrafficRules Vehicle/AircraftGap (raw read)'
+        Pattern     = '\b(Vehicle|Aircraft)Gap\b(?!\s*=[^=])'
+        ProdAllowed = @('Public\Model\TrafficRules.h', 'Private\Model\TrafficRules.cpp')
+        TestAllowed = @('Private\TrafficForwardersTest.cpp')
+        ProdReason  = 'ask Rules.GapFor(Class), which floors the gap at half the footprint (#455) - the raw field is the authored figure, not the one in force'
+        TestReason  = 'ask Rules.GapFor(Class) - the raw field is the authored figure, not the one in force (#455); only TrafficForwardersTest reads it, to assert the knob reaches the model'
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -2311,6 +2326,60 @@ foreach ($viewReader in @(@((Join-Path $ops 'Public\Model\JobBoard.h'), 'JobBoar
     }
 }
 $ranRules.Add('capability-from-the-view')
+
+# --- 46. WHO THE RESOLVER MAY TURN IS ONE PREDICATE: FRoadAgent::IsReplannable ------------------
+# Issue #455: "may this agent be sent along another route" was spelled `Phase == Taxiing` at three sites - ReplanAt's
+# guard, FDeadlockResolver::CanReplanAtBlockedStep and the alert's filter - and only the first two were ever written
+# that way. The third said "is an aircraft", so a cycle through a truck backing along a bay's leg (which cannot go
+# round) dropped out of the alert for being made of vehicles. Now one predicate; the resolver's file must not spell
+# the phase itself. Two askers of CanBeTurnedAtItsBlock (IsReplannable plus WHERE the agent is refused: the candidate
+# test and the alert's filter - a second spelling would let them disagree, and a truck gate-refused at its bay's reverse
+# leg that the resolver will not turn but the alert counted as a way out makes a ring of two of them wait for ever with
+# no alert), one asker of IsReplannable in the resolver's file (the yield's candidate list) and ReplanAt's guard in the
+# rebuild file must still ask. Comments and string literals are stripped first (rule 34's stripper), so a WHY comment
+# can name the banned spelling.
+# WHAT NO REGEX SEES: a `switch (Agent.Phase)` that names Taxiing and answers the same question by another route -
+# pinned by Airside.Model.Traffic.IsOnRouteClassifiesEveryPhase (the replannable column) and
+# Airside.Model.Traffic.Deadlock.CycleThroughAReversingTruckIsAnAlert / RingOfTwoGateRefusedTrucksIsAnAlert (the alert
+# asks what the resolver asks).
+$replannableFile = Join-Path $plugin 'Private\Model\GroundTrafficDeadlock.cpp'
+$replannableRebuildFile = Join-Path $plugin 'Private\Model\GroundTrafficRebuild.cpp'
+foreach ($path in @($replannableFile, $replannableRebuildFile)) {
+    if (-not (Test-Path $path)) {
+        $failures.Add("replannable-predicate: $path is named by rule 46 but does not exist - update the rule, do not let it check nothing")
+    }
+}
+if ((Test-Path $replannableFile) -and (Test-Path $replannableRebuildFile)) {
+    $asks = 0
+    $turnAsks = 0
+    $lines = Get-Content -LiteralPath $replannableFile
+    $inBlock = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        if ($code -match 'Phase\s*[!=]=\s*EAgentPhase::Taxiing') {
+            $failures.Add("replannable-predicate: $(Split-Path $replannableFile -Leaf):$($i + 1) spells the phase itself; ask FRoadAgent::IsReplannable, the one place that says who may be turned (#455): $($code.Trim())")
+        }
+        if ($code -match '\bIsReplannable\s*\(') { $asks++ }
+        if ($code -match '\bCanBeTurnedAtItsBlock\s*\(') { $turnAsks++ }
+    }
+    if ($asks -lt 1) {
+        $failures.Add("replannable-predicate: $(Split-Path $replannableFile -Leaf) no longer asks IsReplannable (the yield's candidate list) - it has its own copy of the rule again, or rule 46 is stale (#455)")
+    }
+    if ($turnAsks -lt 2) {
+        $failures.Add("replannable-predicate: $(Split-Path $replannableFile -Leaf) asks CanBeTurnedAtItsBlock $turnAsks time(s), not the 2 it must (CanReplanAtBlockedStep and AlertCycles) - one has its own copy of the rule again, or rule 46 is stale (#455)")
+    }
+    $replanGuard = $false
+    $lines = Get-Content -LiteralPath $replannableRebuildFile
+    $inBlock = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        if ($code -match '\bIsReplannable\s*\(') { $replanGuard = $true }
+    }
+    if (-not $replanGuard) {
+        $failures.Add("replannable-predicate: $(Split-Path $replannableRebuildFile -Leaf) no longer asks IsReplannable (ReplanAt's guard) - it has its own copy of the rule again, or rule 46 is stale (#455)")
+    }
+}
+$ranRules.Add('replannable-predicate')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
