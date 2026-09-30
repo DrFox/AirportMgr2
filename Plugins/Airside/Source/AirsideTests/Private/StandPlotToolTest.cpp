@@ -416,9 +416,10 @@ bool FStandPlotTooSmallNotCommittableTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 	TaxiwayWorld(Actor);
 
-	// 15 x 15 m: the narrowest entrance the steps allow, and far short of Code A's depth.
+	// 20 x 15 m: the narrowest entrance the steps allow (the shared floor, 20 m since the owner
+	// ruling of 2026-09-30; 15 m before), and far short of Code A's depth.
 	FStandPlotTool Tool;
-	if (!TestTrue(TEXT("a 15 x 15 m stand still locks - no letter is a refusal, not an error"),
+	if (!TestTrue(TEXT("a 20 x 15 m stand still locks - no letter is a refusal, not an error"),
 		DrawStand(Tool, Actor, PlotGesture::MinFrontageUu, 1500.0)))
 	{
 		return false;

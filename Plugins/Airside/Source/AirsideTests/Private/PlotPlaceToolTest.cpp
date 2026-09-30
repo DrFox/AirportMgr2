@@ -371,13 +371,16 @@ bool FPlotFrontageSnapsInFiveMetreStepsTest::RunTest(const FString& Parameters)
 
 	// ROUNDED, NOT TRUNCATED, and not left at 17. Rounding is the difference between a grid
 	// that feels magnetic and one that feels grudging.
-	TestEqual(TEXT("a 17 m drag locks at 15 m"), FrontageFor(1700.0), 1500.0);
-	TestEqual(TEXT("an 18 m drag locks at 20 m"), FrontageFor(1800.0), 2000.0);
+	TestEqual(TEXT("a 22 m drag locks at 20 m"), FrontageFor(2200.0), 2000.0);
 	TestEqual(TEXT("a 23 m drag locks at 25 m"), FrontageFor(2300.0), 2500.0);
 
-	// THE FLOOR IS 15 m AND IT IS A FLOOR, not a step. A yard narrower is not a yard, so a
+	// THE FLOOR IS 20 m AND IT IS A FLOOR, not a step. A yard narrower is not a yard, so a
 	// cursor 3 m along asks for the smallest plot there is rather than one nothing fits in.
-	TestEqual(TEXT("a 3 m drag still asks for the 15 m minimum"), FrontageFor(300.0), 1500.0);
+	// 20, NOT 15 (owner ruling 2026-09-30: minimum depot frontage 20 m): no 15-19 m plot seats
+	// the shed at any depth, so a 17 or 18 m drag asks for 20 m too.
+	TestEqual(TEXT("a 3 m drag still asks for the 20 m minimum"), FrontageFor(300.0), 2000.0);
+	TestEqual(TEXT("a 17 m drag asks for the 20 m minimum"), FrontageFor(1700.0), 2000.0);
+	TestEqual(TEXT("an 18 m drag asks for the 20 m minimum"), FrontageFor(1800.0), 2000.0);
 
 	// DRAGGED BACK PAST THE ANCHOR RUNS THE PLOT THE OTHER WAY rather than refusing or
 	// collapsing. A player who anchors then changes their mind about direction should not
@@ -1095,12 +1098,13 @@ bool FPlotGhostAgreesWithTheBarTest::RunTest(const FString& Parameters)
 		[](const TPair<FString, FString>& F) { return F.Key == TEXT("Frontage"); });
 	if (!TestNotNull(TEXT("a Frontage fact"), Frontage)) { return false; }
 
-	// 16 m ASKED FOR ROUNDS TO 15 m, and the readout must say what the line on the ground
+	// 16 m ASKED FOR SNAPS TO THE 20 m FLOOR (15 m until the owner ruling of 2026-09-30:
+	// minimum depot frontage 20 m), and the readout must say what the line on the ground
 	// says. The predecessor of this assertion caught a ghost drawing the PREVIOUS gesture's
 	// depth, which is why the first gesture above is drawn and backed out of: on a session's
 	// FIRST gesture every member still holds its initial value, where stale and correct agree.
 	TestEqual(TEXT("the readout reports the frontage that actually snapped"),
-		Frontage->Value, FString(TEXT("15 m")));
+		Frontage->Value, FString(TEXT("20 m")));
 
 	return true;
 }
@@ -1387,8 +1391,8 @@ bool FPlotSolvesOnceForTest::RunTest(const FString& Parameters)
  * different solver from the one the ghost and readout used - and threw its own refusal away
  * in `FPlotPlaceTool::OnCommit`, which dropped to Idle whatever it answered.
  *
- * A PLOT TOO SHALLOW FOR ANYTHING AT ALL, not merely for the mix chosen: 15 m of frontage (the
- * gesture's own minimum) and 1 m of depth, shallower than even a pump's 3 m footprint before
+ * A PLOT TOO SHALLOW FOR ANYTHING AT ALL, not merely for the mix chosen: the gesture's own
+ * minimum frontage (20 m since the owner ruling of 2026-09-30; 15 m before) and 1 m of depth, shallower than even a pump's 3 m footprint before
  * clearance is added. `Reservation.Stands` must come back empty for every layout, which is
  * what makes this a "reserves nothing" case rather than a "reserves less than asked for" one -
  * the 2026-09-20 module-kits design rules the second kind ordinary and buildable.
@@ -1423,7 +1427,7 @@ bool FPlotEmptyReservationIsRefusedByOneEvaluatorTest::RunTest(const FString& Pa
 	}
 	const FVector2D Anchor = Anchored[0];
 
-	Tool.OnClick(PlotAt(Actor, Anchor + FVector2D(1500.0, 0.0)));
+	Tool.OnClick(PlotAt(Actor, Anchor + FVector2D(PlotGesture::MinFrontageUu, 0.0)));
 	Tool.OnClick(PlotAt(Actor, Anchor + FVector2D(750.0, 100.0)));
 	Tool.OnClick(PlotAt(Actor, Anchor + FVector2D(0.0, 100.0)));
 	if (!TestEqual(TEXT("all four corners pinned"),
@@ -2154,6 +2158,11 @@ bool FPlotPlaceRefusesUnseatedStarterTest::RunTest(const FString& Parameters)
  * Swept at every frontage the gesture can draw (PlotGesture::MinFrontageUu in FrontageStepUu steps) to 40 m, each at the
  * shallowest accepted depth in 1 m steps, through PlaceEntityInPlot - the commit the tool's Build makes, asking the same
  * DepotKit::WhyUnseated the readout asks. Measured 2026-09-30: nothing at 15 m (no shed ever fits), 20 x 14 m the smallest.
+ *
+ * EVERY FRONTAGE THE GESTURE CAN DRAW ACCEPTS A PLOT (owner ruling 2026-09-30: minimum depot frontage 20 m). The floor was
+ * 15 m, which the tool offered and the seat check always refused; it is 20 m now, and a frontage that accepts no depth up
+ * to 40 m fails here by name - so the next kit that outgrows the floor says so, instead of the tool quietly offering
+ * widths it will refuse.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FSmallestAcceptedPlotSeatsStarterTest,
@@ -2187,6 +2196,7 @@ bool FSmallestAcceptedPlotSeatsStarterTest::RunTest(const FString& Parameters)
 	double X = 0.0;
 	for (double Frontage = PlotGesture::MinFrontageUu; Frontage <= 4000.0; Frontage += PlotGesture::FrontageStepUu)
 	{
+		bool bAcceptedHere = false;
 		for (double Depth = 100.0; Depth <= 4000.0; Depth += 100.0)
 		{
 			const TArray<FVector2D> Outline = { FVector2D(X, 0.0), FVector2D(X + Frontage, 0.0),
@@ -2218,8 +2228,11 @@ bool FSmallestAcceptedPlotSeatsStarterTest::RunTest(const FString& Parameters)
 				SmallestArea = Frontage * Depth;
 				Smallest = Size;
 			}
+			bAcceptedHere = true;
 			break;
 		}
+		TestTrue(*FString::Printf(TEXT("%.0f m, a frontage the gesture can draw, accepts some plot up to 40 m deep - else the tool offers a width it always refuses (owner ruling 2026-09-30)"),
+			Frontage / 100.0), bAcceptedHere);
 		X += 6000.0;
 	}
 	if (!TestTrue(TEXT("some plot up to 40 x 40 m starts a depot - else the kits outgrew every plot the tool can draw"), Accepted > 0)) { return false; }
