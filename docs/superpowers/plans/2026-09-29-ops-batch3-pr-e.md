@@ -208,3 +208,27 @@ LandAircraftPanelWidget.cpp 1/22 -> 1/24; LandAircraftPanelWidget.h 0/49 -> 0/60
 LandChoices.h 0/32 -> 0/48.
 
 Unverified in PIE: all of it - the cards, the Land panel and the held taxi out are measured headlessly only.
+
+## Review ledger (fresh review of PR E, 2026-09-30: 0 Critical, 2 Important)
+
+Rulings are the orchestrator's. Red lines are from each fix's test with the fix taken out (the fix and its test were
+written together; the red is the mutation), unless marked control. Full suite after: `1566 test(s) run, 0 failed, 0
+crashed` (+3). Check-Architecture PASS with rules 34 (hardened) and 35, rule-12 warnings 111.
+
+| # | Finding | Ruling / fix | Test (red line) |
+|---|---|---|---|
+| I1 | The three gates lean on runway facts moving GuidelineRevision, which `URoadNetwork::SetRunwayFacts` never does; `AsksOncePerEdit` itself used that bypass | New Check-Architecture rule 35 `facts-through-facade`: the network's `SetRunwayFacts(` may be called only from RoadEditFacade*.cpp, Testing/ and the test modules (`Facade->` / `Target->` edit-target calls, declarations and definitions exempt; comments and string literals stripped). Cited in the ENFORCED BY of the taxi-out gate, FInspectorCardKey and FLandChoicesKey. `AsksOncePerEdit` now strands the hold by DELETING B, the only line onto the runway (a genuine NoRoute), and fixes it by drawing a line back - a real graph edit, the input the gate reads; no facts write at all | control: `Target->Network->SetRunwayFacts(...)` added to OpsRuntime.cpp -> `FAIL facts-through-facade: OpsRuntime.cpp:1225 calls SetRunwayFacts( on something other than the facade`; rewritten test under the gate-off mutation: "asked once on entering the hold" 1, got 4; "100 quiet substeps" 1, got 104 |
+| I2 | Attach's `ApplySpeed` unpinned; the network-clear step trivial | `SetOnlyWhenItChanges` steps to x4 and attaches a second, fresh actor: its scale is the multiplier, not its default 1. The clear step now asserts the actor is OFF its default beforehand (x2) and that the runtime set nothing across the clear - so a clear that reset the scale reads wrong. The mutation that would show it (a reset in `ClearNetwork`) is itself a second writer of the scale, which rule 34 fails before any test runs (control below) - that is the honest limit of this step | mutation "no ApplySpeed in Attach": "attached to it at x4: it runs at the clock's multiplier" 4, got 1 |
+| - | `RunwayFreedCount()` consumed by nothing | Deleted, with `RunwayFreedTotal`. Its two test uses (`RunwayFreed.TakeOff`, `.DespawnOnRunway`) already counted `OnRunwayFreed` broadcasts beside it; the counter lines were dropped, not replaced | - |
+| M | Land gate missed the type count | `Types.Num() == JudgedTypeCount` on the gate; `SetTypeSourceForTest` | `AirportMgr.UI.LandPanelJudgesWhenTypesArrive` (mutation: "the types arrive: judged again" 2, got 1; "and their rows are there" 2, got 0) |
+| M | Network-object resets unpinned | Two deterministic builds at equal revisions | `Airside.Model.Traffic.HeldTaxiOut.ANewNetworkAsksAgain` (mutation, reset off: "the other network, same number: asked again" 1, got 0); `AirportMgr.UI.LandChoicesKeyNamesTheNetwork` (mutation, Network off `==`: "and still two keys: the network is on it") |
+| M | Raw `const void*` identity in the keys | `FWeakObjectPtr` (index + serial, no complete type needed in the header) | covered by the two tests above for the Land key; the card key's three identities are still not pinned by a card test |
+| M | Rule 34 gaps | Direct `SimTimeScale =` writes fail; "which function" re-read at indented definitions and at every `namespace`; string literals and /* */ stripped; AirsideEditor scanned. The AirsideEditor control first PASSED: the stripper read `/*` inside a `//` comment (a path glob) as a block opening and blinded the rest of the file - now whichever opens first wins | controls: direct write in RoadNetworkActor.cpp -> FAIL "writes SimTimeScale directly"; anonymous-namespace `SneakScale` after ApplySpeed -> FAIL "from SneakScale"; indented `static void SneakScale2` right after an ApplySpeed body -> FAIL; a call in RoadBuildEdMode.cpp -> FAIL (after the fix); a TEXT("...SetSimTimeScale(1)...") log line and single- and multi-line /* */ calls -> PASS |
+| M | `UJobBoard::Revision` overclaimed | "every mutator of Jobs/Vehicles/Turnarounds"; the Serialize and ResolveVehicles bumps named REDUNDANT (OnBeforeRestore runs immediately before the blob; the letter table is read by no Describe), not "unpinned" | - |
+| M | Quiet cards measured with nothing moving | An aircraft taxis a line of its own through the 90 quiet frames; asserted to have moved > 1 m | green (describes still 1 per card) |
+| M | Unmarked claims | ENFORCED BY added: RoadNetworkActor.h "when the speed changes" (rule 34 + SetOnlyWhenItChanges); JobBoard.h 3-arg DescribeAgent (LineSaysWhenItMovesWithTheClock, Cache.FuelLineLiveWhilePumping). GroundTraffic.h's "the Land panel reads no occupancy" reworded to the signature fact ("LandChoices::Build is given no traffic model at all") | - |
+| M | Save slot left on disk | `ON_SCOPE_EXIT` deletes `AirportOpsTest_SimTimeScale` however the test ends | none on disk after the suite |
+
+UE_LOG / comment lines, `f056d647` -> now (no file fell): JobBoard.h 0/413 -> 0/433; GroundTraffic.cpp 34/595 -> 34/616;
+GroundTraffic.h 0/758 -> 0/775; RoadNetworkActor.h 0/899 -> 0/902; InspectorWidget.h 0/138 -> 0/195;
+LandAircraftPanelWidget.h 0/49 -> 0/68; LandChoices.h 0/32 -> 0/51; the rest as in the execution notes.
