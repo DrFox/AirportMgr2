@@ -156,7 +156,9 @@ void UOfferInboxWidget::EnsureSlots(const UUIStyle* Style)
 		USizeBox* StatusBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
 		StatusBox->SetHeightOverride(DemandStripHeight);
 		StatusBox->SetContent(DemandStatusText);
+		StatusBox->SetVisibility(ESlateVisibility::Collapsed);
 		Column->AddChildToVerticalBox(StatusBox)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 8.0f));
+		DemandStatusBox = StatusBox;
 
 		OfferColumn = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("InboxRows"));
 		// WIDE AND SHORT, not narrow and tall: the window is capped at the screen's height and
@@ -239,6 +241,13 @@ void UOfferInboxWidget::ShowAirportStatus(EAirportStatus Status)
 	if (DemandStatusText != nullptr)
 	{
 		DemandStatusText->SetVisibility(bClosed ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
+	// THE BOX TOO, not only the text: its slot's padding goes only with a collapsed box, and the card must be the
+	// same height either way - the strip's box and slot are what this stands in for.
+	// ENFORCED BY: AirportMgr.UI.OfferInbox.StatusSwapKeepsHeight
+	if (DemandStatusBox != nullptr)
+	{
+		DemandStatusBox->SetVisibility(bClosed ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	}
 }
 

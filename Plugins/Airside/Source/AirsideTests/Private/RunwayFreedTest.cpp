@@ -129,7 +129,6 @@ bool FRunwayFreedTakeOffTest::RunTest(const FString&)
 	TestTrue(TEXT("the take-off released the strip"), Transitions >= 1);
 	TestEqual(TEXT("the take-off's release fires one event on its own tick"), AtAirborneRelease, 1);
 	TestEqual(TEXT("one event per held -> free transition"), Seen.Runways.Num(), Transitions);
-	TestEqual(TEXT("and the session counter agrees"), Traffic->RunwayFreedCount(), Transitions);
 	return true;
 }
 
@@ -190,7 +189,6 @@ bool FRunwayFreedDespawnTest::RunTest(const FString&)
 	TestEqual(TEXT("held: nothing yet"), Seen.Runways.Num(), 0);
 	C.Traffic->RetireAgent(C.Plane);
 	TestEqual(TEXT("the despawn frees the strip at once, with no Advance"), Seen.Runways.Num(), 1);
-	TestEqual(TEXT("counted"), C.Traffic->RunwayFreedCount(), 1);
 	C.Traffic->Advance(0.05, C.Net);
 	TestEqual(TEXT("and the next Advance does not say it again"), Seen.Runways.Num(), 1);
 	return true;

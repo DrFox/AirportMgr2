@@ -13,6 +13,11 @@
 #include "BuildActions.h"
 #include "AlertsPanelWidget.h"
 #include "Testing/AirsideTestWorld.h"
+#include "Testing/AirsideTestGraph.h"
+#include "Content/AirsideSettings.h"
+#include "Model/GroundTraffic.h"
+#include "Model/RoadAgent.h"
+#include "Present/AirsideTraffic.h"
 #include "Tool/Selection.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -85,6 +90,43 @@ bool FAlertsGoGoneTest::RunTest(const FString&)
 	TestFalse(TEXT("an aircraft that has gone is nowhere to go"), C->SelectAndFocus(Focus));
 	TestEqual(TEXT("so the camera does not move to where it was"), C->GetViewFocus(), Before);
 	TestFalse(TEXT("and nothing is selected"), C->GetSelection().IsSet());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAlertsGoAgentTest, "AirportMgr.UI.Alerts.GoToAnAgentSelectsIt",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAlertsGoAgentTest::RunTest(const FString&)
+{
+	// THE AGENT CASE (ops batch 3 PR E - the third Go branch had no test): the camera goes to where the aircraft is
+	// NOW, not where the alert saw it, and the aircraft is selected so its card opens.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	URoadNetwork& Net = *Actor->Network;
+	const FGuidelineNodeId A = TestGraph::Node(Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(Net, 200000.0, 0.0);
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	TestGraph::Join(Net, A, B, Options);
+	if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(TestGraph::Probe(Net, A, B, ETraversalClass::Aircraft),
+		UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
+	for (int32 Frame = 0; Frame < 60; ++Frame) { Actor->Tick(1.0f / 30.0f); }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(Actor);
+
+	FAlertFocus Focus;
+	Focus.Kind = EAlertFocusKind::Agent;
+	Focus.Id = Id;
+	Focus.Point = FVector2D(-9000.0, -9000.0);   // where it was when the alert was raised - stale by now
+	TestTrue(TEXT("an aircraft that exists is somewhere to go"), C->SelectAndFocus(Focus));
+	const FRoadAgent* Agent = Actor->GetGroundTraffic()->FindAgent(Id);
+	if (!TestNotNull(TEXT("the aircraft"), Agent)) { return false; }
+	TestEqual(TEXT("the camera goes to where it is now"), C->GetViewFocus(), Agent->GroundPosition());
+	TestEqual(TEXT("and the aircraft is selected, so the inspector opens on it"), C->GetSelection().Kind, ESelectionKind::Aircraft);
+	TestEqual(TEXT("that aircraft"), C->GetSelection().Id, Id);
 	return true;
 }
 

@@ -2,6 +2,12 @@
 #include "BuildCameraComponent.h"
 #include "Misc/AutomationTest.h"
 #include "Present/RoadNetworkActor.h"
+#include "Content/AirsideSettings.h"
+#include "Model/RoadGuideline.h"
+#include "Model/RoadNetwork.h"
+#include "Present/AirsideTraffic.h"
+#include "Testing/AirsideTestGraph.h"
+#include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -64,6 +70,41 @@ bool FBuildCameraComponentTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("and the mode did not flip"), Camera->IsWatchingAgent());
 	TestEqual(TEXT("GetWatchAgentId stays at its default"), Camera->GetWatchAgentId(), 0);
 
+	return true;
+}
+
+/**
+ * AN ALERT'S GO LEAVES WATCH MODE (ops batch 3 PR E - FocusOn's first clause had no test): riding an aircraft and
+ * being sent somewhere else cannot both hold, and a Go that only moved the hidden build view would leave the player
+ * riding the aircraft, looking at nothing new.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildCameraFocusOnLeavesWatchTest,
+	"Airside.View.BuildCameraComponent.FocusOnLeavesWatch",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildCameraFocusOnLeavesWatchTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	URoadNetwork& Net = *Actor->Network;
+	const FGuidelineNodeId A = TestGraph::Node(Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(Net, 200000.0, 0.0);
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	TestGraph::Join(Net, A, B, Options);
+	if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(TestGraph::Probe(Net, A, B, ETraversalClass::Aircraft),
+		UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
+
+	UBuildCameraComponent* Camera = NewObject<UBuildCameraComponent>(GetTransientPackage());
+	if (!TestTrue(TEXT("it rides the aircraft"), Camera->ToggleWatchAgent(*Actor, Id) && Camera->IsWatchingAgent())) { return false; }
+	const FVector2D There(12000.0, -3400.0);
+	Camera->FocusOn(There);
+	TestFalse(TEXT("a Go leaves watch mode"), Camera->IsWatchingAgent());
+	TestEqual(TEXT("and the build view is sent there"), Camera->ViewFocus(), There);
 	return true;
 }
 

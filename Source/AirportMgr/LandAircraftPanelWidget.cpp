@@ -9,6 +9,9 @@
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Entities/AircraftType.h"
+#include "Model/Airport.h"
+#include "Present/OpsRuntime.h"
+#include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
 #include "RoadBuildLog.h"
@@ -90,20 +93,37 @@ void ULandAircraftPanelWidget::Toggle()
 
 void ULandAircraftPanelWidget::Refresh()
 {
+	RefreshFor(Controller(), UOpsRuntimeSubsystem::Get(GetWorld()));
+}
+
+void ULandAircraftPanelWidget::RefreshFor(const ARoadBuildController* C, const UOpsRuntime* Runtime)
+{
 	// READ ONCE, on first open. Types are content: they do not appear mid-session, and a
 	// registry walk per tick would be the one expensive thing on this panel.
 	if (Types.Num() == 0)
 	{
-		for (UAircraftType* Type : LandChoices::EveryMeshedType())
+		for (UAircraftType* Type : TypeSource ? TypeSource() : LandChoices::EveryMeshedType())
 		{
 			Types.Add(Type);
 		}
 	}
 
-	const ARoadBuildController* C = Controller();
 	const ARoadNetworkActor* Target = C != nullptr ? C->GetTarget() : nullptr;
 	const URoadNetwork* Network = Target != nullptr ? Target->Network.Get() : nullptr;
 	const FVector2D Focus = C != nullptr ? C->GetViewFocus() : FVector2D::ZeroVector;
+
+	// JUDGED ONLY WHEN WHAT BUILD READS HAS MOVED (ops batch 3 PR E) - see JudgedKey and FLandChoicesKey. One
+	// NearestRunwayThreshold a frame instead of a CheckArrival per type.
+	// THE STATUS, from the runtime - none (the editor mode) is not a closure, the Land button's own rule.
+	const EAirportStatus Status = Runtime != nullptr ? Runtime->GetAirport()->Status() : EAirportStatus::Open;
+	const FLandChoicesKey Key = LandChoices::KeyFor(Network, Focus, Status);
+	if (bJudged && Key == JudgedKey && Types.Num() == JudgedTypeCount)
+	{
+		return;
+	}
+	JudgedKey = Key;
+	JudgedTypeCount = Types.Num();
+	bJudged = true;
 
 	TArray<UAircraftType*> Raw;
 	Raw.Reserve(Types.Num());
@@ -111,7 +131,8 @@ void ULandAircraftPanelWidget::Refresh()
 	{
 		Raw.Add(Type.Get());
 	}
-	const TArray<FLandChoice> Choices = LandChoices::Build(Network, Focus, Raw);
+	++BuildCalls;
+	const TArray<FLandChoice> Choices = LandChoices::Build(Network, Focus, Raw, Status);
 
 	// THE GATE - see PaintedRefusals.
 	TArray<FString> Refusals;
@@ -186,6 +207,12 @@ void ULandAircraftPanelWidget::Choose(UAircraftType* Type)
 void ULandAircraftPanelWidget::ChooseFor(ARoadBuildController& C, UAircraftType* Type)
 {
 	C.LandAircraftNearViewFocus(Type);
+}
+
+bool ULandAircraftPanelWidget::IsRowEnabledForTest(int32 Index) const
+{
+	return Entries.IsValidIndex(Index) && Entries[Index] != nullptr && Entries[Index]->Button != nullptr
+		&& Entries[Index]->Button->GetIsEnabled();
 }
 
 int32 ULandAircraftPanelWidget::RowWidgetCountForTest() const

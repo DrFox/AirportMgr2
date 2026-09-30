@@ -554,6 +554,7 @@ void FRoadAgent::MarkTaxiOutStale()
 {
 	bTaxiOutStale = true;
 	bTaxiOutHoldSaid = false;
+	TaxiOutRefusedAt.Reset();
 }
 
 void FRoadAgent::AdoptTaxiOut(const FRoutePlan& Route)
@@ -561,12 +562,14 @@ void FRoadAgent::AdoptTaxiOut(const FRoutePlan& Route)
 	TaxiOutPlan = Route;
 	bTaxiOutStale = false;
 	bTaxiOutHoldSaid = false;
+	TaxiOutRefusedAt.Reset();
 }
 
 void FRoadAgent::ResumeTaxiOut(const FRoutePlan& Route)
 {
 	bTaxiOutStale = false;
 	bTaxiOutHoldSaid = false;
+	TaxiOutRefusedAt.Reset();
 	// THE ENGINE IS ALREADY TURNING: RestartTaxi spools from cold, which is right for a stand
 	// and wrong for an aeroplane that stopped on the taxiway a moment ago.
 	const double Spool = EngineRPM;

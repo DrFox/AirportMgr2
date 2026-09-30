@@ -42,6 +42,7 @@ UJobBoard::UJobBoard()
 
 void UJobBoard::OnBeforeRestore()
 {
+	++RevisionCount;   // See Revision: every public mutator.
 	Jobs.Reset();
 	Turnarounds.Reset();
 	Vehicles.Reset();
@@ -53,6 +54,10 @@ void UJobBoard::OnBeforeRestore()
 void UJobBoard::Serialize(FArchive& Ar)
 {
 	Super::Serialize(Ar);
+	if (Ar.IsLoading())
+	{
+		++RevisionCount;   // See Revision: a restore is a change.
+	}
 	if (!Ar.IsLoading() || Vehicles.Num() == 0)
 	{
 		return;
@@ -104,6 +109,7 @@ const TCHAR* UJobBoard::RefusalText(EServiceRefusal Why)
 
 void UJobBoard::ResolveVehicles(TFunctionRef<FVehicle(EIcaoCode)> Resolve)
 {
+	++RevisionCount;   // See Revision: every public mutator.
 	for (int32 Index = 0; Index < LetterCount; ++Index)
 	{
 		VehiclesByLetter[Index] = Resolve(static_cast<EIcaoCode>(Index));
@@ -328,6 +334,7 @@ int32 UJobBoard::RefillingForTest() const
 
 FServiceVehicle& UJobBoard::AddVehicleForTest(FName TypeCode, FEntityInstanceId Home, EServiceVehicleState State, double Cargo)
 {
+	++RevisionCount;   // See Revision: every public mutator.
 	FServiceVehicle& Vehicle = Vehicles.AddDefaulted_GetRef();
 	Vehicle.Id = NextVehicleId++;
 	Vehicle.TypeCode = TypeCode;
@@ -366,6 +373,7 @@ int32 UJobBoard::AddPurchasedVehicle(FName TypeCode, FEntityInstanceId Home)
 	Vehicle.Cargo = FFuelRolePolicy::CapacityOf(Type);
 	const int32 Id = Vehicle.Id;
 	++FleetRevision;
+	++RevisionCount;   // See Revision: every public mutator.
 
 	// A NEW VEHICLE IS A CHANGE A REFUSED JOB CAN ANSWER DIFFERENTLY - see the header. Re-opened, not bid
 	// here: the next Step bids it, in its one sequence (the bus's FleetChanged wakes that pass).
@@ -402,6 +410,7 @@ bool UJobBoard::RemoveVehicle(int32 VehicleId)
 		VehicleId, *Vehicles[Index].TypeCode.ToString(), Vehicles[Index].Home.Index);
 	Vehicles.RemoveAt(Index);
 	++FleetRevision;
+	++RevisionCount;   // See Revision: every public mutator.
 	return true;
 }
 
@@ -424,6 +433,7 @@ FString UJobBoard::VehicleLine(const FServiceVehicle& Vehicle) const
 
 FServiceJob& UJobBoard::AddJobForTest(int32 AircraftId, EServiceJobState State, EServiceRefusal Why, uint32 RefusedAtRevision)
 {
+	++RevisionCount;   // See Revision: every public mutator.
 	FServiceJob& Job = Jobs.AddDefaulted_GetRef();
 	Job.Id = NextJobId++;
 	Job.AircraftId = AircraftId;
@@ -491,6 +501,7 @@ int32 UJobBoard::ReleaseJobsOf(FServiceVehicle& Vehicle)
 bool UJobBoard::RecallVehicleOfAgent(int32 AgentId, bool bRetire, UGroundTraffic& Traffic,
 	const URoadNetwork& Network, const USimClock& Clock)
 {
+	++RevisionCount;   // See Revision: every public mutator.
 	const FServiceVehicle* Found = AgentId != 0 ? VehicleForAgent(AgentId) : nullptr;
 	FServiceVehicle* Vehicle = Found != nullptr ? FindVehicleMutable(Found->Id) : nullptr;
 	if (Vehicle == nullptr)
@@ -869,6 +880,29 @@ EFuelOutcome UJobBoard::FuelOutcomeOf(double Delivered, double Wanted)
 	return Delivered <= 0.0 ? EFuelOutcome::Unfuelled : EFuelOutcome::PartFuelled;
 }
 
+double UJobBoard::LitresWanted(int32 AgentId, const FAirframe& Airframe) const
+{
+	return FMath::Max(LitresOwedFor ? LitresOwedFor(AgentId, Airframe) : DefaultLitres(Airframe), 0.0);
+}
+
+void UJobBoard::EndTurnaround(int32 AircraftId, FEntityInstanceId Stand, double Delivered, double Wanted, const USimClock& Clock)
+{
+	const EFuelOutcome Outcome = FuelOutcomeOf(Delivered, Wanted);
+	// PART-FUELLED PAYS FOR WHAT IT GOT (review, 2026-09-28), HERE AT THE ONE SITE: a job that became
+	// impossible after a trip, or one the player cut short with Depart, leaves with what it got and pays
+	// for it. Never twice: FinishServe pays only a job it calls Done, which FuelOutcomeOf calls Fuelled.
+	// What the shortfall costs the airline is the roster's to score, not the fee's.
+	// ENFORCED BY: AirportOps.Fuel.PartFuelledPaysForWhatItGot, AirportOps.Fuel.ManualDepartEndsTurnaroundOnce
+	if (Outcome == EFuelOutcome::PartFuelled)
+	{
+		PostServiceFee(Clock.Now(), Delivered);
+	}
+	if (Bus != nullptr)
+	{
+		Bus->Publish(FTurnaroundEndedEvent{ AircraftId, Stand, Outcome, Delivered, Wanted });
+	}
+}
+
 void UJobBoard::DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
 {
 	const FTurnaround* Turnaround = TurnaroundFor(AircraftId);
@@ -886,20 +920,7 @@ void UJobBoard::DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& T
 		const FServiceJob* Fuel = JobForAircraft(AircraftId, EServiceRole::Fuel);
 		const double Delivered = Fuel != nullptr ? Fuel->QuantityDelivered : 0.0;
 		const double Wanted = Fuel != nullptr ? Fuel->QuantityDelivered + Fuel->QuantityOwed : 0.0;
-		const EFuelOutcome Outcome = FuelOutcomeOf(Delivered, Wanted);
-		// PART-FUELLED PAYS FOR WHAT IT GOT (review, 2026-09-28), HERE AT THE ONE SITE: a job that became
-		// impossible after a trip, or one the player cut short with Depart, leaves with what it got and pays
-		// for it. Never twice: FinishServe pays only a job it calls Done, which FuelOutcomeOf calls Fuelled.
-		// What the shortfall costs the airline is the roster's to score, not the fee's.
-		// ENFORCED BY: AirportOps.Fuel.PartFuelledPaysForWhatItGot, AirportOps.Fuel.ManualDepartEndsTurnaroundOnce
-		if (Outcome == EFuelOutcome::PartFuelled)
-		{
-			PostServiceFee(Clock.Now(), Delivered);
-		}
-		if (Bus != nullptr)
-		{
-			Bus->Publish(FTurnaroundEndedEvent{ AircraftId, StandId, Outcome, Delivered, Wanted });
-		}
+		EndTurnaround(AircraftId, StandId, Delivered, Wanted, Clock);
 	}
 	Turnarounds.RemoveAll([AircraftId](const FTurnaround& Each) { return Each.AircraftId == AircraftId; });
 
@@ -941,6 +962,7 @@ void UJobBoard::DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& T
 void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Network,
 	const USimClock& Clock, int32 AgentId, EAgentPhase From, EAgentPhase To)
 {
+	++RevisionCount;   // See Revision: every public mutator.
 	// AN AIRCRAFT LEAVING ITS STAND, first: it departs, or is retired, or is deleted under the player's
 	// hand. Its turnaround and jobs go, and any vehicle out for it moves on - its next job, or home.
 	if (From == EAgentPhase::Parked && To != EAgentPhase::Parked && TurnaroundFor(AgentId) != nullptr)
@@ -950,6 +972,29 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 		const bool bDeparted = To == EAgentPhase::Manoeuvring || To == EAgentPhase::Reversing
 			|| To == EAgentPhase::Taxiing || To == EAgentPhase::Departing;
 		DropAircraft(AgentId, bDeparted, Traffic, Network, Clock);
+		return;
+	}
+
+	// A DEPARTURE THAT WAS NEVER TURNED AROUND (whole-stack review M4, ruling 2026-09-30): an aircraft parked on the
+	// fallback junction - no stand, so no turnaround and no fuel job - that the inspector's Depart sends off. It
+	// leaves Unfuelled, owed what its flight was offered at: LitresOwedFor, the same source a turnaround's fuel job
+	// takes its load from (OnAgentPhase's Parked branch below), so the two cannot be owed different amounts. ARMED FOR
+	// A RUNWAY, not merely moving: a Parked -> Taxiing that is the re-offer taking it to a stand (FallbackParkStaysTaxiIn)
+	// is not a departure, and its turnaround at the stand will end it properly. The Parked event is heard a step
+	// late, so the agent is asked as it is now - which is where a departure is still taxiing out, armed.
+	// ENFORCED BY: AirportOps.Model.Bus.DepartFromFallbackReadsTaxiOut, AirportOps.Model.Bus.FallbackParkStaysTaxiIn
+	if (From == EAgentPhase::Parked && (To == EAgentPhase::Manoeuvring || To == EAgentPhase::Reversing
+		|| To == EAgentPhase::Taxiing || To == EAgentPhase::Departing))
+	{
+		const FRoadAgent* Leaving = Traffic.FindAgent(AgentId);
+		const FAirframe* Airframe = Leaving != nullptr ? Leaving->AsAircraft() : nullptr;
+		if (Airframe != nullptr && Leaving->bDepartureArmed)
+		{
+			const double Wanted = LitresWanted(AgentId, *Airframe);
+			UE_LOG(LogAirportOps, Log, TEXT("Fuel: aircraft %d departed without a turnaround - %s, %.0f L owed"),
+				AgentId, *UEnum::GetValueAsString(FuelOutcomeOf(0.0, Wanted)), Wanted);
+			EndTurnaround(AgentId, FEntityInstanceId(), 0.0, Wanted, Clock);
+		}
 		return;
 	}
 
@@ -1030,7 +1075,7 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 	Turnaround.TurnaroundEndsAt = Clock.Now() + Aircraft->TurnaroundSeconds;
 
 	// THE LOAD, from the flight's own offer (LitresOwedFor), or the one fallback.
-	const double Litres = FMath::Max(LitresOwedFor ? LitresOwedFor(AgentId, *Aircraft) : DefaultLitres(*Aircraft), 0.0);
+	const double Litres = LitresWanted(AgentId, *Aircraft);
 	if (Litres <= 0.0)
 	{
 		// WANTS NOTHING, BUT STILL TURNS ROUND: a turnaround with no job, which DepartTheReady sends at
@@ -1090,6 +1135,7 @@ double UJobBoard::NextDeadline(double Now) const
 bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
 {
 	++StepCount;
+	++RevisionCount;   // See Revision: every public mutator.
 	SyncFleet(Traffic, Network, Clock);
 
 	// TIMED STEPS THAT ARE DUE: a trip's pumping, a refill. GAME TIME - a pause stops both. The vehicle
@@ -1235,8 +1281,9 @@ void UJobBoard::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Netw
 		const int32 Stand = Turnaround->Stand.Index;
 
 		// NOTHING IS PUBLISHED OR PAID HERE (batch 3 review I1): a departure DepartAgent accepts changes the
-		// aircraft's phase, OnAgentPhase drops the turnaround, and DropAircraft - the one site the inspector's
-		// manual Depart reaches too - posts the part-fuelled fee and publishes FTurnaroundEndedEvent. A refusal
+		// aircraft's phase, OnAgentPhase drops the turnaround, and DropAircraft - which the inspector's manual Depart
+		// reaches too - calls EndTurnaround, the one publisher of FTurnaroundEndedEvent and poster of the
+		// part-fuelled fee (its other caller is OnAgentPhase, for a departure never turned around). A refusal
 		// changes no phase, so it ends nothing, however often it is retried.
 		// ENFORCED BY: AirportOps.Fuel.RefusedDepartureEndsNoTurnaround
 		const EDepartureRefusal Refusal = Traffic.DepartAgent(AircraftId, Network);
@@ -1300,7 +1347,8 @@ FDepotBacklog UJobBoard::DescribeDepot(FEntityInstanceId Depot, double Now) cons
 {
 	const FString Dot = TEXT(" · ");
 	auto Litres = [](double L) { return FText::AsNumber(FMath::RoundToInt(L)).ToString() + TEXT(" L"); };
-	// WHOLE MINUTES, rounded: the card's text gate then redraws at most once a game minute.
+	// WHOLE MINUTES, rounded: with the inspector passing the minute's start as Now (see the header), its card
+	// redraws at most once a game minute.
 	auto Minutes = [](double Seconds) { return FMath::RoundToInt(FMath::Max(Seconds, 0.0) / 60.0); };
 
 	FDepotBacklog Out;
@@ -1358,6 +1406,13 @@ FDepotBacklog UJobBoard::DescribeDepot(FEntityInstanceId Depot, double Now) cons
 
 FString UJobBoard::DescribeAgent(int32 AgentId, double Now) const
 {
+	bool bMovesWithClock = false;
+	return DescribeAgent(AgentId, Now, bMovesWithClock);
+}
+
+FString UJobBoard::DescribeAgent(int32 AgentId, double Now, bool& bOutMovesWithClock) const
+{
+	bOutMovesWithClock = false;
 	if (const FServiceVehicle* Vehicle = VehicleForAgent(AgentId))
 	{
 		return DescribeVehicle(*Vehicle);
@@ -1395,6 +1450,9 @@ FString UJobBoard::DescribeAgent(int32 AgentId, double Now) const
 	double Left = Job->QuantityOwed;
 	if (Job->State == EServiceJobState::Serving && Job->TripEndsAt > Job->TripStartedAt)
 	{
+		// THE ONE ANSWER THAT MOVES WITH THE CLOCK - the three-argument overload's flag, which lets a caller keep
+		// every other answer until Revision moves.
+		bOutMovesWithClock = true;
 		const double Fraction = FMath::Clamp((Now - Job->TripStartedAt) / (Job->TripEndsAt - Job->TripStartedAt), 0.0, 1.0);
 		Left -= Job->TripQuantity * Fraction;
 	}
@@ -1415,6 +1473,7 @@ FString UJobBoard::DescribeAgent(int32 AgentId, double Now) const
 
 void UJobBoard::AddTurnaroundForTest(int32 AircraftId, double TurnaroundEndsAt, int32 JobId)
 {
+	++RevisionCount;   // See Revision: every public mutator.
 	FTurnaround& Turnaround = Turnarounds.AddDefaulted_GetRef();
 	Turnaround.AircraftId = AircraftId;
 	Turnaround.TurnaroundEndsAt = TurnaroundEndsAt;

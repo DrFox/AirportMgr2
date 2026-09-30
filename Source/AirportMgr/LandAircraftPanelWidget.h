@@ -14,6 +14,7 @@ class UUiButton;
 class ULandAircraftPanelWidget;
 class UTextBlock;
 class UUIStyle;
+class UOpsRuntime;
 class UVerticalBox;
 
 /**
@@ -44,7 +45,8 @@ public:
  * reading numbers because nothing could put an A380 on the runway to be watched.
  *
  * GREYED ROWS ARE CLICKS THE GAME WOULD REFUSE, judged by LandChoices::Build against the
- * runway a landing from the view focus would use - never a second opinion about admission.
+ * runway a landing from the view focus would use - never a second opinion about admission - and
+ * against the airport's status: while it is not open, every row (whole-stack review M1).
  *
  * C++ BASE, BLUEPRINT OPTIONAL, the rule every panel here follows: the code builds a plain
  * card when no asset supplies one. A Widget Blueprint may supply RowColumn and TitleText.
@@ -80,6 +82,23 @@ public:
 	 */
 	void Refresh();
 
+	/** Refresh against a given driver and ops runtime - Refresh passes Controller() and the ops subsystem's, both
+	 *  null in a headless world (see ClickRowForTest), so a test hands its own in. No runtime (the editor mode) is not
+	 *  a closure: the airport reads as open. */
+	void RefreshFor(const ARoadBuildController* C, const UOpsRuntime* Runtime = nullptr);
+
+	/** Row Index's button is enabled - it is a click the game would take. */
+	bool IsRowEnabledForTest(int32 Index) const;
+
+	/** What row Index last showed as its refusal, empty when admitted. */
+	FString RowRefusalForTest(int32 Index) const { return PaintedRefusals.IsValidIndex(Index) ? PaintedRefusals[Index] : FString(); }
+
+	/** How many times Refresh actually asked LandChoices::Build - FLandChoicesKey's gate's counter. */
+	int32 BuildCountForTest() const { return BuildCalls; }
+
+	/** Where the types come from, instead of LandChoices::EveryMeshedType - so a test can have none, then some. */
+	void SetTypeSourceForTest(TFunction<TArray<UAircraftType*>()> Source) { TypeSource = MoveTemp(Source); }
+
 	/** A row was clicked: land its type. ULandRowEntry's only way back in. */
 	void Choose(UAircraftType* Type);
 
@@ -114,13 +133,37 @@ private:
 
 	/**
 	 * What each row last SHOWED - its refusal, empty when admitted - in row order. The panel
-	 * re-judges every tick while open, because the runway nearest the focus changes as the
-	 * camera pans and a strip being drawn changes length, with no single event for either.
+	 * re-judged every tick while open, because the runway nearest the focus changes as the
+	 * camera pans and a strip being drawn changes length, with no single event for either
+	 * (since ops batch 3 PR E it re-judges when JudgedKey moves, which covers both).
 	 * Rebuilding eighteen row widgets sixty times a second to discover nothing moved is the
 	 * expensive kind of correct, so the widgets are rebuilt only when this differs - the
 	 * ledger's revision gate, keyed on the output because there is no one input to key on.
 	 */
 	TArray<FString> PaintedRefusals;
+
+	/**
+	 * What the rows were last JUDGED from - one step before PaintedRefusals (ops batch 3 PR E). That gate saved the
+	 * widgets; Build itself still ran every frame, a CheckArrival per type. Now Build runs when FLandChoicesKey moves:
+	 * the focus reduced to the runway it picks, the network's two revisions, the network object. Valid once built;
+	 * a close does not reset it, since nothing it keys on is the panel's own.
+	 */
+	FLandChoicesKey JudgedKey;
+	bool bJudged = false;
+
+	/**
+	 * How many types the rows were judged over - the gate's other input (PR E review). Types is read on the first
+	 * Refresh and read AGAIN every Refresh while it is empty (a registry not yet scanned), so it can grow from none to
+	 * eighteen with nothing FLandChoicesKey reads moving; the rows must be built then.
+	 * ENFORCED BY: AirportMgr.UI.LandPanelJudgesWhenTypesArrive
+	 */
+	int32 JudgedTypeCount = 0;
+
+	/** See SetTypeSourceForTest. Unset: LandChoices::EveryMeshedType. */
+	TFunction<TArray<UAircraftType*>()> TypeSource;
+
+	/** See BuildCountForTest. */
+	int32 BuildCalls = 0;
 
 	void PaintRows(const TArray<FLandChoice>& Choices);
 

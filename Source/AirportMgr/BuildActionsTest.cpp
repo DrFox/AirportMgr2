@@ -743,7 +743,9 @@ bool FAirportStatusCaptionTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("and not lit"), Action->IsActive(Ctx));
 	Runtime->SetAirportClosed(true);
 	TestEqual(TEXT("closed and empty"), Action->DynamicLabel(Ctx).ToString(), FString(TEXT("Closed")));
-	TestTrue(TEXT("lit while not open"), Action->IsActive(Ctx));
+	// ACCENT MEANS ARMED AND NOTHING ELSE (UBuildBarWidget, whole-stack review M6): a closed airport is not an armed
+	// tool, and lighting it for one would teach the player that accent means two things. The caption is the signal.
+	TestFalse(TEXT("closed: NOT lit - the caption says it"), Action->IsActive(Ctx));
 	UFlight* Ground = NewObject<UFlight>(GetTransientPackage());
 	Ground->Phase = EFlightPhase::TaxiIn;
 	Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Ground);

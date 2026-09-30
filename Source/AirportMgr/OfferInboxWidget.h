@@ -210,6 +210,9 @@ private:
 	/** The strip's box, collapsed while the airport is not open, and the "Closed" line shown in its place. */
 	UPROPERTY() TObjectPtr<USizeBox> DemandStripBox;
 	UPROPERTY() TObjectPtr<UTextBlock> DemandStatusText;
+	/** The "Closed" line's box - the thing collapsed, not only its text: a collapsed child of a vertical box takes its
+	 *  slot's padding with it, and a visible box around collapsed text kept 8 px of it (whole-stack review M2). */
+	UPROPERTY() TObjectPtr<USizeBox> DemandStatusBox;
 	/** ShowAirportStatus's last answer, so a still tick sets nothing (SetText and SetVisibility have no early-out). */
 	bool bShowingClosed = false;
 

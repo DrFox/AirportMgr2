@@ -9,6 +9,13 @@
 #include "Profiles/RoadProfile.h"
 #include "RoadBuildController.h"
 #include "Testing/AirsideTestWorld.h"
+#include "Testing/AirsideTestGraph.h"
+#include "Model/OpsAlerts.h"
+#include "Model/RunwayFacts.h"
+#include "Content/AirsideSettings.h"
+#include "Present/RoadNetworkActor.h"
+#include "Present/OpsRuntime.h"
+#include "Model/Airport.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -232,6 +239,173 @@ bool FLandPanelIsKeySevenTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("and the bar button lights while it is open"), Land->IsActive(Ctx));
 	Land->Execute(Ctx);
 	TestFalse(TEXT("pressing it again closes it"), C->IsLandPanelShowing());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandPanelBuildsOnlyOnChangeTest,
+	"AirportMgr.UI.LandPanelBuildsOnlyOnChange",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandPanelBuildsOnlyOnChangeTest::RunTest(const FString& Parameters)
+{
+	// OPS BATCH 3 PR E: the rows are judged again only when something LandChoices::Build reads moves - one step per
+	// input of FLandChoicesKey, each alone. It judged every type every frame while open.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-300000.0, -300000.0));
+	const FTestTwoRunways Field = FTestTwoRunways::Build(UAirsideSettings::ResolveDefaultAirframe(), Actor->Network);
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(Actor);
+	ULandAircraftPanelWidget* Panel =
+		CreateWidget<ULandAircraftPanelWidget>(TestWorld.World, ULandAircraftPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+
+	auto FocusAt = [C](const FVector2D& At)
+	{
+		FAlertFocus Focus;
+		Focus.Kind = EAlertFocusKind::Point;
+		Focus.Point = At;
+		C->SelectAndFocus(Focus);
+	};
+	auto Builds = [&](int32 Frames)
+	{
+		const int32 Before = Panel->BuildCountForTest();
+		for (int32 Frame = 0; Frame < Frames; ++Frame) { Panel->RefreshFor(C); }
+		return Panel->BuildCountForTest() - Before;
+	};
+
+	FocusAt(FVector2D(1000.0, 0.0));
+	TestEqual(TEXT("opened on runway A: judged once over 30 frames"), Builds(30), 1);
+	FocusAt(FVector2D(1100.0, 50.0));
+	TestEqual(TEXT("the camera moves along A: nothing Build reads moved"), Builds(5), 0);
+	FocusAt(FVector2D(1000.0, -40000.0));
+	TestEqual(TEXT("the camera onto runway B: judged again, once"), Builds(5), 1);
+
+	const FRoadSegment* Piece = Actor->Network->GetSegment(Field.B);
+	if (!TestNotNull(TEXT("runway B"), Piece)) { return false; }
+	const uint32 Guideline = Actor->Network->GetGuidelineRevision();
+	Actor->Network->SetNodePosition(Piece->A, Actor->Network->GetNode(Piece->A)->Position - FVector2D(20000.0, 0.0));
+	TestEqual(TEXT("(a drag moves no guideline revision)"), Actor->Network->GetGuidelineRevision(), Guideline);
+	TestEqual(TEXT("B dragged longer (EditRevision): judged again, once"), Builds(5), 1);
+
+	const uint32 Edit = Actor->Network->GetEditRevision();
+	FRunwayFacts Facts = Actor->Network->RunwayFactsFor(Field.B);
+	Facts.Surface = EPavement::Grass;
+	if (!TestTrue(TEXT("the facade takes B's facts"), Actor->SetRunwayFacts(Field.B.Index, Facts))) { return false; }
+	TestEqual(TEXT("(facts move no edit revision)"), Actor->Network->GetEditRevision(), Edit);
+	TestEqual(TEXT("B turned to grass (GuidelineRevision): judged again, once"), Builds(5), 1);
+
+	Actor->ClearNetwork();
+	TestEqual(TEXT("a new network: judged again, once"), Builds(5), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandPanelJudgesWhenTypesArriveTest,
+	"AirportMgr.UI.LandPanelJudgesWhenTypesArrive",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandPanelJudgesWhenTypesArriveTest::RunTest(const FString& Parameters)
+{
+	// THE TYPES ARE AN INPUT TOO (PR E review): read again every Refresh while there are none, they can arrive with
+	// nothing FLandChoicesKey reads moving - and the rows must appear when they do.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(TestWorld.Actor);
+	ULandAircraftPanelWidget* Panel =
+		CreateWidget<ULandAircraftPanelWidget>(TestWorld.World, ULandAircraftPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+	TArray<UAircraftType*> Two = LandChoices::EveryMeshedType();
+	if (!TestTrue(TEXT("content has at least two meshed types"), Two.Num() >= 2)) { return false; }
+	Two.SetNum(2);
+	bool bArrived = false;
+	Panel->SetTypeSourceForTest([&bArrived, Two]() { return bArrived ? Two : TArray<UAircraftType*>(); });
+
+	for (int32 Frame = 0; Frame < 3; ++Frame) { Panel->RefreshFor(C); }
+	TestEqual(TEXT("no types: judged once"), Panel->BuildCountForTest(), 1);
+	TestEqual(TEXT("and no rows"), Panel->RowWidgetCountForTest(), 0);
+	bArrived = true;
+	Panel->RefreshFor(C);
+	TestEqual(TEXT("the types arrive: judged again"), Panel->BuildCountForTest(), 2);
+	TestEqual(TEXT("and their rows are there"), Panel->RowWidgetCountForTest(), 2);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandChoicesKeyNamesTheNetworkTest,
+	"AirportMgr.UI.LandChoicesKeyNamesTheNetwork",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandChoicesKeyNamesTheNetworkTest::RunTest(const FString& Parameters)
+{
+	// TWO NETWORKS, EVERY REVISION EQUAL: two deterministic builds of one field count their revisions identically, so
+	// only the network's identity tells a key on one from a key on the other - a load's new network looked like this.
+	const FTestTwoRunways First = FTestTwoRunways::Build(UAirsideSettings::ResolveDefaultAirframe());
+	const FTestTwoRunways Second = FTestTwoRunways::Build(UAirsideSettings::ResolveDefaultAirframe());
+	if (!TestTrue(TEXT("the same revisions - the case under test"),
+		First.Net->GetEditRevision() == Second.Net->GetEditRevision()
+		&& First.Net->GetGuidelineRevision() == Second.Net->GetGuidelineRevision())) { return false; }
+	const FVector2D Near(1000.0, 0.0);
+	const FLandChoicesKey A = LandChoices::KeyFor(First.Net, Near);
+	const FLandChoicesKey B = LandChoices::KeyFor(Second.Net, Near);
+	TestTrue(TEXT("the same runway seed on each"), A.bHasRunway && B.bHasRunway && A.Seed == B.Seed);
+	TestTrue(TEXT("and still two keys: the network is on it"), A != B);
+	TestTrue(TEXT("one network is one key"), A == LandChoices::KeyFor(First.Net, Near));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandPanelGreysWhileClosedTest,
+	"AirportMgr.UI.LandPanelGreysWhileClosed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandPanelGreysWhileClosedTest::RunTest(const FString& Parameters)
+{
+	// A CLOSED AIRPORT ADMITS NO ARRIVALS, the debug Land included (PR B ruling I1) - so every row is a click the game
+	// would refuse, and PaintRows's rule (a greyed row is exactly that) greys them all (whole-stack review M1). The
+	// status is on FLandChoicesKey, so the close is seen with nothing else moving.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-300000.0, -300000.0));
+	FTestTwoRunways::Build(UAirsideSettings::ResolveDefaultAirframe(), Actor->Network);
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	Runtime->Tick(0.0);
+	if (!TestEqual(TEXT("open"), Runtime->GetAirport()->Status(), EAirportStatus::Open)) { return false; }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(Actor);
+	FAlertFocus Focus;
+	Focus.Kind = EAlertFocusKind::Point;
+	Focus.Point = FVector2D(1000.0, 0.0);
+	C->SelectAndFocus(Focus);
+	ULandAircraftPanelWidget* Panel =
+		CreateWidget<ULandAircraftPanelWidget>(TestWorld.World, ULandAircraftPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+	auto Enabled = [Panel]()
+	{
+		int32 Count = 0;
+		for (int32 Row = 0; Row < Panel->RowWidgetCountForTest(); ++Row) { Count += Panel->IsRowEnabledForTest(Row) ? 1 : 0; }
+		return Count;
+	};
+
+	Panel->RefreshFor(C, Runtime);
+	if (!TestTrue(FString::Printf(TEXT("open: some type can land (%d of %d rows)"), Enabled(), Panel->RowWidgetCountForTest()), Enabled() > 0)) { return false; }
+	const int32 Built = Panel->BuildCountForTest();
+	Runtime->SetAirportClosed(true);
+	Panel->RefreshFor(C, Runtime);
+	TestEqual(TEXT("the close alone re-judges the rows"), Panel->BuildCountForTest(), Built + 1);
+	TestEqual(TEXT("closed: every row greyed"), Enabled(), 0);
+	TestTrue(FString::Printf(TEXT("and each says why ('%s')"), *Panel->RowRefusalForTest(0)), Panel->RowRefusalForTest(0).Contains(TEXT("closed")));
+	Runtime->SetAirportClosed(false);
+	Panel->RefreshFor(C, Runtime);
+	TestTrue(TEXT("reopened: they are back"), Enabled() > 0);
 	return true;
 }
 

@@ -299,6 +299,19 @@ public:
 	int32 StepCountForTest() const { return StepCount; }
 
 	/**
+	 * Moves with every mutator of Jobs, Vehicles and Turnarounds - private, so every public door to them: Step,
+	 * OnAgentPhase, RecallVehicleOfAgent, OnBeforeRestore, the player's fleet doors (AddPurchasedVehicle,
+	 * RemoveVehicle - #417, rebased under this counter) and the ForTest adders. The bumps in Serialize and
+	 * ResolveVehicles are REDUNDANT, kept as cheap insurance: a load's OnBeforeRestore runs immediately before the
+	 * blob's Serialize and has already moved it, and ResolveVehicles fills the letter table, which no Describe reads. The inspector's
+	 * depot card and fuel line key on it (ops batch 3 PR E). NOT StepCount, which the spec named: OnAgentPhase and
+	 * the recall change the board outside Step, and a card keyed on steps would show them a pass late or never.
+	 * A session counter, not saved - the same idiom as UFlightBoard::Revision.
+	 * ENFORCED BY: AirportOps.Fuel.RevisionMovesOnEveryChange (each public door, one line each)
+	 */
+	uint32 Revision() const { return RevisionCount; }
+
+	/**
 	 * The one line the inspector's card shows for this agent, or empty when the board has nothing to
 	 * say about it: an aircraft's fuel line, or - for a service vehicle's agent - the vehicle's own
 	 * line (DescribeVehicle). ONE SEAM FOR BOTH, because the inspector already asks it for whatever
@@ -309,6 +322,15 @@ public:
 	 * it - the same argument InspectFacts::StatusOf makes for its own line.
 	 */
 	FString DescribeAgent(int32 AgentId, double Now) const;
+
+	/**
+	 * DescribeAgent, and whether its answer MOVES WITH THE CLOCK: true only while the fuel line counts litres down
+	 * through a trip being pumped (its "LIVE WHILE PUMPING" rule). Anything else it says changes only with the
+	 * board, so a caller may keep it until Revision moves - the inspector does (ops batch 3 PR E).
+	 * ENFORCED BY: AirportOps.Fuel.LineSaysWhenItMovesWithTheClock (live only while serving);
+	 * AirportMgr.Inspector.Cache.FuelLineLiveWhilePumping (the card follows it while live)
+	 */
+	FString DescribeAgent(int32 AgentId, double Now, bool& bOutMovesWithClock) const;
 
 	/**
 	 * The player's Unstick for a VEHICLE (spec 2026-09-29-unstick-agent): every job it holds - the
@@ -328,7 +350,9 @@ public:
 	 * finish, and how many of those promises land after their aircraft's turnaround ends, which is the
 	 * backlog actually costing the airport. Read off each job's PromisedFinish, which the re-bid pass
 	 * refreshes on every trigger (RebidQueued), so the card needs no bookkeeping of its own. Minutes are
-	 * whole, so the inspector's text gate redraws at most once a game minute.
+	 * whole - but rounded from Now, so they move at half-minute offsets of it, not at the game minute. The
+	 * inspector therefore passes the START of the game minute as Now (ops batch 3 PR E), which makes its
+	 * card a function of the minute it keys on, and redraws it at most once a game minute.
 	 */
 	FDepotBacklog DescribeDepot(FEntityInstanceId Depot, double Now) const;
 
@@ -514,13 +538,31 @@ private:
 	 * The aircraft left its stand: its turnaround and jobs go, and vehicles out for them move on.
 	 *
 	 * bDeparted - it left for a departing phase (pushed back, taxied), not Gone or Stranded - makes this
-	 * THE ONE PLACE A TURNAROUND ENDS (batch 3 review I1): the part-fuelled fee is posted and
-	 * FTurnaroundEndedEvent published HERE, whoever sent it - DepartTheReady, or the inspector's Depart
-	 * calling UGroundTraffic::DepartAgent directly, which never passes through DepartTheReady. A retire
+	 * where a TURNED-AROUND aircraft's turnaround ends (batch 3 review I1): it calls EndTurnaround, the one
+	 * publisher of FTurnaroundEndedEvent and poster of the part-fuelled fee, whoever sent it - DepartTheReady,
+	 * or the inspector's Depart calling UGroundTraffic::DepartAgent directly, which never passes through
+	 * DepartTheReady. EndTurnaround's other caller is OnAgentPhase, for a departure never turned around. A retire
 	 * (Unstick's despawn) is not a departure: PR B scores it as a cancelled flight.
 	 * ENFORCED BY: AirportOps.Fuel.ManualDepartEndsTurnaroundOnce, AirportOps.Fuel.RetiredAircraftEndsNoTurnaround
 	 */
 	void DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
+
+	/**
+	 * A turnaround's end, announced - THE ONE PUBLISHER of FTurnaroundEndedEvent (and poster of the part-fuelled fee).
+	 * Two callers, one per way an aircraft can leave: DropAircraft for one that had a turnaround, and OnAgentPhase for
+	 * one that departed WITHOUT ever being turned around (whole-stack review M4) - which can never both be true of one
+	 * departure, since OnAgentPhase takes the second branch only when TurnaroundFor finds nothing.
+	 * ENFORCED BY: AirportOps.Model.Bus.DepartFromFallbackReadsTaxiOut ("one TurnaroundEnded"), AirportOps.Fuel.ManualDepartEndsTurnaroundOnce
+	 */
+	void EndTurnaround(int32 AircraftId, FEntityInstanceId Stand, double Delivered, double Wanted, const USimClock& Clock);
+
+	/**
+	 * The litres AgentId's flight is owed: LitresOwedFor (the offer's FuelLitres), else DefaultLitres. ONE READ for both
+	 * sites that ask - a turnaround's fuel job and a departure never turned around (whole-stack re-review m1) - so the
+	 * two cannot be owed different amounts.
+	 * ENFORCED BY: AirportOps.Model.Bus.DepartFromFallbackReadsTaxiOut ("owed what the flight was owed")
+	 */
+	double LitresWanted(int32 AgentId, const FAirframe& Airframe) const;
 
 	/** A trip's pumping is over: quantities move, the job is Done or re-opened with its remainder. */
 	void FinishServe(FServiceVehicle& Vehicle, const USimClock& Clock);
@@ -694,6 +736,9 @@ private:
 
 	/** See StepCountForTest. A session counter, not saved. */
 	int32 StepCount = 0;
+
+	/** See Revision. A session counter, not saved. */
+	uint32 RevisionCount = 0;
 
 	/** True while any of the turnaround's jobs is neither Done nor Unserviceable. One rule, read by
 	 *  DepartTheReady and by Step's "is a departure waiting?" - so the two cannot disagree. */

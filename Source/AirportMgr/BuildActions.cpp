@@ -355,8 +355,11 @@ namespace
 						Ctx.Runtime->SetAirportClosed(false);
 					}
 				},
-				// LIT WHILE NOT OPEN: the one glance that says the airport is taking no traffic.
-				[](const FBuildActionContext& Ctx) { return Ctx.Runtime != nullptr && Ctx.Runtime->GetAirport()->Status() != EAirportStatus::Open; },
+				// NEVER LIT (whole-stack review M6): ACCENT MEANS ARMED AND NOTHING ELSE (UBuildBarWidget), and a closed
+				// airport is not an armed tool. It used to light while not open; the caption ("Closed", "No runway") is
+				// the one glance that says the airport is taking no traffic.
+				// ENFORCED BY: AirportMgr.Actions.AirportStatusCaption ("closed: NOT lit")
+				[](const FBuildActionContext&) { return false; },
 				HasRuntime);
 			Airport.MenuItems = [](const FBuildActionContext& Ctx)
 			{

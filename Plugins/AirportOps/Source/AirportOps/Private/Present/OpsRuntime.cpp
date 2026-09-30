@@ -590,7 +590,11 @@ void UOpsRuntime::RunArrivalQueue()
 		bQueueCovered = true;
 		Bus.MarkDirtyNextDrain(TEXT("ArrivalQueue"));
 	}
-	ArmQueueSafetyNet(Result.Waiting > (Result.Cleared != nullptr ? 1 : 0));
+	// NO NET WHILE CLOSED (whole-stack review I1): a closed airport clears nobody, so a net would tick every 30 s to
+	// find the same answer. Reopening is an AirportStatusChanged, which dirties this pass (WireBus), and the run that
+	// follows re-arms it if anyone is still holding.
+	// ENFORCED BY: AirportOps.Present.ArrivalQueue.ClosedAirportDispatchesNothing ("no safety net ticks")
+	ArmQueueSafetyNet(!Result.bClosed && Result.Waiting > (Result.Cleared != nullptr ? 1 : 0));
 }
 
 void UOpsRuntime::ArmQueueSafetyNet(bool bWaiting)
@@ -983,9 +987,11 @@ void UOpsRuntime::Tick(double RealDeltaSeconds)
 
 	if (Target != nullptr)
 	{
-		// The MULTIPLIER, not TimeScale(): movement runs at the player's speed setting,
-		// never at the day compression. See USimClock's class comment.
-		Target->SetSimTimeScale(USimClock::Multiplier(Clock->GetSpeed()));
+		// NO SetSimTimeScale HERE since ops batch 3 PR E - it re-set the same double every frame. The actor's scale is
+		// set where the speed can change, all of which end in ApplySpeed: Attach (a new actor, whose Transient scale
+		// starts at 1), StepSpeed, TogglePause, LoadFromSlot (the clock's speed is saved). A network clear replaces the
+		// network, not the actor. Checked 2026-09-30: ApplySpeed is the only production caller of SetSimTimeScale.
+		// ENFORCED BY: AirportOps.Present.SimTimeScale.SetOnlyWhenItChanges; Check-Architecture rule 34 (scale-on-change)
 
 		// THE NETWORK IS READ FRESH, never cached: URoadEditFacade::ClearNetwork replaces the
 		// actor's network OBJECT rather than draining it, so a pointer held across a clear is
@@ -1023,6 +1029,9 @@ void UOpsRuntime::ApplySpeed(ESimSpeed Speed)
 	Clock->SetSpeed(Speed);
 	if (Target != nullptr)
 	{
+		// The MULTIPLIER, not TimeScale(): movement runs at the player's speed setting,
+		// never at the day compression. See USimClock's class comment.
+		++TimeScaleSets;
 		Target->SetSimTimeScale(USimClock::Multiplier(Speed));
 	}
 	Bus.Publish(FSpeedChangedEvent{ Speed });
@@ -1300,17 +1309,19 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// published change would reach the flight board's handler and re-run the closure's cancellation - scored, and
 	// over every unarrived flight - when everything the closure cancelled was cancelled when this was saved. The
 	// generator and the alerts read the result.
-	// ENFORCED BY: AirportOps.Present.Airport.LoadRederivesWithoutCancelling
+	// ENFORCED BY: AirportOps.Present.Airport.LoadRederivesSilently
 	Airport->Reseat(*Target->Network);
 
 	// THE ONE THING A LOAD DOES HAVE TO CANCEL (review ruling I2): the flights the demotion above put back in the
 	// queue were on the ground when the closure happened, so the closure left them - and at an airport that is not
-	// open they can never land again. Cancelled HERE, silently and UNSCORED (CancelRequeued publishes nothing), not
-	// by the event above: the airline did not lose them to the closure but to the save.
-	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport
+	// open they can never land again. Cancelled HERE, silently and UNSCORED (CancelUnarrivedAtLoad publishes
+	// nothing), not by the event above: the airline did not lose them to the closure but to the save. AND EVERY
+	// OTHER FLIGHT STILL TO ARRIVE (whole-stack review I1): an Accepted flight saved at the closed airport - which the
+	// closure's own cancel never met - was due to land after the load. Before RearmSchedules, so none is armed.
+	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport, AirportOps.Present.Airport.ClosedLoadCancelsTheUnarrived
 	if (Airport->Status() != EAirportStatus::Open)
 	{
-		FlightBoard->CancelRequeued(Requeued, Clock->Now());
+		FlightBoard->CancelUnarrivedAtLoad(Clock->Now());
 	}
 
 	// IN THIS ORDER, and both are needed. RebuildMesh regenerates the guideline graph, which

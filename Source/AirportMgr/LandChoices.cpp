@@ -53,7 +53,7 @@ namespace
 }
 
 TArray<FLandChoice> LandChoices::Build(const URoadNetwork* Network, const FVector2D& Near,
-	const TArray<UAircraftType*>& Types)
+	const TArray<UAircraftType*>& Types, EAirportStatus Status)
 {
 	// The runway ArrivalPlanner::Plan would pick from here - see the header for why only it.
 	FRunwayEnd End;
@@ -75,6 +75,12 @@ TArray<FLandChoice> LandChoices::Build(const URoadNetwork* Network, const FVecto
 		if (!bHasRunway)
 		{
 			Choice.Refusal = TEXT("no runway");
+		}
+		else if (Status != EAirportStatus::Open)
+		{
+			// CLOSED: every type refused alike - the one fact about the airport, not about the aeroplane, and asked
+			// before the runway's admission so the row names the reason the click would actually be refused.
+			Choice.Refusal = Status == EAirportStatus::NoRunway ? TEXT("no runway") : TEXT("the airport is closed");
 		}
 		else
 		{
@@ -103,6 +109,24 @@ TArray<FLandChoice> LandChoices::Build(const URoadNetwork* Network, const FVecto
 		return A.Type->DisplayName.ToString() < B.Type->DisplayName.ToString();
 	});
 	return Out;
+}
+
+FLandChoicesKey LandChoices::KeyFor(const URoadNetwork* Network, const FVector2D& Near, EAirportStatus Status)
+{
+	FLandChoicesKey Key;
+	Key.Network = Network;
+	Key.Status = Status;
+	if (Network == nullptr)
+	{
+		return Key;
+	}
+	Key.EditRevision = Network->GetEditRevision();
+	Key.GuidelineRevision = Network->GetGuidelineRevision();
+	// THE SAME CALL Build makes first, so the key names the runway Build would judge against.
+	FRunwayEnd End;
+	Key.bHasRunway = Network->NearestRunwayThreshold(Near, End);
+	Key.Seed = Key.bHasRunway ? End.Seed.Index : INDEX_NONE;
+	return Key;
 }
 
 #undef LOCTEXT_NAMESPACE

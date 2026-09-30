@@ -37,7 +37,7 @@ enum class EAirportStatus : uint8
  * a command is not an event. A change publishes FAirportStatusChangedEvent; entering a closed status is
  * what cancels the unarrived flights (UOpsRuntime::WireBus). ATTACH AND LOAD RE-DERIVE SILENTLY (Reseat):
  * neither is a change the player made, and a load must never re-run the cancellation (spec §3 "Load").
- * ENFORCED BY: AirportOps.Present.Airport.LoadRederivesWithoutCancelling
+ * ENFORCED BY: AirportOps.Present.Airport.LoadRederivesSilently
  *
  * World-free, like the boards: a network in, a status out.
  */

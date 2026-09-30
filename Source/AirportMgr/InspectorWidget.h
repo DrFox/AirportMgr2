@@ -21,6 +21,8 @@ class UPanelWidget;
 class UUiButton;
 class UTextBlock;
 class UUIStyle;
+class UFlight;
+class UJobBoard;
 struct FAgentFacts;
 
 /**
@@ -112,6 +114,58 @@ public:
 	bool bArmed = false;
 
 	UFUNCTION() void HandleSell();
+};
+
+/**
+ * What a NETWORK card - runway, taxiway, stand, depot - was last described from (ops batch 3 PR E). Its Describe
+ * walked the network every tick; now it runs when one of these moves, and the card is repainted from what it said.
+ *
+ * EVERY INPUT, BY CARD (checked against InspectFacts.cpp and UJobBoard::DescribeDepot, 2026-09-30):
+ *  - all three read segments, nodes and profiles (EditRevision - every node, segment and profile mutator bumps it,
+ *    a drag included) and runway facts, entities, the stored restriction letters and the guideline graph. In play
+ *    those four change only through the facade, whose Topology notify rebuilds the guideline graph - every derived
+ *    edge removed and re-made - so GuidelineRevision moves for each. The network OBJECT too: a clear or a load is a
+ *    new one, counting from its own zero - held as a weak pointer, whose serial a recycled address cannot match.
+ *  - a STAND also reads who holds its pose node and whether that agent is parked: OccupancyRevision (goal claims,
+ *    holds, every phase change) and UGroundTraffic::StandHoldChangeCount (a body on or off the pose, which moves no
+ *    revision). Runway and taxiway cards read no occupancy, so they leave these zero and a moving airport does not
+ *    recompose them.
+ *  - a DEPOT reads its vehicles and their jobs (UJobBoard::Revision) and the clock, which the card reads AT THE
+ *    MINUTE (Now floored to 60 s) so its text is a function of Minute exactly: DescribeDepot rounds its minutes
+ *    from Now, and a key on the minute alone would have held a figure that moved mid-minute. Its PURCHASE ROWS
+ *    and "No vehicles" (UOpsRuntime::QuoteFacility - the balance, the fleet, the sheds) are NOT keyed: they are
+ *    asked every tick and laid over the kept card, since the balance moves with no revision this key holds.
+ * ENFORCED BY: AirportMgr.Inspector.Cache.* - one test per revision and the minute, each red when its field is left
+ * out of == (2026-09-30); Check-Architecture rule 35 (facts-through-facade) for "only through the facade". The three
+ * object identities are not pinned here: no card test holds every revision equal across two objects (the Land key's and
+ * the held taxi out's are, AirportMgr.UI.LandChoicesKeyNamesTheNetwork and Airside.Model.Traffic.HeldTaxiOut.ANewNetworkAsksAgain).
+ */
+struct FInspectorCardKey
+{
+	ESelectionKind Kind = ESelectionKind::None;
+	int32 Id = INDEX_NONE;
+	/** Identity only, never dereferenced: FWeakObjectPtr compares index AND serial, so a new object at a freed
+	 *  address is not the old one (a raw pointer could be), and it needs no complete type in this header. */
+	FWeakObjectPtr Network;
+	uint32 EditRevision = 0;
+	uint32 GuidelineRevision = 0;
+	/** A stand's only - see the class comment. */
+	FWeakObjectPtr Traffic;
+	uint32 OccupancyRevision = 0;
+	uint32 StandHolds = 0;
+	/** A depot's only - see the class comment. */
+	FWeakObjectPtr JobBoard;
+	uint32 JobRevision = 0;
+	int64 Minute = 0;
+
+	bool operator==(const FInspectorCardKey& Other) const
+	{
+		return Kind == Other.Kind && Id == Other.Id && Network == Other.Network && EditRevision == Other.EditRevision
+			&& GuidelineRevision == Other.GuidelineRevision && Traffic == Other.Traffic
+			&& OccupancyRevision == Other.OccupancyRevision && StandHolds == Other.StandHolds
+			&& JobBoard == Other.JobBoard && JobRevision == Other.JobRevision && Minute == Other.Minute;
+	}
+	bool operator!=(const FInspectorCardKey& Other) const { return !(*this == Other); }
 };
 
 /**
@@ -265,7 +319,6 @@ public:
 	 */
 	static double GameSecondsOfStall(double StalledSeconds, const USimClock& Clock);
 
-	FString StatusForTest() const;
 	/** The deadlock line, or empty while it is collapsed. */
 	FString DeadlockForTest() const;
 	/** The WaitingFor button's caption, or empty while it is collapsed. */
@@ -286,12 +339,35 @@ public:
 	void Refresh(const ARoadNetworkActor* Target, const FSelection& Selection,
 		const FAgentFacts* PrecomputedAgentFacts = nullptr);
 
+	/**
+	 * Refresh's body past the ops runtime lookup - Runtime is what Refresh finds through OpsRuntime() (the
+	 * controller's, else UOpsRuntimeSubsystem's), null for none. A headless test's world has no game instance to hold that subsystem, so the depot card, the
+	 * fuel line and the turnaround were out of its reach; UOfferInboxWidget::RefreshWith is the same seam.
+	 */
+	void RefreshWith(const UOpsRuntime* Runtime, const ARoadNetworkActor* Target, const FSelection& Selection,
+		const FAgentFacts* PrecomputedAgentFacts = nullptr);
+
+	/** How many times a network card's Describe (InspectFacts::DescribeRunway/Taxiway/Stand) actually ran - the
+	 *  FInspectorCardKey gate's counter: a quiet frame adds nothing. */
+	int32 CardDescribeCountForTest() const { return CardDescribeCalls; }
+
+	/** How many times the depot card asked UJobBoard::DescribeDepot - at most once a game minute on a quiet board. */
+	int32 DepotDescribeCountForTest() const { return DepotDescribeCalls; }
+
+	/** How many times the aircraft card looked its flight up (UFlightBoard::FlightForAgent), asked the job board
+	 *  for its fuel line, and composed its turnaround sentence - the three lookups PR E keys. */
+	int32 FlightLookupCountForTest() const { return FlightLookups; }
+	int32 FuelLookupCountForTest() const { return FuelLookups; }
+	int32 TurnaroundComposeCountForTest() const { return TurnaroundComposes; }
+
 	bool IsShownForTest() const;
 	bool IsDepartEnabledForTest() const;
 	FString TitleForTest() const;
 
 	/** The composed facts text (heading, speed, ... and the Demands block). */
 	FString FactsForTest() const;
+	/** The status line as shown. */
+	FString StatusForTest() const;
 	/** Depart's CAPTION colour - the thing that must actually change with enabled state.
 	 *  See Refresh: the button's own background stays Style->Control always (UUiButton::LookFor). */
 	FLinearColor DepartLabelColourForTest() const;
@@ -404,20 +480,75 @@ private:
 	/** See UseFlightBoardForTest. */
 	TWeakObjectPtr<const UFlightBoard> FlightBoardForTest;
 
-	/** UseFlightBoardForTest's board, else the ops runtime's; null when neither exists. */
-	const UFlightBoard* Flights() const;
+	/** UseFlightBoardForTest's board, else Runtime's (the one RefreshWith was handed); null when neither exists. */
+	const UFlightBoard* Flights(const UOpsRuntime* Runtime) const;
 
 	/** See UseClockForTest. */
 	TWeakObjectPtr<const USimClock> ClockForTest;
 
-	/** UseClockForTest's clock, else the ops runtime's; null when neither exists. */
-	const USimClock* GameClock() const;
+	/** UseClockForTest's clock, else Runtime's (the one RefreshWith was handed); null when neither exists. */
+	const USimClock* GameClock(const UOpsRuntime* Runtime) const;
 
 	/**
 	 * How the card names another agent: its flight's registration, else "<type> #<id>" (the title's
 	 * own fallback - a service vehicle reads "FUEL #7"), else "aircraft <id>" for one already gone.
 	 */
-	FString NameOfAgent(const UGroundTraffic* Traffic, int32 AgentId) const;
+	FString NameOfAgent(const UOpsRuntime* Runtime, const UGroundTraffic* Traffic, int32 AgentId) const;
+
+	/** The network card as last described, and what it was described from - see FInspectorCardKey. Valid once a
+	 *  Describe has succeeded; a failed one hides the card and leaves the last good key, which cannot match the
+	 *  key that failed (it differed, or it would not have been asked). */
+	FInspectorCardKey LastCardKey;
+	bool bCardValid = false;
+	FString CardTitle, CardFacts, CardStatus;
+	bool bCardRunway = false;
+	FText CardRunwayCaption, CardRunwayUseCaption;
+	/** Whether the kept card is a depot's, and on a road - what the per-tick purchase quote is laid on by. */
+	bool bCardDepot = false;
+	bool bCardDepotReachable = false;
+
+	/** See CardDescribeCountForTest / DepotDescribeCountForTest. */
+	int32 CardDescribeCalls = 0;
+	int32 DepotDescribeCalls = 0;
+
+	/**
+	 * THE AIRCRAFT CARD'S THREE LOOKUPS, each kept until what it reads moves (ops batch 3 PR E; they ran every tick,
+	 * before FInspectorKey could be compared, because their answers are fields of it):
+	 *  - the flight: UFlightBoard::FlightForAgent reads the board's agent index, which moves with Revision.
+	 *  - the fuel line: UJobBoard::DescribeAgent reads the job board (Revision) and, while pumping only, the clock -
+	 *    which it says (bFuelLineLive), and then it is asked every tick, as before.
+	 *  - the turnaround: DescribeTurnaround reads the flight's contract and Now, which it shows only as whole minutes
+	 *    left or late - so it is keyed on exactly those (TurnaroundKey), computed from the flight each tick for two
+	 *    subtractions instead of an FText::Format.
+	 * The spec keyed them on "flight board revision + agent phase"; the phase is no input of any of the three (a phase
+	 * change reaches the board as a Revision), while the job board and the clock are.
+	 * WEAK, all three pointers: a load or a level change can take either board or the flight away between ticks.
+	 */
+	TWeakObjectPtr<const UFlightBoard> FlightLookupBoard;
+	uint32 FlightLookupRevision = 0;
+	int32 FlightLookupAgent = INDEX_NONE;
+	TWeakObjectPtr<const UFlight> FlightLookup;
+
+	TWeakObjectPtr<const UJobBoard> FuelLineBoard;
+	uint32 FuelLineRevision = 0;
+	int32 FuelLineAgent = INDEX_NONE;
+	bool bFuelLineLive = false;
+	FString FuelLine;
+
+	/** Flight, contract, late?, whole minutes shown - DescribeTurnaround's every input at the resolution it prints. */
+	TWeakObjectPtr<const UFlight> TurnaroundFlight;
+	double TurnaroundContract = -1.0;
+	bool bTurnaroundLate = false;
+	int32 TurnaroundMinutes = -1;
+	FString TurnaroundLine;
+
+	/** See FlightLookupCountForTest and its two siblings. */
+	int32 FlightLookups = 0;
+	int32 FuelLookups = 0;
+	int32 TurnaroundComposes = 0;
+
+	/** The key for Selection's network card now - see FInspectorCardKey for what each kind reads. */
+	FInspectorCardKey CardKeyFor(const UOpsRuntime* Runtime, const ARoadNetworkActor& Target, const FSelection& Selection) const;
 
 	/** What Refresh last showed, so a NEW selection can reopen a window the player closed. */
 	FSelection LastSelection;

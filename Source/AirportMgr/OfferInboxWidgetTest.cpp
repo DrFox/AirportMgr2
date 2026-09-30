@@ -275,4 +275,29 @@ bool FOfferInboxRefreshReadsStatusTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/** THE SWAP DOES NOT JOG THE CARD (whole-stack review M2): "Closed" takes the strip's place at the strip's height,
+ *  so the card is as tall either way - which held only if the hidden half took no room. The status line's slot kept
+ *  its 8 px of padding while its text was collapsed. Measured as Slate lays it out (SlatePrepass), not inferred. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferInboxStatusHeightTest, "AirportMgr.UI.OfferInbox.StatusSwapKeepsHeight",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferInboxStatusHeightTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	UOfferInboxWidget* Widget = CreateWidget<UOfferInboxWidget>(TestWorld.World, UOfferInboxWidget::StaticClass());
+	if (!TestNotNull(TEXT("an inbox"), Widget)) { return false; }
+	const TSharedRef<SWidget> Slate = Widget->TakeWidget();
+	auto Height = [&Slate]() { Slate->SlatePrepass(1.0f); return Slate->GetDesiredSize().Y; };
+	// FRESH, BEFORE ANY STATUS (whole-stack re-review m5): the card as built is the open card, and must be that height
+	// too - ShowAirportStatus's first call is a no-op for Open, so only the build itself can collapse the box.
+	const float Fresh = Height();
+	Widget->ShowAirportStatus(EAirportStatus::ClosedByPlayer);
+	const float Closed = Height();
+	Widget->ShowAirportStatus(EAirportStatus::Open);
+	const float Open = Height();
+	if (!TestTrue(FString::Printf(TEXT("the card has a height to measure (%.1f)"), Open), Open > 0.0f)) { return false; }
+	TestEqual(TEXT("open and closed, the card is the same height"), Open, Closed, 0.01f);
+	TestEqual(TEXT("and fresh from the build, the same again"), Fresh, Closed, 0.01f);
+	return true;
+}
+
 #endif
