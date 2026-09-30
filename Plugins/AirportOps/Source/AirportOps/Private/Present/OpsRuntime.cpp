@@ -1309,7 +1309,7 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// published change would reach the flight board's handler and re-run the closure's cancellation - scored, and
 	// over every unarrived flight - when everything the closure cancelled was cancelled when this was saved. The
 	// generator and the alerts read the result.
-	// ENFORCED BY: AirportOps.Present.Airport.LoadRederivesWithoutCancelling
+	// ENFORCED BY: AirportOps.Present.Airport.LoadRederivesSilently
 	Airport->Reseat(*Target->Network);
 
 	// THE ONE THING A LOAD DOES HAVE TO CANCEL (review ruling I2): the flights the demotion above put back in the
@@ -1318,7 +1318,7 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// nothing), not by the event above: the airline did not lose them to the closure but to the save. AND EVERY
 	// OTHER FLIGHT STILL TO ARRIVE (whole-stack review I1): an Accepted flight saved at the closed airport - which the
 	// closure's own cancel never met - was due to land after the load. Before RearmSchedules, so none is armed.
-	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport, AirportOps.Present.Airport.LoadRederivesWithoutCancelling
+	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport, AirportOps.Present.Airport.ClosedLoadCancelsTheUnarrived
 	if (Airport->Status() != EAirportStatus::Open)
 	{
 		FlightBoard->CancelUnarrivedAtLoad(Clock->Now());

@@ -306,18 +306,19 @@ FQueueTick UFlightBoard::TickQueue(UGroundTraffic& Traffic, const URoadNetwork& 
 	// COUNTED BEFORE THE PAUSE TEST: a paused queue is still a queue, and the pass arms its safety net from this.
 	const TArray<UFlight*> Waiting = Queue();
 	Result.Waiting = Waiting.Num();
-	if (Clock.IsPaused() || Waiting.Num() == 0)
-	{
-		return Result;
-	}
 	// A CLOSED AIRPORT ADMITS NO ARRIVALS - HERE TOO (whole-stack review I1): Accept and Land were gated, and this, the
-	// one door onto the runway, was not; a flight left holding by a load or a closure's edge case landed anyway. The
+	// door onto the runway itself, was not; a flight left holding by a load or a closure's edge case landed anyway. The
 	// same predicate as Accept, so the two doors cannot disagree about what "open" is. Before the stand re-reserve: a
-	// closed airport takes no stand for a flight it will not land.
+	// closed airport takes no stand for a flight it will not land. AND BEFORE THE PAUSE TEST (re-review m6): bClosed is
+	// what keeps the pass from arming a safety net, and a closed airport paused is still closed.
 	// ENFORCED BY: AirportOps.Present.ArrivalQueue.ClosedAirportDispatchesNothing
 	if (AdmitsArrivals && !AdmitsArrivals())
 	{
 		Result.bClosed = true;
+		return Result;
+	}
+	if (Clock.IsPaused() || Waiting.Num() == 0)
+	{
 		return Result;
 	}
 
@@ -695,7 +696,7 @@ int32 UFlightBoard::CancelUnarrivedAtLoad(double Now)
 	// NOTHING IS PUBLISHED, so the roster charges neither ClosureCancelPenalty nor anything else; what closed the
 	// airport happened before the save, and its own cancellations were scored then. Called before RearmSchedules and
 	// OnGraphRebuilt, so no arrival is armed and no stand held for any of them.
-	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport, AirportOps.Present.Airport.LoadRederivesWithoutCancelling
+	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport, AirportOps.Present.Airport.ClosedLoadCancelsTheUnarrived
 	int32 Count = 0;
 	// SNAPSHOT: MoveToHistory removes from the array being walked.
 	const TArray<TObjectPtr<UFlight>> Snapshot = Flights;

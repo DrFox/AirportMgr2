@@ -550,6 +550,14 @@ bool FArrivalQueueClosedTest::RunTest(const FString&)
 	Holding->Phase = EFlightPhase::Inbound;
 	Holding->HoldingSince = Rig.Runtime->GetClock()->Now();
 	Rig.Runtime->GetFlightBoard()->AddOffer(*Rig.Runtime->GetClock(), Holding);
+	// PAUSED AS WELL AS CLOSED (whole-stack re-review m6): a closed airport paused is still closed, and must not arm a
+	// net either - the closed test comes before the pause test in TickQueue for this.
+	Rig.Runtime->TogglePause();
+	Rig.Runtime->GetBus().Publish(FFlightInboundEvent{ Holding->Id, Holding->AirlineId });
+	for (int32 Tick = 0; Tick < 5; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
+	TestFalse(TEXT("paused and closed: no safety net either"), Rig.Runtime->IsQueueSafetyNetArmedForTest());
+	Rig.Runtime->TogglePause();
+
 	const int32 RunsBefore = Rig.QueueRuns();
 	Rig.Runtime->GetBus().Publish(FFlightInboundEvent{ Holding->Id, Holding->AirlineId });
 	for (int32 Tick = 0; Tick < 60; ++Tick)

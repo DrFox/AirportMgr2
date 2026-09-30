@@ -413,68 +413,128 @@ bool FAirportRunwayComesAndGoesTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportLoadTest, "AirportOps.Present.Airport.LoadRederivesWithoutCancelling",
+namespace
+{
+	/**
+	 * A runtime over an FTestAirport field - one an arrival CAN land on - closed by the player and saved with an
+	 * Accepted flight planted by hand (the closure's own cancel never meets it), due 5 s after the save; then reopened,
+	 * so the load has something to re-derive. Load() loads it and ticks past the planted flight's ETA. Shared by the two
+	 * load tests below, which pin two different promises of the same load. Prefixed against the unity build.
+	 */
+	struct FAirportClosedLoadRig
+	{
+		FAirsideTestWorld TestWorld;
+		UOpsRuntime* Runtime = nullptr;
+		FName Airline = TEXT("AirportTestLoadAirline");
+		int32 PlantedId = INDEX_NONE;
+		double DueAt = 0.0;
+		double SatisfactionAtSave = 0.0;
+		FString Slot = TEXT("AirportOpsTest_AirportLoad");
+
+		bool Save()
+		{
+			ARoadNetworkActor* Actor = TestWorld.Actor;
+			if (Actor == nullptr)
+			{
+				return false;
+			}
+			Actor->PlaceNode(FVector2D(0.0, 90000.0));
+			if (Actor->Network == nullptr)
+			{
+				return false;
+			}
+			const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+			const FTestAirport Field = FTestAirport::Build(Airframe, FTestAirportOptions(), Actor->Network);
+			Runtime = NewObject<UOpsRuntime>();
+			Runtime->Attach(Actor);
+			Runtime->GetClock()->SetUniformDay(USimClock::SecondsPerDay);
+			for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
+			if (Runtime->GetAirport()->Status() != EAirportStatus::Open)
+			{
+				return false;
+			}
+			Runtime->GetAirlines()->Ensure(Airline);
+			Runtime->SetAirportClosed(true);
+			Runtime->Tick(0.0);
+			UFlight* Planted = NewObject<UFlight>(GetTransientPackage());
+			Planted->Airframe = Airframe;
+			Planted->ApproachFocus = Field.Threshold;
+			Planted->AirlineId = Airline;
+			Planted->Phase = EFlightPhase::Accepted;
+			Planted->ArrivesAt = Runtime->GetClock()->Now() + 5.0;
+			Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Planted);
+			PlantedId = Planted->Id;
+			DueAt = Planted->ArrivesAt;
+			SatisfactionAtSave = Runtime->GetAirlines()->Find(Airline)->Satisfaction;
+			if (!Runtime->SaveToSlot(Slot))
+			{
+				return false;
+			}
+			Runtime->SetAirportClosed(false);
+			Runtime->Tick(0.0);
+			return Runtime->GetAirport()->Status() == EAirportStatus::Open;
+		}
+
+		bool LoadAndRunPastTheEta()
+		{
+			if (!Runtime->LoadFromSlot(Slot))
+			{
+				return false;
+			}
+			for (int32 Tick = 0; Tick < 20000 && Runtime->GetClock()->Now() < DueAt + 5.0; ++Tick)
+			{
+				TestWorld.Actor->Tick(0.1f);
+				Runtime->Tick(0.1);
+			}
+			return Runtime->GetClock()->Now() > DueAt;
+		}
+
+		~FAirportClosedLoadRig() { UGameplayStatics::DeleteGameInSlot(Slot, 0); }
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportLoadTest, "AirportOps.Present.Airport.LoadRederivesSilently",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FAirportLoadTest::RunTest(const FString&)
 {
-	// A LOAD RE-DERIVES AND NEVER RE-SCORES (spec §3 "Load"): everything a closure cancels was cancelled - and scored -
-	// when it was saved. AND A CLOSED AIRPORT ADMITS NO ARRIVALS, after a load too (whole-stack review I1): the saved
-	// closed airport carries an Accepted flight planted by hand, due just after the load, on a field it COULD land on
-	// - so only the closure stands between it and the runway. The first version of this test planted it for 1e9 s
-	// and asserted it stayed Accepted, which passed while the flight was still waiting to land at a closed airport.
-	FAirsideTestWorld TestWorld;
-	ARoadNetworkActor* Actor = TestWorld.Actor;
-	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
-	Actor->PlaceNode(FVector2D(0.0, 90000.0));
-	if (!TestNotNull(TEXT("a network"), Actor->Network.Get())) { return false; }
-	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
-	const FTestAirport Field = FTestAirport::Build(Airframe, FTestAirportOptions(), Actor->Network);
-	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
-	Runtime->Attach(Actor);
-	Runtime->GetClock()->SetUniformDay(USimClock::SecondsPerDay);
-	for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
-	if (!TestEqual(TEXT("a field with a runway opens"), Runtime->GetAirport()->Status(), EAirportStatus::Open)) { return false; }
-	const FName Airline = TEXT("AirportTestLoadAirline");
-	Runtime->GetAirlines()->Ensure(Airline);
+	// A LOAD RE-DERIVES THE STATUS AND PUBLISHES NO CHANGE (spec §3 "Load"): a published change would reach the flight
+	// board's handler and re-run the closure's cancellation - SCORED - when everything the closure cancelled was
+	// cancelled, and scored, when this was saved. Pinned by the airport's own change count (UAirport::Reseat changes
+	// nothing it counts; Refresh would count one), and by the airline, which must not be charged again. Was
+	// "LoadRederivesWithoutCancelling" - renamed by the whole-stack re-review (I-1): a closed load DOES cancel, unscored
+	// (ClosedLoadCancelsTheUnarrived below), and the old name no longer said what this asserts.
+	FAirportClosedLoadRig Rig;
+	if (!TestTrue(TEXT("a closed airport saved, then reopened"), Rig.Save())) { return false; }
+	const int32 ChangesBefore = Rig.Runtime->GetAirport()->ChangeCountForTest();
+	if (!TestTrue(TEXT("loaded, and run past the planted flight's ETA"), Rig.LoadAndRunPastTheEta())) { return false; }
+	TestEqual(TEXT("the loaded airport is closed, re-derived by the load itself"), Rig.Runtime->GetAirport()->Status(), EAirportStatus::ClosedByPlayer);
+	TestEqual(TEXT("and no status change was published - not by the load, not in the ticks after"),
+		Rig.Runtime->GetAirport()->ChangeCountForTest(), ChangesBefore);
+	TestEqual(TEXT("no satisfaction change - nothing was scored again"),
+		Rig.Runtime->GetAirlines()->Find(Rig.Airline)->Satisfaction, Rig.SatisfactionAtSave, 1e-9);
+	return true;
+}
 
-	Runtime->SetAirportClosed(true);
-	Runtime->Tick(0.0);
-	UFlight* Planted = NewObject<UFlight>(GetTransientPackage());
-	Planted->Airframe = Airframe;
-	Planted->ApproachFocus = Field.Threshold;
-	Planted->AirlineId = Airline;
-	Planted->Phase = EFlightPhase::Accepted;
-	Planted->ArrivesAt = Runtime->GetClock()->Now() + 5.0;
-	Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Planted);
-	const int32 PlantedId = Planted->Id;
-	const double DueAt = Planted->ArrivesAt;
-	const double SatisfactionAtSave = Runtime->GetAirlines()->Find(Airline)->Satisfaction;
-	const FString Slot = TEXT("AirportOpsTest_AirportLoad");
-	ON_SCOPE_EXIT { UGameplayStatics::DeleteGameInSlot(Slot, 0); };
-	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
-
-	Runtime->SetAirportClosed(false);
-	Runtime->Tick(0.0);
-	if (!TestEqual(TEXT("reopened before the load"), Runtime->GetAirport()->Status(), EAirportStatus::Open)) { return false; }
-
-	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
-	TestEqual(TEXT("the loaded airport is closed, re-derived by the load itself"), Runtime->GetAirport()->Status(), EAirportStatus::ClosedByPlayer);
-	for (int32 Tick = 0; Tick < 20000 && Runtime->GetClock()->Now() < DueAt + 5.0; ++Tick)
-	{
-		Actor->Tick(0.1f);
-		Runtime->Tick(0.1);
-	}
-	if (!TestTrue(TEXT("the clock ran past the planted flight's ETA"), Runtime->GetClock()->Now() > DueAt)) { return false; }
-	TestEqual(TEXT("nothing was dispatched: no aircraft in the air"), Actor->GetTraffic()->GetAgentCount(), 0);
-	for (const UFlight* Each : Runtime->GetFlightBoard()->Live())
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportClosedLoadCancelsTest, "AirportOps.Present.Airport.ClosedLoadCancelsTheUnarrived",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirportClosedLoadCancelsTest::RunTest(const FString&)
+{
+	// A CLOSED AIRPORT ADMITS NO ARRIVALS - AFTER A LOAD TOO (whole-stack review I1): the saved closed airport carries an
+	// Accepted flight the closure never met, due just after the load, on a field it COULD land on - so only the load's
+	// own cancel stands between it and the runway. It is cancelled, unscored; nothing is dispatched.
+	FAirportClosedLoadRig Rig;
+	if (!TestTrue(TEXT("a closed airport saved, then reopened"), Rig.Save())) { return false; }
+	if (!TestTrue(TEXT("loaded, and run past the planted flight's ETA"), Rig.LoadAndRunPastTheEta())) { return false; }
+	TestEqual(TEXT("nothing was dispatched: no aircraft in the air"), Rig.TestWorld.Actor->GetTraffic()->GetAgentCount(), 0);
+	for (const UFlight* Each : Rig.Runtime->GetFlightBoard()->Live())
 	{
 		TestTrue(FString::Printf(TEXT("flight %d is not landing"), Each->Id), Each->Phase != EFlightPhase::Landing);
 	}
-	const UFlight* Restored = Runtime->GetFlightBoard()->FindByIdForTest(PlantedId);
-	TestTrue(FString::Printf(TEXT("the planted flight is not coming (%s)"), Restored != nullptr ? *UEnum::GetValueAsString(Restored->Phase) : TEXT("gone")),
-		Restored == nullptr || Restored->Phase == EFlightPhase::Cancelled);
-	TestEqual(TEXT("and no satisfaction change - the load published no status change, and scored nothing"),
-		Runtime->GetAirlines()->Find(Airline)->Satisfaction, SatisfactionAtSave, 1e-9);
+	const UFlight* Restored = Rig.Runtime->GetFlightBoard()->FindByIdForTest(Rig.PlantedId);
+	TestTrue(FString::Printf(TEXT("the planted flight is cancelled (%s)"), Restored != nullptr ? *UEnum::GetValueAsString(Restored->Phase) : TEXT("gone")),
+		Restored != nullptr && Restored->Phase == EFlightPhase::Cancelled);
+	TestEqual(TEXT("unscored: its airline is where the save left it"),
+		Rig.Runtime->GetAirlines()->Find(Rig.Airline)->Satisfaction, Rig.SatisfactionAtSave, 1e-9);
 	return true;
 }
 
