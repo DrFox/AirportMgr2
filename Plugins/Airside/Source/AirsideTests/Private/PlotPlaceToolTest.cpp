@@ -1216,9 +1216,9 @@ bool FPlotReadoutMatchesPreviewTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("idle is not committable"), Collector.Readout.bCommittable);
 	}
 
-	// Three bays wide, and DEEP ENOUGH TO HOLD SOMETHING. It was 6 m deep and held nothing
-	// once PlotFit::BayDepthUu went to 12 m - a plot that holds nothing warns, which is what
-	// the warning assertion below is about.
+	// WIDE AND DEEP ENOUGH TO SEAT THE STARTER MIX - no warning of any kind is the point. It was
+	// 6 m deep and held nothing once PlotFit::BayDepthUu went to 12 m, and a plot that holds
+	// nothing warns, which is what the warning assertion below is about.
 	// 20 m OF FRONTAGE SINCE #266, and square: a plot must seat the starter mix, and no frontage
 	// under 20 m seats a shed under the real kits (Airside.Content.SmallestAcceptedPlotSeatsTheStarterMix).
 	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(2000.0, 200.0),
@@ -2065,7 +2065,7 @@ bool FPlotPlaceRefusesUnseatedStarterTest::RunTest(const FString& Parameters)
 	Actor->ClearNetwork();
 	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
 	LayServiceRoad(Actor, 0.0);
-	const TArray<EDepotModule> Starter = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
+	const TArray<EDepotModule> Starter = DepotKit::StarterModules();
 
 	// Draws a Frontage x Depth plot off the road with the tool, to Confirm.
 	const auto Draw = [this, Actor](FPlotPlaceTool& Tool, double Frontage, double Depth, FVector2D& OutAnchor)

@@ -626,13 +626,22 @@ $AllowedCallers = @(
     },
     @{
         # A DEPOT'S MODULES LEAVE THROUGH ONE DOOR (#266): the unplaced-module repair, whose removal and refund are one act.
-        # URoadNetwork::RemoveEntityModules is the data write, URoadEditFacade::RemoveUnseatedModules the door that rebuilds
-        # and checkpoints undo, and UOpsRuntime's ApplyModuleRemoval hook its one production caller - so a module removed is
-        # always a module UFacilityPurchases::RemoveUnseated refunded. A second caller would take modules the player paid
-        # for with no refund, no Warning and no toast.
-        Name        = 'module removal'
-        Pattern     = '\b(RemoveEntityModules|RemoveUnseatedModules)\s*\('
-        ProdAllowed = @('Public\Model\RoadNetwork.h', 'Private\Model\RoadNetwork.cpp', 'Public\Present\RoadEditFacade.h', 'Private\Present\RoadEditFacade.cpp', 'Private\Present\OpsRuntime.cpp')
+        # TWO ROWS, one per layer, so neither can be skipped: URoadNetwork::RemoveEntityModules is the data write, and only
+        # the facade's door calls it (a caller beside the door skips the rebuild and the undo checkpoint);
+        # URoadEditFacade::RemoveUnseatedModules is the door, and only UOpsRuntime's ApplyModuleRemoval hook calls it - so a
+        # module removed is always a module UFacilityPurchases::RemoveUnseated refunded. A second caller of either would take
+        # modules the player paid for with no refund, no Warning and no toast.
+        Name        = 'module removal (network write)'
+        Pattern     = '\bRemoveEntityModules\s*\('
+        ProdAllowed = @('Public\Model\RoadNetwork.h', 'Private\Model\RoadNetwork.cpp', 'Private\Present\RoadEditFacade.cpp')
+        TestExempt  = $true
+        ProdReason  = 'remove a module through URoadEditFacade::RemoveUnseatedModules, the door that rebuilds and checkpoints undo - and that only through the repair, which refunds it'
+    },
+    @{
+        # The door's own row - see the network write's row above for why there are two.
+        Name        = 'module removal (facade door)'
+        Pattern     = '\bRemoveUnseatedModules\s*\('
+        ProdAllowed = @('Public\Present\RoadEditFacade.h', 'Private\Present\RoadEditFacade.cpp', 'Private\Present\OpsRuntime.cpp')
         TestExempt  = $true
         ProdReason  = 'remove a module only through UFacilityPurchases::RemoveUnseated (the ApplyModuleRemoval hook UOpsRuntime wires to the facade), which refunds it, logs it and toasts it'
     }
@@ -2232,12 +2241,15 @@ if ($TestNamesOut -ne '') {
 #      final review): it matched the variable NAME `Spec` alone, so `VehicleSpecs[Type].Price`, `SpecIt->Price` and
 #      `JobBoard->SpecFor(Type).Price` all read the row past it. Now any `Spec`/`Specs`-prefixed name, subscripted or not,
 #      and a SpecFor(...) call's result. Mutation-checked 2026-09-30: each of those three shapes typed into
-#      FacilityPurchases.cpp fails this rule, and the unwidened pattern passed all three.
+#      FacilityPurchases.cpp fails this rule, and the unwidened pattern passed all three. CASE-SENSITIVE (-cmatch) AND A
+#      CAMEL-CASE SUFFIX ONLY (#469 review): -match read `InspectorRow.Price` as "spec...Price", and `Spec\w*` read
+#      `SpecialOffer.Price` as a spec; the name must now be `Spec`/`Specs` alone or followed by a capital (`SpecIt`,
+#      `VehicleSpecs`). Mutation-checked: both of those pass, the three shapes above still fail.
 # The rule fails, rather than checking nothing, when ServiceFleet.cpp is gone or no longer matches either shape.
 $fleetDoorFile = Join-Path $ops 'Private\Model\ServiceFleet.cpp'
 $fleetContainerWrite = '\b(?:Vehicles|SeededDepots)\s*(?:\.|->)\s*(?:Add|AddUnique|AddDefaulted|Emplace|Insert|Append|Remove|RemoveAt|RemoveAll|RemoveSwap|Reset|Empty)\w*\s*\(|(?:\+\+\s*NextVehicleId\b|\bNextVehicleId\s*(?:\+\+|\+=))'
 $fleetMoneyPost      = '\bELedgerCategory::Fleet\b'
-$fleetPriceRead      = 'Specs?\w*(?:\[[^\]]*\])?(?:\.|->)Price\b|\bSpecFor\([^)]*\)\.Price\b|(?:\.|->)ResaleValue\s*\('
+$fleetPriceRead      = 'Specs?(?:[A-Z]\w*)?(?:\[[^\]]*\])?(?:\.|->)Price\b|\bSpecFor\([^)]*\)\.Price\b|(?:\.|->)ResaleValue\s*\('
 $fleetDoorContainerWrites = 0
 $fleetDoorMoneyPosts = 0
 if (-not (Test-Path $fleetDoorFile)) {
@@ -2265,7 +2277,7 @@ foreach ($fleetTree in @($ops, (Join-Path $Root 'Source\AirportMgr'))) {
             if ($code -match $fleetContainerWrite) {
                 $failures.Add("fleet-one-door: $($file.Name):$($i + 1) writes the fleet's containers by hand - go through FServiceFleet (UJobBoard::Fleet), whose Add/Withdraw own the ledger line, the FFleetChangedEvent and the re-open: $($code.Trim())")
             }
-            if ($file.Extension -eq '.cpp' -and $code -match $fleetPriceRead) {
+            if ($file.Extension -eq '.cpp' -and $code -cmatch $fleetPriceRead) {
                 $failures.Add("fleet-one-door: $($file.Name):$($i + 1) reads a vehicle row's Price or ResaleValue directly - ask FServiceFleet::PriceOf/ResaleOf, the one read the quote, the judgement, the charge and the ledger line share: $($code.Trim())")
             }
             if ($code -match $fleetMoneyPost -and $code -notmatch '^\s*case\s+ELedgerCategory::Fleet\s*:') {

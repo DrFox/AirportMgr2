@@ -208,9 +208,12 @@ public:
 	 * the write (the facade door); this decides and pays. THE MONEY DOOR FOR A REMOVED MODULE, as BuyModule is for a
 	 * bought one: the removal it pays for has no other production caller (Check-Architecture rule 4 row 'module removal').
 	 *
-	 * THE REFUND IS THE OFFER'S Price, what the shop charges for one: a module did not stop being worth that because the
-	 * plot shrank. A kind the shop does not sell (no FModuleOffer - the tank and pump this slice) was never priced alone -
-	 * it came in the plot's kit - so it is removed with nothing to post and the log says so.
+	 * THE REFUND IS THE CURRENT OFFER PRICE, NOT THE PRICE PAID (orchestrator ruling on #469, 2026-09-30, following the
+	 * owner's "remove and refund"): what a module cost is not recorded per module, so the one figure there is to pay back is
+	 * FModuleOffer::Price as the shop quotes it now. A KIT SHED IS REFUNDED TOO - one that came with the plot rather than
+	 * being bought alone is refunded at that same current price. A kind the shop does not sell (no FModuleOffer - the tank
+	 * and pump this slice) has no price to refund: it is removed with 0 posted and the log says so.
+	 * ENFORCED BY: AirportOps.Model.Facility.RepairRefundsAKitShedAtTheShopPrice
 	 *
 	 * RUN BY UOpsRuntime's "ModuleRepair" bus pass: on attach and after a load (MarkAllDirty, the catch-up), and on every
 	 * FNetworkChangedEvent - the moments a plot's seat can change. Plotless depots and an unset ceiling hook are left alone

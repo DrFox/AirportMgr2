@@ -581,4 +581,31 @@ bool FFacilityRepairTest::RunTest(const FString&)
 	return true;
 }
 
+/**
+ * THE KIT SHED IS REFUNDED AT THE SHOP'S PRICE (orchestrator ruling on #469, 2026-09-30): a depot owning only the shed it
+ * was drawn with, on a plot that now seats no shed, loses the shed and is paid FModuleOffer::Price for it - the current
+ * offer, since what it cost is not recorded per module. Its tank and pump seat, and stay.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityKitShedRefundTest, "AirportOps.Model.Facility.RepairRefundsAKitShedAtTheShopPrice",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilityKitShedRefundTest::RunTest(const FString&)
+{
+	FFacilityFixture F;
+	F.ReservedSheds = 0;
+	F.Shop->ApplyModuleRemoval = [&F](FEntityInstanceId Id, EDepotModule Module, int32 Many) { return F.Net->RemoveEntityModules(Id, Module, Many); };
+	if (!TestEqual(TEXT("setup: the depot owns only its kit shed"), F.Sheds(), 1)) { return false; }
+	const double Price = F.Shop->ModuleOffers.FindChecked(EDepotModule::Shed).Price;
+	if (!TestTrue(TEXT("setup: the shop sells sheds"), Price > 0.0)) { return false; }
+	const double Balance = F.Ledger->Balance();
+
+	TestEqual(TEXT("the repair removes the one shed the plot cannot seat"), F.Shop->RemoveUnseated(*F.Net), 1);
+	TestEqual(TEXT("so the depot owns none"), F.Sheds(), 0);
+	TestEqual(TEXT("and is paid the shop's current price for it, though it came with the plot"), F.Ledger->Balance(), Balance + Price, 1e-6);
+	const FLedgerEntry& Line = F.Ledger->Entries().Last();
+	TestEqual(TEXT("on a Refund line"), static_cast<int32>(Line.Category), static_cast<int32>(ELedgerCategory::Refund));
+	TestEqual(TEXT("of exactly one shed's price"), Line.Amount, Price, 1e-6);
+	TestEqual(TEXT("its kit tank and pump seat, and stay"), F.Net->GetEntity(F.Depot)->Modules.Num(), 2);
+	return true;
+}
+
 #endif

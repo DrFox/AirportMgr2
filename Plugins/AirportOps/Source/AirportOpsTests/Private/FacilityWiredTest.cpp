@@ -507,6 +507,8 @@ bool FFacilityDetachClearsHooksTest::RunTest(const FString&)
 		static_cast<bool>(Runtime->GetJobBoard()->ModuleCeilingOf));
 	TestFalse(TEXT("the ceiling hook is cleared"), static_cast<bool>(Shop->ReservedSlotsOf));
 	TestFalse(TEXT("the module hook is cleared"), static_cast<bool>(Shop->ApplyModulePurchase));
+	TestFalse(TEXT("and the repair's removal hook (#266) - left set, it would remove modules from a field nobody drives"),
+		static_cast<bool>(Shop->ApplyModuleRemoval));
 	const FFacilityQuote Q = Shop->Quote(*TestWorld.Actor->Network, Depot);
 	TestTrue(TEXT("the shed row refuses NotAFacility"),
 		Q.Modules.Num() == 1 && Q.Modules[0].Refusal == EPurchaseRefusal::NotAFacility);
