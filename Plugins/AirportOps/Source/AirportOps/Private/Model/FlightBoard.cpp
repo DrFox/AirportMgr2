@@ -258,9 +258,11 @@ const FOfferVerdict& UFlightBoard::VerdictFor(const UGroundTraffic& Traffic,
 	// BOTH DECIDED BEFORE EITHER IS REDONE: the guideline stamp is shared, and the first recompute would write it.
 	const bool bPlanStale = !Verdict.bValid || Verdict.BoardAt != BoardNow || Verdict.GuidelineAt != GuidelineNow
 		|| Verdict.OccupancyAt != OccupancyNow;
-	// bFuelServable is CouldServe(Network, Flight.Airframe): the airport's shape (the guideline graph - depots, roads,
-	// stands, modules) and the fleet's composition. Not the board (the airframe is the flight's own, fixed) and not
-	// occupancy (it judges no traffic).
+	// bFuelServable is CouldServe(Traffic, Network, Flight.Airframe): the airport's shape (the guideline graph - depots,
+	// roads, stands, modules) and the fleet's composition, which includes which vehicles are stranded (#443: the traffic model
+	// is asked who is, and the composition counter moves when one strands or moves again). Not the board (the airframe is the
+	// flight's own, fixed) and not occupancy (it judges no traffic's whereabouts).
+	// ENFORCED BY: AirportOps.Fuel.CouldServe.StrandingMovesTheCompositionAndTheVerdict
 	const bool bFuelStale = !Verdict.bValid || Verdict.GuidelineAt != GuidelineNow || Verdict.FleetAt != FleetNow;
 	if (bPlanStale)
 	{
@@ -276,7 +278,7 @@ const FOfferVerdict& UFlightBoard::VerdictFor(const UGroundTraffic& Traffic,
 	}
 	if (bFuelStale)
 	{
-		Verdict.bFuelServable = Fuel == nullptr || Fuel->CouldServe(Network, Flight.Airframe);
+		Verdict.bFuelServable = Fuel == nullptr || Fuel->CouldServe(Traffic, Network, Flight.Airframe);
 		Verdict.FleetAt = FleetNow;
 	}
 	Verdict.GuidelineAt = GuidelineNow;

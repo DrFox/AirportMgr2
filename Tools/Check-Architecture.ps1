@@ -833,6 +833,21 @@ $AllowedCallers = @(
         ProdReason  = "a catalogue row is written by FServiceFleet::ResolveCatalogue alone; read one through UJobBoard::TypeFor or GetCatalogue"
     },
     @{
+        # THE FIXTURES' PER-FRAME DRIVER (#443, renamed from Tick). It runs the seeding and then Step - the two passes of a drain
+        # in the order UOpsRuntime::WireBus registers them (rule 60(b) holds THAT order) - so a world-free fixture finds its
+        # starter fleet as the game does. A production caller would be a second driver of the job board beside the bus's passes,
+        # which is what gating Step on dirty passes removed.
+        # THE PATTERN NAMES THE RECEIVER: UUiWindowHost has a TickForTest of its own (a production header), so a bare
+        # `TickForTest(` would fail it. A call on anything named for a board, a service or the jobs - `Board->`, `Service.`,
+        # `GetJobBoard()->` - is this one; the declaration in JobBoard.h is allowed below. A receiver named otherwise is a GAP,
+        # said: the compiler still sees it, and a production caller of a *ForTest driver is what this row is for.
+        Name        = 'UJobBoard::TickForTest'
+        Pattern     = '\b\w*(?:Board|Service|Jobs)\w*\s*(?:\(\s*\))?\s*(?:\.|->)\s*TickForTest\s*\('
+        ProdAllowed = @('Public\Model\JobBoard.h')
+        TestExempt  = $true
+        ProdReason  = "the job board is driven by the ops bus's FleetSeed and JobBoard passes; TickForTest is the world-free fixtures' mirror of them"
+    },
+    @{
         # ONE HOME PER OPS DESIGN DEFAULT (#449): the refill rate was typed 500 in three files, the inbox cap 8 in two,
         # and the fallback fuel load 0.7 beside the offer's 0.5-0.9 draw. They live in OpsDesignDefaults.h; a literal
         # assigned to one of these names, or the draw typed out, is the next copy. A test sets them freely.
@@ -3439,6 +3454,184 @@ if (-not (Test-Path $inputReadFile)) {
     }
 }
 $ranRules.Add('input-read-once')
+
+# --- 60. THE STARTER FLEET IS SEEDED BY THE ANNOUNCEMENT'S PASS, NOT DISCOVERED BY A POLL -------------
+# Issue #443. A depot's starter fleet was seeded by the first loop of UJobBoard::SyncFleet, which every job board Step ran:
+# each pass walked every entity to find a depot it had not seen, although placement is announced (#446's
+# FNetworkChangedEvent). It is UOpsRuntime's "FleetSeed" pass now, woken by that announcement and by the attach's and a
+# load's MarkAllDirty, and registered before the "JobBoard" pass. The SHAPE a poll needs is a seeding call from the job
+# board's own pass, so in production code (*Test.cpp and Testing/ exempt - a fixture seeds by hand, and UJobBoard::TickForTest
+# is the fixtures' mirror of the two passes, held to tests by rule 4's 'UJobBoard::TickForTest' row):
+# (a) `SeedStarterFleets(` is CALLED only in UJobBoard::SeedStarterFleets (the forwarder, JobBoard.cpp), UJobBoard::TickForTest
+#     (JobBoard.h, the mirror), and OpsRuntime.cpp. Its definitions and declarations are exempt. A call from Step, SyncFleet,
+#     OnAgentPhase or anywhere else is the poll coming back;
+# (b) IN OpsRuntime.cpp the call is legal in exactly ONE place: the body of the "FleetSeed" RegisterPass (from its `(` to
+#     the matching `)`). The same file must register that pass BEFORE the "JobBoard" one (a drain seeds, then bids), and
+#     subscribe FNetworkChangedEvent to it - so the rule cannot pass by the wiring going missing. A call inside the
+#     "JobBoard" pass's lambda, or in any handler, is in WireBus and so passes (a), but is the exact shape #443 removed
+#     (the job board's own pass seeding): (b) reads the pass BODIES, and fails it.
+# Comments are stripped first, with the pass names KEPT (Strip-ArchComments: Strip-ArchCode blanks string literals, and (b)
+# matches TEXT("FleetSeed")) - so a commented-out call or subscription does not count. (a)'s "which function" is rule 34's
+# Get-ArchDefinition, on Strip-ArchCode text.
+# WHAT NO REGEX SEES: a second seeding loop written by hand (Fleet().Add(..., Seeded) over the depots) - rule 43 keeps the
+# containers to the fleet's door and this rule keeps the ONE loop's caller, but a new loop through the public Add is not a
+# container write. Pinned from the other side by AirportOps.Present.Fleet.PlacedDepotIsSeededByTheAnnouncement, which goes
+# red when the pass is not woken by the announcement.
+# COMMENTS STRIPPED, STRING LITERALS KEPT: rule 60(b) matches pass names, which are strings. Character-wise, so a `//` inside a
+# string is not a comment and a `"` inside a comment does not open one. A `'"'` char literal would confuse it - none in
+# OpsRuntime.cpp, and the rule fails rather than passing if the pass it looks for is gone.
+function Strip-ArchComments([string] $Line, [ref] $InBlock) {
+    $out = New-Object System.Text.StringBuilder
+    $inString = $false
+    $i = 0
+    while ($i -lt $Line.Length) {
+        if ($InBlock.Value) {
+            $end = $Line.IndexOf('*/', $i)
+            if ($end -lt 0) { return $out.ToString() }
+            $i = $end + 2
+            $InBlock.Value = $false
+            continue
+        }
+        $c = $Line[$i]
+        if ($inString) {
+            [void]$out.Append($c)
+            if ($c -eq '\' -and $i + 1 -lt $Line.Length) { $i++; [void]$out.Append($Line[$i]) }
+            elseif ($c -eq '"') { $inString = $false }
+            $i++
+            continue
+        }
+        if ($c -eq '"') { $inString = $true; [void]$out.Append($c); $i++; continue }
+        if ($c -eq '/' -and $i + 1 -lt $Line.Length) {
+            $next = $Line[$i + 1]
+            if ($next -eq '/') { return $out.ToString() }
+            if ($next -eq '*') { $InBlock.Value = $true; $i += 2; continue }
+        }
+        [void]$out.Append($c)
+        $i++
+    }
+    return $out.ToString()
+}
+# THE TEXT OF ONE CALL: from the `(` at OpenIndex to its matching `)` (string-aware, so a paren in a literal is not counted).
+# Empty when the parens never balance.
+function Get-ArchCallSpan([string] $Text, [int] $OpenIndex) {
+    $depth = 0
+    $inString = $false
+    for ($i = $OpenIndex; $i -lt $Text.Length; $i++) {
+        $c = $Text[$i]
+        if ($inString) {
+            if ($c -eq '\') { $i++ } elseif ($c -eq '"') { $inString = $false }
+            continue
+        }
+        if ($c -eq '"') { $inString = $true }
+        elseif ($c -eq '(') { $depth++ }
+        elseif ($c -eq ')') { $depth--; if ($depth -eq 0) { return $Text.Substring($OpenIndex, $i - $OpenIndex + 1) } }
+    }
+    return ''
+}
+$seedAllowed = @{
+    'JobBoard.cpp'   = @('UJobBoard::SeedStarterFleets')
+    'JobBoard.h'     = @('TickForTest')
+    'OpsRuntime.cpp' = @('UOpsRuntime::WireBus')
+}
+foreach ($seedTree in @($ops, (Join-Path $Root 'Source\AirportMgr'))) {
+    foreach ($file in Get-Sources $seedTree @('.cpp', '.h')) {
+        if ($file.Name -like '*Test.cpp' -or $file.Name -like '*Test.h' -or $file.FullName -match '[\\/]Testing[\\/]') { continue }
+        $lines = Get-Content -LiteralPath $file.FullName
+        $current = ''
+        $inBlock = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            $def = Get-ArchDefinition $code
+            if ($null -ne $def) { $current = $def }
+            if ($code -notmatch '\bSeedStarterFleets\s*\(') { continue }
+            # A DEFINITION OR DECLARATION, not a call: `int32 X::SeedStarterFleets(` / `int32 SeedStarterFleets(`.
+            if ($code -match '^\s*(?:(?:virtual|static|inline)\s+)*(?:int32|void|bool)\s+(?:\w+::)?SeedStarterFleets\s*\(') { continue }
+            $legal = $seedAllowed.ContainsKey($file.Name) -and ($seedAllowed[$file.Name] -contains $current)
+            if (-not $legal) {
+                $failures.Add("starter-fleet-seeded-on-announcement: $($file.Name):$($i + 1) calls SeedStarterFleets in $current - the starter fleet is seeded by UOpsRuntime's `"FleetSeed`" pass (woken by FNetworkChangedEvent and MarkAllDirty), not found by a poll in the job board's own pass (#443): $($code.Trim())")
+            }
+        }
+    }
+}
+$seedWiringFile = Join-Path $ops 'Private\Present\OpsRuntime.cpp'
+if (-not (Test-Path $seedWiringFile)) {
+    $failures.Add("starter-fleet-seeded-on-announcement: $seedWiringFile is named by rule 60 but does not exist - update the rule, do not let it check nothing")
+}
+else {
+    $seedStripped = New-Object System.Collections.Generic.List[string]
+    $seedBlock = $false
+    foreach ($seedLine in (Get-Content -LiteralPath $seedWiringFile)) { $seedStripped.Add((Strip-ArchComments $seedLine ([ref]$seedBlock))) }
+    $seedText = $seedStripped -join "`n"
+    $seedPasses = [regex]::Matches($seedText, 'RegisterPass\s*\(\s*TEXT\s*\(\s*"([^"]+)"\s*\)')
+    $seedPass = $null
+    $boardPass = $null
+    foreach ($passMatch in $seedPasses) {
+        if ($passMatch.Groups[1].Value -eq 'FleetSeed') { $seedPass = $passMatch }
+        if ($passMatch.Groups[1].Value -eq 'JobBoard') { $boardPass = $passMatch }
+    }
+    if ($null -eq $seedPass) {
+        $failures.Add("starter-fleet-seeded-on-announcement: OpsRuntime.cpp registers no `"FleetSeed`" pass - a starter depot would never be seeded (#443)")
+    }
+    else {
+        if ($null -eq $boardPass -or $seedPass.Index -gt $boardPass.Index) {
+            $failures.Add("starter-fleet-seeded-on-announcement: the `"FleetSeed`" pass must be registered BEFORE the `"JobBoard`" pass - a drain seeds, then bids (#443)")
+        }
+        # THE PASS BODY: RegisterPass( ... ) balanced, so the lambda and nothing after it. Every call in the file must be in it.
+        $passOpen = $seedText.IndexOf('(', $seedPass.Index)
+        $passBody = Get-ArchCallSpan $seedText $passOpen
+        if ($passBody -eq '') {
+            $failures.Add("starter-fleet-seeded-on-announcement: OpsRuntime.cpp's `"FleetSeed`" RegisterPass call has no balanced closing paren - the rule cannot read its body; update rule 60, do not let it check nothing")
+        }
+        elseif ($passBody -notmatch '\bSeedStarterFleets\s*\(') {
+            $failures.Add("starter-fleet-seeded-on-announcement: the `"FleetSeed`" pass's body never calls SeedStarterFleets - it seeds nothing (#443)")
+        }
+        $callsInFile = [regex]::Matches($seedText, '\bSeedStarterFleets\s*\(').Count
+        $callsInPass = [regex]::Matches($passBody, '\bSeedStarterFleets\s*\(').Count
+        if ($callsInFile -ne $callsInPass) {
+            $failures.Add("starter-fleet-seeded-on-announcement: OpsRuntime.cpp calls SeedStarterFleets $($callsInFile - $callsInPass) time(s) outside the `"FleetSeed`" pass's body - in another pass (the `"JobBoard`" one seeding is the poll #443 removed) or a handler; the one legal place is the FleetSeed pass")
+        }
+    }
+    if ($seedText -notmatch 'Subscribe\s*<\s*FNetworkChangedEvent\s*>\s*\(\s*EOpsTier::Sim\s*,\s*TEXT\s*\(\s*"FleetSeed"\s*\)') {
+        $failures.Add("starter-fleet-seeded-on-announcement: OpsRuntime.cpp never subscribes FNetworkChangedEvent to the `"FleetSeed`" pass - a depot placed after the attach would wait for an unrelated event (#443)")
+    }
+}
+$ranRules.Add('starter-fleet-seeded-on-announcement')
+
+# --- 61. THE SHOP REFUSES A KIND NO STAND ADMITS ---------------------------------------------------
+# Issue #478. A catalogue row larger than every stand's design vehicle could be bought and then refused every job it bid on
+# as VehicleTooLarge. UFacilityPurchases::JudgeVehicle asks UJobBoard::AnyStandAdmits before it sells one, and the quote and
+# the command share that judgement (QuoteEqualsCommandForEveryOffer). The SHAPE removed is a purchase judgement that
+# never asks whether the kind can work anywhere, so: JudgeVehicle's body in FacilityPurchases.cpp must name AnyStandAdmits(
+# (comments and strings stripped), and the rule fails rather than checking nothing when either is gone.
+# WHAT NO REGEX SEES: that the answer is used as a refusal rather than ignored - pinned by
+# AirportOps.Model.Facility.KindNoStandAdmitsIsRefused, which goes red when the refusal is not returned.
+$shopFile = Join-Path $ops 'Private\Model\FacilityPurchases.cpp'
+if (-not (Test-Path $shopFile)) {
+    $failures.Add("shop-asks-stand-admission: $shopFile is named by rule 61 but does not exist - update the rule, do not let it check nothing")
+}
+else {
+    $shopLines = Get-Content -LiteralPath $shopFile
+    $shopCurrent = ''
+    $shopInBlock = $false
+    $shopJudgeSeen = $false
+    $shopAsks = $false
+    for ($i = 0; $i -lt $shopLines.Count; $i++) {
+        $code = Strip-ArchCode $shopLines[$i] ([ref]$shopInBlock)
+        $def = Get-ArchDefinition $code
+        if ($null -ne $def) { $shopCurrent = $def }
+        if ($shopCurrent -eq 'UFacilityPurchases::JudgeVehicle') {
+            $shopJudgeSeen = $true
+            if ($code -match '\bAnyStandAdmits\s*\(') { $shopAsks = $true }
+        }
+    }
+    if (-not $shopJudgeSeen) {
+        $failures.Add("shop-asks-stand-admission: UFacilityPurchases::JudgeVehicle not found in FacilityPurchases.cpp - the judgement moved or went; update rule 61, do not let it check nothing")
+    }
+    elseif (-not $shopAsks) {
+        $failures.Add("shop-asks-stand-admission: UFacilityPurchases::JudgeVehicle no longer asks UJobBoard::AnyStandAdmits - a kind larger than every stand's design vehicle could be bought and would refuse every job as VehicleTooLarge (#478)")
+    }
+}
+$ranRules.Add('shop-asks-stand-admission')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was

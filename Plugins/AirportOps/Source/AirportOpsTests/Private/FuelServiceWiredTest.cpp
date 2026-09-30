@@ -247,8 +247,8 @@ bool FFleetRuntimeSeedsTest::RunTest(const FString& Parameters)
 {
 	// THE COMPOSITION BEHIND CouldServe'S "REAL VEHICLES ONLY" (#443): the starter fleet is no longer predicted beside its
 	// seeding, so the seeding has to have happened before an offer is read. Attach marks every pass dirty, and the first
-	// drain runs the job board's - which seeds a placed starter depot through the fleet's door. Unwired, CouldServe would
-	// say "no fuel" for a starter depot until some unrelated event woke the board.
+	// drain runs the "FleetSeed" pass - which seeds a depot that was already there, when nothing was announced, through the
+	// fleet's door. Unwired, CouldServe would say "no fuel" for a starter depot until some unrelated event woke the pass.
 	FAirsideTestWorld TestWorld;
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("the actor"), Actor)) { return false; }
@@ -261,6 +261,86 @@ bool FFleetRuntimeSeedsTest::RunTest(const FString& Parameters)
 	Runtime->Attach(Actor);
 	Runtime->Tick(0.0);
 	TestTrue(TEXT("the first drain seeded the starter depot's fleet"), Runtime->GetJobBoard()->VehiclesAt(Depot) > 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFleetPlacedDepotSeededByAnnouncementTest, "AirportOps.Present.Fleet.PlacedDepotIsSeededByTheAnnouncement",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFleetPlacedDepotSeededByAnnouncementTest::RunTest(const FString& Parameters)
+{
+	// THE SEAM THE "FleetSeed" PASS STANDS ON (#443): a depot placed AFTER the attach is seeded because the placement was
+	// ANNOUNCED - FNetworkChangedEvent, published by the rebuild the placement committed - and not because a job board Step
+	// walked the entities and found it (Step does not seed any more). Through the actor's live placement path, the one the
+	// player's gesture takes. Unwire the subscription and the depot stays empty for the session: this goes red on the last line.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("the actor"), Actor)) { return false; }
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	Actor->PlaceNode(FVector2D(0.0, 40000.0));
+	if (!TestNotNull(TEXT("a network"), Actor->Network.Get())) { return false; }
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	Runtime->Tick(1.0 / 30.0);
+	TestEqual(TEXT("setup: an airport with no depot has no fleet"), Runtime->GetJobBoard()->GetVehicles().Num(), 0);
+
+	const int32 Index = Actor->PlaceEntity(FVector2D(12000.0, 0.0), 0.0, EPlaceableEntity::FuelDepot);
+	if (!TestTrue(TEXT("the depot is placed"), Index != INDEX_NONE)) { return false; }
+	const FEntityInstanceId Depot = Actor->Network->EntityIdAt(Index);
+	TestEqual(TEXT("nothing runs at the call site of the placement: the announcement is queued, and no vehicle exists yet"),
+		Runtime->GetJobBoard()->VehiclesAt(Depot), 0);
+
+	Runtime->Tick(1.0 / 30.0);
+	TestTrue(TEXT("the drain that heard the announcement seeded the depot's starter fleet"), Runtime->GetJobBoard()->VehiclesAt(Depot) > 0);
+	const int32 Seeded = Runtime->GetJobBoard()->VehiclesAt(Depot);
+	for (int32 Tick = 0; Tick < 5; ++Tick) { Runtime->Tick(1.0 / 30.0); }
+	TestEqual(TEXT("and only once: later drains add nothing to a depot that has been seen"), Runtime->GetJobBoard()->VehiclesAt(Depot), Seeded);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFleetLoadDoesNotReseedTest, "AirportOps.Present.Fleet.LoadDoesNotReseedADepotThatHasVehicles",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFleetLoadDoesNotReseedTest::RunTest(const FString& Parameters)
+{
+	// A LOAD ANNOUNCES THE NETWORK IT ADOPTED (FNetworkChangedEvent, once) AND MARKS EVERY PASS DIRTY, so the "FleetSeed" pass
+	// runs after every load - and must find every depot seen. The restored vehicles' depots are (FServiceFleet::Restored), and
+	// so are the depots whose fleet was sold (SeededDepots is saved). There are no player saves yet (owner ruling), but a
+	// test snapshot is one, and a pass that seeded again would double the fleet on every load.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("the actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 40000.0));
+	if (!TestNotNull(TEXT("a network"), Actor->Network.Get())) { return false; }
+	UEntityDefinition* DepotDef = UEntityDefinition::MakeFuelDepotTransient();
+	Actor->Network->PlaceEntity(DepotDef, DepotDef->Anchors, FVector2D(12000.0, 0.0), 0.0, 0.0, DepotDef->PoseRole, DepotDef->Trucks);
+	Actor->RebuildMesh();
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	Runtime->Tick(1.0 / 30.0);
+	const int32 Seeded = Runtime->GetJobBoard()->GetVehicles().Num();
+	if (!TestTrue(TEXT("setup: the depot was seeded"), Seeded > 0)) { return false; }
+
+	const FString Slot = TEXT("AirportOpsTest_FleetLoadDoesNotReseed");
+	if (!TestTrue(TEXT("setup: the airport saves"), Runtime->SaveToSlot(Slot))) { return false; }
+	if (!TestTrue(TEXT("and loads"), Runtime->LoadFromSlot(Slot))) { return false; }
+	Runtime->Tick(1.0 / 30.0);
+	TestEqual(TEXT("a load restores the depot's vehicles and the pass it wakes seeds nothing beside them"),
+		Runtime->GetJobBoard()->GetVehicles().Num(), Seeded);
+
+	// THE OTHER HALF: a starter fleet the player sold stays sold across a load.
+	TArray<int32> Ids;
+	for (const FServiceVehicle& Vehicle : Runtime->GetJobBoard()->GetVehicles()) { Ids.Add(Vehicle.Id); }
+	for (const int32 Id : Ids)
+	{
+		TestTrue(TEXT("setup: each idle starter vehicle sells"), Runtime->GetJobBoard()->Fleet().Withdraw(Id, EFleetReason::Sold, 0.0));
+	}
+	if (!TestTrue(TEXT("setup: the sold-out airport saves"), Runtime->SaveToSlot(Slot))) { return false; }
+	if (!TestTrue(TEXT("and loads"), Runtime->LoadFromSlot(Slot))) { return false; }
+	for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(1.0 / 30.0); }
+	TestEqual(TEXT("a sold starter fleet stays sold: the load's pass finds the depot seen"), Runtime->GetJobBoard()->GetVehicles().Num(), 0);
 	return true;
 }
 

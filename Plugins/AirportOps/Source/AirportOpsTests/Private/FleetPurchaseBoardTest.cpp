@@ -124,14 +124,14 @@ bool FFleetSoldStaysSoldTest::RunTest(const FString&)
 	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
 	Net->PlaceEntity(Depot, Depot->Anchors, FVector2D(0.0, 0.0), 0.0, 0.0, EServiceRole::Fuel, 1);
 
-	Board->Tick(*Traffic, *Net, *Clock);
+	Board->TickForTest(*Traffic, *Net, *Clock);
 	if (!TestEqual(TEXT("setup: the starter truck is seeded"), Board->GetVehicles().Num(), 1)) { return false; }
 	TestTrue(TEXT("setup: and sold"), Board->Fleet().Withdraw(Board->GetVehicles()[0].Id, EFleetReason::Sold, 0.0));
 
 	FOpsSnapshot Snapshot;
 	OpsSave::CaptureBlob(*Board, Snapshot);
 	OpsSave::RestoreBlob(Snapshot, *Board);
-	Board->Tick(*Traffic, *Net, *Clock);
+	Board->TickForTest(*Traffic, *Net, *Clock);
 	TestEqual(TEXT("the load does not seed the sold-out depot again"), Board->GetVehicles().Num(), 0);
 	return true;
 }
@@ -304,7 +304,7 @@ bool FFleetSeedingPublishesTest::RunTest(const FString&)
 	const FEntityInstanceId DepotId = Net->PlaceEntity(Depot, Depot->Anchors, FVector2D(0.0, 0.0), 0.0, 0.0, EServiceRole::Fuel, 1);
 
 	const uint32 CompositionBefore = Board->GetFleetCompositionRevision();
-	Board->Tick(*Traffic, *Net, *Clock);
+	Board->TickForTest(*Traffic, *Net, *Clock);
 	Bus.Drain();
 	if (!TestEqual(TEXT("one starter truck of each of the two kinds is seeded"), Board->GetVehicles().Num(), 2)) { return false; }
 	if (!TestEqual(TEXT("and each is announced"), Seen.Num(), 2)) { return false; }
@@ -318,7 +318,7 @@ bool FFleetSeedingPublishesTest::RunTest(const FString&)
 	TestEqual(TEXT("and it charged nothing"), Ledger->Entries().Num(), 0);
 	TestTrue(TEXT("the composition moved, so an offer's verdict re-judges"), Board->GetFleetCompositionRevision() != CompositionBefore);
 	Seen.Reset();
-	Board->Tick(*Traffic, *Net, *Clock);
+	Board->TickForTest(*Traffic, *Net, *Clock);
 	Bus.Drain();
 	TestEqual(TEXT("a depot is seeded once: the next Step announces nothing"), Seen.Num(), 0);
 	return true;
@@ -339,11 +339,12 @@ bool FFleetSeedingReopensTest::RunTest(const FString&)
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
 
-	// ONE STEP: it seeds (SyncFleet, through the door), which re-opens the job, and the same Step's bid then judges it again. The
-	// job was refused at THIS graph revision, so the Step's own re-offer pass would not touch it: what changed its reason is
-	// the seeding's re-open alone. Nothing to bid it to (no road), so it is refused afresh - for the road, not for a vehicle.
-	Board->Step(*Traffic, *Net, *Clock);
-	TestEqual(TEXT("the Step seeded the starter truck"), Board->GetVehicles().Num(), 1);
+	// ONE TICK, the two passes of a drain in order: the seeding ("FleetSeed", through the door) re-opens the job, and the
+	// Step's bid then judges it again. The job was refused at THIS graph revision, so the Step's own re-offer pass would not
+	// touch it: what changed its reason is the seeding's re-open alone. Nothing to bid it to (no road), so it is refused
+	// afresh - for the road, not for a vehicle.
+	Board->TickForTest(*Traffic, *Net, *Clock);
+	TestEqual(TEXT("the drain's seeding made the starter truck"), Board->GetVehicles().Num(), 1);
 	const FServiceJob* After = Board->GetJobs().FindByPredicate([JobId](const FServiceJob& J) { return J.Id == JobId; });
 	if (!TestNotNull(TEXT("the job is still on the board"), After)) { return false; }
 	// THE EXACT POST-STATE, not merely "not NoVehicles" (#461 final review): a Why that moved to ANY other value passed the

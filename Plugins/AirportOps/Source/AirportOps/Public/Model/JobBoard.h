@@ -295,15 +295,41 @@ public:
 	 *
 	 * REAL VEHICLES ONLY (#443): it used to add the starter fleet a not-yet-seeded depot WOULD get, a prediction
 	 * written beside the seeding it had to mirror and already fixed once for drifting from it ("seeded is not
-	 * not-yet-seeded"). The seeding is FServiceFleet::SeedStarterFleets, run by every Step (SyncFleet) through the
+	 * not-yet-seeded"). The seeding is FServiceFleet::SeedStarterFleets, run by UOpsRuntime's "FleetSeed" pass - which
+	 * a network change and an attach or load wake, and which runs before the "JobBoard" pass of the same drain - through the
 	 * fleet's door, so a starter depot has its vehicles before any bid can use them and the offer's answer and the
-	 * bid are read off the SAME vehicles. THE PRICE: asked before a board's first Step, a starter depot says "no
-	 * fuel". A Step is the first thing UOpsRuntime::Attach schedules (Bus.MarkAllDirty), so no offer is read in that
-	 * window in play; a test that asks earlier steps the board first.
-	 * ENFORCED BY: AirportOps.Fuel.CouldServe.StarterDepotVerdictAgreesWithItsFirstBid,
+	 * bid are read off the SAME vehicles. THE PRICE: asked before that pass has run, a starter depot says "no fuel" -
+	 * and the bid, made from the same real vehicles, says NoVehicles: the two agree on every frame, seeded or not.
+	 * The pass is the first thing UOpsRuntime::Attach schedules (Bus.MarkAllDirty).
+	 *
+	 * TRAFFIC IS REQUIRED, NEVER NULL (#443): a STRANDED vehicle does not count, and only the traffic model knows which are
+	 * (IsStranded). It used to be asked with none - the offer is judged before its aircraft exists - on the reasoning that
+	 * no agent is stranded then; but the vehicles and their agents exist without the aircraft, and a depot whose only bowser
+	 * stood stranded said "fuel OK" on every offer while every job was refused. A signature that cannot be given nothing is
+	 * a verdict that cannot forget the stranded (CandidatesFor takes the same reference).
+	 * ENFORCED BY: AirportOps.Fuel.CouldServe.StrandedOnlyVehicleCannot,
+	 * AirportOps.Fuel.CouldServe.StarterDepotVerdictAgreesWithItsFirstBid,
 	 * AirportOps.Fuel.CouldServe.SoldOutStarterDepotCannot, AirportOps.Present.Fleet.AttachSeedsTheStarterFleetOnTheFirstDrain
 	 */
-	bool CouldServe(const URoadNetwork& Network, const FAirframe& Airframe) const;
+	bool CouldServe(const UGroundTraffic& Traffic, const URoadNetwork& Network, const FAirframe& Airframe) const;
+
+	/**
+	 * Could ANY stand admit this kind - is it no larger than some stand's design vehicle (VehicleFit::NoLargerThan), the
+	 * eligibility ceiling the bid applies per stand (Judge)? Asked by the shop (UFacilityPurchases::JudgeVehicle) before it
+	 * sells one: a kind larger than every stand's design vehicle is bought and then refuses every job as VehicleTooLarge (#478).
+	 *
+	 * EVERY DESIGN VEHICLE THERE IS: each stand letter's table entry (VehiclesFor, what a stand with no authored figure is
+	 * built for) AND each live stand's own (DesignVehicleFor - a definition may author a bigger one than its letter's), so a
+	 * kind a placed stand admits is never refused. NOT ONLY THE PLACED STANDS: a shop asked before any stand is drawn must not
+	 * refuse every kind, and a stand the player has not yet placed is one the letter's figure describes. NO DESIGN VEHICLE AT
+	 * ALL (a bare NewObject that never resolved its letters) admits nothing: a fixture that buys states its letters
+	 * (ResolveVehicles), as UOpsRuntime::Attach does (AirportOps.Fuel.RuntimeResolvesPerStand).
+	 * Cost: one NoLargerThan per letter (LetterCount, 6 on 2026-09-30) and per live stand, per quote row - a turning-circle
+	 * bisection for a towing kind - asked when a depot card rebuilds, not per frame; it stops at the first design vehicle that
+	 * admits the kind, and the letters come first. The stand count is not measured here: it is whatever the player has drawn.
+	 * ENFORCED BY: AirportOps.Model.Facility.KindNoStandAdmitsIsRefused
+	 */
+	bool AnyStandAdmits(const FVehicle& Kind, const URoadNetwork& Network) const;
 
 	/**
 	 * Every phase change in the traffic model - the events this class is driven by.
@@ -373,8 +399,44 @@ public:
 	 */
 	bool Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
-	/** Step, ignoring its answer - the world-free fixtures' per-frame driver, as it always was. */
-	void Tick(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock) { Step(Traffic, Network, Clock); }
+	/**
+	 * THE STARTER FLEET OF EVERY DEPOT THE AIRPORT HAS GAINED (#443): each live fuel depot not seen before gets Trucks x
+	 * StarterFleet vehicles through the fleet's door (FServiceFleet::SeedStarterFleets), once per depot. THE "FleetSeed"
+	 * BUS PASS IS ITS ONE PRODUCTION CALLER (UOpsRuntime::WireBus): woken by the FNetworkChangedEvent that announces a
+	 * depot placed, undone or loaded, and by the attach's and a load's Bus.MarkAllDirty for the depots that were there
+	 * before anything was announced, and registered BEFORE the "JobBoard" pass so a drain seeds and then bids.
+	 *
+	 * NOT A STEP OF STEP (it was SyncFleet's first loop, run by every pass and discovering a placement by walking every
+	 * entity): placement is ANNOUNCED now - URoadNetwork's rebuild tells ARoadNetworkActor::OnNetworkChanged, which ops
+	 * bridges onto the bus (#446) - and a poll for a fact the owner announces is the shape that issue removed. Heard from the
+	 * event and not from the facade's placement path: an edit can be rolled back (FRoadEditScope::Rollback) and undone, and a
+	 * depot also arrives by a load or a replaced network - none of which a hook in PlaceEntity would see - while
+	 * a seed from inside the edit would mint vehicles for a depot that then does not exist. The event is published only for
+	 * a committed rebuild, of whichever door the depot came through, and Airside stays free of the fleet.
+	 * A LOAD DOES NOT RE-SEED: the restored vehicles' depots are already seen (FServiceFleet::Restored, and SeededDepots is
+	 * saved), so the pass the load wakes adds nothing to a depot that has its vehicles.
+	 * Returns how many vehicles it added.
+	 * ENFORCED BY: Check-Architecture rule 60 (starter-fleet-seeded-on-announcement),
+	 * AirportOps.Present.Fleet.PlacedDepotIsSeededByTheAnnouncement, AirportOps.Present.Fleet.LoadDoesNotReseedADepotThatHasVehicles,
+	 * AirportOps.Present.Bus.NetworkChangedPublishedOnceWithNoTick (the event is published once per committed rebuild, none per drag frame)
+	 */
+	int32 SeedStarterFleets(const URoadNetwork& Network, const USimClock& Clock);
+
+	/**
+	 * Step, ignoring its answer - the world-free fixtures' per-frame driver, as it always was (it was `Tick` until #443; FOR
+	 * TEST, in its name, because nothing in production calls it - the bus's passes do). THE TWO PASSES OF A DRAIN IN THE ORDER
+	 * UOpsRuntime RUNS THEM: the fleet seeded for any depot the airport has gained ("FleetSeed"), then Step ("JobBoard"). So a
+	 * fixture that places a depot and ticks finds its starter fleet, as the game does, and a test that calls Step alone asks
+	 * what the job board pass alone does - which no longer seeds. THE PRODUCTION ORDER is what this mirrors, and what
+	 * Check-Architecture rule 60(b) holds: the "FleetSeed" pass seeds and is registered before the "JobBoard" one.
+	 * ENFORCED BY: Check-Architecture rule 60(b) (the production order) and rule 4's 'UJobBoard::TickForTest' row (no
+	 * production caller); AirportOps.Present.Fleet.PlacedDepotIsSeededByTheAnnouncement (the pass, woken by the announcement)
+	 */
+	void TickForTest(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
+	{
+		SeedStarterFleets(Network, Clock);
+		Step(Traffic, Network, Clock);
+	}
 
 	/**
 	 * The earliest game time after Now at which a Step would find something due: a vehicle's serve or
@@ -561,7 +623,7 @@ public:
 
 	/** Puts a vehicle on the board without the placeholder fleet or the traffic model - for OpsSave's
 	 *  and the re-bid tests. ITS HOME COUNTS AS SEEDED: a test that places a depot's vehicles by hand
-	 *  means those to be the fleet, and SyncFleet must not add the placeholder's beside them. */
+	 *  means those to be the fleet, and SeedStarterFleets must not add the placeholder's beside them. */
 	FServiceVehicle& AddVehicleForTest(FName TypeCode, FEntityInstanceId Home, EServiceVehicleState State, double Cargo);
 
 	/**
@@ -581,9 +643,10 @@ public:
 	uint32 GetFleetRevisionForTest() const { return GetFleetRevision(); }
 
 	/**
-	 * See FleetCompositionRevision: only who is in the fleet. What the offer verdict's bFuelServable is dated by
-	 * (UFlightBoard::VerdictFor), because CouldServe reads which vehicles exist and where they live and nothing of
-	 * their state - so a truck arriving, serving or refilling does not re-plan every pending offer.
+	 * See FleetCompositionRevision: who is in the fleet, and which of them are stranded. What the offer verdict's
+	 * bFuelServable is dated by (UFlightBoard::VerdictFor), because CouldServe reads which vehicles exist, where they live
+	 * and whether they are stranded, and nothing else of their state - so a truck arriving, serving or refilling does not
+	 * re-plan every pending offer.
 	 */
 	uint32 GetFleetCompositionRevision() const { return FleetCompositionRevision; }
 
@@ -633,12 +696,11 @@ private:
 	void DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
 	/**
-	 * The placeholder fleet brought in line with the depots (spec §3.4): a live depot seen for the
-	 * first time gets Trucks x StarterFleet vehicles, Idle at home and full (FServiceFleet::SeedStarterFleets); a
-	 * vehicle whose depot is gone is withdrawn (its agent retired, its jobs back to the board, then
-	 * FServiceFleet::Withdraw(DepotRemoved) credits its resale value and announces it); a vehicle whose agent vanished
-	 * under it (retired by somebody else) is put back Idle at home by LoseAgent, every job it held re-opened - THE
-	 * NET under OnAgentPhase's Gone branch, which is how the board normally hears of it.
+	 * The placeholder fleet brought in line with the depots (spec §3.4): a vehicle whose depot is gone is withdrawn (its
+	 * agent retired, its jobs back to the board, then FServiceFleet::Withdraw(DepotRemoved) credits its resale value and
+	 * announces it); a vehicle whose agent vanished under it (retired by somebody else) is put back Idle at home by
+	 * LoseAgent, every job it held re-opened - THE NET under OnAgentPhase's Gone branch, which is how the board normally
+	 * hears of it. THE SEEDING OF A NEW DEPOT IS NOT HERE any more (#443): it is SeedStarterFleets, the "FleetSeed" pass's.
 	 */
 	void SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
@@ -763,8 +825,14 @@ private:
 	{
 		int32 Depots = 0;
 		int32 DepotsOnRoad = 0;
-		/** Real vehicles whose home depot is alive and on a road - NoVehicles when zero. */
+		/** Real vehicles whose home depot is alive and on a road - NoVehicles when zero. Counts a vehicle of an unknown kind:
+		 *  it is IN the depot, which is what "nothing in it" asks. */
 		int32 FleetOnRoad = 0;
+		/** Candidates Judge got as far as sizing - their kind is in the catalogue. Zero with UnknownKinds above zero
+		 *  means every vehicle it could have judged has no catalogue row (EServiceRefusal::UnknownVehicleKind, #478). */
+		int32 KnownKinds = 0;
+		/** Candidates skipped for a kind the catalogue has no row for. */
+		int32 UnknownKinds = 0;
 		bool bStandJoined = false;
 		bool bAnyPumpless = false;
 		bool bAnyTooLarge = false;
@@ -786,15 +854,16 @@ private:
 	/**
 	 * THE CANDIDATE FILTER, written once (#443: it was three copies in the two bid passes and CouldServe): the vehicles
 	 * of Role that may bid for a job. Every one, less
-	 *  - a STRANDED vehicle, when Traffic says who is: it prices itself as "home soon" (ToFacility with no plan left, so no
+	 *  - a STRANDED vehicle, as Traffic says who is: it prices itself as "home soon" (ToFacility with no plan left, so no
 	 *    drive remaining), wins, and holds the job for a trip it will never make - the wedge OnAgentPhase's Stranded branch
-	 *    releases jobs from. CouldServe passes null Traffic: it is asked before the aircraft exists, with no agent to be
-	 *    stranded, and answers for the fleet as it stands;
+	 *    releases jobs from. TRAFFIC IS A REFERENCE (#443): CouldServe used to pass null - the offer is judged before its
+	 *    aircraft exists - and so counted a stranded vehicle, which exists without the aircraft; a filter that cannot be
+	 *    given nothing cannot forget the stranded;
 	 *  - Except (a vehicle id, 0 for none): the re-bid asks for the ALTERNATIVES to the vehicle that holds the job.
 	 * READS REAL VEHICLES ONLY: the starter fleet is seeded through the fleet's door before any of this runs.
-	 * ENFORCED BY: AirportOps.Fuel.CouldServe.StarterDepotVerdictAgreesWithItsFirstBid
+	 * ENFORCED BY: AirportOps.Fuel.CouldServe.StarterDepotVerdictAgreesWithItsFirstBid, AirportOps.Fuel.CouldServe.StrandedOnlyVehicleCannot
 	 */
-	TArray<FCandidate> CandidatesFor(EServiceRole Role, const UGroundTraffic* Traffic, int32 Except = 0) const;
+	TArray<FCandidate> CandidatesFor(EServiceRole Role, const UGroundTraffic& Traffic, int32 Except = 0) const;
 
 	/**
 	 * WAS ChooseDepot's classification, per candidate instead of per depot, and without "busy": a busy
@@ -918,12 +987,15 @@ private:
 	uint32 FleetRevision = 0;
 
 	/**
-	 * Bumped only when WHO IS IN THE FLEET changes: a vehicle added or withdrawn (FServiceFleet, whatever the origin),
-	 * the fleet cleared or replaced by a load. A vehicle's state, agent, job and cargo are not composition, and
-	 * CouldServe reads none of them - only which vehicles exist, of what kind, at which depot (verified in #454's review).
-	 * The offer verdict's bFuelServable is dated by it; every composition change also moves FleetRevision, so the re-bid
-	 * still hears of it. A session clock, like the one above.
-	 * ENFORCED BY: AirportOps.Model.FlightBoard.VehicleTransitionsDoNotReplanOffers, AirportOps.Model.Fleet.OfferVerdictIsDatedByTheFleet
+	 * Bumped only when WHAT COULDSERVE READS of the fleet changes: a vehicle added or withdrawn (FServiceFleet, whatever the
+	 * origin), the fleet cleared or replaced by a load, and a vehicle's agent going STRANDED or moving again (#443 - a
+	 * stranded vehicle does not count, so its stranding changes the answer; OnAgentPhase and RetireAgentOf say so). A
+	 * vehicle's state, job and cargo are not composition, and CouldServe reads none of them - only which vehicles exist, of
+	 * what kind, at which depot, and whether they are stranded (verified in #454's review). The offer verdict's
+	 * bFuelServable is dated by it; every composition change also moves FleetRevision, so the re-bid still hears of it.
+	 * A session clock, like the one above.
+	 * ENFORCED BY: AirportOps.Model.FlightBoard.VehicleTransitionsDoNotReplanOffers, AirportOps.Model.Fleet.OfferVerdictIsDatedByTheFleet,
+	 * AirportOps.Fuel.CouldServe.StrandingMovesTheCompositionAndTheVerdict
 	 */
 	uint32 FleetCompositionRevision = 0;
 

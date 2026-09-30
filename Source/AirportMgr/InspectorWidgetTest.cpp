@@ -947,6 +947,42 @@ bool FInspectorFacilityCardTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorNoStandAdmitsTest,
+	"AirportMgr.Inspector.BuyMenuShowsAKindNoStandAdmits",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorNoStandAdmitsTest::RunTest(const FString& Parameters)
+{
+	// #478: THE SHOP REFUSES A KIND NO STAND ADMITS with a new EPurchaseRefusal, and the card must show it without a row
+	// being taught it: the buy menu renders the quote's refusal as a greyed line with RefusalText as its reason, whatever the
+	// value (UInspectorFacilityRows::BuyVehicleItems). This is the check that a NEW reason reaches the player.
+	FAirsideTestWorld Bare(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), Bare.World)) { return false; }
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(Bare.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel is created with no asset"), Panel)) { return false; }
+	FFacilityQuote Quote;
+	Quote.Refusal = EPurchaseRefusal::None;
+	Quote.Bays = 2;
+	Quote.Vehicles = 0;
+	FVehicleOfferQuote& Bowser = Quote.VehicleOffers.AddDefaulted_GetRef();
+	Bowser.TypeCode = TEXT("FUEL");
+	Bowser.Refusal = EPurchaseRefusal::None;
+	Bowser.Label = FText::FromString(TEXT("Bowser"));
+	FVehicleOfferQuote& Giant = Quote.VehicleOffers.AddDefaulted_GetRef();
+	Giant.TypeCode = TEXT("GIANT");
+	Giant.Refusal = EPurchaseRefusal::NoStandAdmits;
+	Giant.Label = FText::FromString(TEXT("Giant"));
+	Panel->FacilityRows->Show(Quote);
+	const TArray<FUiMenuItem> Items = Panel->FacilityRows->BuyVehicleItemsForTest();
+	if (!TestEqual(TEXT("one menu line per vehicle offer"), Items.Num(), 2)) { return false; }
+	TestTrue(TEXT("a kind a stand admits is for sale"), Items[0].bEnabled);
+	TestFalse(TEXT("a kind no stand admits is a greyed line"), Items[1].bEnabled);
+	TestTrue(TEXT("whose reason is the refusal's words"), Items[1].Why.EqualTo(UFacilityPurchases::RefusalText(EPurchaseRefusal::NoStandAdmits)));
+	TestFalse(TEXT("and those words exist"), Items[1].Why.IsEmpty());
+	return true;
+}
+
 namespace
 {
 	/**

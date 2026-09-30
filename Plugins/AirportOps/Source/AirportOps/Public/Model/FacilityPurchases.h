@@ -30,7 +30,13 @@ enum class EPurchaseRefusal : uint8
 	/** No offer for it: a vehicle row absent from the scenario, or a module with no FModuleOffer. */
 	UnknownType,
 	/** R5: not idle at home with an empty queue. */
-	VehicleBusy
+	VehicleBusy,
+	/**
+	 * #478: a vehicle kind larger than every stand's design vehicle - it could be bought and then refuse every job it bid on
+	 * as VehicleTooLarge (UJobBoard::AnyStandAdmits). Refused at the shop, as a module the plot cannot seat is (owner:
+	 * "a player should not be able to purchase upgrades that don't fit"). APPENDED so no other value moves.
+	 */
+	NoStandAdmits
 };
 
 /** One module offer as the card shows it. Label is "Buy Shed ¤40,000". */
@@ -234,7 +240,7 @@ private:
 	static int32 OwnedOf(const FEntityInstance& Facility, EDepotModule Module);
 
 	EPurchaseRefusal JudgeModule(const FEntityInstance* Facility, EDepotModule Module, int32 Reserved) const;
-	EPurchaseRefusal JudgeVehicle(const FEntityInstance* Facility, FEntityInstanceId Entity, FName TypeCode) const;
+	EPurchaseRefusal JudgeVehicle(const URoadNetwork& Network, const FEntityInstance* Facility, FEntityInstanceId Entity, FName TypeCode) const;
 	EPurchaseRefusal JudgeSale(int32 VehicleId) const;
 
 	bool CanPay(double Price) const;

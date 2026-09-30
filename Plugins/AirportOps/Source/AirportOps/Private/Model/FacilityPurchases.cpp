@@ -21,6 +21,7 @@ FText UFacilityPurchases::RefusalText(EPurchaseRefusal Why)
 	case EPurchaseRefusal::NoFreeBay:      return LOCTEXT("NoFreeBay", "No free bay - buy a shed");
 	case EPurchaseRefusal::UnknownType:    return LOCTEXT("UnknownType", "Not for sale");
 	case EPurchaseRefusal::VehicleBusy:    return LOCTEXT("VehicleBusy", "Busy");
+	case EPurchaseRefusal::NoStandAdmits:  return LOCTEXT("NoStandAdmits", "Too large for any stand");
 	}
 	return FText::GetEmpty();
 }
@@ -121,7 +122,8 @@ EPurchaseRefusal UFacilityPurchases::JudgeModule(const FEntityInstance* Facility
 	return CanPay(Offer->Price) ? EPurchaseRefusal::None : EPurchaseRefusal::CannotAfford;
 }
 
-EPurchaseRefusal UFacilityPurchases::JudgeVehicle(const FEntityInstance* Facility, FEntityInstanceId Entity, FName TypeCode) const
+EPurchaseRefusal UFacilityPurchases::JudgeVehicle(const URoadNetwork& Network, const FEntityInstance* Facility,
+	FEntityInstanceId Entity, FName TypeCode) const
 {
 	if (Facility == nullptr || JobBoard == nullptr)
 	{
@@ -129,9 +131,20 @@ EPurchaseRefusal UFacilityPurchases::JudgeVehicle(const FEntityInstance* Facilit
 	}
 	// A KIND THE CATALOGUE LACKS IS NOT FOR SALE (#430): a scenario row whose code has no chassis was dropped at attach,
 	// and offering it would sell a vehicle the door refuses to make.
-	if (!JobBoard->GetCatalogue().Contains(TypeCode))
+	const FServiceVehicleType* Kind = JobBoard->GetCatalogue().Find(TypeCode);
+	if (Kind == nullptr)
 	{
 		return EPurchaseRefusal::UnknownType;
+	}
+	// A KIND NO STAND ADMITS IS NOT FOR SALE EITHER (#478): larger than every stand's design vehicle, it would be bought and
+	// then refuse every job it bid on as VehicleTooLarge - the shop took the player's money for a vehicle that cannot work.
+	// Refused here, where the module purchase refuses what the plot cannot seat (owner: "a player should not be able to
+	// purchase upgrades that don't fit"), and BEFORE NoFreeBay: no shed fixes this one, so the player is not sent to buy one.
+	// The refusal the inspector's rows already render (RefusalText), so no row changes with it.
+	// ENFORCED BY: AirportOps.Model.Facility.KindNoStandAdmitsIsRefused, AirportOps.Model.Facility.QuoteEqualsCommandForEveryOffer
+	if (!JobBoard->AnyStandAdmits(Kind->Vehicle, Network))
+	{
+		return EPurchaseRefusal::NoStandAdmits;
 	}
 	if (JobBoard->VehiclesAt(Entity) >= VehicleSlotsOf(Entity, *Facility))
 	{
@@ -196,7 +209,7 @@ FFacilityQuote UFacilityPurchases::Quote(const URoadNetwork& Network, FEntityIns
 		// THE TANK THE VEHICLE WILL CARRY, by the one capacity rule (FFuelRolePolicy::CapacityOf, floored) - the figure
 		// the bid and the stand write on a job, so the label cannot promise a different tank.
 		Row.CapacityLitres = FFuelRolePolicy::CapacityOf(Kind);
-		Row.Refusal = JudgeVehicle(Facility, Entity, TypeCode);
+		Row.Refusal = JudgeVehicle(Network, Facility, Entity, TypeCode);
 		Row.Label = FText::Format(LOCTEXT("VehicleLabel", "{0} {1} \u00B7 {2} L"), Row.Name, Money(Row.Price),
 			FText::AsNumber(FMath::RoundToInt(Row.CapacityLitres)));
 	}
@@ -266,7 +279,7 @@ FPurchaseResult UFacilityPurchases::BuyVehicle(const URoadNetwork& Network, FEnt
 {
 	FPurchaseResult Result;
 	const FEntityInstance* Facility = FacilityAt(Network, Entity);
-	Result.Refusal = JudgeVehicle(Facility, Entity, TypeCode);
+	Result.Refusal = JudgeVehicle(Network, Facility, Entity, TypeCode);
 	if (!Result.Succeeded())
 	{
 		LogRefused(Entity.Index, TypeCode.ToString(), Result.Refusal);
