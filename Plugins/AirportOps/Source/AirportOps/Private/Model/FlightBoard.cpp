@@ -172,6 +172,14 @@ bool UFlightBoard::Accept(UGroundTraffic& Traffic, const URoadNetwork& Network, 
 	UE_LOG(LogAirportOps, Log, TEXT("Flight %d accepted: stand %d held, landing at %.0f"),
 		Flight.Id, Flight.Stand.Index, Flight.ArrivesAt);
 	++RevisionCount;
+	// PUBLISHED HERE, IN THE BOARD, not by the inbox that called it: Accept is a player command reached
+	// straight from the game module, and the key-7 path (AcceptImmediate) comes through here too - one
+	// publisher for every accept. After the hold, so a refusal above publishes nothing.
+	// ENFORCED BY: AirportOps.Model.FlightBoard.AcceptPublishesOfferAccepted
+	if (Bus != nullptr)
+	{
+		Bus->Publish(FOfferAcceptedEvent{ Flight.Id, Flight.AirlineId, Flight.Stand });
+	}
 	return true;
 }
 

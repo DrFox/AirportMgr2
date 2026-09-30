@@ -8,6 +8,7 @@
 #include "Model/OpsSave.h"
 #include "Model/Pricing.h"
 #include "Model/Ledger.h"
+#include "Model/OpsEventBus.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
@@ -94,6 +95,9 @@ namespace
 		FGuidelineNodeId DepotPose;
 		FGuidelineNodeId TaxiwayFarEnd;
 
+		/** The taxiway's north end, where LayRunway joins the runway on. Set by Build. */
+		FGuidelineNodeId TaxiwayNorthEnd;
+
 		/** A SECOND stand, for the queue case. Unset unless bSecondStand was set before Build. */
 		FEntityInstanceId Stand2;
 		FGuidelineNodeId StandPose2;
@@ -133,6 +137,13 @@ namespace
 		 * The turnaround tests need one, because what they assert is the aeroplane going.
 		 */
 		bool bWithRunway = false;
+
+		/**
+		 * The runway bWithRunway lays, laid NOW - for a test that needs the airport to gain its runway after
+		 * an aircraft has been refused for the want of one. Build calls it when bWithRunway is set, so the
+		 * recipe exists once.
+		 */
+		void LayRunway();
 
 		/**
 		 * How far south of the stands the service road runs.
@@ -286,6 +297,58 @@ namespace
 	}
 }
 
+namespace
+{
+	/** A bare bus with one recorder on FTurnaroundEndedEvent - what the tests below pin the publisher by. */
+	struct FTurnaroundRecorder
+	{
+		FOpsEventBus Bus;
+		TArray<FTurnaroundEndedEvent> Ended;
+
+		explicit FTurnaroundRecorder(UJobBoard& Board)
+		{
+			Bus.BeginWiring();
+			Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Sim, TEXT("test"), [this](const FTurnaroundEndedEvent& E) { Ended.Add(E); });
+			Bus.EndWiring();
+			Board.Bus = &Bus;
+		}
+		int32 Drained() { Bus.Drain(); return Ended.Num(); }
+	};
+}
+
+void FFuelFixture::LayRunway()
+{
+	// THE SAME RECIPE Airside.Model.Traffic.DepartAgent uses - PAVEMENT split at the
+	// point the guideline meets it, and a wide continuous profile. No SetRunwayFacts: the
+	// defaults admit the default airframe, and a fixture that authored facts would be
+	// asserting admission rules this test says nothing about.
+	//
+	// NORTH of the taxiway's far end, so a departure taxis AWAY from the stand and the
+	// leaving is unmistakable on the phase.
+	URoadProfile* Strip = TestProfiles::Runway();
+	const FRoadNodeId West = Net->AddNode(FVector2D(-50000.0, 20000.0));
+	const FRoadNodeId Mid = Net->AddNode(FVector2D(-10000.0, 20000.0));
+	const FRoadNodeId East = Net->AddNode(FVector2D(50000.0, 20000.0));
+	Net->AddStraightSegment(West, Mid, Strip);
+	Net->AddStraightSegment(Mid, East, Strip);
+
+	// FROM THE TAXIWAY'S OWN NORTH NODE, not from a fresh one at the same place. LayLine
+	// adds nodes, so a second call at (-10000, 10000) puts a SECOND node there joined to
+	// nothing - the runway was then found and refused NoRoute, which is a graph with two
+	// components and no way between them.
+	const FGuidelineNodeId OnStrip = Net->AddGuidelineNode(FVector2D(-10000.0, 20000.0), false);
+	FGuidelineEdge ToStrip;
+	ToStrip.A = TaxiwayNorthEnd;
+	ToStrip.B = OnStrip;
+	ToStrip.Control = FVector2D(-10000.0, 15000.0);
+	ToStrip.AllowedTraffic = FTrafficMask::Only(ETraversalClass::Aircraft);
+	ToStrip.AllowedTraffic.Add(ETraversalClass::Emergency);
+	ToStrip.Direction = EGuidelineDir::Bidirectional;
+	ToStrip.Width = 600.0;
+	ToStrip.bDerived = true;
+	Net->AddGuidelineEdge(MoveTemp(ToStrip));
+}
+
 void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 {
 	Net = NewObject<URoadNetwork>(GetTransientPackage());
@@ -316,38 +379,11 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 	LayLine(*Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0),
 		ETraversalClass::Aircraft, TaxiSouth, TaxiNorth);
 	TaxiwayFarEnd = TaxiSouth;
+	TaxiwayNorthEnd = TaxiNorth;
 
 	if (bWithRunway)
 	{
-		// THE SAME RECIPE Airside.Model.Traffic.DepartAgent uses - PAVEMENT split at the
-		// point the guideline meets it, and a wide continuous profile. No SetRunwayFacts: the
-		// defaults admit the default airframe, and a fixture that authored facts would be
-		// asserting admission rules this test says nothing about.
-		//
-		// NORTH of the taxiway's far end, so a departure taxis AWAY from the stand and the
-		// leaving is unmistakable on the phase.
-		URoadProfile* Strip = TestProfiles::Runway();
-		const FRoadNodeId West = Net->AddNode(FVector2D(-50000.0, 20000.0));
-		const FRoadNodeId Mid = Net->AddNode(FVector2D(-10000.0, 20000.0));
-		const FRoadNodeId East = Net->AddNode(FVector2D(50000.0, 20000.0));
-		Net->AddStraightSegment(West, Mid, Strip);
-		Net->AddStraightSegment(Mid, East, Strip);
-
-		// FROM THE TAXIWAY'S OWN NORTH NODE, not from a fresh one at the same place. LayLine
-		// adds nodes, so a second call at (-10000, 10000) puts a SECOND node there joined to
-		// nothing - the runway was then found and refused NoRoute, which is a graph with two
-		// components and no way between them.
-		const FGuidelineNodeId OnStrip = Net->AddGuidelineNode(FVector2D(-10000.0, 20000.0), false);
-		FGuidelineEdge ToStrip;
-		ToStrip.A = TaxiNorth;
-		ToStrip.B = OnStrip;
-		ToStrip.Control = FVector2D(-10000.0, 15000.0);
-		ToStrip.AllowedTraffic = FTrafficMask::Only(ETraversalClass::Aircraft);
-		ToStrip.AllowedTraffic.Add(ETraversalClass::Emergency);
-		ToStrip.Direction = EGuidelineDir::Bidirectional;
-		ToStrip.Width = 600.0;
-		ToStrip.bDerived = true;
-		Net->AddGuidelineEdge(MoveTemp(ToStrip));
+		LayRunway();
 	}
 
 	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
@@ -1315,6 +1351,7 @@ bool FFuelUnserviceableStillDepartsTest::RunTest(const FString& Parameters)
 	// NO DEPOT AT ALL, so the demand goes Unserviceable for a real reason rather than by
 	// being written there - the same airport AirportOps.Model.FuelServiceRefusals uses.
 	Fixture.Build(/*bWithRoad=*/true, /*bWithDepot=*/false);
+	FTurnaroundRecorder Recorder(*Fixture.Service);
 
 	const int32 Aircraft = Fixture.ParkAircraft();
 	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
@@ -1340,6 +1377,12 @@ bool FFuelUnserviceableStillDepartsTest::RunTest(const FString& Parameters)
 			const FRoadAgent* Agent = Fixture.Traffic->FindAgent(Aircraft);
 			return Agent == nullptr || Agent->Phase != EAgentPhase::Parked;
 		}, 300.0));
+
+	// THE PUBLISHER'S OWN FIGURES for a departure with nothing delivered (batch 3 review I2).
+	if (!TestEqual(TEXT("its departure ends the turnaround once"), Recorder.Drained(), 1)) { return false; }
+	TestEqual(TEXT("unfuelled"), static_cast<int32>(Recorder.Ended[0].Outcome), static_cast<int32>(EFuelOutcome::Unfuelled));
+	TestEqual(TEXT("nothing delivered"), Recorder.Ended[0].Delivered, 0.0, 1e-6);
+	TestEqual(TEXT("of the fixture's 300 L"), Recorder.Ended[0].Wanted, Fixture.FixtureLitres, 1e-6);
 	return true;
 }
 
@@ -2189,6 +2232,7 @@ bool FFuelPartFuelledTest::RunTest(const FString& Parameters)
 	Ledger->Open(0.0);
 	Fixture.Service->Ledger = Ledger;
 	Fixture.Service->Pricing = NewObject<UPricing>();
+	FTurnaroundRecorder Recorder(*Fixture.Service);
 
 	FLogLineSpy Spy(FName(TEXT("LogAirportOps")));
 	GLog->AddOutputDevice(&Spy);
@@ -2214,6 +2258,14 @@ bool FFuelPartFuelledTest::RunTest(const FString& Parameters)
 		TestFalse(*FString::Printf(TEXT("never called UNFUELLED: %s"), *Line), Line.Contains(TEXT("UNFUELLED")));
 	}
 	TestTrue(TEXT("and the log says how much it got"), bPartLine);
+
+	// THE PUBLISHER'S OWN FIGURES, pinned (batch 3 review I2): the roster's tests feed it hand-made events,
+	// so only this says what the job board really tells the airline about a part-fuelled departure.
+	if (!TestEqual(TEXT("its departure ends the turnaround once"), Recorder.Drained(), 1)) { return false; }
+	TestEqual(TEXT("part-fuelled"), static_cast<int32>(Recorder.Ended[0].Outcome), static_cast<int32>(EFuelOutcome::PartFuelled));
+	TestEqual(TEXT("with the 1000 L it got"), Recorder.Ended[0].Delivered, 1000.0, 1e-6);
+	TestEqual(TEXT("of the 2500 L it wanted"), Recorder.Ended[0].Wanted, 2500.0, 1e-6);
+	TestEqual(TEXT("for the aircraft that left"), Recorder.Ended[0].AircraftAgentId, Aircraft);
 	return true;
 }
 
@@ -2848,6 +2900,137 @@ bool FFuelEmptyDepotSaysNoVehiclesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and the card says what to do"),
 		Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0),
 		FString(TEXT("Fuel 300 L \u00B7 depot has no vehicles - buy one")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelRefusedDepartureTest, "AirportOps.Fuel.RefusedDepartureEndsNoTurnaround",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelRefusedDepartureTest::RunTest(const FString& Parameters)
+{
+	// FTurnaroundEndedEvent IS PUBLISHED ONLY ONCE DepartAgent SAYS YES (spec 2026-09-29-ops-batch3 §2). A
+	// refusal is retried every step the aircraft stays due, so an event published before the answer would
+	// score one turnaround against its airline once per retry - thirty times a second while a runway is busy.
+	FFuelFixture Fixture;
+	Fixture.TurnaroundSeconds = 60.0;
+	Fixture.Build(/*bWithRoad=*/true);   // NO RUNWAY: every departure is refused NoRunway until LayRunway
+	FOpsEventBus Bus;
+	TArray<FTurnaroundEndedEvent> Ended;
+	Bus.BeginWiring();
+	Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Sim, TEXT("test"), [&Ended](const FTurnaroundEndedEvent& E) { Ended.Add(E); });
+	Bus.EndWiring();
+	Fixture.Service->Bus = &Bus;
+
+	const int32 Aircraft = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
+	const FTurnaround* Turnaround = Fixture.Service->TurnaroundFor(Aircraft);
+	if (!TestNotNull(TEXT("its turnaround opened"), Turnaround)) { return false; }
+	const double Deadline = Turnaround->TurnaroundEndsAt;
+	auto Phase = [&Fixture, Aircraft]
+	{
+		const FRoadAgent* Agent = Fixture.Traffic->FindAgent(Aircraft);
+		return Agent != nullptr ? Agent->Phase : EAgentPhase::Gone;
+	};
+	const bool bDue = Fixture.AdvanceUntil([&Fixture, Deadline]
+	{
+		const TArray<FServiceJob>& Jobs = Fixture.Service->GetJobs();
+		return Fixture.Clock->Now() >= Deadline && Jobs.Num() == 1 && Jobs[0].State == EServiceJobState::Done;
+	}, 300.0);
+	if (!TestTrue(TEXT("fuelled, and past its deadline"), bDue)) { return false; }
+
+	// FIVE SECONDS OF REFUSALS - 150 steps, each one asking DepartAgent again.
+	Fixture.Advance(5.0);
+	Bus.Drain();
+	TestEqual(TEXT("with no runway it is still on its stand"), static_cast<int32>(Phase()), static_cast<int32>(EAgentPhase::Parked));
+	TestEqual(TEXT("and a refused departure ends no turnaround - nothing is published"), Ended.Num(), 0);
+
+	Fixture.LayRunway();
+	TestTrue(TEXT("given a runway, it leaves and the turnaround's end is published"),
+		Fixture.AdvanceUntil([&Bus, &Ended] { Bus.Drain(); return Ended.Num() > 0; }, 60.0));
+	Fixture.Advance(5.0);
+	Bus.Drain();
+	if (!TestEqual(TEXT("exactly once, for all the refusals before it"), Ended.Num(), 1)) { return false; }
+	TestEqual(TEXT("naming the aircraft's agent - the roster finds the flight through it"), Ended[0].AircraftAgentId, Aircraft);
+	TestEqual(TEXT("and the stand it left"), Ended[0].Stand.Index, Fixture.Stand.Index);
+	TestEqual(TEXT("fuelled"), static_cast<int32>(Ended[0].Outcome), static_cast<int32>(EFuelOutcome::Fuelled));
+	TestEqual(TEXT("with everything it asked for delivered"), Ended[0].Delivered, 300.0, 1e-6);
+	TestEqual(TEXT("of the 300 L it asked for"), Ended[0].Wanted, 300.0, 1e-6);
+	return true;
+}
+
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelManualDepartTest, "AirportOps.Fuel.ManualDepartEndsTurnaroundOnce",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelManualDepartTest::RunTest(const FString& Parameters)
+{
+	// THE INSPECTOR'S DEPART (batch 3 review I1): RoadBuildController::DepartSelected calls
+	// UGroundTraffic::DepartAgent on a parked aircraft directly, never through DepartTheReady - so a
+	// publisher there missed it, and so did the part-fuelled fee: send an aircraft off mid-fuelling and
+	// the airline never heard and the fuel was never paid for. The ONE site is the drop of the turnaround
+	// when its aircraft leaves Parked for a departing phase, whoever made it leave.
+	FFuelFixture Fixture;
+	Fixture.FixtureLitres = 2500.0;
+	Fixture.TurnaroundSeconds = 3600.0;   // LONG: nothing but the manual depart below may send it
+	Fixture.bWithRunway = true;
+	Fixture.Build(/*bWithRoad=*/true);
+	Fixture.Service->FallbackSpec = FFuelVehicleSpec(1000.0, 600.0);
+	Fixture.Service->VehicleSpecs.Reset();
+	ULedger* Ledger = NewObject<ULedger>();
+	Ledger->Open(0.0);
+	Fixture.Service->Ledger = Ledger;
+	Fixture.Service->Pricing = NewObject<UPricing>();
+	FTurnaroundRecorder Recorder(*Fixture.Service);
+
+	const int32 Aircraft = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
+	const bool bFirstTrip = Fixture.AdvanceUntil([&Fixture]
+	{
+		return Fixture.Service->GetJobs().Num() == 1 && Fixture.Service->GetJobs()[0].Trips == 1;
+	}, 600.0);
+	if (!TestTrue(TEXT("one 1000 L trip of the 2500 L was made"), bFirstTrip)) { return false; }
+	TestEqual(TEXT("and nothing is paid yet - the job is not finished"), Ledger->Balance(), 0.0, 1e-6);
+
+	// THE PLAYER'S DEPART, by hand, mid-fuelling.
+	if (!TestEqual(TEXT("the manual depart is accepted"), static_cast<int32>(Fixture.Traffic->DepartAgent(Aircraft, *Fixture.Net)),
+		static_cast<int32>(EDepartureRefusal::None))) { return false; }
+	Fixture.Advance(5.0);
+
+	if (!TestEqual(TEXT("a manual depart ends the turnaround, once"), Recorder.Drained(), 1)) { return false; }
+	TestEqual(TEXT("part-fuelled, derived from the figures - the job was still being served, not Unserviceable"),
+		static_cast<int32>(Recorder.Ended[0].Outcome), static_cast<int32>(EFuelOutcome::PartFuelled));
+	TestEqual(TEXT("1000 L delivered"), Recorder.Ended[0].Delivered, 1000.0, 1e-6);
+	TestEqual(TEXT("of 2500"), Recorder.Ended[0].Wanted, 2500.0, 1e-6);
+	TestEqual(TEXT("and the 1000 L it got are paid for, once - a manual depart is not a way round the fee"),
+		Ledger->Balance(), 1000.0 * Fixture.Service->Pricing->FuelPricePerLitre, 1e-6);
+	const int32 FeeEntries = Ledger->Entries().FilterByPredicate([](const FLedgerEntry& Entry)
+		{ return Entry.Category == ELedgerCategory::ServiceFee; }).Num();
+	TestEqual(TEXT("in one ledger entry"), FeeEntries, 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelRetiredAircraftTest, "AirportOps.Fuel.RetiredAircraftEndsNoTurnaround",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelRetiredAircraftTest::RunTest(const FString& Parameters)
+{
+	// A DESPAWN IS NOT A DEPARTURE (batch 3 ruling on I1): Unstick's retire takes the aircraft Parked -> Gone,
+	// and PR B scores that as a Cancelled flight. Scoring it here too would charge the airline twice for one
+	// aeroplane - and pay a fuel fee for an aircraft the player deleted.
+	FFuelFixture Fixture;
+	Fixture.TurnaroundSeconds = 3600.0;
+	Fixture.Build(/*bWithRoad=*/true, /*bWithDepot=*/false);
+	FTurnaroundRecorder Recorder(*Fixture.Service);
+	const int32 Aircraft = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
+	TestNotNull(TEXT("its turnaround opened"), Fixture.Service->TurnaroundFor(Aircraft));
+	Fixture.Traffic->RetireAgent(Aircraft);
+	Fixture.Advance(1.0);
+	TestNull(TEXT("the retire dropped the turnaround"), Fixture.Service->TurnaroundFor(Aircraft));
+	TestEqual(TEXT("but ended none - nothing is published for a despawn"), Recorder.Drained(), 0);
 	return true;
 }
 

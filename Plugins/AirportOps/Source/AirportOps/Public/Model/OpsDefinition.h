@@ -128,6 +128,14 @@ struct AIRPORTOPS_API FAirlineSatisfactionTuning
 	/** An offer that lapsed because no stand was free for it the whole time - the airport's fault, not the player's inattention. */
 	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0")) double NeverAcceptablePenalty = 0.01;
 
+	/**
+	 * A turnaround that left short of fuel costs this times the fraction NOT delivered - part-fuelled in
+	 * proportion, unfuelled in full (spec 2026-09-29-ops-batch3 §0). A fuelled one costs nothing and earns
+	 * nothing here: the on-time bonus already rewards it. UNJUDGED (2026-09-29): a first guess, set three
+	 * times the ignored-offer penalty because the aircraft was on the ground and the airport let it down.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0")) double ShortfallPenalty = 0.06;
+
 	/** Each day, this fraction of the way back to Start. */
 	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0", ClampMax = "1.0")) double DailyDriftFraction = 0.2;
 

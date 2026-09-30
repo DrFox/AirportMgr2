@@ -1,6 +1,7 @@
 #include "Model/JobBoard.h"
 
 #include "Model/Ledger.h"
+#include "Model/OpsEventBus.h"
 #include "Model/Pricing.h"
 
 #include "AirportOpsLog.h"
@@ -776,7 +777,7 @@ void UJobBoard::FinishServe(FServiceVehicle& Vehicle, const USimClock& Clock)
 	Job->TripQuantity = 0.0;
 	Job->VehicleId = 0;
 
-	if (Job->QuantityOwed > 0.5)
+	if (Job->QuantityOwed > FuelledWithinLitres)
 	{
 		// MORE THAN ONE TANKFUL (spec 2026-09-28-fuel-litres): the REMAINDER goes back to the board
 		// (user's ruling 5) and is bid afresh - this vehicle, having priced its own refill, or a bowser
@@ -865,7 +866,16 @@ void UJobBoard::OnVehicleArrived(FServiceVehicle& Vehicle, const FRoadAgent& Age
 		Job->Trips + 1, Seconds / 60.0);
 }
 
-void UJobBoard::DropAircraft(int32 AircraftId, UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
+EFuelOutcome UJobBoard::FuelOutcomeOf(double Delivered, double Wanted)
+{
+	if (Wanted <= 0.0 || Wanted - Delivered <= FuelledWithinLitres)
+	{
+		return EFuelOutcome::Fuelled;
+	}
+	return Delivered <= 0.0 ? EFuelOutcome::Unfuelled : EFuelOutcome::PartFuelled;
+}
+
+void UJobBoard::DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
 {
 	const FTurnaround* Turnaround = TurnaroundFor(AircraftId);
 	if (Turnaround == nullptr)
@@ -874,6 +884,29 @@ void UJobBoard::DropAircraft(int32 AircraftId, UGroundTraffic& Traffic, const UR
 	}
 	const TArray<int32> JobIds = Turnaround->JobIds;
 	const int32 StandIndex = Turnaround->Stand.Index;
+	const FEntityInstanceId StandId = Turnaround->Stand;
+
+	// THE TURNAROUND'S END, read BEFORE the jobs go (batch 3 review I1) - the one site, see the header.
+	if (bDeparted)
+	{
+		const FServiceJob* Fuel = JobForAircraft(AircraftId, EServiceRole::Fuel);
+		const double Delivered = Fuel != nullptr ? Fuel->QuantityDelivered : 0.0;
+		const double Wanted = Fuel != nullptr ? Fuel->QuantityDelivered + Fuel->QuantityOwed : 0.0;
+		const EFuelOutcome Outcome = FuelOutcomeOf(Delivered, Wanted);
+		// PART-FUELLED PAYS FOR WHAT IT GOT (review, 2026-09-28), HERE AT THE ONE SITE: a job that became
+		// impossible after a trip, or one the player cut short with Depart, leaves with what it got and pays
+		// for it. Never twice: FinishServe pays only a job it calls Done, which FuelOutcomeOf calls Fuelled.
+		// What the shortfall costs the airline is the roster's to score, not the fee's.
+		// ENFORCED BY: AirportOps.Fuel.PartFuelledPaysForWhatItGot, AirportOps.Fuel.ManualDepartEndsTurnaroundOnce
+		if (Outcome == EFuelOutcome::PartFuelled)
+		{
+			PostServiceFee(Clock.Now(), Delivered);
+		}
+		if (Bus != nullptr)
+		{
+			Bus->Publish(FTurnaroundEndedEvent{ AircraftId, StandId, Outcome, Delivered, Wanted });
+		}
+	}
 	Turnarounds.RemoveAll([AircraftId](const FTurnaround& Each) { return Each.AircraftId == AircraftId; });
 
 	// THE VEHICLES OUT FOR IT MOVE ON - a truck left at a hydrant nobody is using would hold that node
@@ -918,7 +951,11 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 	// hand. Its turnaround and jobs go, and any vehicle out for it moves on - its next job, or home.
 	if (From == EAgentPhase::Parked && To != EAgentPhase::Parked && TurnaroundFor(AgentId) != nullptr)
 	{
-		DropAircraft(AgentId, Traffic, Network, Clock);
+		// A DEPARTING PHASE, named rather than "not Gone": Gone is a retire and Stranded a road lost under
+		// it, and neither is the aircraft leaving under its own power.
+		const bool bDeparted = To == EAgentPhase::Manoeuvring || To == EAgentPhase::Reversing
+			|| To == EAgentPhase::Taxiing || To == EAgentPhase::Departing;
+		DropAircraft(AgentId, bDeparted, Traffic, Network, Clock);
 		return;
 	}
 
@@ -1203,6 +1240,11 @@ void UJobBoard::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Netw
 		const double Wanted = Fuel != nullptr ? Fuel->QuantityDelivered + Fuel->QuantityOwed : 0.0;
 		const int32 Stand = Turnaround->Stand.Index;
 
+		// NOTHING IS PUBLISHED OR PAID HERE (batch 3 review I1): a departure DepartAgent accepts changes the
+		// aircraft's phase, OnAgentPhase drops the turnaround, and DropAircraft - the one site the inspector's
+		// manual Depart reaches too - posts the part-fuelled fee and publishes FTurnaroundEndedEvent. A refusal
+		// changes no phase, so it ends nothing, however often it is retried.
+		// ENFORCED BY: AirportOps.Fuel.RefusedDepartureEndsNoTurnaround
 		const EDepartureRefusal Refusal = Traffic.DepartAgent(AircraftId, Network);
 		if (Refusal != EDepartureRefusal::None)
 		{
@@ -1224,19 +1266,17 @@ void UJobBoard::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Netw
 		//
 		// PART-FUELLED is not UNFUELLED (review, 2026-09-28): a job that became impossible after a trip
 		// or two - a depot deleted, a road cut - leaves with what it got, and PAYS for it. Fuel sold is
-		// fuel paid for; what the shortfall costs the player's standing is C's to score, not the fee's.
+		// fuel paid for - PAID IN DropAircraft since batch 3, when the phase change DepartAgent announced
+		// reaches OnAgentPhase; this line only says so in the log.
 		// ENFORCED BY: AirportOps.Fuel.PartFuelledPaysForWhatItGot
 		const bool bPartFuelled = bUnfuelled && Delivered > 0.0;
-		if (bPartFuelled)
-		{
-			PostServiceFee(Clock.Now(), Delivered);
-		}
 		UE_LOG(LogAirportOps, Log, TEXT("Fuel: aircraft %d departs stand %d%s"), AircraftId, Stand,
 			bPartFuelled
 				? *FString::Printf(TEXT(" PART-FUELLED %.0f of %.0f L - %s"), Delivered, Wanted, RefusalText(Why))
 				: bUnfuelled
 					? *FString::Printf(TEXT(" UNFUELLED - %s"), RefusalText(Why))
 					: TEXT(" after its turnaround"));
+
 	}
 }
 

@@ -22,6 +22,7 @@ class USimClock;
 class UGroundTraffic;
 class URoadNetwork;
 class ULedger;
+class FOpsEventBus;
 class UPricing;
 struct FRoadAgent;
 enum class EAgentPhase : uint8;
@@ -250,6 +251,13 @@ public:
 	UPROPERTY() TObjectPtr<UPricing> Pricing = nullptr;
 
 	/**
+	 * Where a turnaround's end is announced (FTurnaroundEndedEvent). Set by UOpsRuntime::Attach beside the
+	 * ledger; null in a bare NewObject, and the publish checks - Ledger's reason. Raw: the runtime owns
+	 * both this board and the bus.
+	 */
+	FOpsEventBus* Bus = nullptr;
+
+	/**
 	 * Bank the fee for one completed fuelling.
 	 *
 	 * THERE IS NO MATCHING PENALTY METHOD, and that is the design rather than an omission (spec
@@ -367,6 +375,21 @@ public:
 
 	/** The aircraft's job of Role, or null. */
 	const FServiceJob* JobForAircraft(int32 AircraftId, EServiceRole Role = EServiceRole::Fuel) const;
+
+	/**
+	 * Litres a job may be short and still count as fuelled - FinishServe calls a job Done within this of
+	 * what it owed, so the outcome and the fee must use the same figure, or a Done job 0.4 L short would
+	 * read part-fuelled and be paid for twice.
+	 */
+	static constexpr double FuelledWithinLitres = 0.5;
+
+	/**
+	 * How a departing aircraft left, from the FIGURES, not the job's state (batch 3 review I1): a job still
+	 * being served when the player pressed Depart is part-fuelled, though it never went Unserviceable.
+	 * Wanted <= 0 or delivered within FuelledWithinLitres of it: Fuelled; nothing delivered: Unfuelled;
+	 * otherwise PartFuelled.
+	 */
+	static EFuelOutcome FuelOutcomeOf(double Delivered, double Wanted);
 
 	/** The aircraft's turnaround, or null. */
 	const FTurnaround* TurnaroundFor(int32 AircraftId) const;
@@ -487,8 +510,17 @@ private:
 	void OnVehicleArrived(FServiceVehicle& Vehicle, const FRoadAgent& Agent, UGroundTraffic& Traffic,
 		const URoadNetwork& Network, const USimClock& Clock);
 
-	/** The aircraft left its stand: its turnaround and jobs go, and vehicles out for them move on. */
-	void DropAircraft(int32 AircraftId, UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
+	/**
+	 * The aircraft left its stand: its turnaround and jobs go, and vehicles out for them move on.
+	 *
+	 * bDeparted - it left for a departing phase (pushed back, taxied), not Gone or Stranded - makes this
+	 * THE ONE PLACE A TURNAROUND ENDS (batch 3 review I1): the part-fuelled fee is posted and
+	 * FTurnaroundEndedEvent published HERE, whoever sent it - DepartTheReady, or the inspector's Depart
+	 * calling UGroundTraffic::DepartAgent directly, which never passes through DepartTheReady. A retire
+	 * (Unstick's despawn) is not a departure: PR B scores it as a cancelled flight.
+	 * ENFORCED BY: AirportOps.Fuel.ManualDepartEndsTurnaroundOnce, AirportOps.Fuel.RetiredAircraftEndsNoTurnaround
+	 */
+	void DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
 	/** A trip's pumping is over: quantities move, the job is Done or re-opened with its remainder. */
 	void FinishServe(FServiceVehicle& Vehicle, const USimClock& Clock);

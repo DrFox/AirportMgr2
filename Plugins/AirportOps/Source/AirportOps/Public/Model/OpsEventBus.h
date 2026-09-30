@@ -10,6 +10,7 @@
 #include "Model/OpsAlerts.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
+#include "Model/ServiceJob.h"
 #include "Model/SimClock.h"
 
 /**
@@ -247,6 +248,46 @@ struct AIRPORTOPS_API FLandRefusedEvent
 };
 
 /**
+ * The player accepted an offer - UFlightBoard::Accept, once the stand is held. Accept is a player command
+ * called on the board straight from the game module (OfferViewModels), so before this event an accept
+ * dirtied no pass at all. No toast (spec 2026-09-29-ops-batch3 §0): the flight moving into the accepted
+ * list is the feedback. No roster score either - accepting is not something the airline experiences.
+ */
+struct AIRPORTOPS_API FOfferAcceptedEvent
+{
+	int32 FlightId = 0;
+	FName AirlineId;
+	/** The stand Accept just held for it. */
+	FEntityInstanceId Stand;
+	static const TCHAR* EventName() { return TEXT("OfferAccepted"); }
+	FString Describe() const;
+};
+
+/**
+ * An aircraft left its stand for a departing phase - published by UJobBoard::DropAircraft, the ONE site, when
+ * the aircraft's Parked -> departing phase change reaches the job board: whoever sent it, DepartTheReady or
+ * the inspector's manual Depart (batch 3 review I1). A refused departure changes no phase, so ends nothing;
+ * a retire (Gone) is not a departure. Outcome is derived from the litres (UJobBoard::FuelOutcomeOf).
+ *
+ * NAMES THE AGENT, NOT THE FLIGHT: the job board does not know flights, and must not learn them. The
+ * airline roster resolves the flight through UFlightBoard::FlightForAgent when it hears this - the
+ * flight is still the agent's then: the flight board unhooks the agent only at its Gone, which is
+ * published after this and so dispatched in a later round.
+ * ENFORCED BY: AirportOps.Present.Bus.UnfuelledDepartureLowersAirline
+ */
+struct AIRPORTOPS_API FTurnaroundEndedEvent
+{
+	int32 AircraftAgentId = INDEX_NONE;
+	FEntityInstanceId Stand;
+	EFuelOutcome Outcome = EFuelOutcome::Fuelled;
+	/** Litres delivered and litres the flight asked for - both 0 for an aircraft that wanted none. */
+	double Delivered = 0.0;
+	double Wanted = 0.0;
+	static const TCHAR* EventName() { return TEXT("TurnaroundEnded"); }
+	FString Describe() const;
+};
+
+/**
  * EVERY EVENT THERE IS, as one closed list. Subscribe<T> and Publish<T> are compile-checked
  * against it, and the wiring test walks it - "lists that must agree are ONE list".
  * FInstancedStruct was rejected: an open set has no answer to "which events exist?".
@@ -254,7 +295,8 @@ struct AIRPORTOPS_API FLandRefusedEvent
 using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChangedEvent, FNotificationEvent,
 	FOfferExpiredEvent, FOfferDeclinedEvent, FFlightAirborneEvent, FDayEndedEvent, FAirlineSatisfactionEvent,
 	FNetworkChangedEvent, FAlertRaisedEvent, FAlertClearedEvent, FAlertsResetEvent, FBuildRefusedEvent, FLandRefusedEvent,
-	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent>;
+	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent, FOfferAcceptedEvent,
+	FTurnaroundEndedEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec
