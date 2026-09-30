@@ -397,4 +397,67 @@ bool FTrafficCrossingHeadOnReplansOffTheCycleTest::RunTest(const FString& Parame
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficAsymmetricBarToBarHoldsTest,
+	"Airside.Model.Traffic.AsymmetricBarToBarHolds",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficAsymmetricBarToBarHoldsTest::RunTest(const FString& Parameters)
+{
+	// A HAND-DRAWN BAR-TO-BAR EDGE WHOSE MIDDLE IS OFF THE STRIP (review of dedf049f): the near bar
+	// 3000 uu from the centreline, the far one 12000, so the edge's two vertices AND its midpoint
+	// (4500) all miss a strip 2250 uu half wide. A "does the step lead onto the strip" test that
+	// reads only those three points calls the near bar an exit bar: no runway reservation at it,
+	// no exit chain - and the agent drives up to the asphalt with a landing on it, where only the
+	// nose test arms the crossing, on the runway. The step's LINE crosses the strip; that is what
+	// must be asked, by the same predicate UpdateCrossing arms with.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = TestProfiles::Runway();
+	const FRoadNodeId RA = Net->AddNode(FVector2D(-50000.0, 0.0));
+	const FRoadNodeId RB = Net->AddNode(FVector2D(50000.0, 0.0));
+	const FRoadSegmentId Strip = Net->AddStraightSegment(RA, RB, Runway);
+	const FGuidelineNodeId S = TestGraph::Node(*Net, 0.0, -20000.0);
+	const FGuidelineNodeId Hn = TestGraph::Node(*Net, 0.0, -3000.0);
+	const FGuidelineNodeId Hf = TestGraph::Node(*Net, 0.0, 12000.0);
+	const FGuidelineNodeId N = TestGraph::Node(*Net, 0.0, 30000.0);
+	TestGraph::Join(*Net, S, Hn);
+	TestGraph::Join(*Net, Hn, Hf);   // ONE edge across the runway; vertices and midpoint all off it.
+	TestGraph::Join(*Net, Hf, N);
+	Net->SetRunwayHoldingPositionForTest(Hn, Strip);
+	Net->SetRunwayHoldingPositionForTest(Hf, Strip);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	CrossingExitHoldStrip(*Traffic, Strip);
+	const int32 Plane = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, S, N, ETraversalClass::Aircraft),
+		TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
+
+	// THE RUNWAY IS HELD (a landing). The aircraft must stop with its nose on the near bar.
+	bool bArmedWhileHeld = false;
+	TickUntil(*Traffic, *Net, 60.0, [&](int32)
+	{
+		bArmedWhileHeld = bArmedWhileHeld || Traffic->FindAgent(Plane)->GetCrossingPhase() != ECrossingPhase::None;
+		return true;
+	});
+	const double HeldAt = Traffic->FindAgent(Plane)->Follower.Travelled;
+	const int32 WaitingOn = Traffic->FindAgent(Plane)->GetWaitingOn();
+
+	Traffic->OccupancyForTest().ReleaseAll(CrossingExitRunwayHolder);
+	TickUntil(*Traffic, *Net, 120.0, [&](int32) { return Traffic->FindAgent(Plane)->Phase != EAgentPhase::Parked; });
+	const bool bParked = Traffic->FindAgent(Plane)->Phase == EAgentPhase::Parked;
+
+	UE_LOG(LogAirsideTests, Log,
+		TEXT("AsymmetricBarToBarHolds measured: held at %.0f uu (nose on the near bar = 16500) waiting on %d; ")
+		TEXT("armed a crossing while the runway was held: %s; parked after release: %s"),
+		HeldAt, WaitingOn, bArmedWhileHeld ? TEXT("yes") : TEXT("no"), bParked ? TEXT("yes") : TEXT("no"));
+
+	TestTrue(FString::Printf(TEXT("held with its nose on the near bar, off the runway (%.0f, want 16500)"), HeldAt),
+		FMath::Abs(HeldAt - 16500.0) < 100.0);
+	TestEqual(TEXT("held for the runway's holder - the bar reserved the strip"), WaitingOn, CrossingExitRunwayHolder);
+	TestFalse(TEXT("and never armed a crossing onto a runway somebody else holds"), bArmedWhileHeld);
+	TestTrue(TEXT("once the runway frees it crosses and parks"), bParked);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

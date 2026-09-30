@@ -99,6 +99,16 @@ struct FClaimPass::FWantedClaim
 	bool bInChain = false;
 
 	/**
+	 * The same all-or-nothing, for a RUNWAY crossing's exit chain (BuildPending's step 0''').
+	 * A SECOND FLAG AND NOT A SECOND USE OF bInChain (review, 2026-09-30): the two boxes can be in
+	 * one window - an aircraft inside a road-taxiway crossing with a runway bar ahead - and each
+	 * gives back only its OWN grants. Shared, a refused runway exit handed back the road box's
+	 * conflict reservations under an aircraft still driving through it, for a van to take. Two
+	 * bools and not an enum: a claim on the step between the boxes can be in both.
+	 */
+	bool bInExitChain = false;
+
+	/**
 	 * Set on a claim raised inside a RUNWAY crossing's exit chain (BuildPending's step 0''') -
 	 * the ENTRY bar the agent holds at if it is refused, for ApplyClaims' log line. Unset
 	 * everywhere else; a handle and not a bool beside HoldNode because the line names the bar.
@@ -109,19 +119,28 @@ struct FClaimPass::FWantedClaim
 namespace
 {
 	/**
-	 * Does route step Index lead ONTO the strip Chain describes? UpdateCrossing's first two
-	 * arming tests (the step's end node on the strip; any polyline vertex of the step on it),
-	 * plus the step's MIDDLE, read off the same polyline, in place of its third: that one reads
-	 * the agent's nose, and this is asked of steps the agent has not reached. The middle is what
-	 * finds the hand-drawn bar-to-bar edge, whose only vertices are the two bars - both off the
-	 * asphalt by construction.
+	 * Does route step Index lead ONTO the strip Chain describes? ONE predicate for the two places
+	 * that ask it - UpdateCrossing's arming test (0a) and BuildPending's bar and exit rules - so an
+	 * entry bar is the same bar to both (review of dedf049f: they disagreed, and a bar the claim
+	 * pass called an exit reserved nothing while the arming test still put the agent on the strip).
 	 *
-	 * NOT FOLDED INTO UpdateCrossing: that test has a body to fall back on and must keep it, and
-	 * the arming moment it decides is pinned by CrossingHoldsRunway. This one only has to tell an
-	 * ENTRY bar from an EXIT bar before the agent gets there.
+	 * THE STEP'S END NODE, then its polyline: every vertex, and the line BETWEEN them sampled at the
+	 * strip's half width. A straight line across a strip spends at least a full width on it, so at
+	 * half-width spacing one sample must land inside. The hand-drawn bar-to-bar edge is the case:
+	 * two vertices, both bars, both off the asphalt by construction - and a midpoint that is off it
+	 * too once the two set-backs differ by more than the strip's width (AsymmetricBarToBarHolds).
+	 *
+	 * READ OFF Plan.Polyline, the array the follower walks - the sample-once rule. Capped at 256
+	 * samples: a crossing step is a few strip widths long (2-10 samples on 2026-09-30's maps), and
+	 * the cap only bounds a pathological hand-drawn edge, whose far reaches are not a crossing.
+	 *
+	 * FROM FromDistance ON (route distance; the step's start when negative). UpdateCrossing asks
+	 * from the TAIL: on the bar-to-bar edge the step still leaving the near bar is the step the
+	 * agent is on after the geometric release, and asked whole it "leads onto the strip" behind the
+	 * aircraft and re-armed the crossing (BarToBarCrossing: "the bar on the way OUT arms nothing").
 	 */
 	bool StepLeadsOntoStrip(const URoadNetwork& Network, const FRoutePlan& Plan, int32 Index,
-		const TArray<FRoadSegmentId>& Chain)
+		const TArray<FRoadSegmentId>& Chain, double FromDistance = -1.0)
 	{
 		if (!Plan.Steps.IsValidIndex(Index))
 		{
@@ -131,20 +150,51 @@ namespace
 		{
 			return true;
 		}
+		const double End = Plan.Steps[Index].EndDistance;
+		const double Start = FMath::Max(UGroundTraffic::StepStart(Plan, Index), FromDistance);
+		if (Start >= End)
+		{
+			return false;
+		}
+		double HalfWidth = 0.0;
 		const int32 FirstVertex = Index > 0 ? Plan.Steps[Index - 1].EndVertex : 0;
 		const int32 LastVertex = FMath::Min(Plan.Steps[Index].EndVertex, Plan.Polyline.Num() - 1);
+		double VertexAt = UGroundTraffic::StepStart(Plan, Index);
 		for (int32 Vertex = FMath::Max(0, FirstVertex); Vertex <= LastVertex; ++Vertex)
 		{
-			if (Network.IsPointOnRunway(Plan.Polyline[Vertex], Chain))
+			if (Vertex > FMath::Max(0, FirstVertex))
+			{
+				VertexAt += FVector2D::Distance(Plan.Polyline[Vertex - 1], Plan.Polyline[Vertex]);
+			}
+			// Asked of every vertex for the half width; counted only from Start on.
+			if (Network.IsPointOnRunway(Plan.Polyline[Vertex], Chain, &HalfWidth) && VertexAt >= Start)
 			{
 				return true;
 			}
 		}
-		FVector2D Middle;
-		double Heading = 0.0;
-		const double Along = (UGroundTraffic::StepStart(Plan, Index) + Plan.Steps[Index].EndDistance) * 0.5;
-		return GuidelineGeom::PointAtDistance(Plan.Polyline, Along, Middle, Heading)
-			&& Network.IsPointOnRunway(Middle, Chain);
+		if (HalfWidth <= 0.0)
+		{
+			return false;
+		}
+		constexpr int32 MaxSamples = 256;
+		const int32 Samples = FMath::Clamp(FMath::CeilToInt((End - Start) / HalfWidth), 1, MaxSamples);
+		int32 HintVertex = 1;
+		double HintWalked = 0.0;
+		for (int32 K = 1; K < Samples; ++K)
+		{
+			FVector2D Point;
+			double Heading = 0.0;
+			if (!GuidelineGeom::PointAtDistance(Plan.Polyline, Start + (End - Start) * K / Samples, Point, Heading,
+				HintVertex, HintWalked))
+			{
+				return false;
+			}
+			if (Network.IsPointOnRunway(Point, Chain))
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 }
 
@@ -414,6 +464,9 @@ void FClaimPass::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Network,
 	// first two find nothing because the only vertices are the two bars, both off the
 	// asphalt by construction). The last is the body test, and it is why the arming moment
 	// on such a crossing is "a wheel reaches the runway" rather than "a node says so".
+	// SINCE 2026-09-30 the first two are StepLeadsOntoStrip, which also samples the line
+	// between the vertices - so the bar-to-bar edge arms at the bar, and the nose test is the
+	// fallback for a polyline that cannot be sampled.
 	//
 	// AND THIS IS WHAT TELLS AN ENTRY FROM AN EXIT - spec §3.1, refined during Task 7. A
 	// crossing is painted with a bar on EACH side, so the far bar is also "a bar the agent
@@ -431,20 +484,14 @@ void FClaimPass::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Network,
 		// question the try before it had just answered. Chains.Get answers it once per Bar
 		// per revision; every one of these calls after the first is a map lookup.
 		const TArray<FRoadSegmentId>& BarChain = Chains.Get(Network, Bar);
-		bool bOntoStrip = Network.IsGuidelineNodeOnRunway(Plan.Steps[Current].To, BarChain);
 
-		if (!bOntoStrip)
-		{
-			// EndVertex is this step's last point in the plan's welded polyline, and the
-			// previous step's is its first - the map the plan already carries, rather than
-			// a second walk over distances.
-			const int32 FirstVertex = Current > 0 ? Plan.Steps[Current - 1].EndVertex : 0;
-			const int32 LastVertex = FMath::Min(Plan.Steps[Current].EndVertex, Plan.Polyline.Num() - 1);
-			for (int32 Vertex = FMath::Max(0, FirstVertex); Vertex <= LastVertex && !bOntoStrip; ++Vertex)
-			{
-				bOntoStrip = Network.IsPointOnRunway(Plan.Polyline[Vertex], BarChain);
-			}
-		}
+		// THE SAME PREDICATE BuildPending's bar and exit rules ask (review of dedf049f): end node,
+		// vertices, and the line between them. Two tests that must agree about which bar is an
+		// entry are one test - see StepLeadsOntoStrip. On the hand-drawn bar-to-bar edge this now
+		// arms as the centre passes the bar, as a generated crossing does, rather than half a
+		// footprint later when the nose reaches the asphalt; that closes the stretch in between
+		// where the agent was neither crossing nor behind an entry bar, and held nothing.
+		bool bOntoStrip = StepLeadsOntoStrip(Network, Plan, Current, BarChain, T - F * 0.5);
 
 		if (!bOntoStrip)
 		{
@@ -836,10 +883,12 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 	// is the far bar - plus a footprint and a gap past it, so the tail can clear the strip, is one
 	// all-or-nothing chain with the bar's own reservation. Refused anywhere in it before the agent
 	// commits, ApplyClaims gives back every reservation granted in it this pass, the RUNWAY
-	// included, and the agent holds with its nose on the bar. Once committed the room stays claimed
-	// (the window keeps reaching it) until the tail passes the exit, so nothing drives into it while
-	// the crosser is on the asphalt - an aircraft arriving at the far side then waits short of the
-	// room, on its own line, rather than on the crosser's.
+	// included, and the agent holds with its nose on the bar. Once committed the window keeps
+	// REACHING the room until the tail passes the exit, so the room is asked for on every pass and
+	// stays held while it is granted - an aircraft arriving at the far side is then refused it and
+	// waits short of it, on its own line. What that does NOT promise: the room is a RESERVATION, so
+	// a higher rank (an authored priority at a node in it) can still take it, and a crosser refused
+	// its room after committing stops wherever its stop point is, which may be on the asphalt.
 	//
 	// REJECTED: letting the committed crosser win and asking the waiter to back off. Nothing in this
 	// model reverses on a taxiway, and the resolver's replan cannot free a node an aeroplane is
@@ -925,8 +974,17 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 				const FGuidelineNode* Next = Network.GetGuidelineNode(Plan.Steps[Index].To);
 				if (Next != nullptr && Next->HoldingPositionFor.IsSet())
 				{
+					// CLIPPED ONLY WHERE THE BODY FITS between the exit and the next bar. Closer than
+					// a footprint (review, 2026-09-30: parallel runways nearer than F + G), an aircraft
+					// held at the second bar would have its tail on the first strip - so the room is
+					// NOT clipped, the window reaches the second bar, and its runway reservation joins
+					// this chain: both runways or neither, holding at the first bar.
 					const double NextReach = ReachExcessAt(Rules, Reach, Network, Plan.Steps[Index].To, Plan.Steps[Index].Edge, Agent.Class);
-					RoomTo = FMath::Min(RoomTo, Plan.Steps[Index].EndDistance - NextReach);
+					const double NextAt = Plan.Steps[Index].EndDistance - NextReach;
+					if (NextAt - ExitAt >= F)
+					{
+						RoomTo = FMath::Min(RoomTo, NextAt);
+					}
 					break;
 				}
 			}
@@ -1223,7 +1281,8 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 				// Airside.Model.Traffic.CrossingHeadOnReplansOffTheCycle) was refused at the very bar
 				// it was turning away from, re-formed the cycle, and was replanned back, every window.
 				// A route that ENDS at a bar crosses nothing either. The crossing's own occupancy
-				// (step 0) is untouched: it is the body, not the bar. ENFORCED BY: that test.
+				// (step 0) is untouched: it is the body, not the bar.
+				// ENFORCED BY: Airside.Model.Traffic.CrossingHeadOnReplansOffTheCycle, .AsymmetricBarToBarHolds.
 				const bool bEntersStrip = StepLeadsOntoStrip(Network, Plan, Index + 1, Chain);
 				for (const FRoadSegmentId Segment : Chain)
 				{
@@ -1339,10 +1398,7 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 		for (int32 Index = FirstForward; Index < Pending.Num(); ++Index)
 		{
 			FWantedClaim& Want = Pending[Index];
-			if (Want.Step >= ExitChainFirst - 1)
-			{
-				Want.bInChain = true;
-			}
+			Want.bInExitChain = Want.Step >= ExitChainFirst - 1;
 			if (Want.Step >= ExitChainFirst && (Want.HoldAt < 0.0 || ExitHoldAt < Want.HoldAt))
 			{
 				Want.HoldAt = ExitHoldAt;
@@ -1389,8 +1445,23 @@ void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 	// queue lasted, with the crossing empty; a van the queue's own stand needed could never
 	// cross. Given back, the lanes are free between this agent's passes.
 	// ENFORCED BY: Airside.Model.Traffic.VanCrossesPastAircraftQueue
+	//
+	// ONE LIST PER BOX (review, 2026-09-30): the runway exit chain (bInExitChain) is a second box
+	// that can share a window with the road one, and a refusal in either gives back only its own.
+	// ENFORCED BY: no test yet - staging an aircraft inside a derived road-taxiway crossing with a
+	// runway bar inside its window needs a solved junction beside a runway; the split is kept
+	// small enough to read instead.
 	TArray<FTrafficResource, TInlineAllocator<8>> ChainGranted;
 	bool bChainRefused = false;
+	TArray<FTrafficResource, TInlineAllocator<8>> ExitChainGranted;
+	bool bExitChainRefused = false;
+	auto GiveBack = [this](TArrayView<const FTrafficResource> Granted)
+	{
+		for (const FTrafficResource& Given : Granted)
+		{
+			Wanted.RemoveSingle(Given);
+		}
+	};
 
 	for (const FWantedClaim& Want : Pending)
 	{
@@ -1406,7 +1477,7 @@ void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 			// cleared the line the follower was inside its braking distance of it and stopped with
 			// its nose 35 cm in the strip for 10 s). Not claimed - reservations past a refusal
 			// never are - only looked at, and only a node another agent holds.
-			if (Want.bInChain && Want.Claim.Resource.Kind == ETrafficResourceKind::Node
+			if ((Want.bInChain || Want.bInExitChain) && Want.Claim.Resource.Kind == ETrafficResourceKind::Node
 				&& Table.IsHeld(Want.Claim.Resource, Agent.Id))
 			{
 				const double Cap = Want.Surface == FWantedClaim::ESurface::HoldingPosition
@@ -1430,13 +1501,19 @@ void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 		{
 			ChainGranted.Add(Want.Claim.Resource);
 		}
+		if (bGranted && Want.bInExitChain && !Want.Claim.bOccupied)
+		{
+			ExitChainGranted.Add(Want.Claim.Resource);
+		}
 		if (!bGranted && Want.bInChain && !bChainRefused)
 		{
 			bChainRefused = true;
-			for (const FTrafficResource& Given : ChainGranted)
-			{
-				Wanted.RemoveSingle(Given);
-			}
+			GiveBack(ChainGranted);
+		}
+		if (!bGranted && Want.bInExitChain && !bExitChainRefused)
+		{
+			bExitChainRefused = true;
+			GiveBack(ExitChainGranted);
 		}
 		if (bGranted)
 		{
