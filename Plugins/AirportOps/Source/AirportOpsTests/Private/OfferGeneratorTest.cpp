@@ -11,6 +11,7 @@
 #include "Model/OpsSave.h"
 #include "Model/Pricing.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RunwayFacts.h"
 #include "Model/SimClock.h"
 #include "Profiles/RoadProfile.h"
 #include "Testing/AirsideTestGraph.h"
@@ -39,7 +40,7 @@ namespace
 	 * The WIDTH is the parameter that matters here: the 2026-09-11 bug was A320s offered to a
 	 * 15 m strip, which RunwayAdmission refuses on wingspan and the old filter never asked.
 	 */
-	URoadNetwork* FieldWith(double RunwayWidth, const FAirframe& For)
+	URoadNetwork* FieldWith(double RunwayWidth, const FAirframe& For, FRoadSegmentId* OutRunway = nullptr)
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 
@@ -57,8 +58,12 @@ namespace
 		const FRoadNodeId ThresholdNode = Net->AddNode(FVector2D::ZeroVector);
 		const FRoadNodeId ExitNode = Net->AddNode(ExitAt);
 		const FRoadNodeId FarNode = Net->AddNode(FVector2D(Length, 0.0));
-		Net->AddStraightSegment(ThresholdNode, ExitNode, Runway);
+		const FRoadSegmentId Seed = Net->AddStraightSegment(ThresholdNode, ExitNode, Runway);
 		Net->AddStraightSegment(ExitNode, FarNode, Runway);
+		if (OutRunway != nullptr)
+		{
+			*OutRunway = Seed;
+		}
 
 		const FRoadNodeId TaxiEnd = Net->AddNode(ExitAt + FVector2D(0.0, -20000.0));
 		Net->AddStraightSegment(ExitNode, TaxiEnd, Taxiway);
@@ -590,6 +595,43 @@ bool FOfferNothingUnlessOpenTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("no runway: no offers"), Run(Runwayless, Checks, bJudged), 0);
 	TestEqual(TEXT("and no route search"), Checks, 0);
 	TestFalse(TEXT("and no airline's state touched"), bJudged);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferArrivalsOnlyTest, "AirportOps.Model.Offers.Generate.ArrivalsOnlyFieldGetsNoneUntilMixed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferArrivalsOnlyTest::RunTest(const FString& Parameters)
+{
+	// #456 REVIEW: ONE RUNWAY, ARRIVALS ONLY. Anything that lands could never leave, so the planner refuses every type
+	// (NotAdmitted, worded as the departure) and no airline is offered a flight the player could only strand. Flipped to
+	// mixed, the offers resume: the refusal was the runway's use, which the admission cache must see change.
+	FRoadSegmentId Runway;
+	URoadNetwork* Field = FieldWith(4500.0, Needing(0.0, 3000.0), &Runway);
+	FRunwayFacts Facts = Field->RunwayFactsFor(Runway);
+	Facts.Use = ERunwayUse::ArrivalsOnly;
+	if (!TestTrue(TEXT("the runway takes its use"), Field->SetRunwayFacts(Runway, Facts))) { return false; }
+	// THE FACADE'S TOPOLOGY NOTIFY re-derives the graph on a facts change in play, stand links included; this
+	// model-level field does both by hand (a derive alone drops the anchor link FieldWith built).
+	TestGraph::Derive(*Field);
+	FAnchorLink::Build(*Field, UAirsideSettings::ResolveLargestServiceVehicle());
+
+	UOfferGenerator* Generator = SeededGenerator();
+	Generator->MaxPendingOffers = 100000;
+	const TArray<FAirlineOffers> Airlines = { Offering(MakeAirline(6.0), { Candidate(3000.0) }) };
+	TestEqual(TEXT("arrivals only: two hours at six an hour make no offer"),
+		RunMinutes(*Generator, *Field, Airlines, *ClockAt(9.0), 120).Num(), 0);
+	EArrivalRefusal Why = EArrivalRefusal::None;
+	TestFalse(TEXT("because the type could never be admitted"),
+		UOfferGenerator::CouldEverAdmit(*Field, FVector2D::ZeroVector, Candidate(3000.0).Airframe, Why));
+	TestEqual(TEXT("for the runway's use, not something vaguer"), Why, EArrivalRefusal::NotAdmitted);
+
+	const uint32 Before = Field->GetGuidelineRevision();
+	Facts.Use = ERunwayUse::Mixed;
+	Field->SetRunwayFacts(Runway, Facts);
+	TestGraph::Derive(*Field);
+	FAnchorLink::Build(*Field, UAirsideSettings::ResolveLargestServiceVehicle());
+	TestNotEqual(TEXT("(the flip moves the guideline revision the admission cache is keyed on)"), Field->GetGuidelineRevision(), Before);
+	TestTrue(TEXT("mixed: the offers resume"), RunMinutes(*Generator, *Field, Airlines, *ClockAt(11.0), 120).Num() > 0);
 	return true;
 }
 

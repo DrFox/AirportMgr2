@@ -1,31 +1,30 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Model/Airport.h"
+#include "Model/FlightBoard.h"
 
 class UAircraftType;
+class UGroundTraffic;
 class URoadNetwork;
 
 /**
- * Everything LandChoices::Build reads, bar the types (read once, fixed for the session) - so the Land panel builds
- * its rows only when this moves (ops batch 3 PR E; it planned every type every frame while open). Checked against
- * Build, 2026-09-30:
- *  - the runway a landing from Near would use: URoadNetwork::NearestRunwayThreshold, asked here - the one input that
- *    moves with the camera - reduced to its SEED, since CheckArrival asks only of the seed. A pan along one runway
- *    changes nothing; a pan onto another does.
- *  - that runway's length (segments and nodes: EditRevision, a drag included) and facts (surface, approach, use:
- *    through the facade, whose Topology notify rebuilds the guideline graph - GuidelineRevision).
+ * Everything the Land panel's quotes read, bar the types (read once, fixed for the session) - so the panel quotes its
+ * rows only when this moves (ops batch 3 PR E; it judged every type every frame while open). Each row is a whole
+ * arrival plan since #432 (UOpsRuntime::QuoteLanding), so this is what keeps a still panel from planning at all:
+ *  - the runway the plan asks FIRST from Near (ArrivalPlanner::FirstLandingRunway) - the one input that moves with
+ *    the camera, and all Near decides in a plan (which runway's refusal is reported when none will do). A pan along one
+ *    runway changes nothing; a pan onto another does.
+ *  - the graph: EditRevision (segments and nodes, a drag included) and GuidelineRevision (facts, use, the derived
+ *    graph - through the facade, whose Topology notify rebuilds it).
+ *  - the traffic's OccupancyRevision: a stand held or freed moves NoFreeStand, which the plan reports.
  *  - the network object: a clear or a load is a new one, counting from zero - a weak pointer, so a recycled address
  *    is not mistaken for the old network.
- * NOT the occupancy, and not a runway-freed count, which the spec named: Build asks what the runway ADMITS, never whether
- * it is busy.
- *  - THE AIRPORT'S STATUS (whole-stack review M1): a closed airport admits no arrivals (PR B ruling I1), so while it
- *    is not Open every row is a click the game would refuse, and Build greys them all. It used to grey only the bar's
- *    Land button, leaving an open panel offering clicks the game then refused.
- * ENFORCED BY: AirportMgr.UI.LandPanelBuildsOnlyOnChange (one step per revision and the seed, each red when its field
+ *  - whether the airport admits arrivals (UAirport::AdmitsArrivals) - the gate every quote ends with - and whether
+ *    there is a runtime to quote from at all.
+ * ENFORCED BY: AirportMgr.UI.LandPanelBuildsOnlyOnChange (one step per revision and the runway, each red when its field
  * is left out of ==); AirportMgr.UI.LandChoicesKeyNamesTheNetwork (two networks, equal revisions);
- * AirportMgr.UI.LandPanelGreysWhileClosed (the status, alone); Check-Architecture
- * rule 35 (facts-through-facade) for "through the facade".
+ * AirportMgr.UI.LandPanelGreysWhileClosed (the gate, alone); Check-Architecture rule 35 (facts-through-facade) for
+ * "through the facade".
  */
 struct FLandChoicesKey
 {
@@ -33,19 +32,22 @@ struct FLandChoicesKey
 	FWeakObjectPtr Network;
 	uint32 EditRevision = 0;
 	uint32 GuidelineRevision = 0;
-	bool bHasRunway = false;
-	int32 Seed = INDEX_NONE;
-	EAirportStatus Status = EAirportStatus::Open;
+	uint32 OccupancyRevision = 0;
+	/** ArrivalPlanner::FirstLandingRunway(Near)'s index, INDEX_NONE with no landing runway. */
+	int32 FirstRunway = INDEX_NONE;
+	bool bAdmits = true;
+	bool bQuotes = false;
 
 	bool operator==(const FLandChoicesKey& Other) const
 	{
 		return Network == Other.Network && EditRevision == Other.EditRevision && GuidelineRevision == Other.GuidelineRevision
-			&& bHasRunway == Other.bHasRunway && Seed == Other.Seed && Status == Other.Status;
+			&& OccupancyRevision == Other.OccupancyRevision && FirstRunway == Other.FirstRunway && bAdmits == Other.bAdmits
+			&& bQuotes == Other.bQuotes;
 	}
 	bool operator!=(const FLandChoicesKey& Other) const { return !(*this == Other); }
 };
 
-/** One row of the Land panel: an aircraft type, and whether the airport can take it now. */
+/** One row of the Land panel: an aircraft type, and whether the game would land it now. */
 struct FLandChoice
 {
 	/** Held alive by the panel's own UPROPERTY list, not by this plain struct. */
@@ -54,48 +56,35 @@ struct FLandChoice
 	/** "C · A320-200" - the ICAO letter, then the name. */
 	FText Label;
 
-	/** The runway a landing from here would use admits this type. */
+	/** The quote accepts it: a click on this row is a landing the game takes. */
 	bool bAdmitted = false;
 
-	/** Why not, in one short phrase, or empty when admitted. */
+	/** Why not - the quote's own sentence (ArrivalPlanner::DescribeRefusal's, or the airport's gate) - or empty. */
 	FString Refusal;
 };
 
 /**
- * What the Land panel offers, and which of it the airport can take - world-free, so it is
- * tested with a bare URoadNetwork and no widget.
+ * What the Land panel offers, and which of it the game would take - world-free, so it is tested with any quote.
  *
- * A NAMESPACE OF TWO FUNCTIONS, not a class: there is no state to own. The widget is the
- * presentation; this is the answer it presents.
+ * A NAMESPACE OF THREE FUNCTIONS, not a class: there is no state to own. The widget is the presentation; the verdict
+ * is the MODEL's (UOpsRuntime::QuoteLanding, #432) - this keeps the labels and the order, and renders the quote. It
+ * judged each type itself until #432, by the nearest runway alone, which had been stale since #412 made the planner
+ * land on whichever runway takes the arrival.
  */
 namespace LandChoices
 {
-	/**
-	 * Every aircraft type with a model, from the asset registry.
-	 *
-	 * THE SAME RULE AS the test helper EveryAircraftType (Testing/AirsideTestWorld.h), which
-	 * cannot be called from here - it is compiled only WITH_DEV_AUTOMATION_TESTS. The paper
-	 * types (DA_Aircraft_A320, _B738) carry no mesh and are left out: the panel exists to
-	 * WATCH something land, and they would land as the fallback model.
-	 */
+	/** Every aircraft type with a model - UAirsideSettings::EveryAircraftType(true), the one registry scan. The panel
+	 *  exists to WATCH something land; the paper types would land as the fallback model. */
 	AIRPORTMGR_API TArray<UAircraftType*> EveryMeshedType();
 
 	/**
-	 * One choice per type, sorted by ICAO letter then name, each judged against the runway
-	 * a landing near Near would use.
-	 *
-	 * THE RUNWAY NEAREST Near, AND ONLY THAT ONE - URoadNetwork::NearestRunwayThreshold then
-	 * RunwayAdmission::CheckArrival, the two calls ArrivalPlanner::Plan makes, in its order. The
-	 * planner does NOT fall back to another runway when that one refuses (checked 2026-09-27,
-	 * ArrivalPlanner.cpp step 1), so a panel that greyed only what NO runway admits would
-	 * offer clicks the game then refuses. Near is the view focus, the point the click lands at.
-	 *
-	 * Null Network, or none with a runway, refuses everything with a reason.
+	 * One choice per type, sorted by ICAO letter then name, each the quote Quote gives its airframe - the widget's is
+	 * UOpsRuntime::QuoteLanding at the view focus, the point the click lands at.
 	 */
-	AIRPORTMGR_API TArray<FLandChoice> Build(const URoadNetwork* Network, const FVector2D& Near,
-		const TArray<UAircraftType*>& Types, EAirportStatus Status = EAirportStatus::Open);
+	AIRPORTMGR_API TArray<FLandChoice> Build(const TArray<UAircraftType*>& Types,
+		TFunctionRef<FArrivalQuote(const FAirframe&)> Quote);
 
-	/** What Build(Network, Near, ...) would read, now - see FLandChoicesKey. One NearestRunwayThreshold. */
-	AIRPORTMGR_API FLandChoicesKey KeyFor(const URoadNetwork* Network, const FVector2D& Near,
-		EAirportStatus Status = EAirportStatus::Open);
+	/** What the quotes would read, now - see FLandChoicesKey. Traffic may be null (no occupancy to date). */
+	AIRPORTMGR_API FLandChoicesKey KeyFor(const URoadNetwork* Network, const UGroundTraffic* Traffic,
+		const FVector2D& Near, bool bAdmits, bool bQuotes);
 }

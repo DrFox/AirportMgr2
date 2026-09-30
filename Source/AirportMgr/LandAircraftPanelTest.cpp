@@ -16,6 +16,10 @@
 #include "Present/RoadNetworkActor.h"
 #include "Present/OpsRuntime.h"
 #include "Model/Airport.h"
+#include "Model/ArrivalPlanner.h"
+#include "Model/GroundTraffic.h"
+#include "Model/LandingRun.h"
+#include "Model/RoadTraffic.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -40,6 +44,31 @@ namespace
 			return Choice.Type != nullptr && Choice.Type->GetName() == AssetName;
 		});
 	}
+
+	UAircraftType* LandPanelType(const TCHAR* AssetName)
+	{
+		for (UAircraftType* Type : LandChoices::EveryMeshedType())
+		{
+			if (Type->GetName() == AssetName) { return Type; }
+		}
+		return nullptr;
+	}
+
+	/** A runtime attached to Actor and settled - what the widget quotes from in play. */
+	UOpsRuntime* LandPanelRuntime(ARoadNetworkActor& Actor)
+	{
+		UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+		Runtime->Attach(&Actor);
+		Runtime->Tick(0.0);
+		return Runtime;
+	}
+
+	/** Every type's row, quoted by Runtime at Near - the widget's own lambda, minus the widget. */
+	TArray<FLandChoice> LandPanelQuoted(const UOpsRuntime& Runtime, const FVector2D& Near)
+	{
+		return LandChoices::Build(LandChoices::EveryMeshedType(),
+			[&Runtime, &Near](const FAirframe& Airframe) { return Runtime.QuoteLanding(Airframe, Near); });
+	}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -57,7 +86,10 @@ bool FLandChoicesListEveryMeshedTypeTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("and no paper type - the paper A320 and 737 have no model to watch land"),
 		!Types.ContainsByPredicate([](const UAircraftType* Type) { return Type->Mesh.IsNull(); }));
 
-	const TArray<FLandChoice> Choices = LandChoices::Build(nullptr, FVector2D::ZeroVector, Types);
+	// NO NETWORK: a runtime attached to nothing, which QuoteLanding refuses as LandNear does.
+	const UOpsRuntime* Unattached = NewObject<UOpsRuntime>();
+	const TArray<FLandChoice> Choices = LandChoices::Build(Types,
+		[Unattached](const FAirframe& Airframe) { return Unattached->QuoteLanding(Airframe, FVector2D::ZeroVector); });
 	TestEqual(TEXT("one choice per type"), Choices.Num(), Types.Num());
 
 	// SORTED BY LETTER, THEN NAME, so the list reads small to large - the order a player
@@ -100,14 +132,23 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FLandChoicesGreyWhatTheRunwayRefusesTest::RunTest(const FString& Parameters)
 {
-	// A 600 m, 45 m strip: long enough for the Meridian (510 / 470), far too short for the
-	// A380 (3000 / 2050). Asked through RunwayAdmission - the check the arrival itself makes -
-	// so a greyed row is exactly a click that would have been refused.
-	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	LandPanelMakeRunway(*Net, 60000.0, 4500.0);
+	// A FIELD SIZED FOR THE MERIDIAN - runway, exit, taxiway, stand - so it lands, and the A380 (3000 / 2050) is far too
+	// long for the strip. Quoted through UOpsRuntime::QuoteLanding, the check the click's own accept makes (#432), so a
+	// greyed row is exactly a click that would have been refused.
+	//
+	// "THE NEAREST RUNWAY, NOT ANY RUNWAY" WAS ASSERTED HERE UNTIL #432 - a long strip elsewhere did not un-grey the
+	// A380 while the view was on the short one. Stale since #412: the planner lands on whichever runway takes the
+	// arrival, so the panel greyed a click the game would take. AirportMgr.UI.LandChoicesAgreeWithThePlanner replaces it.
+	UAircraftType* MeridianType = LandPanelType(TEXT("DA_Aircraft_Plane7"));
+	if (!TestNotNull(TEXT("the Meridian is content"), MeridianType)) { return false; }
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-300000.0, -300000.0));
+	const FTestAirport Field = FTestAirport::Build(MeridianType->Airframe(), FTestAirportOptions(), Actor->Network);
+	const UOpsRuntime* Runtime = LandPanelRuntime(*Actor);
 
-	const TArray<FLandChoice> Choices =
-		LandChoices::Build(Net, FVector2D::ZeroVector, LandChoices::EveryMeshedType());
+	const TArray<FLandChoice> Choices = LandPanelQuoted(*Runtime, Field.Threshold);
 	const FLandChoice* Meridian = LandPanelFind(Choices, TEXT("DA_Aircraft_Plane7"));
 	const FLandChoice* A380 = LandPanelFind(Choices, TEXT("DA_Aircraft_Plane8"));
 	if (!TestNotNull(TEXT("the Meridian is listed"), Meridian) || !TestNotNull(TEXT("the A380 is listed"), A380))
@@ -115,32 +156,16 @@ bool FLandChoicesGreyWhatTheRunwayRefusesTest::RunTest(const FString& Parameters
 		return false;
 	}
 
-	TestTrue(TEXT("the Meridian can land on 600 m"), Meridian->bAdmitted);
+	TestTrue(FString::Printf(TEXT("the Meridian can land on the field built for it ('%s')"), *Meridian->Refusal), Meridian->bAdmitted);
 	TestTrue(TEXT("with no refusal"), Meridian->Refusal.IsEmpty());
 	TestFalse(TEXT("the A380 cannot"), A380->bAdmitted);
-	TestTrue(FString::Printf(TEXT("and the row says it is the length, in metres: \"%s\""), *A380->Refusal),
-		A380->Refusal.Contains(TEXT("short")) && A380->Refusal.Contains(TEXT(" m")));
-
-	// THE NEAREST RUNWAY, NOT ANY RUNWAY. A 3.5 km strip 5 km north: the arrival planner lands
-	// at the threshold nearest the view focus and does not fall back, so while the view is on
-	// the short strip the A380 stays grey - and looking at the long one un-greys it.
-	const FRoadNodeId FarA = Net->AddNode(FVector2D(0.0, 500000.0));
-	const FRoadNodeId FarB = Net->AddNode(FVector2D(350000.0, 500000.0));
-	URoadProfile* Long = URoadProfile::MakeTransient(6000.0, 1500.0, 600.0);
-	Long->bContinuousThroughJunctions = true;
-	Net->AddStraightSegment(FarA, FarB, Long);
-
-	const TArray<FLandChoice> AtShort = LandChoices::Build(Net, FVector2D::ZeroVector, LandChoices::EveryMeshedType());
-	const TArray<FLandChoice> AtLong = LandChoices::Build(Net, FVector2D(0.0, 500000.0), LandChoices::EveryMeshedType());
-	const FLandChoice* A380AtShort = LandPanelFind(AtShort, TEXT("DA_Aircraft_Plane8"));
-	const FLandChoice* A380AtLong = LandPanelFind(AtLong, TEXT("DA_Aircraft_Plane8"));
-	if (TestNotNull(TEXT("listed at both"), A380AtShort) && TestNotNull(TEXT("listed at both "), A380AtLong))
-	{
-		TestFalse(TEXT("a long runway elsewhere does not un-grey it while the view is on the short one"),
-			A380AtShort->bAdmitted);
-		TestTrue(FString::Printf(TEXT("but looking at the long one does (%s)"), *A380AtLong->Refusal),
-			A380AtLong->bAdmitted);
-	}
+	// THE PLANNER'S OWN WORDS, figures and all - the runway's admission, which for this strip is its width before its
+	// length (measured 2026-09-30: "the runway admits a 6500 uu wingspan; this aircraft's is 7940").
+	UAircraftType* A380Type = LandPanelType(TEXT("DA_Aircraft_Plane8"));
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Actor->Network, Field.Threshold, A380Type->Airframe(),
+		&Actor->GetGroundTraffic()->GetOccupancy(), ERunwayBusy::Queue);
+	TestEqual(TEXT("and the row says why in the planner's words"), A380->Refusal, ArrivalPlanner::DescribeRefusal(Plan));
+	TestTrue(FString::Printf(TEXT("naming the runway: \"%s\""), *A380->Refusal), A380->Refusal.Contains(TEXT("runway")));
 	return true;
 }
 
@@ -153,10 +178,16 @@ bool FLandChoicesGreyWhatCannotLeaveTest::RunTest(const FString& Parameters)
 {
 	// THE REPORTED STRIP, 404 m: the SR22 lands in 390 m but needs 430 m to leave (2026-09-27).
 	// Greyed, with the departure named - not offered as a click that strands the aircraft.
-	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	LandPanelMakeRunway(*Net, 40366.0, 2300.0);
-	const TArray<FLandChoice> Choices =
-		LandChoices::Build(Net, FVector2D::ZeroVector, LandChoices::EveryMeshedType());
+	// THROUGH THE RUNTIME'S QUOTE (#432): the admission is the planner's first question of a runway, so a bare strip is
+	// enough - the SR22 is refused before any exit or stand is asked for.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-300000.0, -300000.0));
+	LandPanelMakeRunway(*Actor->Network, 40366.0, 2300.0);
+	// DERIVED, as the facade's rebuild would: a guideline graph behind the road refuses every plan as mid-edit.
+	TestGraph::Derive(*Actor->Network);
+	const TArray<FLandChoice> Choices = LandPanelQuoted(*LandPanelRuntime(*Actor), FVector2D::ZeroVector);
 	const FLandChoice* Sr22 = LandPanelFind(Choices, TEXT("DA_Aircraft_Plane15"));
 	if (!TestNotNull(TEXT("the SR22 is listed"), Sr22)) { return false; }
 	TestFalse(TEXT("the SR22 cannot land where it cannot take off again"), Sr22->bAdmitted);
@@ -298,8 +329,26 @@ bool FLandPanelBuildsOnlyOnChangeTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("(facts move no edit revision)"), Actor->Network->GetEditRevision(), Edit);
 	TestEqual(TEXT("B turned to grass (GuidelineRevision): judged again, once"), Builds(5), 1);
 
+	// A STAND HELD (#432): each row is a whole plan now, and a plan's NoFreeStand moves with the occupancy table.
+	UGroundTraffic* Traffic = Actor->GetGroundTraffic();
+	if (!TestNotNull(TEXT("traffic"), Traffic)) { return false; }
+	const uint32 Occupancy = Traffic->OccupancyRevision();
+	TestTrue(TEXT("a stand held for a flight"), Traffic->HoldStand(-99, Field.Pose(0)));
+	TestNotEqual(TEXT("(a hold moves the occupancy revision)"), Traffic->OccupancyRevision(), Occupancy);
+	TestEqual(TEXT("a stand held (OccupancyRevision): judged again, once"), Builds(5), 1);
+
+	// A RUNTIME TO QUOTE FROM: with none every row is refused, so its arrival must re-quote them.
+	UOpsRuntime* Runtime = LandPanelRuntime(*Actor);
+	auto BuildsWith = [&](int32 Frames)
+	{
+		const int32 Before = Panel->BuildCountForTest();
+		for (int32 Frame = 0; Frame < Frames; ++Frame) { Panel->RefreshFor(C, Runtime); }
+		return Panel->BuildCountForTest() - Before;
+	};
+	TestEqual(TEXT("the runtime arrives: judged again, once"), BuildsWith(5), 1);
+
 	Actor->ClearNetwork();
-	TestEqual(TEXT("a new network: judged again, once"), Builds(5), 1);
+	TestEqual(TEXT("a new network: judged again, once"), BuildsWith(5), 1);
 	return true;
 }
 
@@ -351,11 +400,11 @@ bool FLandChoicesKeyNamesTheNetworkTest::RunTest(const FString& Parameters)
 		First.Net->GetEditRevision() == Second.Net->GetEditRevision()
 		&& First.Net->GetGuidelineRevision() == Second.Net->GetGuidelineRevision())) { return false; }
 	const FVector2D Near(1000.0, 0.0);
-	const FLandChoicesKey A = LandChoices::KeyFor(First.Net, Near);
-	const FLandChoicesKey B = LandChoices::KeyFor(Second.Net, Near);
-	TestTrue(TEXT("the same runway seed on each"), A.bHasRunway && B.bHasRunway && A.Seed == B.Seed);
+	const FLandChoicesKey A = LandChoices::KeyFor(First.Net, nullptr, Near, true, true);
+	const FLandChoicesKey B = LandChoices::KeyFor(Second.Net, nullptr, Near, true, true);
+	TestTrue(TEXT("the same first runway on each"), A.FirstRunway != INDEX_NONE && A.FirstRunway == B.FirstRunway);
 	TestTrue(TEXT("and still two keys: the network is on it"), A != B);
-	TestTrue(TEXT("one network is one key"), A == LandChoices::KeyFor(First.Net, Near));
+	TestTrue(TEXT("one network is one key"), A == LandChoices::KeyFor(First.Net, nullptr, Near, true, true));
 	return true;
 }
 
@@ -397,15 +446,120 @@ bool FLandPanelGreysWhileClosedTest::RunTest(const FString& Parameters)
 
 	Panel->RefreshFor(C, Runtime);
 	if (!TestTrue(FString::Printf(TEXT("open: some type can land (%d of %d rows)"), Enabled(), Panel->RowWidgetCountForTest()), Enabled() > 0)) { return false; }
+	TArray<int32> Landable;
+	for (int32 Row = 0; Row < Panel->RowWidgetCountForTest(); ++Row) { if (Panel->IsRowEnabledForTest(Row)) { Landable.Add(Row); } }
 	const int32 Built = Panel->BuildCountForTest();
 	Runtime->SetAirportClosed(true);
 	Panel->RefreshFor(C, Runtime);
 	TestEqual(TEXT("the close alone re-judges the rows"), Panel->BuildCountForTest(), Built + 1);
 	TestEqual(TEXT("closed: every row greyed"), Enabled(), 0);
-	TestTrue(FString::Printf(TEXT("and each says why ('%s')"), *Panel->RowRefusalForTest(0)), Panel->RowRefusalForTest(0).Contains(TEXT("closed")));
+	// THE GATE'S WORDS on every row the plan would take - the airport's closure, not a plan's refusal (a row the plan
+	// refuses keeps its own reason, which is still true when the airport reopens).
+	for (const int32 Row : Landable)
+	{
+		TestTrue(FString::Printf(TEXT("row %d says why ('%s')"), Row, *Panel->RowRefusalForTest(Row)), Panel->RowRefusalForTest(Row).Contains(TEXT("closed")));
+	}
 	Runtime->SetAirportClosed(false);
 	Panel->RefreshFor(C, Runtime);
 	TestTrue(TEXT("reopened: they are back"), Enabled() > 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandChoicesAgreeWithThePlannerTest,
+	"AirportMgr.UI.LandChoicesAgreeWithThePlanner",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandChoicesAgreeWithThePlannerTest::RunTest(const FString& Parameters)
+{
+	// #432's PIN: TWO RUNWAYS, THE ONE UNDER THE VIEW DEPARTURES ONLY. The panel judged the runway nearest the focus by
+	// itself - departures only, so it greyed every row - while the planner lands on the other one, and the click would
+	// have been taken. Each row is now the model's quote; this asks the planner directly, type by type, at the same
+	// focus, and the two must agree on the verdict AND the words.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-300000.0, -300000.0));
+	const FTestTwoRunways Field = FTestTwoRunways::Build(UAirsideSettings::ResolveDefaultAirframe(), Actor->Network);
+	auto UseOf = [&](FRoadSegmentId Seed, ERunwayUse Use)
+	{
+		// THROUGH THE FACADE, as the player's toggle is - its Topology notify moves the guideline revision the key reads.
+		FRunwayFacts Facts = Actor->Network->RunwayFactsFor(Seed);
+		Facts.Use = Use;
+		return Actor->SetRunwayFacts(Seed.Index, Facts);
+	};
+	if (!TestTrue(TEXT("A is departures only"), UseOf(Field.A, ERunwayUse::DeparturesOnly))) { return false; }
+	UOpsRuntime* Runtime = LandPanelRuntime(*Actor);
+	UGroundTraffic* Traffic = Actor->GetGroundTraffic();
+	if (!TestNotNull(TEXT("traffic"), Traffic)) { return false; }
+
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(Actor);
+	const FVector2D Focus(1000.0, 0.0);
+	FAlertFocus OnA;
+	OnA.Kind = EAlertFocusKind::Point;
+	OnA.Point = Focus;
+	C->SelectAndFocus(OnA);
+	FRunwayEnd Nearest;
+	if (!TestTrue(TEXT("the view is on A - the case under test"),
+		Actor->Network->NearestRunwayThreshold(Focus, Nearest) && FTestTwoRunways::IsA(Nearest))) { return false; }
+	ULandAircraftPanelWidget* Panel =
+		CreateWidget<ULandAircraftPanelWidget>(TestWorld.World, ULandAircraftPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+
+	auto AgreeRowByRow = [&](const TCHAR* When)
+	{
+		int32 Lit = 0;
+		for (const UAircraftType* Type : LandChoices::EveryMeshedType())
+		{
+			const int32 Row = Panel->RowIndexOfForTest(*Type->GetName());
+			if (!TestTrue(FString::Printf(TEXT("%s: %s has a row"), When, *Type->GetName()), Row != INDEX_NONE)) { continue; }
+			const FArrivalPlan Plan = ArrivalPlanner::Plan(*Actor->Network, Focus, Type->Airframe(),
+				&Traffic->GetOccupancy(), ERunwayBusy::Queue);
+			const bool bLit = Panel->IsRowEnabledForTest(Row);
+			Lit += bLit ? 1 : 0;
+			TestEqual(FString::Printf(TEXT("%s: %s's row is the planner's verdict"), When, *Type->GetName()), bLit, Plan.IsValid());
+			TestEqual(FString::Printf(TEXT("%s: %s's row gives the planner's reason"), When, *Type->GetName()),
+				Panel->RowRefusalForTest(Row), Plan.IsValid() ? FString() : ArrivalPlanner::DescribeRefusal(Plan));
+		}
+		return Lit;
+	};
+
+	Panel->RefreshFor(C, Runtime);
+	TestTrue(TEXT("B takes arrivals, so something the view's own runway would refuse still lands"), AgreeRowByRow(TEXT("A departures only")) > 0);
+
+	if (!TestTrue(TEXT("B is departures only too"), UseOf(Field.B, ERunwayUse::DeparturesOnly))) { return false; }
+	Panel->RefreshFor(C, Runtime);
+	TestEqual(TEXT("no runway takes arrivals: every row greyed, each with the planner's words"), AgreeRowByRow(TEXT("both departures only")), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandWithNoRuntimeLandsNothingTest,
+	"AirportMgr.Actions.LandWithNoRuntimeLandsNothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandWithNoRuntimeLandsNothingTest::RunTest(const FString& Parameters)
+{
+	// #431: THE BOARD-LESS FALLBACK IS GONE. With no runtime the controller dispatched straight onto the traffic model -
+	// "for the editor mode", which never creates this controller - an aeroplane belonging to no flight, past the board
+	// and the closure rule. A field that would take the landing, and no runtime: refused, said, nothing on the field.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-300000.0, -300000.0));
+	FTestAirport::Build(UAirsideSettings::ResolveDefaultAirframe(), FTestAirportOptions(), Actor->Network);
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(Actor);
+	if (!TestTrue(TEXT("a headless world has no runtime - the case under test"), C->GetOpsRuntime() == nullptr)) { return false; }
+	UGroundTraffic* Traffic = Actor->GetGroundTraffic();
+	if (!TestNotNull(TEXT("traffic"), Traffic)) { return false; }
+
+	AddExpectedMessagePlain(TEXT("Land refused: no ops runtime"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	C->LandAircraftNearViewFocus(nullptr);
+	TestEqual(TEXT("nothing was dispatched onto the field"), Traffic->GetAgents().Num(), 0);
 	return true;
 }
 

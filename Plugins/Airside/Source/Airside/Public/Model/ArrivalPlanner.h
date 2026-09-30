@@ -187,6 +187,14 @@ struct AIRSIDE_API FArrivalPlan
 	UPROPERTY() EArrivalRefusal Why = EArrivalRefusal::NoRunway;
 
 	bool IsValid() const { return Why == EArrivalRefusal::None; }
+
+	/**
+	 * The stand this plan taxis to - the pose node its taxi-in ends at - or unset when it reaches none. THE STAND AN
+	 * ACCEPT HOLDS (#431): UFlightBoard::TryAccept holds exactly this one, so the hold comes from the same REACHABLE set
+	 * the plan chose from (ChooseStand), never the smallest-fitting stand on the field whether or not anything can
+	 * taxi to it. The route's last step is its goal: RouteSearch backtraces from the stand it settled.
+	 */
+	FGuidelineNodeId StandNode() const { return TaxiIn.Steps.Num() > 0 ? TaxiIn.Steps.Last().To : FGuidelineNodeId(); }
 };
 
 /**
@@ -258,6 +266,15 @@ namespace ArrivalPlanner
 	AIRSIDE_API FArrivalPlan Plan(const URoadNetwork& Network, const FVector2D& Near,
 		const FAirframe& Airframe, const FTrafficOccupancy* Occupancy = nullptr,
 		ERunwayBusy RunwayBusy = ERunwayBusy::Refuse, int32 ExcludingHolder = 0);
+
+	/**
+	 * The runway Plan asks FIRST from Near - the landing runway nearest it, whose refusal Plan reports when none will do
+	 * and none clears on its own - or unset when no runway takes arrivals. Near decides nothing else in a plan, so a
+	 * view that caches plans keys on this rather than on every camera move (the Land panel, #432) - and does not choose
+	 * a runway by proximity itself, which Check-Architecture rule 28 forbids outside the planners.
+	 * ENFORCED BY: AirportMgr.UI.LandPanelBuildsOnlyOnChange (a pan along one runway re-plans nothing, onto another does)
+	 */
+	AIRSIDE_API FRoadSegmentId FirstLandingRunway(const URoadNetwork& Network, const FVector2D& Near);
 
 	/**
 	 * Is EVERY runway that takes arrivals held - when Plan, refusing on a busy strip, would find

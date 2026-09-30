@@ -30,7 +30,7 @@ class UOpsRuntime;
 struct FBuildActionContext
 {
 	ARoadBuildController& Controller;
-	/** The attached OpsRuntime, or null outside PIE (the editor mode has no game instance). */
+	/** The attached OpsRuntime, or null in a world with no game instance (a headless test). */
 	UOpsRuntime* Runtime = nullptr;
 	/** The road actor being built into, or null when the level has none. */
 	ARoadNetworkActor* Target = nullptr;

@@ -623,8 +623,11 @@ bool FProfileResolutionIsOneRuleTest::RunTest(const FString& Parameters)
 
 namespace
 {
-	/** The network's bytes through the archive a save game uses (OpsSave::SerializeObject - AirportOps, which this
-	 *  module may not include). Replaced prefix: the test module is a unity build. */
+	/** The network's bytes through a PLAIN proxy archive - the archive a save game used BEFORE #459 (AirportOps'
+	 *  OpsSave::SerializeObject, which this module may not include). Since #459 that archive writes an actor's
+	 *  fallback profile (URoadProfile::bActorFallback) as none; this one writes every profile's path, so it models a
+	 *  pre-#459 save. Nothing here depends on the difference: the tests using it measure caches keyed on revisions.
+	 *  Replaced prefix: the test module is a unity build. */
 	TArray<uint8> ReplacedNetworkBytes(URoadNetwork& Network)
 	{
 		TArray<uint8> Bytes;

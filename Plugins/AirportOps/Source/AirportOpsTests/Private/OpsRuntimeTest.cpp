@@ -13,6 +13,7 @@
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/JobBoard.h"
+#include "Model/LandingRun.h"
 #include "Model/InspectFacts.h"
 #include "Model/OpsEvents.h"
 #include "Model/OpsSave.h"
@@ -361,6 +362,69 @@ bool FOpsRuntimeLandNearTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeLandWithNoRouteTest,
+	"AirportOps.Present.LandWithNoRouteHoldsNothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeLandWithNoRouteTest::RunTest(const FString& Parameters)
+{
+	// #431's PIN: A RUNWAY THE ARRIVAL CAN LAND ON, A FREE STAND IT FITS, AND NOTHING JOINING THEM. Key 7 used to accept
+	// this - Accept asked only the airport's status and UStandAllocator::Reserve, which found the stand - and the flight
+	// then held for ever at the queue's clearance gate, with no toast: the "pressing 7 does nothing" shape. The one
+	// evaluator refuses it with the planner's own reason, and holds nothing.
+	//
+	// NoRouteToStand, NOT THE ISSUE'S NoExit: a derived runway always has one exit, its own far end (Airside.Model.
+	// ArrivalPlanner.NoExit's banner - NoExit needs a graph never derived, which an actor's network is not), so "no
+	// exit" on a real field reads as an exit with no route from it to the stand. Measured 2026-09-30: "landing 36, 1
+	// usable exit(s), but no route from any of them to a stand".
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor spawned"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 90000.0));
+	if (!TestNotNull(TEXT("the actor has a network"), Actor->Network.Get())) { return false; }
+	URoadNetwork& Net = *Actor->Network;
+
+	// SIZED FROM THE AIRFRAME that lands - FTestAirport's own reason: a strip shorter than the landing run is refused for
+	// its length, which is not the refusal this pins.
+	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	const double Needed = FLandingRun::RequiredLandingDistance(
+		Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
+	const FRoadNodeId Threshold = Net.AddNode(FVector2D(0.0, -50000.0));
+	const FRoadNodeId Far = Net.AddNode(FVector2D(Needed * 3.0, -50000.0));
+	TestGraph::Lay(Net, Threshold, Far, TestProfiles::Runway());
+	TestGraph::Derive(Net);
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Stand = Net.PlaceEntity(StandDef, StandDef->Anchors, FVector2D(Needed, -20000.0), 0.0,
+		3600.0, StandDef->PoseRole, StandDef->Trucks);
+	const FEntityInstance* StandAt = Net.GetEntity(Stand);
+	if (!TestNotNull(TEXT("the stand is placed"), StandAt)) { return false; }
+
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	Runtime->Tick(0.0);
+	if (!TestTrue(TEXT("an open airport - the gate is not what refuses below"), Runtime->GetAirport()->AdmitsArrivals())) { return false; }
+	UGroundTraffic* Traffic = Actor->GetGroundTraffic();
+	if (!TestNotNull(TEXT("traffic"), Traffic)) { return false; }
+
+	// CONTROL: THE OLD EVALUATOR WOULD HAVE TAKEN IT - the stand admits this airframe and is free, so Reserve holds it.
+	// Without this the pin below could pass on a field where nothing fits at all.
+	{
+		UGroundTraffic* Probe = NewObject<UGroundTraffic>();
+		UFlight* ProbeFlight = NewObject<UFlight>();
+		ProbeFlight->Id = 99;
+		ProbeFlight->Airframe = Airframe;
+		TestTrue(TEXT("CONTROL: Reserve alone finds the stand - size is all it asks"),
+			NewObject<UStandAllocator>()->Reserve(*Probe, Net, *ProbeFlight));
+	}
+
+	const EArrivalRefusal Why = Runtime->LandNear(FVector2D(0.0, -50000.0), nullptr);
+	TestEqual(TEXT("key 7 is refused for the reason the planner gives - no route from its exit to the stand"), Why, EArrivalRefusal::NoRouteToStand);
+	TestFalse(TEXT("and nothing holds the stand"), Traffic->IsStandHeld(StandAt->PoseNode, 0));
+	TestEqual(TEXT("no flight is on its way"), Runtime->GetFlightBoard()->UnarrivedCount(), 0);
+	return true;
+}
+
 // NAMED, NOT ANONYMOUS - the tests module is a UNITY build; see StandAllocatorTest.cpp.
 namespace OpsRuntimeStandLoadTest
 {
@@ -612,12 +676,12 @@ bool FOpsRuntimeMidFlightLoadTest::RunTest(const FString& Parameters)
 	const int32 RoadA = Actor->PlaceNode(FVector2D(0.0, 30000.0));
 	const int32 RoadB = Actor->PlaceNode(FVector2D(20000.0, 30000.0));
 	Actor->ConnectNodes(RoadA, RoadB);
-	Actor->MinimumRunwayLength = 100.0;
-	Actor->PlaceRunway(FVector2D(0.0, -50000.0), FVector2D(6000.0, -50000.0), TestProfiles::Runway());
-	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
-	Actor->Network->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 90000.0), 0.0, 3600.0, StandDef->PoseRole, StandDef->Trucks);
-	// A SECOND STAND, for the one the re-queued flight must move to (review I1).
-	Actor->Network->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 120000.0), 0.0, 3600.0, StandDef->PoseRole, StandDef->Trucks);
+	// A FIELD AN ARRIVAL CAN USE - runway, exit, taxiway, stand (#431): an accept is the arrival plan's now, so a strip nothing can land on, or a stand nothing reaches, accepts nothing. A SECOND STAND, for the one the re-queued flight must move to (review I1).
+	FAirframe FieldAirframe;
+	FieldAirframe.Wingspan = 3400.0;
+	FTestAirportOptions TwoStands;
+	TwoStands.StandCount = 2;
+	FTestAirport::Build(FieldAirframe, TwoStands, Actor->Network);
 
 	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 	Runtime->Attach(Actor);
@@ -727,10 +791,10 @@ bool FOpsRuntimeMidFlightClosedTest::RunTest(const FString& Parameters)
 		const int32 RoadA = Actor->PlaceNode(FVector2D(0.0, 30000.0));
 		const int32 RoadB = Actor->PlaceNode(FVector2D(20000.0, 30000.0));
 		Actor->ConnectNodes(RoadA, RoadB);
-		Actor->MinimumRunwayLength = 100.0;
-		Actor->PlaceRunway(FVector2D(0.0, -50000.0), FVector2D(6000.0, -50000.0), TestProfiles::Runway());
-		UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
-		Actor->Network->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 90000.0), 0.0, 3600.0, StandDef->PoseRole, StandDef->Trucks);
+		// A FIELD AN ARRIVAL CAN USE - runway, exit, taxiway, stand (#431): an accept is the arrival plan's now, so a strip nothing can land on, or a stand nothing reaches, accepts nothing.
+		FAirframe FieldAirframe;
+		FieldAirframe.Wingspan = 3400.0;
+		FTestAirport::Build(FieldAirframe, FTestAirportOptions(), Actor->Network);
 
 		UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 		Runtime->Attach(Actor);

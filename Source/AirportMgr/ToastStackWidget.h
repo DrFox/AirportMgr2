@@ -176,7 +176,7 @@ private:
 	UFUNCTION() void OnAlertCleared(const FOpsAlertKey& Key);
 	/** Refusals that used to be log lines only - a build the purse refused, key 7 refused. */
 	UFUNCTION() void OnBuildRefused(const FString& What, const FString& Price, const FString& Balance);
-	UFUNCTION() void OnLandRefused(EArrivalRefusal Why);
+	UFUNCTION() void OnLandRefused(EArrivalRefusal Why, const FString& Sentence);
 	/** Back in credit (stage 3) - the one money moment the feed says; going negative is the alert's. */
 	UFUNCTION() void OnBalanceSignChanged(bool bOverdrawn);
 	/** An Overdrawn alert was toasted, so the way back out is news. */

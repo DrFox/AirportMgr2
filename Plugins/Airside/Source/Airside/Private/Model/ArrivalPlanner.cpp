@@ -417,6 +417,15 @@ namespace ArrivalPlanner
 		}
 	}
 
+	FRoadSegmentId FirstLandingRunway(const URoadNetwork& Network, const FVector2D& Near)
+	{
+		// THE SAME ORDER Plan asks in - LandingRunways, not a second nearest-first rule - so a key on this names exactly
+		// the runway whose refusal Plan would report.
+		int32 RunwayCount = 0;
+		const TArray<FRunwayEnd> Candidates = LandingRunways(Network, Near, RunwayCount);
+		return Candidates.IsEmpty() ? FRoadSegmentId() : Candidates[0].Seed;
+	}
+
 	bool IsRunwayBusy(const URoadNetwork& Network, const FVector2D& Near, const FTrafficOccupancy* Occupancy)
 	{
 		// EVERY RUNWAY THAT TAKES ARRIVALS HELD, not the one nearest Near (2026-09-29): Plan now

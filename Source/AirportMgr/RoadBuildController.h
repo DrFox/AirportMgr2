@@ -432,8 +432,11 @@ public:
 	 *
 	 * A THIN FORWARDER as of issue #191: resolving which airframe lands and driving it through
 	 * the flight board are now UOpsRuntime::LandNear's job (Present/ of AirportOps, which
-	 * already owns the board) - this supplies the view focus, the chosen type if any, and the
-	 * one path LandNear cannot cover: the editor mode's no-runtime direct dispatch.
+	 * already owns the board) - this supplies the view focus and the chosen type if any. WITH NO
+	 * RUNTIME IT REFUSES, logged (#431): the board-less direct dispatch that used to sit here, for
+	 * "the editor mode", ran only in headless tests - the editor mode never creates this
+	 * controller, and in PIE the runtime is a game-instance subsystem that always exists - and it
+	 * bypassed the board and the closure rule, a fourth door onto arrival.
 	 *
 	 * Type is the Land panel's choice (2026-09-27); null lands the content default. Called
 	 * from the panel's rows, no longer from key 7, which opens the panel.
@@ -519,7 +522,7 @@ public:
 	 * THE UNSTICK MENU'S VERBS (spec 2026-09-29-unstick-agent) - FORWARDERS to UOpsRuntime::CanUnstick /
 	 * Unstick with the selected agent, so the inspector's lines and the action they run are the one
 	 * decision UAgentRescue makes. Refused ("Nothing selected") with no agent selected or no runtime
-	 * (the editor mode has none).
+	 * (a headless test's world has none).
 	 */
 	FUnstickVerdict CanUnstickSelected(EUnstickAction Action) const;
 	void UnstickSelected(EUnstickAction Action);
@@ -572,8 +575,8 @@ public:
 
 	/**
 	 * The ops runtime the depot verbs forward to: the one SetOpsRuntimeForTest gave, else the game
-	 * instance's (null in the editor mode). A headless world has no game instance, so without the
-	 * override the verbs could never be driven end to end by a test.
+	 * instance's. A headless world has no game instance, so without the override the verbs could
+	 * never be driven end to end by a test.
 	 */
 	UOpsRuntime* GetOpsRuntime() const;
 	/** See GetOpsRuntime. SetTargetForTest's precedent. */

@@ -228,7 +228,7 @@ void UOfferInboxWidget::ShowAirportStatus(EAirportStatus Status)
 {
 	// "Closed" FOR EITHER NOT-OPEN STATUS: the strip answers "will offers come?", and the NoRunway alert already says
 	// why they will not - a second wording of the reason here would be a second account of it.
-	const bool bClosed = Status != EAirportStatus::Open;
+	const bool bClosed = !UAirport::AdmitsArrivals(Status);
 	if (bClosed == bShowingClosed)
 	{
 		return;

@@ -30,7 +30,14 @@ public:
 	UFUNCTION() void OnAlertsReset() { Seen.Add(TEXT("reset")); }
 	UFUNCTION() void OnAlertCleared(const FOpsAlertKey& Key) { Seen.Add(TEXT("alert-:") + UEnum::GetValueAsString(Key.Kind)); }
 	UFUNCTION() void OnBuildRefused(const FString& What, const FString& Price, const FString& Balance) { Seen.Add(TEXT("refused:") + What); }
-	UFUNCTION() void OnLandRefused(EArrivalRefusal Why) { Seen.Add(FString::Printf(TEXT("land:%d"), static_cast<int32>(Why))); }
+	UFUNCTION() void OnLandRefused(EArrivalRefusal Why, const FString& Sentence)
+	{
+		Seen.Add(FString::Printf(TEXT("land:%d"), static_cast<int32>(Why)));
+		LastLandSentence = Sentence;
+	}
+
+	/** The words the last land refusal carried - the toast shows these (#456 review). */
+	FString LastLandSentence;
 
 	int32 CountOf(const FString& Prefix) const
 	{

@@ -362,15 +362,23 @@ bool FToastsFromOpsAlertsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("as a Warning"), Stack->Centre()->Entries()[3].Severity, ENotificationSeverity::Warning);
 	}
 
-	Events->OnLandRefused.Broadcast(EArrivalRefusal::NoRunway);
+	Events->OnLandRefused.Broadcast(EArrivalRefusal::NoRunway, FString());
 	TestEqual(TEXT("and so is a refused key 7"), Stack->Centre()->Entries().Num(), 5);
+	// THE REFUSAL'S OWN SENTENCE WHEN IT HAS ONE (#456 review) - not the reason-only wording, which says "not admitted to
+	// that runway" for an arrivals-only field whose real reason is the departure.
+	const FString Planned = TEXT("Arrival refused: no runway here can take the departure.");
+	Events->OnLandRefused.Broadcast(EArrivalRefusal::NotAdmitted, Planned);
+	if (TestEqual(TEXT("a worded refusal is a toast too"), Stack->Centre()->Entries().Num(), 6))
+	{
+		TestEqual(TEXT("in the plan's words"), Stack->Centre()->Entries()[5].Text.ToString(), Planned);
+	}
 
 	// #266: THE REPAIR'S LINE through its own delegate - unbound, the modules would be removed and refunded in silence.
 	Events->NotifyWarning(TEXT("No room on its plot - 2 Sheds removed, 80,000 refunded"));
-	if (TestEqual(TEXT("a warning notification is a toast"), Stack->Centre()->Entries().Num(), 6))
+	if (TestEqual(TEXT("a warning notification is a toast"), Stack->Centre()->Entries().Num(), 7))
 	{
-		TestEqual(TEXT("as a Warning, where a plain notification is Info"), Stack->Centre()->Entries()[5].Severity, ENotificationSeverity::Warning);
-		TestTrue(TEXT("in the publisher's words"), Stack->Centre()->Entries()[5].Text.ToString().Contains(TEXT("2 Sheds removed")));
+		TestEqual(TEXT("as a Warning, where a plain notification is Info"), Stack->Centre()->Entries()[6].Severity, ENotificationSeverity::Warning);
+		TestTrue(TEXT("in the publisher's words"), Stack->Centre()->Entries()[6].Text.ToString().Contains(TEXT("2 Sheds removed")));
 	}
 	return true;
 }

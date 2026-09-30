@@ -355,6 +355,16 @@ public:
 	static const FLetterEnvelopeTable& ResolveLetterEnvelopeTable();
 
 	/**
+	 * EVERY UAircraftType the asset registry knows, loaded - or, bMeshedOnly, only those with a model to watch (the paper
+	 * types, DA_Aircraft_A320 and _B738, carry none). THE ONE SCAN (#432): the Land panel, the letter envelope and the
+	 * test helper EveryAircraftType each walked the registry with their own rule, and only one of them waited for the
+	 * registry's startup discovery - the others could under-count, silently. SYNCHRONOUS for that reason: a no-op once
+	 * the registry has caught up, which it has by the time PIE or a test runs.
+	 * ENFORCED BY: AirportMgr.UI.LandChoicesListEveryMeshedType, Check-Architecture rule 4 ('UAircraftType registry scan')
+	 */
+	static TArray<UAircraftType*> EveryAircraftType(bool bMeshedOnly);
+
+	/**
 	 * The raising rule alone, given the exact fleet to scan - ResolveLetterEnvelope's own test
 	 * seam. A test can pin "a longer tail raises the envelope" against synthetic in-memory
 	 * UAircraftType objects (NewObject, never saved) this way, without authoring a .uasset for

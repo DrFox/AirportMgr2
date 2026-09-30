@@ -13,6 +13,7 @@ class ARoadNetworkActor;
 class UAirlineRoster;
 class UAirport;
 class UOpsAlerts;
+struct FArrivalQuote;
 struct FBuildQuote;
 enum class EBuildRefusal : uint8;
 class UGroundTraffic;
@@ -186,6 +187,14 @@ public:
 	 * PlayerController's, and the old home could only be exercised by driving PIE.
 	 */
 	EArrivalRefusal LandNear(const FVector2D& Focus, const FAirframe* Override);
+
+	/**
+	 * Would LandNear(Near, &Airframe) be accepted now - asked without accepting anything (#432). UFlightBoard::
+	 * QuoteArrival: the plan and the airport's gate TryAccept asks, so the Land panel renders the game's verdict rather
+	 * than its own (it judged the nearest runway alone, stale since #412). Refused, worded, with no attached network.
+	 * ENFORCED BY: AirportMgr.UI.LandChoicesAgreeWithThePlanner
+	 */
+	FArrivalQuote QuoteLanding(const FAirframe& Airframe, const FVector2D& Near) const;
 
 	/** True once Attach has armed the generator's minute tick. False before Attach. */
 	bool HasOfferScheduledForTest() const { return OfferHandle != INDEX_NONE; }

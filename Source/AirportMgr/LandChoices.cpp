@@ -1,64 +1,23 @@
 #include "LandChoices.h"
 
-#include "AssetRegistry/AssetRegistryModule.h"
+#include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
+#include "Model/ArrivalPlanner.h"
+#include "Model/GroundTraffic.h"
 #include "Model/RoadNetwork.h"
-#include "Model/RunwayAdmission.h"
 
 #define LOCTEXT_NAMESPACE "LandChoices"
 
 TArray<UAircraftType*> LandChoices::EveryMeshedType()
 {
-	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
-		TEXT("AssetRegistry")).Get();
-
-	TArray<FAssetData> Assets;
-	Registry.GetAssetsByClass(UAircraftType::StaticClass()->GetClassPathName(), Assets);
-
-	TArray<UAircraftType*> Out;
-	for (const FAssetData& Data : Assets)
-	{
-		// Loaded here, once per open of the panel: eighteen small data assets on 2026-09-27,
-		// already resident in any session that has dispatched an arrival.
-		if (UAircraftType* Type = Cast<UAircraftType>(Data.GetAsset()))
-		{
-			if (!Type->Mesh.IsNull())
-			{
-				Out.Add(Type);
-			}
-		}
-	}
-	return Out;
+	// THE ONE SCAN (#432) - this had its own registry walk, which copied the test helper's rule by hand and skipped the
+	// synchronous search the envelope's scan knew it needed.
+	return UAirsideSettings::EveryAircraftType(/*bMeshedOnly*/ true);
 }
 
-namespace
+TArray<FLandChoice> LandChoices::Build(const TArray<UAircraftType*>& Types,
+	TFunctionRef<FArrivalQuote(const FAirframe&)> Quote)
 {
-	/**
-	 * One short phrase for the row. TooShort is said in METRES, not RunwayAdmission::
-	 * Describe's uu - "the runway is 60000 uu" is a sentence for the log, not for a player
-	 * choosing an aeroplane. Every other refusal is Describe's own words.
-	 */
-	FString LandChoiceRefusal(const FRunwayAdmission& Admission)
-	{
-		if (Admission.Why == ERunwayRefusal::TooShort)
-		{
-			const double NeedM = Admission.FieldLength / 100.0;
-			const double HaveM = Admission.RunwayLength / 100.0;
-			return Admission.bForDeparture
-				? FString::Printf(TEXT("could not take off again: needs %.0f m, longest runway %.0f m"), NeedM, HaveM)
-				: FString::Printf(TEXT("too short: needs %.0f m, runway %.0f m"), NeedM, HaveM);
-		}
-		return RunwayAdmission::Describe(Admission);
-	}
-}
-
-TArray<FLandChoice> LandChoices::Build(const URoadNetwork* Network, const FVector2D& Near,
-	const TArray<UAircraftType*>& Types, EAirportStatus Status)
-{
-	// The runway ArrivalPlanner::Plan would pick from here - see the header for why only it.
-	FRunwayEnd End;
-	const bool bHasRunway = Network != nullptr && Network->NearestRunwayThreshold(Near, End);
-
 	TArray<FLandChoice> Out;
 	Out.Reserve(Types.Num());
 	for (UAircraftType* Type : Types)
@@ -72,27 +31,13 @@ TArray<FLandChoice> LandChoices::Build(const URoadNetwork* Network, const FVecto
 		Choice.Label = FText::Format(LOCTEXT("Row", "{0} · {1}"),
 			FText::FromName(Type->Code), Type->DisplayName);
 
-		if (!bHasRunway)
-		{
-			Choice.Refusal = TEXT("no runway");
-		}
-		else if (Status != EAirportStatus::Open)
-		{
-			// CLOSED: every type refused alike - the one fact about the airport, not about the aeroplane, and asked
-			// before the runway's admission so the row names the reason the click would actually be refused.
-			Choice.Refusal = Status == EAirportStatus::NoRunway ? TEXT("no runway") : TEXT("the airport is closed");
-		}
-		else
-		{
-			// CheckArrival, the planner's own question: it must be able to leave, too.
-			const FRunwayAdmission Admission =
-				RunwayAdmission::CheckArrival(*Network, End.Seed, Type->Airframe());
-			Choice.bAdmitted = Admission.Why == ERunwayRefusal::None;
-			if (!Choice.bAdmitted)
-			{
-				Choice.Refusal = LandChoiceRefusal(Admission);
-			}
-		}
+		// THE MODEL'S VERDICT, RENDERED (#432) - never a second opinion about admission. This judged the nearest runway
+		// alone (NearestRunwayThreshold, then CheckArrival) until #432, which #412 had made stale: the planner lands on
+		// whichever runway takes the arrival, so the panel greyed an A380 the long far runway would take, judged a
+		// departures-only runway the planner never lands on, and lit rows no exit or route could serve.
+		const FArrivalQuote Answer = Quote(Type->Airframe());
+		Choice.bAdmitted = Answer.IsAccepted();
+		Choice.Refusal = Answer.IsAccepted() ? FString() : Answer.Sentence;
 		Out.Add(MoveTemp(Choice));
 	}
 
@@ -111,21 +56,22 @@ TArray<FLandChoice> LandChoices::Build(const URoadNetwork* Network, const FVecto
 	return Out;
 }
 
-FLandChoicesKey LandChoices::KeyFor(const URoadNetwork* Network, const FVector2D& Near, EAirportStatus Status)
+FLandChoicesKey LandChoices::KeyFor(const URoadNetwork* Network, const UGroundTraffic* Traffic, const FVector2D& Near,
+	bool bAdmits, bool bQuotes)
 {
 	FLandChoicesKey Key;
 	Key.Network = Network;
-	Key.Status = Status;
+	Key.bAdmits = bAdmits;
+	Key.bQuotes = bQuotes;
+	Key.OccupancyRevision = Traffic != nullptr ? Traffic->OccupancyRevision() : 0;
 	if (Network == nullptr)
 	{
 		return Key;
 	}
 	Key.EditRevision = Network->GetEditRevision();
 	Key.GuidelineRevision = Network->GetGuidelineRevision();
-	// THE SAME CALL Build makes first, so the key names the runway Build would judge against.
-	FRunwayEnd End;
-	Key.bHasRunway = Network->NearestRunwayThreshold(Near, End);
-	Key.Seed = Key.bHasRunway ? End.Seed.Index : INDEX_NONE;
+	// THE PLANNER'S OWN ORDER, asked of the planner - not a runway chosen by proximity here (Check-Architecture rule 28).
+	Key.FirstRunway = ArrivalPlanner::FirstLandingRunway(*Network, Near).Index;
 	return Key;
 }
 

@@ -301,28 +301,23 @@ void ARoadBuildController::LandAircraftNearViewFocus(const UAircraftType* Type)
 	// else - offers and their arrivals still resolve their own type, so this cannot become the
 	// game's behaviour by being forgotten. It was DefaultGame.ini's LandAircraftType until
 	// 2026-09-27; see the header. Resolved to an FAirframe (the shape every dispatch already
-	// takes, issue #29) once, so BOTH paths below - through the board and the no-runtime
-	// fallback - honour it the same way the single pre-split method used to.
+	// takes, issue #29) once, for the board.
 	const UAircraftType* Configured = Type;
 	const FAirframe Override = Configured != nullptr ? Configured->Airframe() : FAirframe();
 
 	// THROUGH THE BOARD WHEN THERE IS ONE, so the aeroplane belongs to a flight the rest of
 	// the game can track - see LandNear's own header for why a direct dispatch is a second
 	// door onto arrival.
-	if (UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld()))
+	if (UOpsRuntime* Runtime = GetOpsRuntime())
 	{
 		Runtime->LandNear(Focus, Configured != nullptr ? &Override : nullptr);
 		return;
 	}
 
-	// No runtime: the editor mode, which has no game instance and so no board - LandNear needs
-	// one to reach FlightBoard through, so the direct dispatch this used to fall back to when
-	// UOpsRuntimeSubsystem::Get failed stays here, the one path LandNear cannot cover. Still
-	// honours the chosen type, same as the pre-split method did.
-	//
-	// DispatchArrival has already logged which runway, which exit and which stand it chose,
-	// or why it declined.
-	Target->DispatchArrival(Focus, Configured != nullptr ? Override : UAirsideSettings::ResolveDefaultAirframe());
+	// NO RUNTIME, NO LANDING - SAID (#431). A direct DispatchArrival sat here "for the editor mode", which never creates
+	// this controller; in PIE the runtime is a game-instance subsystem that always exists, so the fallback ran only in
+	// headless tests - and it bypassed the board and the closure rule, a fourth door onto arrival.
+	UE_LOG(LogRoadBuild, Warning, TEXT("Land refused: no ops runtime - an arrival needs the flight board"));
 }
 
 bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals) const

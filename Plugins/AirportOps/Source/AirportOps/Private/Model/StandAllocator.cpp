@@ -68,16 +68,28 @@ bool UStandAllocator::Reserve(UGroundTraffic& Traffic, const URoadNetwork& Netwo
 		return false;
 	}
 
-	const FEntityInstance* Chosen = Network.GetEntity(Best);
-	if (Chosen == nullptr || !Traffic.HoldStand(Flight.HolderId(), Chosen->PoseNode))
+	// THROUGH Hold, where holding is decided (#431) - it re-asks the checks above of the one stand, which costs
+	// nothing and means a stand an accept holds and one Reserve holds are held by the same rule.
+	return Hold(Traffic, Network, Flight, Best);
+}
+
+bool UStandAllocator::Hold(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight, FEntityInstanceId Stand)
+{
+	// A flight with no airframe is a fixture nobody filled in - Reserve's own refusal, kept for every hold.
+	const double Wingspan = Flight.Airframe.Wingspan;
+	const FEntityInstance* Chosen = Stand.IsSet() ? Network.GetEntity(Stand) : nullptr;
+	if (Wingspan <= 0.0 || Chosen == nullptr || !Chosen->IsStandCandidate()
+		|| !StandAdmission::Judge(Network, *Chosen, Flight.Airframe).IsAdmitted()
+		|| Traffic.IsStandHeld(Chosen->PoseNode, Flight.HolderId())
+		|| !Traffic.HoldStand(Flight.HolderId(), Chosen->PoseNode))
 	{
 		return false;
 	}
 
-	Flight.Stand = Best;
+	Flight.Stand = Stand;
 	UE_LOG(LogAirportOps, Log,
 		TEXT("Flight %d holds stand %d: a %.0f uu stand for a %.0f uu span"),
-		Flight.Id, Best.Index, Chosen->DesignWingspan, Wingspan);
+		Flight.Id, Stand.Index, Chosen->DesignWingspan, Wingspan);
 	return true;
 }
 

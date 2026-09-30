@@ -70,8 +70,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FFlightBoardAcceptReservesTest::RunTest(const FString& Parameters)
 {
 	// ONE stand, two offers. The second must be refused rather than double-booked: that
-	// refusal IS "the player cannot over-commit".
-	URoadNetwork* Net = BoardNetworkWithStands({3600.0});
+	// refusal IS "the player cannot over-commit". ON A FIELD SINCE #431 - an accept is the
+	// arrival plan's, and a stand row with no runway is refused before any stand is asked.
+	URoadNetwork* Net = BoardField(3400.0);
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
 	USimClock* Clock = NewObject<USimClock>();
 	UFlightBoard* Board = MakeBoard();
@@ -92,6 +93,54 @@ bool FFlightBoardAcceptReservesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and is left in the inbox for the player to see"),
 		Second->Phase, EFlightPhase::Offered);
 	TestEqual(TEXT("so one offer still stands"), Board->PendingOfferCount(), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardAcceptHoldsTheReachableStandTest,
+	"AirportOps.Model.FlightBoard.AcceptHoldsTheReachableStand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardAcceptHoldsTheReachableStandTest::RunTest(const FString& Parameters)
+{
+	// #431's PIN: AN UNCONNECTED CODE A STAND AND A CONNECTED CODE C ONE, and a Code A flight. Reserve took the smallest
+	// stand that fits - the unconnected A - while the arrival lands on the nearest stand it can REACH, the C; a second
+	// accept then took the C and this flight waited NoFreeStand until that one had gone. The hold is the plan's stand.
+	FAirframe Small;
+	Small.Wingspan = 1100.0;   // 11 m: Code A
+	const FTestAirport Field = FTestAirport::Build(Small);
+	if (!TestEqual(TEXT("one connected stand"), Field.Stands.Num(), 1)) { return false; }
+	const FEntityInstanceId Connected = Field.Stands[0];
+
+	// FAR FROM EVERY TAXIWAY, and sized for Code A - admitted by size, reached by nothing.
+	UEntityDefinition* Def = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Unconnected = Field.Net->PlaceEntity(Def, Def->Anchors, FVector2D(-300000.0, -300000.0), 0.0,
+		1400.0, Def->PoseRole, Def->Trucks);
+	if (!TestTrue(TEXT("the unconnected stand is placed"), Unconnected.IsSet())) { return false; }
+
+	// CONTROL: THE OLD EVALUATOR PICKS THE UNCONNECTED ONE - so this field tells the two apart.
+	{
+		UGroundTraffic* Probe = NewObject<UGroundTraffic>();
+		UFlight* ProbeFlight = BoardFlightNeeding(Small.Wingspan);
+		ProbeFlight->Id = 99;
+		if (!TestTrue(TEXT("CONTROL: Reserve holds something"), NewObject<UStandAllocator>()->Reserve(*Probe, *Field.Net, *ProbeFlight))) { return false; }
+		TestEqual(TEXT("CONTROL: and it is the smaller, unconnected stand"), ProbeFlight->Stand, Unconnected);
+	}
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = MakeBoard();
+	UFlight* Flight = BoardFlightNeeding(Small.Wingspan);
+	Flight->LeadTimeSeconds = 100.0;
+	Flight->ApproachFocus = Field.Threshold;
+	Board->AddOffer(*Clock, Flight);
+
+	const FArrivalQuote Quote = Board->TryAccept(*Traffic, *Field.Net, *Clock, *Flight);
+	TestTrue(FString::Printf(TEXT("accepted ('%s')"), *Quote.Sentence), Quote.IsAccepted());
+	TestEqual(TEXT("holding the stand it can taxi to"), Flight->Stand, Connected);
+	TestEqual(TEXT("which is the one the quote named"), Quote.Stand, Connected);
+	const FEntityInstance* Far = Field.Net->GetEntity(Unconnected);
+	TestTrue(TEXT("and the unreachable one is left free"), Far != nullptr && !Traffic->IsStandHeld(Far->PoseNode, 0));
 	return true;
 }
 
@@ -377,7 +426,8 @@ bool FFlightBoardAcceptedNeverExpiresTest::RunTest(const FString& Parameters)
 {
 	// The expiry clock must stop at the accept. Otherwise a flight the player accepted early
 	// would lapse on its way in, holding a stand for an aeroplane the board had written off.
-	URoadNetwork* Net = BoardNetworkWithStands({3600.0});
+	// ON A FIELD SINCE #431 - see AcceptReservesAStand.
+	URoadNetwork* Net = BoardField(3400.0);
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
 	USimClock* Clock = NewObject<USimClock>();
 	UFlightBoard* Board = MakeBoard();

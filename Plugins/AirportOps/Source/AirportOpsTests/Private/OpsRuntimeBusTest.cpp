@@ -3,6 +3,7 @@
 #include "Build/AnchorLink.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
+#include "Model/ArrivalPlanner.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
@@ -421,6 +422,10 @@ bool FOpsRuntimeLandRefusedTest::RunTest(const FString&)
 	Runtime->Tick(0.0);
 	TestEqual(TEXT("and the refusal reaches the UI - it never went through Airside's OnArrivalRefused"),
 		Listener->CountOf(TEXT("land:")), 1);
+	// WITH ITS WORDS (#456 review): the reason alone reads "not admitted to that runway" for an arrivals-only field, so
+	// the sentence the refusal was worded with travels with it - here the planner's own for no runway.
+	TestEqual(TEXT("carrying the refusal's own sentence"), Listener->LastLandSentence,
+		ArrivalPlanner::DescribeRefusal(EArrivalRefusal::NoRunway));
 	return true;
 }
 
@@ -475,18 +480,21 @@ bool FOpsRuntimeAcceptDirtiesAlertsTest::RunTest(const FString&)
 	// ACCEPT IS A PLAYER COMMAND ON THE BOARD (OfferViewModels calls UFlightBoard::Accept directly), so before
 	// FOfferAcceptedEvent it dirtied no pass: a condition about accepted flights waited for something unrelated
 	// to re-derive it. Measured as the pass RUNNING, not as a particular alert: no alert kind can be raised or
-	// cleared BY an accept today - UStandAllocator::Reserve only holds a stand with a pose, and HeldStandIsGone
-	// needs one without - so an alert-shaped assertion here would pass with the subscription deleted.
+	// cleared BY an accept today - an accept holds only the stand its plan taxis to (UStandAllocator::Hold), which has
+	// a pose, and HeldStandIsGone needs one without - so an alert-shaped assertion here would pass with the
+	// subscription deleted.
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
-	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	// NOT RuntimeBusTestAttach: its road lies along y = 0, where the field below lays its runway.
+	TestWorld.Actor->PlaceNode(FVector2D(0.0, 90000.0));
 	URoadNetwork* Net = TestWorld.Actor->Network;
 	if (!TestNotNull(TEXT("a network"), Net)) { return false; }
-	// A RUNWAY: a closed airport - one without a runway too - accepts nothing (ruling I1, 2026-09-30).
-	TestWorld.Actor->MinimumRunwayLength = 100.0;
-	TestWorld.Actor->PlaceRunway(FVector2D(0.0, -50000.0), FVector2D(6000.0, -50000.0), TestProfiles::Runway());
-	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
-	Net->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 30000.0), 0.0, 3600.0, StandDef->PoseRole, StandDef->Trucks);
+	// A FIELD AN ARRIVAL CAN USE - runway, exit, taxiway, stand (#431): an accept is the arrival plan's now, so a strip nothing can land on, or a stand nothing reaches, accepts nothing - and a closed airport, one without a runway too, accepts nothing (ruling I1, 2026-09-30).
+	FAirframe Airframe;
+	Airframe.Wingspan = 3400.0;
+	FTestAirport::Build(Airframe, FTestAirportOptions(), Net);
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(TestWorld.Actor);
 
 	// QUIET FIRST: the attach and the stand just drawn each dirty the pass; let them settle.
 	for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }

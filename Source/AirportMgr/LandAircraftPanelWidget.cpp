@@ -112,11 +112,11 @@ void ULandAircraftPanelWidget::RefreshFor(const ARoadBuildController* C, const U
 	const URoadNetwork* Network = Target != nullptr ? Target->Network.Get() : nullptr;
 	const FVector2D Focus = C != nullptr ? C->GetViewFocus() : FVector2D::ZeroVector;
 
-	// JUDGED ONLY WHEN WHAT BUILD READS HAS MOVED (ops batch 3 PR E) - see JudgedKey and FLandChoicesKey. One
-	// NearestRunwayThreshold a frame instead of a CheckArrival per type.
-	// THE STATUS, from the runtime - none (the editor mode) is not a closure, the Land button's own rule.
-	const EAirportStatus Status = Runtime != nullptr ? Runtime->GetAirport()->Status() : EAirportStatus::Open;
-	const FLandChoicesKey Key = LandChoices::KeyFor(Network, Focus, Status);
+	// QUOTED ONLY WHEN WHAT A QUOTE READS HAS MOVED (ops batch 3 PR E) - see JudgedKey and FLandChoicesKey. Each row is a
+	// whole arrival plan since #432, so this is what keeps a still panel from planning at all.
+	const UGroundTraffic* Traffic = Target != nullptr ? Target->GetGroundTraffic() : nullptr;
+	const bool bAdmits = Runtime == nullptr || Runtime->GetAirport()->AdmitsArrivals();
+	const FLandChoicesKey Key = LandChoices::KeyFor(Network, Traffic, Focus, bAdmits, Runtime != nullptr);
 	if (bJudged && Key == JudgedKey && Types.Num() == JudgedTypeCount)
 	{
 		return;
@@ -132,7 +132,20 @@ void ULandAircraftPanelWidget::RefreshFor(const ARoadBuildController* C, const U
 		Raw.Add(Type.Get());
 	}
 	++BuildCalls;
-	const TArray<FLandChoice> Choices = LandChoices::Build(Network, Focus, Raw, Status);
+	// THE GAME'S VERDICT PER TYPE (#432): UOpsRuntime::QuoteLanding - the plan and the airport's gate TryAccept asks - at
+	// the view focus, the point the click lands at. NO RUNTIME, NOTHING LANDS: the land path is the flight board's, and
+	// without a board there is no landing to offer (the board-less fallback that used to take it went with #431).
+	const TArray<FLandChoice> Choices = LandChoices::Build(Raw, [Runtime, &Focus](const FAirframe& Airframe)
+	{
+		if (Runtime != nullptr)
+		{
+			return Runtime->QuoteLanding(Airframe, Focus);
+		}
+		FArrivalQuote NoGame;
+		NoGame.Why = EArrivalRefusal::NoRunway;
+		NoGame.Sentence = TEXT("No game running - landing needs the flight board.");
+		return NoGame;
+	});
 
 	// THE GATE - see PaintedRefusals.
 	TArray<FString> Refusals;

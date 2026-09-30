@@ -280,6 +280,22 @@ namespace
 		return Runtime;
 	}
 
+	/**
+	 * A FIELD AN ARRIVAL CAN USE - runway, exit, taxiway, stand (#431): an accept is the arrival plan's now, so a strip nothing can land on, or a stand nothing reaches, accepts nothing.
+	 * AirportTestRuntime's 60 m strip stays for the tests that want a field no airliner can use (the airline verdicts).
+	 */
+	UOpsRuntime* AirportTestUsableRuntime(FAirsideTestWorld& World)
+	{
+		ARoadNetworkActor* Actor = World.Actor;
+		// THE FIRST EDIT MAKES THE NETWORK (URoadEditFacade::EnsureNetwork is lazy) - clear of the field below.
+		Actor->PlaceNode(FVector2D(0.0, 90000.0));
+		FTestAirport::Build(UAirsideSettings::ResolveDefaultAirframe(), FTestAirportOptions(), Actor->Network);
+		UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+		Runtime->Attach(Actor);
+		for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
+		return Runtime;
+	}
+
 	/** A stand the allocator can hold, clear of everything else. */
 	void AirportTestStand(URoadNetwork& Net)
 	{
@@ -291,7 +307,8 @@ namespace
 	UFlight* AirportTestOffer(UOpsRuntime& Runtime, FName Airline)
 	{
 		UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
-		Flight->Airframe.Wingspan = 3400.0;
+		// THE CONTENT DEFAULT, what AirportTestUsableRuntime's field is sized for.
+		Flight->Airframe = UAirsideSettings::ResolveDefaultAirframe();
 		Flight->AirlineId = Airline;
 		Flight->OfferWindowSeconds = 1.0e6;
 		Flight->OfferSecondsLeft = 1.0e6;
@@ -323,11 +340,9 @@ bool FAirportCloseCancelsTest::RunTest(const FString&)
 	// Sim handler cancels what has not arrived; the roster, hearing each cancellation, charges the airline.
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
-	UOpsRuntime* Runtime = AirportTestRuntime(TestWorld, /*bRunway=*/true);
+	UOpsRuntime* Runtime = AirportTestUsableRuntime(TestWorld);
 	if (!TestEqual(TEXT("a field with a runway opens"), Runtime->GetAirport()->Status(), EAirportStatus::Open)) { return false; }
 	URoadNetwork* Net = TestWorld.Actor->Network;
-	AirportTestStand(*Net);
-	Runtime->Tick(0.0);
 
 	const FName Airline = TEXT("AirportTestCloseAirline");
 	Runtime->GetAirlines()->Ensure(Airline);
@@ -658,13 +673,14 @@ bool FAirportLandRefusedTest::RunTest(const FString&)
 	{
 		FAirsideTestWorld TestWorld;
 		if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
-		UOpsRuntime* Runtime = AirportTestRuntime(TestWorld, /*bRunway=*/true);
-		AirportTestStand(*TestWorld.Actor->Network);
+		// A FIELD THE LANDING COULD USE, so the refusal is the closure's and not the plan's (#431: the gate is asked
+		// after the plan, one quote for key 7, the inbox and the Land panel).
+		UOpsRuntime* Runtime = AirportTestUsableRuntime(TestWorld);
 		Runtime->SetAirportClosed(true);
 		Runtime->Tick(0.0);
-		AddExpectedMessagePlain(TEXT("Land: refused - the airport is closed"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+		AddExpectedMessagePlain(TEXT("Land: no flight. Arrival refused: the airport is closed"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
 		const EArrivalRefusal Why = Runtime->LandNear(FVector2D(0.0, -50000.0), nullptr);
-		TestTrue(TEXT("closed by the player: Land is refused"), Why != EArrivalRefusal::None);
+		TestEqual(TEXT("closed by the player: Land is refused by the airport's gate"), Why, EArrivalRefusal::NotAdmitted);
 		TestEqual(TEXT("no flight is on its way"), Runtime->GetFlightBoard()->UnarrivedCount(), 0);
 		TestEqual(TEXT("and none was left in the inbox"), Runtime->GetFlightBoard()->PendingOfferCount(), 0);
 	}
@@ -682,13 +698,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportAcceptRefusedTest, "AirportOps.Present.
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FAirportAcceptRefusedTest::RunTest(const FString&)
 {
-	// THE INBOX'S DOOR IS THE BOARD'S Accept (OfferViewModels.cpp calls it), so the gate is there: nothing Offered
+	// THE INBOX'S DOOR IS THE BOARD'S TryAccept (OfferViewModels.cpp calls it), so the gate is there: nothing Offered
 	// becomes Accepted while the airport is not open. The offer is planted AFTER the closure withdrew the rest.
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
-	UOpsRuntime* Runtime = AirportTestRuntime(TestWorld, /*bRunway=*/true);
+	UOpsRuntime* Runtime = AirportTestUsableRuntime(TestWorld);
 	URoadNetwork* Net = TestWorld.Actor->Network;
-	AirportTestStand(*Net);
 	Runtime->SetAirportClosed(true);
 	Runtime->Tick(0.0);
 	UFlight* Offer = AirportTestOffer(*Runtime, TEXT("AirportTestAcceptAirline"));
@@ -708,10 +723,8 @@ bool FAirportRunwayLossFreeTest::RunTest(const FString&)
 	// cancels what has not arrived, and costs the airline nothing - the loophole the user accepted.
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
-	UOpsRuntime* Runtime = AirportTestRuntime(TestWorld, /*bRunway=*/true);
+	UOpsRuntime* Runtime = AirportTestUsableRuntime(TestWorld);
 	URoadNetwork* Net = TestWorld.Actor->Network;
-	AirportTestStand(*Net);
-	Runtime->Tick(0.0);
 	const FName Airline = TEXT("AirportTestRunwayLossAirline");
 	Runtime->GetAirlines()->Ensure(Airline);
 	UFlight* Coming = AirportTestOffer(*Runtime, Airline);
@@ -778,10 +791,8 @@ bool FAirportSaveRefreshesTest::RunTest(const FString&)
 	// load re-derives silently, so nothing would ever cancel them.
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
-	UOpsRuntime* Runtime = AirportTestRuntime(TestWorld, /*bRunway=*/true);
+	UOpsRuntime* Runtime = AirportTestUsableRuntime(TestWorld);
 	URoadNetwork* Net = TestWorld.Actor->Network;
-	AirportTestStand(*Net);
-	Runtime->Tick(0.0);
 	UFlight* Coming = AirportTestOffer(*Runtime, TEXT("AirportTestSaveAirline"));
 	if (!TestTrue(TEXT("an accepted flight"), Runtime->GetFlightBoard()->Accept(*TestWorld.Actor->GetTraffic()->GetModel(), *Net, *Runtime->GetClock(), *Coming))) { return false; }
 	AirportTestDeleteRunways(*TestWorld.Actor);
