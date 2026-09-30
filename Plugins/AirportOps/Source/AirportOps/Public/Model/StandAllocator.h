@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
+#include "Model/RoadHandles.h"
 
 #include "StandAllocator.generated.h"
 
@@ -20,6 +21,11 @@ class URoadNetwork;
  * guarantees is that A stand exists for the flight when the player accepts it - which is the
  * whole of "the player cannot over-commit". See UFlight::Stand for why the two can differ
  * and who reconciles them.
+ *
+ * AN ACCEPT HOLDS THE PLAN'S STAND (#431), through Hold: UFlightBoard::TryAccept passes the stand
+ * the accept's own plan taxis to, which is reachable. Reserve's smallest fit is REACH-BLIND and is
+ * left to UFlightBoard's re-holds (a flight whose hold was lost) - a known gap, #471.
+ * ENFORCED BY: Check-Architecture rule 4 ('UStandAllocator::Reserve (reach-blind hold)' - FlightBoard.cpp only)
  */
 UCLASS()
 class AIRPORTOPS_API UStandAllocator : public UObject
@@ -31,9 +37,17 @@ public:
 	 * Hold the smallest live stand whose design wingspan admits this flight's type.
 	 *
 	 * Writes UFlight::Stand and returns true; or changes nothing and returns false when every
-	 * stand that would fit is already held, which is the refusal the inbox shows.
+	 * stand that would fit is already held. Not reachability: see the class comment.
 	 */
 	bool Reserve(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight);
+
+	/**
+	 * Hold THIS stand for the flight - the one an arrival plan chose (FArrivalPlan::StandNode), which UFlightBoard::
+	 * TryAccept passes (#431) - after the same checks Reserve makes of every stand it considers: live, a stand, admitted
+	 * (StandAdmission::Judge), and not held by another. Writes UFlight::Stand and returns true, or changes nothing.
+	 * Reserve holds its own choice through here, so the two cannot disagree about what holding is.
+	 */
+	bool Hold(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight, FEntityInstanceId Stand);
 
 	/** Give the hold back. Safe on a flight that never had one. */
 	void Release(UGroundTraffic& Traffic, UFlight& Flight);

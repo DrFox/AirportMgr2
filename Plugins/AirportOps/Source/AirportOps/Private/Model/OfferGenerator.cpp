@@ -102,7 +102,7 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 	// so a runway-less field runs no route search and judges no airline unable to come - no AirlineCannotCome
 	// alert, no "cannot use this airport" line per airline, for a condition the NoRunway alert already names.
 	// ENFORCED BY: AirportOps.Model.Offers.Generate.NothingUnlessOpen
-	if (Airport != nullptr && Airport->Status() != EAirportStatus::Open)
+	if (Airport != nullptr && !Airport->AdmitsArrivals())
 	{
 		return Made;
 	}

@@ -84,16 +84,10 @@ void AnimYardCatalogue::EveryRig(TArray<FYardRigEntry>& Out)
 		Out.Add(MoveTemp(Entry));
 	}
 
-	TArray<FAssetData> TypeAssets;
-	Registry.GetAssetsByClass(UAircraftType::StaticClass()->GetClassPathName(), TypeAssets);
-
-	for (const FAssetData& Data : TypeAssets)
+	// THE ONE UAircraftType SCAN (#432), every type - a type with no mesh of its own may still resolve one through
+	// ResolveAgentView's fallbacks, which is the bench's question below, not the scan's.
+	for (const UAircraftType* Type : UAirsideSettings::EveryAircraftType(/*bMeshedOnly*/ false))
 	{
-		const UAircraftType* Type = Cast<UAircraftType>(Data.GetAsset());
-		if (Type == nullptr)
-		{
-			continue;
-		}
 
 		// THROUGH Airframe() AND ResolveAgentView, not by reading Type->Mesh directly. The
 		// type's own soft pointers are only half the answer: ResolveAgentView is what applies
@@ -143,7 +137,7 @@ void AnimYardCatalogue::EveryRig(TArray<FYardRigEntry>& Out)
 		// length - see FYardMotion::ToAgentMotion for why the split is here rather than in the
 		// channel.
 		Entry.Rig.Gear = Frame.Gear;
-		Entry.DeclaredBy = Data.AssetName.ToString();
+		Entry.DeclaredBy = Type->GetName();   // an asset's object name IS its AssetName
 		Out.Add(MoveTemp(Entry));
 	}
 }

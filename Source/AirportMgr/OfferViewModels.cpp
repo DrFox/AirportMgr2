@@ -81,16 +81,15 @@ void UOfferViewModel::Refresh(const UFlightBoard& Board, const UGroundTraffic& T
 	// see FOfferVerdict), so this row and the lapse classification read one answer. Cheap on
 	// every frame nothing moved.
 	const FOfferVerdict& Verdict = Board.VerdictFor(Traffic, Network, *Live);
-	bAcceptable = Verdict.Why == EArrivalRefusal::None;
+	// THE QUOTE THE ACCEPT WILL ASK (#431): the cached verdict, then the airport's gate - so the button is lit exactly
+	// when UFlightBoard::TryAccept would take the click, and a closed airport greys it with its reason.
+	const FArrivalQuote Quote = Board.QuoteFor(Traffic, Network, *Live);
+	bAcceptable = Quote.IsAccepted();
 	bFuelServable = Verdict.bFuelServable;
-	// THE REASON-ONLY OVERLOAD, not a plan built by hand just to carry Why - ToastStackWidget
-	// already reads it this way, and a plan with every other field default-constructed is not
-	// a plan, it is Why wearing a bigger struct.
-	// THE FLIGHT'S OWN SPAN rides along so NoStandBigEnough can name the letter to build
-	// ("needs a Code F stand") - the row has the airframe, which the toast does not.
-	Refusal = bAcceptable
-		? FText::GetEmpty()
-		: FText::FromString(ArrivalPlanner::DescribeRefusal(Verdict.Why, Live->Airframe.Wingspan));
+	// THE PLAN'S OWN SENTENCE (#456 review), carried on the verdict - not the reason-only overload, which reads "not
+	// admitted to that runway" for an arrivals-only field whose real reason is that nothing can take the departure.
+	// The plan names the stand letter to build, the figures and the admission itself.
+	Refusal = bAcceptable ? FText::GetEmpty() : FText::FromString(Quote.Sentence);
 	AcceptLabel = bFuelServable
 		? NSLOCTEXT("AirportMgr", "OfferAccept", "Accept")
 		: NSLOCTEXT("AirportMgr", "OfferAcceptNoFuel", "Accept (no fuel)");
@@ -208,8 +207,9 @@ bool UOfferInboxViewModel::Accept(UOfferViewModel* Row)
 		return false;
 	}
 
-	// THE ONE DOOR. The viewmodel asks the board; it never writes a phase or a stand itself.
-	const bool bAccepted = LiveBoard->Accept(*LiveTraffic, *LiveNetwork, *LiveClock, *Flight);
+	// THE ONE DOOR. The viewmodel asks the board; it never writes a phase or a stand itself. TryAccept (#431), the
+	// door key 7 comes through too.
+	const bool bAccepted = LiveBoard->TryAccept(*LiveTraffic, *LiveNetwork, *LiveClock, *Flight).IsAccepted();
 	Refresh(*LiveBoard, *LiveTraffic, *LiveNetwork, *LiveClock, Airlines.Get());
 	return bAccepted;
 }

@@ -136,8 +136,18 @@ void UToastStackWidget::OnBuildRefused(const FString& What, const FString& Price
 	}
 }
 
-void UToastStackWidget::OnLandRefused(EArrivalRefusal Why)
+void UToastStackWidget::OnLandRefused(EArrivalRefusal Why, const FString& Sentence)
 {
+	// THE REFUSAL'S OWN SENTENCE when it has one (#456 review) - the plan's, with its figures and admission, or the
+	// airport's gate. The reason-only wording below reads "not admitted to that runway" for an arrivals-only field.
+	if (!Sentence.IsEmpty())
+	{
+		if (Notifications != nullptr)
+		{
+			Notifications->PostFeed(FText::FromString(Sentence), ENotificationSeverity::Warning);
+		}
+		return;
+	}
 	// THE SAME SENTENCE as a dispatch refusal (OnArrivalRefused) - one account of why an aeroplane cannot land.
 	OnArrivalRefused(Why);
 }

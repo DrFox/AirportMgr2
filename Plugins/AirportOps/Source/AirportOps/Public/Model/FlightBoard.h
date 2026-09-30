@@ -43,6 +43,12 @@ enum class ECancelReason : uint8;
 struct FOfferVerdict
 {
 	EArrivalRefusal Why = EArrivalRefusal::None;
+	/** The plan's own sentence for Why - ArrivalPlanner::DescribeRefusal(Plan), with its figures and its admission - or
+	 *  empty when None. The row shows THIS, not the reason-only wording, which reads "not admitted to that runway" for
+	 *  an arrivals-only field whose real reason is that nothing can take the departure (#456 review). */
+	FString Sentence;
+	/** The stand the plan taxis to when Why is None - what TryAccept holds (#431). Unset otherwise. */
+	FEntityInstanceId Stand;
 
 	/** Could a depot fuel this airframe on a stand it would take? True when nothing checks
 	 *  (no fuel service wired, as in most board tests). A MISSING service does not block the
@@ -59,6 +65,20 @@ struct FOfferVerdict
 	 *  ENFORCED BY: AirportOps.Model.Fleet.OfferVerdictIsDatedByTheFleet */
 	uint32 FleetAt = 0;
 	bool bValid = false;
+};
+
+/**
+ * THE ANSWER TO "MAY THIS ARRIVAL BE ACCEPTED NOW" (#431, #432): the arrival plan (ArrivalPlanner::Plan, a busy runway
+ * queued), then the airport's gate (UAirport::AdmitsArrivals) - one evaluator for the inbox, key 7 and the Land panel.
+ * Why, the sentence the refusal is worded with (the plan's own, or the gate's), and the stand an accept would hold.
+ * Plain C++: an answer, not state.
+ */
+struct FArrivalQuote
+{
+	EArrivalRefusal Why = EArrivalRefusal::NoRunway;
+	FString Sentence;
+	FEntityInstanceId Stand;
+	bool IsAccepted() const { return Why == EArrivalRefusal::None; }
 };
 
 /**
@@ -104,12 +124,12 @@ public:
 	virtual UObject& AsPersistentObject() override { return *this; }
 
 	/**
-	 * Recreate every flight's own ApproachFocus from this board's one field, for a snapshot
-	 * older than FOpsSnapshot::Version 3.
+	 * Rebuild the lookups a restore does not carry. It migrated old snapshots too - the v2 ApproachFocus copy and
+	 * #188's sweep of terminal flights out of Flights - until the owner ruling of 2026-09-30: since #452 (v6) a pre-v6
+	 * blob restores no flights, so neither could reach a real save.
 	 *
-	 * MOVED HERE FROM OpsSave::Restore so that Restore could become a plain loop over every
-	 * persistent object rather than naming this class as a parameter and calling it in one
-	 * particular position - see IOpsPersistent::OnAfterRestore.
+	 * AN IOpsPersistent HOOK so that OpsSave::Restore stays a plain loop over every persistent object rather than
+	 * naming this class as a parameter and calling it in one particular position.
 	 */
 	virtual void OnAfterRestore(int32 SnapshotVersion) override;
 
@@ -309,13 +329,43 @@ public:
 	int32 TakeNextId();
 
 	/**
-	 * Hold a stand and put the arrival on the clock.
+	 * WHERE EVERY ACCEPT IS DECIDED (#431). QuoteFor - the cached plan verdict, then the airport's gate - and on a yes,
+	 * the stand THAT PLAN taxis to is held (UStandAllocator::Hold) and the arrival goes on the clock. Returns the
+	 * quote: None and the held stand, or the refusal it actually hit, worded.
 	 *
-	 * False when no stand admits it, which is the refusal the inbox shows - and the whole of
-	 * "the player cannot over-commit": an accepted flight always has somewhere to go.
+	 * BEFORE THIS, Accept was the airport's status plus UStandAllocator::Reserve - the smallest fitting stand, reachable
+	 * or not - while the inbox, the lapse classifier and the queue asked ArrivalPlanner::Plan. Two evaluators: key 7
+	 * accepted flights the planner refused (no exit, no route) and they held for ever, AcceptImmediate reported a refusal
+	 * by asking the OTHER evaluator, and a hold could sit on a stand nothing could taxi to while the flight waited for
+	 * the one it could.
+	 *
+	 * A refusal before the plan - not an offer, no stand allocator, no airframe - is NotAdmitted with a sentence saying
+	 * which, and logged: a caller's bug or a fixture's, never a player's. So is the gate's closure. NotAdmitted because
+	 * EArrivalRefusal (the planner's enum, in Airside) has no value for either: it is the nearest reason, and the quote's
+	 * Sentence carries the real one - a reader of Why alone must not word it.
+	 * ENFORCED BY: AirportOps.Model.FlightBoard.AcceptHoldsTheReachableStand, AirportOps.Present.LandWithNoRouteHoldsNothing
 	 */
+	FArrivalQuote TryAccept(UGroundTraffic& Traffic, const URoadNetwork& Network, USimClock& Clock, UFlight& Flight);
+
+	/** TryAccept, answered yes or no - the tests' spelling. A FORWARDER, so nothing accepts a second way. */
 	bool Accept(UGroundTraffic& Traffic, const URoadNetwork& Network, USimClock& Clock,
 		UFlight& Flight);
+
+	/**
+	 * VerdictFor's plan answer, then the airport's gate - what TryAccept asks, and the inbox row shows. The gate is NOT in
+	 * the cached verdict: the lapse classifier reads the verdict alone, and a flight that lapses while the player has
+	 * closed the airport was ignored, not unacceptable.
+	 * ENFORCED BY: AirportOps.Model.Offers.Countdown.LapseReadsThePlanNotTheGate
+	 */
+	FArrivalQuote QuoteFor(const UGroundTraffic& Traffic, const URoadNetwork& Network, const UFlight& Flight) const;
+
+	/**
+	 * The same quote for an arrival that is not a flight yet - Airframe, aimed at Focus - UNCACHED. What the Land panel
+	 * asks per type (UOpsRuntime::QuoteLanding, #432): the SAME plan and the SAME gate AcceptImmediate's accept will
+	 * ask, so a row the panel lights is a click the game takes.
+	 */
+	FArrivalQuote QuoteArrival(const UGroundTraffic& Traffic, const URoadNetwork& Network, const FAirframe& Airframe,
+		const FVector2D& Focus) const;
 
 	/** Retires the offer at once; free (spec ruling 8) - only a lapse will cost anything, in C. */
 	void Decline(USimClock& Clock, UFlight& Flight);
@@ -359,12 +409,13 @@ public:
 	 * UFlight::ApproachFocus - so it never has to touch the board's own field, which the
 	 * generator also writes and would otherwise fight over.
 	 *
-	 * Returns EArrivalRefusal::None on success, or the reason Accept refused it - the same
-	 * sentence ArrivalPlanner::DescribeRefusal would print for it. The flight is left in the
-	 * inbox on refusal, exactly as a generated offer nobody could accept yet is.
+	 * Returns EArrivalRefusal::None on success, or the refusal TryAccept HIT - returned by the gate that refused, not
+	 * re-derived by asking the plan again (#431: a closure, a null allocator or a span-0 airframe used to come back as
+	 * None, "success"). OutSentence, when given, receives its words. The flight is left in the inbox on refusal, exactly
+	 * as a generated offer nobody could accept yet is.
 	 */
 	EArrivalRefusal AcceptImmediate(UGroundTraffic& Traffic, const URoadNetwork& Network,
-		USimClock& Clock, const FAirframe& Airframe, const FVector2D& Focus, FText Airline);
+		USimClock& Clock, const FAirframe& Airframe, const FVector2D& Focus, FText Airline, FString* OutSentence = nullptr);
 
 	/**
 	 * Why this offer could not be accepted this instant, or EArrivalRefusal::None.
@@ -543,16 +594,6 @@ public:
 	/** How many times TickOffers has copied Flights to walk them - its early-out's counter. */
 	int32 OfferSnapshotCountForTest() const { return OfferSnapshots; }
 
-	/**
-	 * Copies this board's own ApproachFocus onto every flight it holds.
-	 *
-	 * A LOAD-ONLY MIGRATION for a snapshot older than FOpsSnapshot::Version 3 - see
-	 * OpsSave::Restore, which is the one caller. Before UFlight::ApproachFocus existed
-	 * (issue #96) every flight shared this one board-wide field, so recreating it per-flight
-	 * is the only way an old load lands where it was actually aimed rather than the origin.
-	 */
-	void AimUnaimedFlightsAtBoardFocus();
-
 private:
 	/**
 	 * Every flight not yet in a terminal phase: offered, accepted, or anywhere between landing
@@ -680,6 +721,19 @@ private:
 	 * blob case (#426 (b)) retires exactly what a blob's load does. Returns how many.
 	 */
 	int32 RetireEveryFlight();
+
+	/**
+	 * THE PLAN HALF OF A QUOTE - ArrivalPlanner::Plan for Airframe at Focus, a busy runway queued (an accepted flight
+	 * waits for it, spec 2026-09-28-arrival-queue), ExcludingHolder's own stand hold not counting against it - with the
+	 * plan's sentence and the stand it taxis to. Counted in WhyNotAcceptableCallsForTest: it IS the expensive call.
+	 * VerdictFor caches it for a flight; QuoteArrival asks it uncached for an arrival that is not a flight yet.
+	 */
+	FArrivalQuote PlanQuote(const UGroundTraffic& Traffic, const URoadNetwork& Network, const FAirframe& Airframe,
+		const FVector2D& Focus, int32 ExcludingHolder) const;
+
+	/** THE GATE HALF: a plan's yes turned into NotAdmitted, worded, while the airport admits no arrivals (AdmitsArrivals).
+	 *  After the plan, so a refusal the plan already names (no runway) is reported as the plan's. */
+	FArrivalQuote Gated(FArrivalQuote Quote) const;
 
 	/** O(1) via ByAgent/ById. CONST because a lookup does not change what the board holds -
 	 *  which also lets FindByAgentForTest/FindByIdForTest above call them on a const board. */

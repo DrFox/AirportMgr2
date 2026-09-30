@@ -612,6 +612,37 @@ FLetterEnvelope UAirsideSettings::EnvelopeFromFleet(EIcaoCode Letter, TArrayView
 	return Envelope;
 }
 
+TArray<UAircraftType*> UAirsideSettings::EveryAircraftType(bool bMeshedOnly)
+{
+	TArray<FAssetData> Assets;
+	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
+		TEXT("AssetRegistry")).Get();
+	// SYNCHRONOUS, because a scan that returns before the registry has finished its own
+	// startup discovery would silently under-count the fleet - a letter would read as
+	// having nothing modelled purely from being asked too early, and the Land panel would
+	// offer fewer aeroplanes than exist. A no-op once the registry is already caught up
+	// (IsSearchAllAssets() true, which it is by the time PIE or a test runs in the ordinary case).
+	Registry.SearchAllAssets(true);
+	// bSearchSubClasses false: a UAircraftType subclass would be a second kind of type nothing
+	// else here treats specially, and this scan should not either without that being decided first.
+	Registry.GetAssetsByClass(UAircraftType::StaticClass()->GetClassPathName(), Assets, false);
+
+	TArray<UAircraftType*> Out;
+	Out.Reserve(Assets.Num());
+	for (const FAssetData& Asset : Assets)
+	{
+		// Loaded here: eighteen small data assets on 2026-09-27, already resident in any session
+		// that has dispatched an arrival.
+		UAircraftType* Type = Cast<UAircraftType>(Asset.GetAsset());
+		// THE PAPER TYPES (DA_Aircraft_A320, _B738) carry no mesh: left out when the caller wants something to watch.
+		if (Type != nullptr && (!bMeshedOnly || !Type->Mesh.IsNull()))
+		{
+			Out.Add(Type);
+		}
+	}
+	return Out;
+}
+
 const FLetterEnvelopeTable& UAirsideSettings::ResolveLetterEnvelopeTable()
 {
 	// BOUND BEFORE THE VALIDITY CHECK, every call: cheap once bDelegatesBound is already true
@@ -627,29 +658,10 @@ const FLetterEnvelopeTable& UAirsideSettings::ResolveLetterEnvelopeTable()
 		++ResolveLetterEnvelopeCallCountForTest;
 
 		// EVERY LOADED UAircraftType, ONCE, via the AssetRegistry - see ResolveLargestAircraftOfLetter's
-		// own header for why no in-content table exists to walk instead. bSearchSubClasses
-		// false: a UAircraftType subclass would be a second kind of type nothing else here
-		// treats specially, and this scan should not either without that being decided first.
-		TArray<FAssetData> Assets;
-		IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(
-			TEXT("AssetRegistry")).Get();
-		// SYNCHRONOUS, because a scan that returns before the registry has finished its own
-		// startup discovery would silently under-count the fleet - a letter would read as
-		// having nothing modelled purely from being asked too early. A no-op once the registry
-		// is already caught up (IsSearchAllAssets() true, which it is by the time PIE or a
-		// test runs in the ordinary case).
-		Registry.SearchAllAssets(true);
-		Registry.GetAssetsByClass(UAircraftType::StaticClass()->GetClassPathName(), Assets, false);
-
-		TArray<UAircraftType*> Fleet;
-		Fleet.Reserve(Assets.Num());
-		for (const FAssetData& Asset : Assets)
-		{
-			if (UAircraftType* Type = Cast<UAircraftType>(Asset.GetAsset()))
-			{
-				Fleet.Add(Type);
-			}
-		}
+		// own header for why no in-content table exists to walk instead. THROUGH EveryAircraftType,
+		// the one scan (#432), paper types included: an envelope is a fact about every modelled
+		// figure, whether or not a mesh exists to watch.
+		const TArray<UAircraftType*> Fleet = EveryAircraftType(/*bMeshedOnly*/ false);
 
 		for (uint8 Index = 0; Index < UE_ARRAY_COUNT(Cache.Table.Envelopes); ++Index)
 		{

@@ -81,7 +81,7 @@ UOpsRuntime::UOpsRuntime()
 	FlightBoard->AdmitsArrivals = [WeakAirport]()
 	{
 		const UAirport* Live = WeakAirport.Get();
-		return Live == nullptr || Live->Status() == EAirportStatus::Open;
+		return Live == nullptr || Live->AdmitsArrivals();
 	};
 
 	// The Unstick menu, the same shape again: a pointer, and the two boards it composes.
@@ -446,7 +446,7 @@ void UOpsRuntime::WireBus()
 	// ENFORCED BY: AirportOps.Present.Airport.ReopenForgetsAirlineVerdicts
 	Bus.Subscribe<FAirportStatusChangedEvent>(EOpsTier::Sim, TEXT("Offers"), [this](const FAirportStatusChangedEvent& E)
 	{
-		if (E.New == EAirportStatus::Open)
+		if (UAirport::AdmitsArrivals(E.New))
 		{
 			OfferGenerator->ForgetAirlineVerdicts();
 		}
@@ -469,7 +469,7 @@ void UOpsRuntime::WireBus()
 	Bus.Subscribe<FAirportStatusChangedEvent>(EOpsTier::Sim, TEXT("FlightBoard"), [this](const FAirportStatusChangedEvent& E)
 	{
 		UGroundTraffic* Model = LiveModel();
-		if (E.New == EAirportStatus::Open)
+		if (UAirport::AdmitsArrivals(E.New))
 		{
 			return;
 		}
@@ -565,7 +565,7 @@ void UOpsRuntime::WireBus()
 	Bus.Subscribe<FBuildRefusedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FBuildRefusedEvent& E) { Events->OnBuildRefused.Broadcast(E.What, E.Price, E.Balance); });
 	Bus.Subscribe<FLandRefusedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
-		[this](const FLandRefusedEvent& E) { Events->OnLandRefused.Broadcast(E.Why); });
+		[this](const FLandRefusedEvent& E) { Events->OnLandRefused.Broadcast(E.Why, E.Sentence); });
 	Bus.Subscribe<FBalanceSignChangedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FBalanceSignChangedEvent& E) { Events->OnBalanceSignChanged.Broadcast(E.bOverdrawn); });
 
@@ -1323,26 +1323,15 @@ EArrivalRefusal UOpsRuntime::LandNear(const FVector2D& Focus, const FAirframe* O
 		// NoRunway rather than a new refusal of its own: there is nothing here to check a
 		// runway AGAINST, which is the same fact that refusal already names.
 		UE_LOG(LogAirportOps, Warning, TEXT("Land: no attached network to land on."));
-		Bus.Publish(FLandRefusedEvent{ EArrivalRefusal::NoRunway });
+		Bus.Publish(FLandRefusedEvent{ EArrivalRefusal::NoRunway, ArrivalPlanner::DescribeRefusal(EArrivalRefusal::NoRunway) });
 		return EArrivalRefusal::NoRunway;
 	}
 
-	// A CLOSED AIRPORT ADMITS NO ARRIVALS, THE DEBUG ONE INCLUDED (ruling I1, 2026-09-30) - asked BEFORE AcceptImmediate,
-	// which leaves a refused flight in the inbox as an offer. NoRunway is Airside's own refusal and toasts as one; a
-	// player's closure has no Airside word, so it says "Airport closed" and returns NotAdmitted ("may not use it").
+	// NO STATUS BRANCHES HERE ANY MORE (#431): a closed airport admits no arrivals, the debug one included (ruling I1,
+	// 2026-09-30) - and that is the board's gate now, asked by TryAccept after the plan, so key 7, the inbox and the
+	// Land panel refuse a closure with one sentence. This re-checked the status itself because AcceptImmediate reported
+	// its refusals by asking the plan again, which a closure passes.
 	// ENFORCED BY: AirportOps.Present.Airport.LandRefusedWhileClosed
-	if (Airport->Status() == EAirportStatus::NoRunway)
-	{
-		UE_LOG(LogAirportOps, Warning, TEXT("Land: refused - the airport has no runway"));
-		Bus.Publish(FLandRefusedEvent{ EArrivalRefusal::NoRunway });
-		return EArrivalRefusal::NoRunway;
-	}
-	if (Airport->Status() == EAirportStatus::ClosedByPlayer)
-	{
-		UE_LOG(LogAirportOps, Warning, TEXT("Land: refused - the airport is closed"));
-		Bus.Publish(FNotificationEvent{ TEXT("Airport closed") });
-		return EArrivalRefusal::NotAdmitted;
-	}
 
 	// THE SAME RESOLVER EVERY DISPATCH FALLS BACK TO, for the same reason: an aircraft that
 	// approached as one airframe and taxied as another would be two different aircraft
@@ -1371,21 +1360,40 @@ EArrivalRefusal UOpsRuntime::LandNear(const FVector2D& Focus, const FAirframe* O
 	// AcceptImmediate's own header (issue #96). THROUGH THE BOARD WHEN THERE IS ONE, and there
 	// always is one here - this class owns it - which is exactly what makes a direct dispatch
 	// two doors onto arrival: an aeroplane landed straight onto the traffic model would belong
-	// to no flight, so nothing would ever give its stand back or know it had landed.
+	// to no flight, so nothing would ever give its stand back or know it had landed. AND THROUGH
+	// TryAccept (#431): the plan the inbox greys on, so a field with a stand and no exit refuses here too
+	// rather than accepting a flight that holds for ever.
+	FString Sentence;
 	const EArrivalRefusal Why = FlightBoard->AcceptImmediate(*Traffic, *Target->Network, *Clock,
-		Airframe, Focus, NSLOCTEXT("AirportOps", "DebugAirline", "(key 7)"));
+		Airframe, Focus, NSLOCTEXT("AirportOps", "DebugAirline", "(key 7)"), &Sentence);
 	if (Why != EArrivalRefusal::None)
 	{
 		// SAID TO THE PLAYER, not only the log: AcceptImmediate refuses BEFORE any dispatch, so Airside's
-		// OnArrivalRefused - the toast key 7 used to rely on - never fires (spec 2026-09-29-ops-alerts §2).
+		// OnArrivalRefused - the toast key 7 used to rely on - never fires (spec 2026-09-29-ops-alerts §2). WITH THE
+		// REFUSAL'S OWN SENTENCE (#456 review): the reason alone reads "not admitted to that runway" for an
+		// arrivals-only field, whose real reason is that nothing can take the departure.
 		// ENFORCED BY: AirportOps.Present.Alerts.LandRefusalReachesUi
-		Bus.Publish(FLandRefusedEvent{ Why });
+		Bus.Publish(FLandRefusedEvent{ Why, Sentence });
 		// The key used to do nothing at all when the airport was full. Now it says which of the
-		// seven refusals it was, in the sentence the inbox would show.
-		UE_LOG(LogAirportOps, Warning, TEXT("Land: no flight. %s"),
-			*ArrivalPlanner::DescribeRefusal(Why));
+		// refusals it was, in the sentence the inbox would show.
+		UE_LOG(LogAirportOps, Warning, TEXT("Land: no flight. %s"), *Sentence);
 	}
 	return Why;
+}
+
+FArrivalQuote UOpsRuntime::QuoteLanding(const FAirframe& Airframe, const FVector2D& Near) const
+{
+	const UGroundTraffic* Traffic = Target != nullptr ? Target->GetGroundTraffic() : nullptr;
+	if (Target == nullptr || Target->Network == nullptr || Traffic == nullptr)
+	{
+		// LandNear's own refusal for the same fact, worded the same way.
+		FArrivalQuote None;
+		None.Why = EArrivalRefusal::NoRunway;
+		None.Sentence = ArrivalPlanner::DescribeRefusal(EArrivalRefusal::NoRunway);
+		return None;
+	}
+	// THE QUOTE AcceptImmediate's TryAccept will ask - the plan, then the gate - for an arrival that is not a flight yet.
+	return FlightBoard->QuoteArrival(*Traffic, *Target->Network, Airframe, Near);
 }
 
 bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
@@ -1469,7 +1477,7 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// AirportOps.Present.Airport.ClosedLoadCancelsTheUnarrived
 	// A NULL TRAFFIC MODEL still demotes and cancels (steps 1-2 need no model); the board says what it skipped.
 	UGroundTraffic* Model = Target->GetTraffic() != nullptr ? Target->GetTraffic()->GetModel() : nullptr;
-	FlightBoard->RestoreAfterLoad(Model, *Target->Network, *Clock, Airport->Status() == EAirportStatus::Open);
+	FlightBoard->RestoreAfterLoad(Model, *Target->Network, *Clock, Airport->AdmitsArrivals());
 	// THE REPEATERS TOO, from the loaded Now - see RearmRepeatingSchedules (review I1).
 	RearmRepeatingSchedules();
 	// AND THE SAFETY NET, both halves, for the same reason: its entry was booked against the pre-load clock. Cancelled;

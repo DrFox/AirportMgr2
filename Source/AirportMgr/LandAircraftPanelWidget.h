@@ -44,9 +44,11 @@ public:
  * restart, or waiting for the board to offer one. The flare fix of 2026-09-27 was found by
  * reading numbers because nothing could put an A380 on the runway to be watched.
  *
- * GREYED ROWS ARE CLICKS THE GAME WOULD REFUSE, judged by LandChoices::Build against the
- * runway a landing from the view focus would use - never a second opinion about admission - and
- * against the airport's status: while it is not open, every row (whole-stack review M1).
+ * GREYED ROWS ARE CLICKS THE GAME WOULD REFUSE: each row renders UOpsRuntime::QuoteLanding at the
+ * view focus - the arrival plan and the airport's gate that the click's accept asks (#432) - never a
+ * second opinion about admission. It judged the nearest runway itself until #432, stale since #412
+ * made the planner land on whichever runway takes the arrival. While the airport is not open, every
+ * row the plan would take is refused by the gate (whole-stack review M1).
  *
  * C++ BASE, BLUEPRINT OPTIONAL, the rule every panel here follows: the code builds a plain
  * card when no asset supplies one. A Widget Blueprint may supply RowColumn and TitleText.
@@ -77,14 +79,14 @@ public:
 	virtual void OnWindowClosedByPlayer() override;
 
 	/**
-	 * Re-judge every row against the current runway and repaint if anything changed. What
+	 * Re-quote every row if anything a quote reads has moved, and repaint if a verdict changed. What
 	 * NativeTick calls while open, and what Toggle calls on opening.
 	 */
 	void Refresh();
 
 	/** Refresh against a given driver and ops runtime - Refresh passes Controller() and the ops subsystem's, both
-	 *  null in a headless world (see ClickRowForTest), so a test hands its own in. No runtime (the editor mode) is not
-	 *  a closure: the airport reads as open. */
+	 *  null in a headless world (see ClickRowForTest), so a test hands its own in. No runtime, nothing lands: every row
+	 *  is refused, since the land path is the flight board's (#431). */
 	void RefreshFor(const ARoadBuildController* C, const UOpsRuntime* Runtime = nullptr);
 
 	/** Row Index's button is enabled - it is a click the game would take. */
@@ -145,8 +147,9 @@ private:
 	/**
 	 * What the rows were last JUDGED from - one step before PaintedRefusals (ops batch 3 PR E). That gate saved the
 	 * widgets; Build itself still ran every frame, a CheckArrival per type. Now Build runs when FLandChoicesKey moves:
-	 * the focus reduced to the runway it picks, the network's two revisions, the network object. Valid once built;
-	 * a close does not reset it, since nothing it keys on is the panel's own.
+	 * the focus reduced to the runway the planner asks first, the network's two revisions, the traffic's occupancy,
+	 * the network object, the gate and the runtime. Each row is a whole arrival plan since #432, so this matters more.
+	 * Valid once built; a close does not reset it, since nothing it keys on is the panel's own.
 	 */
 	FLandChoicesKey JudgedKey;
 	bool bJudged = false;

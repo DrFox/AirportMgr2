@@ -277,12 +277,15 @@ struct AIRPORTOPS_API FBuildRefusedEvent
 struct AIRPORTOPS_API FLandRefusedEvent
 {
 	EArrivalRefusal Why = EArrivalRefusal::None;
+	/** The refusal's own sentence - the plan's (figures, admission) or the airport's gate - which the toast shows. The
+	 *  reason alone reads "not admitted to that runway" for an arrivals-only field (#456 review). */
+	FString Sentence;
 	static const TCHAR* EventName() { return TEXT("LandRefused"); }
 	FString Describe() const;
 };
 
 /**
- * The player accepted an offer - UFlightBoard::Accept, once the stand is held. Accept is a player command
+ * The player accepted an offer - UFlightBoard::TryAccept, once the stand is held. An accept is a player command
  * called on the board straight from the game module (OfferViewModels), so before this event an accept
  * dirtied no pass at all. No toast (spec 2026-09-29-ops-batch3 §0): the flight moving into the accepted
  * list is the feedback. No roster score either - accepting is not something the airline experiences.

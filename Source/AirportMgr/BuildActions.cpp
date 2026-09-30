@@ -143,13 +143,14 @@ namespace
 			// what land now, each its own type - see ULandAircraftPanelWidget.
 			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleLandPanel(); },
 			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsLandPanelShowing(); },
-			// AND OPEN: a closed airport admits no arrivals, the debug one included (ruling I1, 2026-09-30). No runtime
-			// (the editor mode) is not a closure.
+			// AND OPEN: a closed airport admits no arrivals, the debug one included (ruling I1, 2026-09-30) - UAirport::
+			// AdmitsArrivals, the one predicate (#431). AND A RUNTIME: landing is the flight board's, and with none there is
+			// nothing to land through - the board-less fallback that made "no runtime" look like a working Land went
+			// with #431 (it ran only in headless tests).
 			// ENFORCED BY: AirportMgr.Actions.LandGreyedWhileClosed
 			[](const FBuildActionContext& Ctx)
 			{
-				return Ctx.Controller.HasRunway()
-					&& (Ctx.Runtime == nullptr || Ctx.Runtime->GetAirport()->Status() == EAirportStatus::Open);
+				return Ctx.Runtime != nullptr && Ctx.Controller.HasRunway() && Ctx.Runtime->GetAirport()->AdmitsArrivals();
 			}));
 		Out.Add(Make(TEXT("aircraft.guidelines"), EActionSection::Aircraft, LOCTEXT("Guidelines", "Guidelines"), EKeys::G, false,
 			[](FBuildActionContext& Ctx) { Ctx.Controller.OnToggleGuidelines(); },

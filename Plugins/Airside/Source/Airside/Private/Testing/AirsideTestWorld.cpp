@@ -5,6 +5,7 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Engine/Engine.h"
+#include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Present/AirsideBuildingsActor.h"
 #include "Present/RoadNetworkActor.h"
@@ -43,21 +44,10 @@ TArray<UAircraftType*> EveryAircraftType()
 	// header comment for why an unfinished scan is worse than a slow one here.
 	Registry.WaitForCompletion();
 
-	TArray<FAssetData> Assets;
-	Registry.GetAssetsByClass(UAircraftType::StaticClass()->GetClassPathName(), Assets);
-
-	TArray<UAircraftType*> Out;
-	for (const FAssetData& Data : Assets)
-	{
-		if (UAircraftType* Type = Cast<UAircraftType>(Data.GetAsset()))
-		{
-			// NOT THE PAPER TYPES - see this function's header comment.
-			if (!Type->Mesh.IsNull())
-			{
-				Out.Add(Type);
-			}
-		}
-	}
+	// THE ONE SCAN (#432) - UAirsideSettings::EveryAircraftType, meshed only: NOT THE PAPER TYPES, see this
+	// function's header comment. It had its own copy of that rule, and the Land panel a third; this helper
+	// adds the wait above and the floor below, and nothing else.
+	TArray<UAircraftType*> Out = UAirsideSettings::EveryAircraftType(/*bMeshedOnly*/ true);
 
 	// A FLOOR, NOT AN EXACT COUNT - see the header comment for why 12 and why ensureAlways
 	// rather than a silent return.

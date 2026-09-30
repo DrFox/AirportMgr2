@@ -147,6 +147,25 @@ bool FOfferCountdownIgnoredTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferCountdownGateNotInVerdictTest, "AirportOps.Model.Offers.Countdown.LapseReadsThePlanNotTheGate",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferCountdownGateNotInVerdictTest::RunTest(const FString& Parameters)
+{
+	// #431: THE AIRPORT'S GATE IS NOT IN THE CACHED VERDICT. TryAccept and the inbox row ask QuoteFor - the verdict,
+	// then the gate - but the lapse classifier reads the verdict alone: an offer the plan would take, lapsing while the
+	// airport admits no arrivals, was ignored, not unacceptable. Folding the gate into VerdictFor turns this red.
+	FCountdownRig Rig;
+	Rig.Board->AdmitsArrivals = []() { return false; };
+	UFlight* Flight = Rig.Offer(60.0);
+	const FArrivalQuote Quote = Rig.Board->QuoteFor(*Rig.Traffic, *Rig.Net, *Flight);
+	TestEqual(TEXT("the quote is refused at the gate"), Quote.Why, EArrivalRefusal::NotAdmitted);
+	TestTrue(FString::Printf(TEXT("in the gate's words ('%s')"), *Quote.Sentence), Quote.Sentence.Contains(TEXT("closed")));
+	Rig.Tick(61.0);
+	TestEqual(TEXT("it lapses"), Flight->Phase, EFlightPhase::Expired);
+	TestEqual(TEXT("as ignored - the plan would have taken it"), Flight->LapseReason, ELapseReason::Ignored);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferCountdownNeverAcceptableTest, "AirportOps.Model.Offers.Countdown.LapseNeverAcceptable",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FOfferCountdownNeverAcceptableTest::RunTest(const FString& Parameters)

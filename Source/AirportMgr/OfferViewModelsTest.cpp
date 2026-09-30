@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Testing/AirsideTestGraph.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/AirlineDefinition.h"
@@ -24,6 +25,14 @@ namespace
 		Net->PlaceEntity(Stand, Stand->Anchors, FVector2D::ZeroVector, 0.0, 3600.0,
 			Stand->PoseRole, Stand->Trucks);
 		return Net;
+	}
+
+	/** ONE stand on a FIELD AN ARRIVAL CAN USE - runway, exit, taxiway, stand (#431): an accept is the arrival plan's now, so a strip nothing can land on, or a stand nothing reaches, accepts nothing. Sized for InboxOffer's airframe. */
+	URoadNetwork* InboxField()
+	{
+		FAirframe Airframe;
+		Airframe.Wingspan = 3400.0;
+		return FTestAirport::Build(Airframe).Net;
 	}
 
 	UFlight* InboxOffer(double ArrivesAt)
@@ -119,7 +128,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FOfferInboxAcceptGoesThroughTheBoardTest::RunTest(const FString& Parameters)
 {
-	URoadNetwork* Net = InboxNetwork();   // ONE stand
+	URoadNetwork* Net = InboxField();   // ONE stand
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
 	USimClock* Clock = NewObject<USimClock>();
 	UFlightBoard* Board = NewObject<UFlightBoard>();

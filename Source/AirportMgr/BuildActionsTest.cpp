@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "UIStyle.h"
 #include "UI/UiMenuButton.h"
+#include "Content/AirsideSettings.h"
 #include "Testing/AirsideTestGraph.h"
 #include "Profiles/RoadProfile.h"
 #include "Present/RoadNetworkActor.h"
@@ -626,10 +627,8 @@ namespace
 		const int32 A = Actor->PlaceNode(FVector2D(0.0, 30000.0));
 		const int32 B = Actor->PlaceNode(FVector2D(20000.0, 30000.0));
 		Actor->ConnectNodes(A, B);
-		Actor->MinimumRunwayLength = 100.0;
-		Actor->PlaceRunway(FVector2D(0.0, -50000.0), FVector2D(6000.0, -50000.0), TestProfiles::Runway());
-		UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
-		Actor->Network->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 90000.0), 0.0, 3600.0, StandDef->PoseRole, StandDef->Trucks);
+		// A FIELD AN ARRIVAL CAN USE - runway, exit, taxiway, stand (#431): an accept is the arrival plan's now, so a strip nothing can land on, or a stand nothing reaches, accepts nothing.
+		FTestAirport::Build(UAirsideSettings::ResolveDefaultAirframe(), FTestAirportOptions(), Actor->Network);
 		UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 		Runtime->Attach(Actor);
 		for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
@@ -640,7 +639,8 @@ namespace
 	UFlight* AirportActionAccepted(UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
 	{
 		UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
-		Flight->Airframe.Wingspan = 3400.0;
+		// THE CONTENT DEFAULT, what AirportActionRuntime's field is sized for.
+		Flight->Airframe = UAirsideSettings::ResolveDefaultAirframe();
 		Flight->LeadTimeSeconds = 1.0e7;
 		Runtime.GetFlightBoard()->AddOffer(*Runtime.GetClock(), Flight);
 		return Runtime.GetFlightBoard()->Accept(*Actor.GetTraffic()->GetModel(), *Actor.Network, *Runtime.GetClock(), *Flight) ? Flight : nullptr;
@@ -860,6 +860,11 @@ bool FLandGreyedWhileClosedTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("CONTROL: open with a runway, Land is enabled"), Land->IsEnabled(Ctx));
 	Runtime->SetAirportClosed(true);
 	TestFalse(TEXT("closed: Land is greyed"), Land->IsEnabled(Ctx));
+	Runtime->SetAirportClosed(false);
+	// NO RUNTIME, NOTHING TO LAND THROUGH (#431): the board-less fallback that made "no runtime" look like a working Land
+	// is gone, so the button no longer offers a click the controller would only refuse.
+	Ctx.Runtime = nullptr;
+	TestFalse(TEXT("no runtime: Land is greyed"), Land->IsEnabled(Ctx));
 	return true;
 }
 

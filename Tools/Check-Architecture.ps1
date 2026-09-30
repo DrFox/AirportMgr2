@@ -371,13 +371,14 @@ $AllowedCallers = @(
     },
     @{
         # CONFIRMED BY GREP FOR #255: production callers today are AirsideSettings.cpp
-        # (itself), RoadBuildController.cpp and OpsRuntime.cpp. Unlike Piper, tests call this
+        # (itself) and OpsRuntime.cpp - RoadBuildController.cpp's went with its board-less Land
+        # fallback (#431), and a new one there would be that fallback returning. Unlike Piper, tests call this
         # directly from a couple dozen files on purpose - it IS the canonical "give me a
         # plane" accessor test fixtures are supposed to use - so tests are blanket-exempt
         # rather than narrowed to one fixture file.
         Name        = 'UAirsideSettings::ResolveDefaultAirframe'
         Pattern     = 'UAirsideSettings::ResolveDefaultAirframe\s*\('
-        ProdAllowed = @('Public\Content\AirsideSettings.h', 'Private\Content\AirsideSettings.cpp', 'Source\AirportMgr\RoadBuildController.cpp', 'Private\Present\OpsRuntime.cpp')
+        ProdAllowed = @('Public\Content\AirsideSettings.h', 'Private\Content\AirsideSettings.cpp', 'Private\Present\OpsRuntime.cpp')
         TestExempt  = $true
         ProdReason  = 'a new production caller resolves the default airframe a second way instead of taking it from context - route it through one of the rows above or extend this row and say why'
     },
@@ -644,6 +645,48 @@ $AllowedCallers = @(
         ProdAllowed = @('Public\Present\RoadEditFacade.h', 'Private\Present\RoadEditFacade.cpp', 'Private\Present\OpsRuntime.cpp')
         TestExempt  = $true
         ProdReason  = 'remove a module only through UFacilityPurchases::RemoveUnseated (the ApplyModuleRemoval hook UOpsRuntime wires to the facade), which refunds it, logs it and toasts it'
+    },
+    @{
+        # ONE PREDICATE FOR "THE AIRPORT TAKES ARRIVALS" (#431): UAirport::AdmitsArrivals. `Status() == Open` was spelled
+        # at nine sites across the ops model, the runtime and the game module, and reached the model three ways. A
+        # comparison against Open outside the airport is that list growing a tenth entry.
+        Name        = 'EAirportStatus::Open compared'
+        Pattern     = '(==|!=)\s*EAirportStatus::Open\b|\bEAirportStatus::Open\s*(==|!=)'
+        ProdAllowed = @('Public\Model\Airport.h', 'Private\Model\Airport.cpp')
+        TestExempt  = $true
+        ProdReason  = 'ask UAirport::AdmitsArrivals (or its static form for a status you hold) - the one predicate (#431)'
+    },
+    @{
+        # ONE UAircraftType SCAN (#432): UAirsideSettings::EveryAircraftType. The Land panel, the letter envelope, the
+        # test helper and the anim bench each walked the registry with their own rule, and only one waited for its
+        # startup discovery - a scan too early under-counts, silently.
+        Name        = 'UAircraftType registry scan'
+        Pattern     = 'GetAssetsByClass\s*\(\s*UAircraftType::StaticClass'
+        ProdAllowed = @('Private\Content\AirsideSettings.cpp')
+        TestExempt  = $true
+        ProdReason  = 'enumerate aircraft types through UAirsideSettings::EveryAircraftType(bMeshedOnly), the one synchronous scan (#432)'
+    },
+    @{
+        # AN ACTOR'S FALLBACK IS MARKED IN ONE PLACE (#459, #465 review): ARoadNetworkActor::ResolveProfile, where it is
+        # made. OpsSave writes every marked profile as none, so a second writer would make a real profile vanish from a
+        # save. RoadProfile.h declares the field (its default).
+        Name        = 'URoadProfile::bActorFallback written'
+        Pattern     = '\bbActorFallback\s*=(?!=)'
+        ProdAllowed = @('Public\Profiles\RoadProfile.h', 'Private\Present\RoadNetworkActor.cpp')
+        TestExempt  = $true
+        ProdReason  = 'only ARoadNetworkActor::ResolveProfile marks its fallback - see URoadProfile::bActorFallback'
+    },
+    @{
+        # AN ACCEPT HOLDS THE STAND ITS PLAN CHOSE (#431): UFlightBoard::TryAccept -> UStandAllocator::Hold. Reserve picks
+        # the smallest fitting stand with NO reach check, and is left to the board's own re-holds (a flight whose hold was
+        # lost - the queue, a graph rebuild, a load), a gap tracked as #471. A caller anywhere else would bring back the
+        # hold on a stand nothing can taxi to. The pattern is a Reserve call with three or more arguments: TArray::Reserve
+        # takes one.
+        Name        = 'UStandAllocator::Reserve (reach-blind hold)'
+        Pattern     = '(\.|->)Reserve\s*\(\s*\*?\w+\s*,\s*\*?\w+\s*,'
+        ProdAllowed = @('Private\Model\FlightBoard.cpp')
+        TestExempt  = $true
+        ProdReason  = 'accept through UFlightBoard::TryAccept, which holds the stand its plan taxis to (UStandAllocator::Hold) - Reserve is reach-blind (#471)'
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -1506,6 +1549,11 @@ $inUsePlanners = @(
     (Join-Path $plugin 'Private\Model\ArrivalPlanner.cpp'),
     (Join-Path $plugin 'Private\Model\DeparturePlanner.cpp')
 )
+# #432: THE GAME MODULE TOO. The Land panel chose "the runway a landing would use" by NearestRunwayThreshold itself
+# (LandChoices.cpp) - a view deciding a gameplay verdict, stale since #412 made the planner land on whichever runway
+# takes the arrival. A view asks the model (UOpsRuntime::QuoteLanding, ArrivalPlanner::FirstLandingRunway); every
+# non-test .cpp under Source\AirportMgr is read with the planners.
+$inUsePlanners += @(Get-Sources (Join-Path $Root 'Source\AirportMgr') @('.cpp') | Where-Object { $_.Name -notlike '*Test.cpp' } | ForEach-Object { $_.FullName })
 foreach ($path in $inUsePlanners) {
     if (-not (Test-Path $path)) {
         $failures.Add("runway-end-in-use: $path is named by rule 28 but does not exist - update the rule, do not let it check nothing")

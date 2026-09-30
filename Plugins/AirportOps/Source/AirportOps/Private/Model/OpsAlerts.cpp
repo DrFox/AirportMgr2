@@ -132,7 +132,7 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 	// THE AIRPORT'S STATUS (spec 2026-09-29-ops-batch3 §3). No runway is the player's to fix; a closure is the
 	// player's own choice and raises nothing. While not Open the generator judges no airline, so a verdict left
 	// from before the closure would be a stale alert: airlines are reported only while Open.
-	const bool bOpen = Sources.Airport == nullptr || Sources.Airport->Status() == EAirportStatus::Open;
+	const bool bOpen = Sources.Airport == nullptr || Sources.Airport->AdmitsArrivals();
 	if (Sources.Airport != nullptr && Sources.Airport->Status() == EAirportStatus::NoRunway)
 	{
 		Found.Add(OpsAlertOf(EAlertKind::NoRunway, 0, NAME_None,

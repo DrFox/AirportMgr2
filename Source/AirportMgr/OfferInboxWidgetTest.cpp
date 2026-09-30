@@ -19,6 +19,7 @@
 #include "OfferViewModels.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
+#include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
 #include "UI/UiButton.h"
 #include "UIStyle.h"
@@ -48,9 +49,10 @@ bool FOfferInboxWidgetTest::RunTest(const FString& Parameters)
 	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 	if (!TestNotNull(TEXT("the first edit made a network"), Actor->Network.Get())) { return false; }
 
-	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-	Actor->Network->PlaceEntity(Stand, Stand->Anchors, FVector2D::ZeroVector, 0.0, 3600.0,
-		Stand->PoseRole, Stand->Trucks);
+	// A FIELD AN ARRIVAL CAN USE - runway, exit, taxiway, stand (#431): an accept is the arrival plan's now, so a strip nothing can land on, or a stand nothing reaches, accepts nothing. Sized for the offers' own airframe.
+	FAirframe FieldAirframe;
+	FieldAirframe.Wingspan = 3400.0;
+	FTestAirport::Build(FieldAirframe, FTestAirportOptions(), Actor->Network);
 
 	UOfferInboxWidget* Widget = CreateWidget<UOfferInboxWidget>(World, UOfferInboxWidget::StaticClass());
 	if (!TestNotNull(TEXT("the widget was created"), Widget)) { return false; }

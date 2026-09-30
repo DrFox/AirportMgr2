@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Testing/AirsideTestGraph.h"
 #include "Model/AirlineDefinition.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
@@ -35,9 +36,10 @@ namespace
 
 		FFbEventsFixture()
 		{
-			Net = NewObject<URoadNetwork>(GetTransientPackage());
-			UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-			Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, 0.0), 0.0, 3600.0, Stand->PoseRole, Stand->Trucks);
+			// A FIELD AN ARRIVAL CAN USE - runway, exit, taxiway, stand (#431): an accept is the arrival plan's now, so a strip nothing can land on, or a stand nothing reaches, accepts nothing. Sized for the offers' own airframe.
+			FAirframe Airframe;
+			Airframe.Wingspan = 3400.0;
+			Net = FTestAirport::Build(Airframe).Net;
 			Traffic = NewObject<UGroundTraffic>();
 			Clock = NewObject<USimClock>();
 			Board = NewObject<UFlightBoard>(GetTransientPackage());

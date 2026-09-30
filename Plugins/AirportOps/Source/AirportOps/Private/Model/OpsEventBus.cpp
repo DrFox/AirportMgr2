@@ -105,7 +105,7 @@ FString FBuildRefusedEvent::Describe() const
 
 FString FLandRefusedEvent::Describe() const
 {
-	return UEnum::GetValueAsString(Why);
+	return Sentence.IsEmpty() ? UEnum::GetValueAsString(Why) : FString::Printf(TEXT("%s: %s"), *UEnum::GetValueAsString(Why), *Sentence);
 }
 
 FString FFacilityUpgradedEvent::Describe() const

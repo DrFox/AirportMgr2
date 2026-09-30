@@ -265,8 +265,12 @@ const FOfferVerdict& UFlightBoard::VerdictFor(const UGroundTraffic& Traffic,
 	if (bPlanStale)
 	{
 		// THE REAL PLAN, with the live occupancy. The greyed-out reason is the sentence the
-		// arrival itself would print, because it is the same refusal.
-		Verdict.Why = WhyNotAcceptable(Traffic, Network, Flight);
+		// arrival itself would print, because it is the same refusal - and since #431 the
+		// stand the plan taxis to is kept with it, for TryAccept to hold.
+		const FArrivalQuote Plan = PlanQuote(Traffic, Network, Flight.Airframe, Flight.ApproachFocus, 0);
+		Verdict.Why = Plan.Why;
+		Verdict.Sentence = Plan.Sentence;
+		Verdict.Stand = Plan.Stand;
 		Verdict.BoardAt = BoardNow;
 		Verdict.OccupancyAt = OccupancyNow;
 	}
@@ -285,24 +289,122 @@ int32 UFlightBoard::TakeNextId()
 	return NextFlightId++;
 }
 
+FArrivalQuote UFlightBoard::PlanQuote(const UGroundTraffic& Traffic, const URoadNetwork& Network,
+	const FAirframe& Airframe, const FVector2D& Focus, int32 ExcludingHolder) const
+{
+	// #169: counted before the search runs, not after - GetWhyNotAcceptableCallsForTest exists
+	// to measure exactly how often this expensive call is reached, whatever it returns.
+	++WhyNotAcceptableCallsForTest;
+	// QUEUE, not Refuse: a busy runway is something an accepted flight waits for (spec
+	// 2026-09-28-arrival-queue section 1), so the row greys out only on what waiting cannot fix
+	// - a stand above all - and never on RunwayOccupied.
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(Network, Focus, Airframe, &Traffic.GetOccupancy(),
+		ERunwayBusy::Queue, ExcludingHolder);
+	FArrivalQuote Quote;
+	Quote.Why = Plan.Why;
+	// THE PLAN'S OWN SENTENCE, figures and admission included (#456 review) - the reason-only wording cannot say that
+	// an arrivals-only field refuses because nothing can take the departure.
+	Quote.Sentence = Plan.IsValid() ? FString() : ArrivalPlanner::DescribeRefusal(Plan);
+	if (Plan.IsValid())
+	{
+		// THE STAND THE PLAN TAXIS TO, as an entity - what an accept holds (#431). A plan whose route ends somewhere that
+		// is not a stand's pose cannot be accepted onto one, and says so rather than holding something else.
+		const int32 StandIndex = Network.FindEntityIndexByPoseNode(Plan.StandNode());
+		Quote.Stand = StandIndex != INDEX_NONE ? Network.EntityIdAt(StandIndex) : FEntityInstanceId();
+		if (!Quote.Stand.IsSet())
+		{
+			Quote.Why = EArrivalRefusal::NoRouteToStand;
+			Quote.Sentence = ArrivalPlanner::DescribeRefusal(Quote.Why, Airframe.Wingspan);
+		}
+	}
+	return Quote;
+}
+
+FArrivalQuote UFlightBoard::Gated(FArrivalQuote Quote) const
+{
+	// AFTER THE PLAN: a runway-less field is the plan's NoRunway, worded as the plan words it. A plan's yes at an airport
+	// the player has closed is the gate's - ruling I1, a closed airport admits no arrivals, the debug one included.
+	// NotAdmitted BECAUSE EArrivalRefusal HAS NO CLOSURE VALUE (it is the planner's, in Airside, which knows no airport):
+	// the nearest reason, with the real one in Sentence. A reader of Why alone must not word it - DescribeRefusal(
+	// NotAdmitted) says "not admitted to that runway" - which is why every listener carries the Sentence.
+	if (Quote.IsAccepted() && AdmitsArrivals && !AdmitsArrivals())
+	{
+		Quote.Why = EArrivalRefusal::NotAdmitted;
+		Quote.Sentence = TEXT("Arrival refused: the airport is closed - open it to take arrivals.");
+		Quote.Stand = FEntityInstanceId();
+	}
+	return Quote;
+}
+
+FArrivalQuote UFlightBoard::QuoteFor(const UGroundTraffic& Traffic, const URoadNetwork& Network,
+	const UFlight& Flight) const
+{
+	const FOfferVerdict& Verdict = VerdictFor(Traffic, Network, Flight);
+	FArrivalQuote Quote;
+	Quote.Why = Verdict.Why;
+	Quote.Sentence = Verdict.Sentence;
+	Quote.Stand = Verdict.Stand;
+	return Gated(MoveTemp(Quote));
+}
+
+FArrivalQuote UFlightBoard::QuoteArrival(const UGroundTraffic& Traffic, const URoadNetwork& Network,
+	const FAirframe& Airframe, const FVector2D& Focus) const
+{
+	return Gated(PlanQuote(Traffic, Network, Airframe, Focus, 0));
+}
+
 bool UFlightBoard::Accept(UGroundTraffic& Traffic, const URoadNetwork& Network, USimClock& Clock,
 	UFlight& Flight)
 {
-	if (Flight.Phase != EFlightPhase::Offered || Allocator == nullptr)
+	return TryAccept(Traffic, Network, Clock, Flight).IsAccepted();
+}
+
+FArrivalQuote UFlightBoard::TryAccept(UGroundTraffic& Traffic, const URoadNetwork& Network, USimClock& Clock,
+	UFlight& Flight)
+{
+	// REFUSED BEFORE THE PLAN, each worded and logged - a caller's bug or a fixture's, never a player's (see the header).
+	// NotAdmitted for Gated's reason: EArrivalRefusal has no value for these, so the Sentence carries the real one.
+	const auto Refuse = [&Flight](const TCHAR* Why)
 	{
-		return false;
+		UE_LOG(LogAirportOps, Log, TEXT("Flight %d not accepted: %s"), Flight.Id, Why);
+		FArrivalQuote Out;
+		Out.Why = EArrivalRefusal::NotAdmitted;
+		Out.Sentence = FString::Printf(TEXT("Arrival refused: %s."), Why);
+		return Out;
+	};
+	if (Flight.Phase != EFlightPhase::Offered)
+	{
+		return Refuse(TEXT("it is not an open offer"));
 	}
-	// NOT OPEN, NOTHING ACCEPTED (ruling I1): before the stand is held, so a refusal holds nothing.
-	if (AdmitsArrivals && !AdmitsArrivals())
+	if (Allocator == nullptr)
 	{
-		UE_LOG(LogAirportOps, Log, TEXT("Flight %d not accepted: the airport is not open"), Flight.Id);
-		return false;
+		return Refuse(TEXT("the board has no stand allocator to hold a stand with"));
+	}
+	if (Flight.Airframe.Wingspan <= 0.0)
+	{
+		return Refuse(TEXT("it has no airframe"));
 	}
 
-	if (!Allocator->Reserve(Traffic, Network, Flight))
+	// THE ONE EVALUATOR (#431): the cached plan verdict, then the airport's gate - the answer the inbox row shows and the
+	// Land panel quotes. NOT OPEN, NOTHING ACCEPTED (ruling I1): the gate refuses before the stand is held.
+	FArrivalQuote Quote = QuoteFor(Traffic, Network, Flight);
+	if (!Quote.IsAccepted())
 	{
-		UE_LOG(LogAirportOps, Log, TEXT("Flight %d not accepted: no stand admits it"), Flight.Id);
-		return false;
+		UE_LOG(LogAirportOps, Log, TEXT("Flight %d not accepted: %s"), Flight.Id, *Quote.Sentence);
+		return Quote;
+	}
+
+	// THE STAND THE PLAN TAXIS TO, and no other: the plan chose it from the stands it can REACH (ChooseStand), where
+	// Reserve's smallest fit took any admitted stand, reachable or not, and could leave this flight waiting NoFreeStand
+	// for the stand a later accept took. The verdict is dated by occupancy and by this board, so the stand it names is
+	// free now; a refusal here is a same-call race, and says so.
+	if (!Allocator->Hold(Traffic, Network, Flight, Quote.Stand))
+	{
+		Quote.Why = EArrivalRefusal::NoFreeStand;
+		Quote.Sentence = ArrivalPlanner::DescribeRefusal(Quote.Why, Flight.Airframe.Wingspan);
+		Quote.Stand = FEntityInstanceId();
+		UE_LOG(LogAirportOps, Warning, TEXT("Flight %d not accepted: the stand its plan chose could not be held"), Flight.Id);
+		return Quote;
 	}
 
 	Flight.Phase = EFlightPhase::Accepted;
@@ -325,7 +427,7 @@ bool UFlightBoard::Accept(UGroundTraffic& Traffic, const URoadNetwork& Network, 
 	{
 		Bus->Publish(FOfferAcceptedEvent{ Flight.Id, Flight.AirlineId, Flight.Stand });
 	}
-	return true;
+	return Quote;
 }
 
 void UFlightBoard::Schedule(UGroundTraffic& Traffic, USimClock& Clock, UFlight& Flight)
@@ -669,20 +771,30 @@ int32 UFlightBoard::OnGroundCount() const
 EArrivalRefusal UFlightBoard::WhyNotAcceptable(const UGroundTraffic& Traffic,
 	const URoadNetwork& Network, const UFlight& Flight) const
 {
-	// #169: counted before the search runs, not after - GetWhyNotAcceptableCallsForTest exists
-	// to measure exactly how often this expensive call is reached, whatever it returns.
-	++WhyNotAcceptableCallsForTest;
-	// QUEUE, not Refuse: a busy runway is something an accepted flight waits for (spec
-	// 2026-09-28-arrival-queue section 1), so the row greys out only on what waiting cannot fix
-	// - a stand above all - and never on RunwayOccupied.
-	const FArrivalPlan Plan = ArrivalPlanner::Plan(Network, Flight.ApproachFocus, Flight.Airframe,
-		&Traffic.GetOccupancy(), ERunwayBusy::Queue);
-	return Plan.Why;
+	// THE PLAN HALF OF THE ONE QUOTE - PlanQuote, where the count and the Queue rule now live, so this and the cached
+	// verdict cannot plan two different ways.
+	return PlanQuote(Traffic, Network, Flight.Airframe, Flight.ApproachFocus, 0).Why;
 }
 
 EArrivalRefusal UFlightBoard::AcceptImmediate(UGroundTraffic& Traffic, const URoadNetwork& Network,
-	USimClock& Clock, const FAirframe& Airframe, const FVector2D& Focus, FText Airline)
+	USimClock& Clock, const FAirframe& Airframe, const FVector2D& Focus, FText Airline, FString* OutSentence)
 {
+	// A FIELD THAT TAKES NO ARRIVALS HOLDS NO OFFERS (ruling I1, 2026-09-30): the closure withdrew them and the generator
+	// makes none, so a refused debug flight left in the inbox would be the only offer on a closed field. Not made at all,
+	// then - and the refusal is still THE ONE QUOTE (QuoteArrival: the plan, then the gate), asked before the flight
+	// exists rather than re-derived after, so a runway-less field says NoRunway and a closed one says it is closed.
+	// ENFORCED BY: AirportOps.Present.Airport.LandRefusedWhileClosed
+	if (AdmitsArrivals && !AdmitsArrivals())
+	{
+		const FArrivalQuote Refused = QuoteArrival(Traffic, Network, Airframe, Focus);
+		UE_LOG(LogAirportOps, Log, TEXT("AcceptImmediate: no flight made - %s"), *Refused.Sentence);
+		if (OutSentence != nullptr)
+		{
+			*OutSentence = Refused.Sentence;
+		}
+		return Refused.Why;
+	}
+
 	UFlight* Flight = NewObject<UFlight>(this);
 	Flight->Airframe = Airframe;
 	Flight->AirlineName = Airline;
@@ -699,16 +811,17 @@ EArrivalRefusal UFlightBoard::AcceptImmediate(UGroundTraffic& Traffic, const URo
 
 	AddOffer(Clock, Flight);
 
-	if (Accept(Traffic, Network, Clock, *Flight))
-	{
-		return EArrivalRefusal::None;
-	}
-
-	// Says WHICH refusal, the same sentence the inbox would show for it - see
-	// ArrivalPlanner::DescribeRefusal. The flight is left in the inbox rather than removed:
+	// THE REFUSAL TryAccept HIT, returned by the gate that refused - not re-derived by asking the plan again, which is
+	// how a closure, a null allocator or a span-0 airframe used to come back as None, "success" (#431). Says WHICH
+	// refusal, the same sentence the inbox would show for it. The flight is left in the inbox rather than removed:
 	// an offer nobody could accept yet is exactly what the board already does for one the
 	// generator makes, and a player watching the inbox sees the same row either way.
-	return WhyNotAcceptable(Traffic, Network, *Flight);
+	const FArrivalQuote Quote = TryAccept(Traffic, Network, Clock, *Flight);
+	if (OutSentence != nullptr)
+	{
+		*OutSentence = Quote.Sentence;
+	}
+	return Quote.Why;
 }
 
 int32 UFlightBoard::RetireEveryFlight()
@@ -783,45 +896,15 @@ void UFlightBoard::RestoreAfterLoad(UGroundTraffic* Traffic, const URoadNetwork&
 		Requeued.Num(), Cancelled, Flights.Num());
 }
 
-void UFlightBoard::OnAfterRestore(int32 SnapshotVersion)
+void UFlightBoard::OnAfterRestore(int32 /*SnapshotVersion*/)
 {
-	// Flights.Num() replaces the bHadFlights flag OpsSave::Restore used to keep around this
-	// call: a board with no flights has nothing to migrate either way, so asking its own state
-	// answers the same question without Restore having to remember which blobs it saw - which
-	// is what let Restore become a plain loop over every persistent object.
-	if (SnapshotVersion < 3 && Flights.Num() > 0)
-	{
-		AimUnaimedFlightsAtBoardFocus();
-	}
-
-	// SWEEP UNCONDITIONALLY, NOT GATED ON SnapshotVersion < 4 (issue #188): every save before
-	// History existed put every flight ever created in Flights, terminal or not, because there
-	// was nowhere else for one to go - and an unconditional sweep is self-healing if a future
-	// change ever finds a second way a terminal flight ends up back in Flights, rather than
-	// growing a second version check to remember here.
-	//
-	// SNAPSHOT FIRST: MoveToHistory mutates Flights, and this loop is walking it.
-	const TArray<TObjectPtr<UFlight>> Loaded = Flights;
-	for (const TObjectPtr<UFlight>& Each : Loaded)
-	{
-		if (Each == nullptr)
-		{
-			continue;
-		}
-		if (Each->Phase == EFlightPhase::Declined || Each->Phase == EFlightPhase::Expired
-			|| Each->Phase == EFlightPhase::Departed || Each->Phase == EFlightPhase::Cancelled
-			|| Each->Phase == EFlightPhase::Withdrawn)
-		{
-			// TerminatedAt DID NOT EXIST before this change, so a flight loaded from a save
-			// that predates it has none - ArrivesAt is the closest recorded moment to when it
-			// actually finished, and is only ever a fallback for THIS one-time migration: a
-			// flight retired after this change always carries the real TerminatedAt its own
-			// call site set - see Decline, TickOffers, and OnAgentPhase below. (ExpiresAt, the
-			// closer figure for a lapsed offer, went with snapshot v5.)
-			MoveToHistory(*Each, Each->ArrivesAt);
-		}
-	}
-
+	// NO MIGRATION LEFT (owner ruling 2026-09-30): since #452 (snapshot v6) a pre-v6 blob restores no flights - the
+	// board's Serialize warns "no flights by value" - so the v2 ApproachFocus migration and #188's sweep of terminal
+	// flights out of Flights could reach nothing from any real save, and went. A v6 save's Flights holds live flights
+	// only: each terminal transition calls MoveToHistory where it happens - eight sites in this file on 2026-09-30
+	// (TickOffers' lapse, Decline, CancelByAgent, CancelUnarrived's withdrawal and cancel, DemoteRestoredMidFlight,
+	// CancelUnarrivedAtLoad, OnAgentPhase's Departed), Decline's pinned, the rest by inspection.
+	// ENFORCED BY: AirportOps.Model.FlightSave.PreV6BlobRestoresNoFlights (the load half), AirportOps.Model.FlightBoard.HistoryStaysBoundedAcrossManySimulatedDays (Decline)
 	RebuildIndices();
 }
 
@@ -953,23 +1036,6 @@ void UFlightBoard::RebuildIndices()
 		if (Each != nullptr)
 		{
 			ById.Add(Each->Id, Each);
-		}
-	}
-}
-
-void UFlightBoard::AimUnaimedFlightsAtBoardFocus()
-{
-	// A LOAD-ONLY MIGRATION for a snapshot older than FOpsSnapshot::Version 3 - see
-	// OnAfterRestore, the one caller. Before UFlight::ApproachFocus existed (issue #96) every flight
-	// shared this one board-wide field, so a v1/v2 blob's flights have no per-flight focus
-	// at all; tagged-property load leaves the new field at FVector2D::ZeroVector, which
-	// would aim every restored flight at the world origin rather than wherever it was
-	// actually saved aimed.
-	for (const TObjectPtr<UFlight>& Each : Flights)
-	{
-		if (Each != nullptr)
-		{
-			Each->ApproachFocus = ApproachFocus;
 		}
 	}
 }

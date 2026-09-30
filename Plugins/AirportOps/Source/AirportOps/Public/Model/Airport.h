@@ -67,6 +67,15 @@ public:
 
 	/** The status as last derived. */
 	EAirportStatus Status() const { return Current; }
+
+	/**
+	 * THE ONE PREDICATE: does the airport take arrivals now (#431). It was spelled at nine sites as `Status() == Open`,
+	 * and reached the model three ways (a TFunction on the board, a pointer on the generator, a field for the alerts);
+	 * every one asks this now, and the static form answers for a status a caller holds (an event's New).
+	 * ENFORCED BY: Check-Architecture rule 4 ('EAirportStatus::Open compared' - only Airport.h/.cpp)
+	 */
+	bool AdmitsArrivals() const { return AdmitsArrivals(Current); }
+	static bool AdmitsArrivals(EAirportStatus Status) { return Status == EAirportStatus::Open; }
 	bool IsClosedByPlayer() const { return bClosedByPlayer; }
 
 	/** Re-derive against Network; on a change, log it and publish FAirportStatusChangedEvent. True if it changed. */
