@@ -10,6 +10,7 @@
 #include "Entities/EntityDefinition.h"
 #include "Model/LandingRun.h"
 #include "Model/TaxiwayRestriction.h"
+#include "Model/TrafficOccupancy.h"
 #include "Profiles/RoadProfile.h"
 
 FGuidelineNodeId TestGraph::Node(URoadNetwork& Net, double X, double Y)
@@ -197,6 +198,65 @@ FGuidelineNodeId FTestAirport::Pose(FEntityInstanceId Stand) const
 {
 	const FEntityInstance* E = Net->GetEntity(Stand);
 	return E != nullptr ? E->PoseNode : FGuidelineNodeId();
+}
+
+FGuidelineNodeId FTestTwoRunways::Pose(int32 Index) const
+{
+	const FEntityInstance* E = Stands.IsValidIndex(Index) ? Net->GetEntity(Stands[Index]) : nullptr;
+	return E != nullptr ? E->PoseNode : FGuidelineNodeId();
+}
+
+void FTestTwoRunways::SetUse(FRoadSegmentId Seed, ERunwayUse Use) const
+{
+	FRunwayFacts Facts = Net->RunwayFactsFor(Seed);
+	Facts.Use = Use;
+	Net->SetRunwayFacts(Seed, Facts);
+}
+
+void FTestTwoRunways::Hold(FTrafficOccupancy& Occupancy, FRoadSegmentId Seed, int32 AgentId) const
+{
+	for (const FTrafficResource& Surface : Net->RunwaySurfaces(Seed))
+	{
+		Occupancy.Assert(FTrafficClaim::Make(AgentId, Surface, /*bOccupied*/ true, 2));
+	}
+}
+
+FTestTwoRunways FTestTwoRunways::Build(const FAirframe& Airframe, URoadNetwork* ExistingNet)
+{
+	FTestTwoRunways Out;
+	Out.Net = ExistingNet != nullptr ? ExistingNet : NewObject<URoadNetwork>(GetTransientPackage());
+	const double Needed = FLandingRun::RequiredLandingDistance(
+		Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
+	const double ExitX = Needed * 1.2;
+	const double FarX = Needed * 3.0;
+	URoadProfile* Runway = TestProfiles::Runway();
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
+
+	auto Strip = [&](double Y, FRoadNodeId& OutExit)
+	{
+		const FRoadNodeId Threshold = Out.Net->AddNode(FVector2D(0.0, Y));
+		OutExit = Out.Net->AddNode(FVector2D(ExitX, Y));
+		const FRoadNodeId Far = Out.Net->AddNode(FVector2D(FarX, Y));
+		const FRoadSegmentId Seed = TestGraph::Lay(*Out.Net, Threshold, OutExit, Runway);
+		TestGraph::Lay(*Out.Net, OutExit, Far, Runway);
+		return Seed;
+	};
+	FRoadNodeId ExitA, ExitB;
+	Out.A = Strip(0.0, ExitA);
+	Out.B = Strip(-40000.0, ExitB);
+	const FRoadNodeId Middle = Out.Net->AddNode(FVector2D(ExitX, -20000.0));
+	TestGraph::Lay(*Out.Net, ExitA, Middle, Taxiway);
+	TestGraph::Lay(*Out.Net, Middle, ExitB, Taxiway);
+	TestGraph::Derive(*Out.Net);
+
+	// FACING EAST, so the lead-in casts west onto the taxiway - FTestAirport::Build's reason.
+	for (const double Y : { -10000.0, -16000.0 })
+	{
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+		Out.Stands.Add(Out.Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(ExitX + 9000.0, Y), 0.0));
+	}
+	FAnchorLink::Build(*Out.Net, UAirsideSettings::ResolveLargestServiceVehicle());
+	return Out;
 }
 
 FTestAirport FTestAirport::BuildScale(const FAirframe& Airframe, int32 Seed, bool bDerived, URoadNetwork* ExistingNet)
