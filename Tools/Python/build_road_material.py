@@ -119,6 +119,29 @@ TRACK_WEAR = 0.0
 TRACK_HALF_WIDTH = 300.0
 TRACK_FEATHER = 400.0
 
+# CLOSE-UP SPECKLE (2026-09-30): OFF in the parent (SpeckleAmount 0), set on grass only.
+# Up close a grass strip read as "green plastic" - one flat tone and the 2.5 m grain are
+# all it had, while the field beside it has three tones and a 17 m octave. This is a fine
+# value dappling, centimetres across, that stands in for "many blades" without drawing any.
+#
+# FADED BY CAMERA DEPTH, fully gone by SPECKLE_FADE_END metres. Top-down the strip already
+# looked right (the user, 2026-09-30), and a centimetre pattern seen from 300 m is not
+# detail but shimmer - the texture's mips would average it to mush at best. So the look the
+# user approved at distance is left exactly as it was.
+#
+# SIZE is the span of one tile of the 64 px noise texture, in metres: 1.5 m gives ~2.3 cm
+# per texel. A second octave at 0.37x (a non-integer ratio, so the two tilings never line
+# up) hides the repeat a single tile would show when the camera is near the ground.
+SPECKLE_AMOUNT = 0.0
+SPECKLE_SIZE = 1.5
+SPECKLE_FADE_START = 15.0
+SPECKLE_FADE_END = 40.0
+
+# Specular at the engine default, so every instance that does not set it is unchanged.
+# Grass sets it low: a lawn has no specular sheen, and a sheen band across a flat green
+# plane under a low sun is the single strongest "plastic" cue.
+SPECULAR = 0.5
+
 
 def fail(msg):
     unreal.log_error("MARKER: FAIL " + str(msg))
@@ -180,10 +203,24 @@ def build_material():
     grain = nodes.value_grain(
         lib, material, noise_texture, grain_size, grain_amount, -2900, -100)
 
-    surface = lib.create_material_expression(
+    grained = lib.create_material_expression(
         material, unreal.MaterialExpressionMultiply, -1300, -500)
-    lib.connect_material_expressions(weathered, "", surface, "A")
-    lib.connect_material_expressions(grain, "", surface, "B")
+    lib.connect_material_expressions(weathered, "", grained, "A")
+    lib.connect_material_expressions(grain, "", grained, "B")
+
+    # --- Close-up speckle: SPECKLE_* above; the chain is nodes.close_speckle ------------
+    speckle_size = nodes.scalar(lib, material, "SpeckleSize", SPECKLE_SIZE, -3000, -1000)
+    speckle_amount = nodes.scalar(lib, material, "SpeckleAmount", SPECKLE_AMOUNT, -3000, -920)
+    fade_start = nodes.scalar(lib, material, "SpeckleFadeStart", SPECKLE_FADE_START, -3000, -1200)
+    fade_end = nodes.scalar(lib, material, "SpeckleFadeEnd", SPECKLE_FADE_END, -3000, -1120)
+    speckle = nodes.close_speckle(
+        lib, material, noise_texture, speckle_size, speckle_amount, fade_start, fade_end,
+        -2900, -1000)
+
+    surface = lib.create_material_expression(
+        material, unreal.MaterialExpressionMultiply, -1200, -600)
+    lib.connect_material_expressions(grained, "", surface, "A")
+    lib.connect_material_expressions(speckle, "", surface, "B")
 
     # --- UV1: markings ---------------------------------------------------------------
     # UV1.X is lateral offset in uu, UV1.Y is distance along the centreline in uu.
@@ -415,6 +452,8 @@ def build_material():
     # double-darkens every crevice, and on a flat plane there are no crevices to darken.
     lib.connect_material_property(painted, "", unreal.MaterialProperty.MP_BASE_COLOR)
     lib.connect_material_property(roughness, "", unreal.MaterialProperty.MP_ROUGHNESS)
+    specular = nodes.scalar(lib, material, "Specular", SPECULAR, -200, 460)
+    lib.connect_material_property(specular, "", unreal.MaterialProperty.MP_SPECULAR)
 
     lib.recompile_material(material)
     unreal.EditorAssetLibrary.save_asset("%s/M_RoadSurface" % MAT_DIR)

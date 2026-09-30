@@ -6,6 +6,8 @@ void FBuildCameraRig::ApplyLimits(const FCameraRigLimits& Limits)
 	MaxDistance = Limits.MaxDistance;
 	MinPitch = Limits.MinPitch;
 	MaxPitch = Limits.MaxPitch;
+	CloseZoomDistance = Limits.CloseZoomDistance;
+	CloseZoomStepScale = Limits.CloseZoomStepScale;
 }
 
 void FBuildCameraRig::Reset(const FCameraRigLimits& Limits)
@@ -70,10 +72,21 @@ FBuildCameraRig FBuildCameraRig::InFrame(const FVector2D& Origin, double Heading
 
 void FBuildCameraRig::Zoom(double Step, double Notches)
 {
-	Distance = FMath::Clamp(
-		Distance * FMath::Pow(1.0 + Step, Notches),
-		FMath::Max(MinDistance, 1.0),
-		FMath::Max(MaxDistance, 1.0));
+	// ONE NOTCH AT A TIME, so a multi-notch call that crosses CloseZoomDistance takes the
+	// close step only for the notches that start inside it - the same result as the wheel
+	// delivering them one per frame. Fractional remainders (a trackpad) apply last.
+	double Remaining = Notches;
+	while (FMath::Abs(Remaining) > UE_DOUBLE_KINDA_SMALL_NUMBER)
+	{
+		const double ThisNotch = FMath::Sign(Remaining) * FMath::Min(1.0, FMath::Abs(Remaining));
+		const bool bClose = CloseZoomDistance > 0.0 && Distance < CloseZoomDistance;
+		// Capped where ZoomStep's own ClampMax is, after scaling: a notch that more than
+		// doubles the distance is a jump, not a zoom.
+		const double ThisStep = FMath::Min(bClose ? Step * FMath::Max(CloseZoomStepScale, 1.0) : Step, 0.9);
+		Distance *= FMath::Pow(1.0 + ThisStep, ThisNotch);
+		Remaining -= ThisNotch;
+	}
+	Distance = FMath::Clamp(Distance, FMath::Max(MinDistance, 1.0), FMath::Max(MaxDistance, 1.0));
 }
 
 void FBuildCameraRig::Pan(double Right, double Forward, double Rate, double DeltaTime)

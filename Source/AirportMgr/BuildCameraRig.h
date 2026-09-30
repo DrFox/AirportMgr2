@@ -87,6 +87,23 @@ struct FCameraRigLimits
 	 */
 	UPROPERTY(EditAnywhere)
 	FVector2D StartFocus = FVector2D::ZeroVector;
+
+	/**
+	 * Inside this distance, uu, each wheel notch zooms CloseZoomStepScale times as far.
+	 *
+	 * THE FINAL TILT WAS A SLOG. Pitch moves evenly per notch on the log of distance (see
+	 * FBuildCameraRig::PitchDegrees), so at a 15% step the last stretch from ~14 m up to eye
+	 * level - 2772 uu to 600, 31 degrees to 12 - took eleven notches (log, 2026-09-30), and
+	 * the player's view barely changed on each. Speeding the STEP rather than reshaping the
+	 * pitch curve keeps every pose the same; it only reaches the horizon view in fewer turns.
+	 * 3000 x 2.5 makes that stretch about five notches. Zero switches it off.
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0.0"))
+	double CloseZoomDistance = 3000.0;
+
+	/** Step multiplier inside CloseZoomDistance. 1 is no change. */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "1.0", ClampMax = "10.0"))
+	double CloseZoomStepScale = 2.5;
 };
 
 /**
@@ -138,7 +155,11 @@ struct FBuildCameraRig
 	/** Pitch at MaxDistance. 90 would be straight down. */
 	double MaxPitch = 70.0;
 
-	/** Copy Min/MaxDistance and Min/MaxPitch from Limits onto this rig, so a details-panel
+	/** MIRROR FCameraRigLimits' close-zoom pair, copied by ApplyLimits; see there. */
+	double CloseZoomDistance = 3000.0;
+	double CloseZoomStepScale = 2.5;
+
+	/** Copy Min/MaxDistance, Min/MaxPitch and the close-zoom pair from Limits onto this rig, so a details-panel
 	 *  edit takes effect on the live view - the one function ApplyViewLimits and
 	 *  ApplyWatchLimits used to be separately (issue #94). */
 	void ApplyLimits(const FCameraRigLimits& Limits);

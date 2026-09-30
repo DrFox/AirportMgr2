@@ -33,6 +33,7 @@ import unreal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import airside_palette as palette
+import airside_matnodes as nodes
 
 MAT_DIR = "/Game/Materials"
 PARENT = "%s/M_RoadSurface" % MAT_DIR
@@ -110,6 +111,18 @@ SCALARS = {
         "TrackWear": 5.0,
         "TrackHalfWidth": 300.0,
         "TrackFeather": 400.0,
+        # NOT PLASTIC (2026-09-30): up close the strip read as green plastic. Matte - a lawn
+        # has no sheen - and a speckle that fades out with distance, so the top-down look the
+        # user approved is untouched. See build_road_material's SPECKLE_* for the mechanism.
+        # Tuned live against a 3.5 m-high and a 25 m-high shot of a grass runway:
+        #   size 1.5 / 0.35 - fine grain; read as sandpaper rather than turf
+        #   size 3.5 / 0.40 - clumpier, reads as turf (chosen)
+        #   fade 15-40 m    - at 50 m the strip went smooth beside the still-mottled field
+        #   fade 30-100 m   - near half of a mid view speckled, matching the field (chosen)
+        # The speckle numbers live in nodes.GRASS_SPECKLE, shared with the field.
+        "RoughnessBase": 1.0,
+        "Specular": nodes.GRASS_SPECULAR,
+        **nodes.GRASS_SPECKLE,
     },
 }
 
