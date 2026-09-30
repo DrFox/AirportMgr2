@@ -87,6 +87,9 @@ public:
 	/** How many times Refresh actually asked LandChoices::Build - FLandChoicesKey's gate's counter. */
 	int32 BuildCountForTest() const { return BuildCalls; }
 
+	/** Where the types come from, instead of LandChoices::EveryMeshedType - so a test can have none, then some. */
+	void SetTypeSourceForTest(TFunction<TArray<UAircraftType*>()> Source) { TypeSource = MoveTemp(Source); }
+
 	/** A row was clicked: land its type. ULandRowEntry's only way back in. */
 	void Choose(UAircraftType* Type);
 
@@ -138,6 +141,17 @@ private:
 	 */
 	FLandChoicesKey JudgedKey;
 	bool bJudged = false;
+
+	/**
+	 * How many types the rows were judged over - the gate's other input (PR E review). Types is read on the first
+	 * Refresh and read AGAIN every Refresh while it is empty (a registry not yet scanned), so it can grow from none to
+	 * eighteen with nothing FLandChoicesKey reads moving; the rows must be built then.
+	 * ENFORCED BY: AirportMgr.UI.LandPanelJudgesWhenTypesArrive
+	 */
+	int32 JudgedTypeCount = 0;
+
+	/** See SetTypeSourceForTest. Unset: LandChoices::EveryMeshedType. */
+	TFunction<TArray<UAircraftType*>()> TypeSource;
 
 	/** See BuildCountForTest. */
 	int32 BuildCalls = 0;

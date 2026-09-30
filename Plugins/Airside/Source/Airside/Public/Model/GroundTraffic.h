@@ -127,19 +127,16 @@ public:
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnStandsFreed, const TArray<FGuidelineNodeId>& /*PoseNodes*/);
 	FOnStandsFreed OnStandsFreed;
 
-	/**
-	 * How many times OnRunwayFreed has fired this session. A plain counter, like OccupancyRevision: a poller
-	 * asks "has a runway freed since the number I remember". PR E planned two such pollers and found neither
-	 * reads a held runway (2026-09-30): a held taxi out's replan is only RANKED by one (ReplanHeldTaxiOuts'
-	 * gate), and the Land panel reads no occupancy. Kept: it is the diff's own count, and costs an int.
-	 */
-	int32 RunwayFreedCount() const { return RunwayFreedTotal; }
+	// NO RunwayFreedCount (removed in ops batch 3 PR E's review, 2026-09-30): PR D added it for PR E's two pollers,
+	// and neither reads a held runway - a held taxi out's replan is only RANKED by one (see ReplanHeldTaxiOuts'
+	// gate), and LandChoices::Build is given no traffic model at all. A counter nothing consumes is a list declared
+	// and never read (CLAUDE.md); OnRunwayFreed itself is what AirportOps and the tests count.
 
 	/**
 	 * How many DiffFreedom calls have found the set of held stands CHANGED - one gained or lost, either way. The
 	 * stand card's key (ops batch 3 PR E): OccupancyRevision covers goal claims, holds and phase changes, but a
 	 * body the per-tick claim pass puts on a pose node, or takes off it, moves no revision; OnStandsFreed sees
-	 * only the losing half. A plain session counter, like RunwayFreedCount.
+	 * only the losing half. A plain session counter, like OccupancyRevision.
 	 * ENFORCED BY: Airside.Model.Traffic.StandHolds.ChurnIsCounted
 	 */
 	uint32 StandHoldChangeCount() const { return StandHoldChanges; }
@@ -914,9 +911,6 @@ private:
 	 * by pose so the baseline names the thing a flight holds, not a graph handle.
 	 */
 	TMap<FEntityInstanceId, FGuidelineNodeId> HeldStands;
-
-	/** See RunwayFreedCount. A session counter, not saved. */
-	int32 RunwayFreedTotal = 0;
 
 	/** See StandHoldChangeCount. A session counter, not saved. */
 	uint32 StandHoldChanges = 0;

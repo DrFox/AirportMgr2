@@ -99,7 +99,7 @@ void ULandAircraftPanelWidget::RefreshFor(const ARoadBuildController* C)
 	// registry walk per tick would be the one expensive thing on this panel.
 	if (Types.Num() == 0)
 	{
-		for (UAircraftType* Type : LandChoices::EveryMeshedType())
+		for (UAircraftType* Type : TypeSource ? TypeSource() : LandChoices::EveryMeshedType())
 		{
 			Types.Add(Type);
 		}
@@ -112,11 +112,12 @@ void ULandAircraftPanelWidget::RefreshFor(const ARoadBuildController* C)
 	// JUDGED ONLY WHEN WHAT BUILD READS HAS MOVED (ops batch 3 PR E) - see JudgedKey and FLandChoicesKey. One
 	// NearestRunwayThreshold a frame instead of a CheckArrival per type.
 	const FLandChoicesKey Key = LandChoices::KeyFor(Network, Focus);
-	if (bJudged && Key == JudgedKey)
+	if (bJudged && Key == JudgedKey && Types.Num() == JudgedTypeCount)
 	{
 		return;
 	}
 	JudgedKey = Key;
+	JudgedTypeCount = Types.Num();
 	bJudged = true;
 
 	TArray<UAircraftType*> Raw;

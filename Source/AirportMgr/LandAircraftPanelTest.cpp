@@ -301,4 +301,60 @@ bool FLandPanelBuildsOnlyOnChangeTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandPanelJudgesWhenTypesArriveTest,
+	"AirportMgr.UI.LandPanelJudgesWhenTypesArrive",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandPanelJudgesWhenTypesArriveTest::RunTest(const FString& Parameters)
+{
+	// THE TYPES ARE AN INPUT TOO (PR E review): read again every Refresh while there are none, they can arrive with
+	// nothing FLandChoicesKey reads moving - and the rows must appear when they do.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(TestWorld.Actor);
+	ULandAircraftPanelWidget* Panel =
+		CreateWidget<ULandAircraftPanelWidget>(TestWorld.World, ULandAircraftPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+	TArray<UAircraftType*> Two = LandChoices::EveryMeshedType();
+	if (!TestTrue(TEXT("content has at least two meshed types"), Two.Num() >= 2)) { return false; }
+	Two.SetNum(2);
+	bool bArrived = false;
+	Panel->SetTypeSourceForTest([&bArrived, Two]() { return bArrived ? Two : TArray<UAircraftType*>(); });
+
+	for (int32 Frame = 0; Frame < 3; ++Frame) { Panel->RefreshFor(C); }
+	TestEqual(TEXT("no types: judged once"), Panel->BuildCountForTest(), 1);
+	TestEqual(TEXT("and no rows"), Panel->RowWidgetCountForTest(), 0);
+	bArrived = true;
+	Panel->RefreshFor(C);
+	TestEqual(TEXT("the types arrive: judged again"), Panel->BuildCountForTest(), 2);
+	TestEqual(TEXT("and their rows are there"), Panel->RowWidgetCountForTest(), 2);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandChoicesKeyNamesTheNetworkTest,
+	"AirportMgr.UI.LandChoicesKeyNamesTheNetwork",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandChoicesKeyNamesTheNetworkTest::RunTest(const FString& Parameters)
+{
+	// TWO NETWORKS, EVERY REVISION EQUAL: two deterministic builds of one field count their revisions identically, so
+	// only the network's identity tells a key on one from a key on the other - a load's new network looked like this.
+	const FTestTwoRunways First = FTestTwoRunways::Build(UAirsideSettings::ResolveDefaultAirframe());
+	const FTestTwoRunways Second = FTestTwoRunways::Build(UAirsideSettings::ResolveDefaultAirframe());
+	if (!TestTrue(TEXT("the same revisions - the case under test"),
+		First.Net->GetEditRevision() == Second.Net->GetEditRevision()
+		&& First.Net->GetGuidelineRevision() == Second.Net->GetGuidelineRevision())) { return false; }
+	const FVector2D Near(1000.0, 0.0);
+	const FLandChoicesKey A = LandChoices::KeyFor(First.Net, Near);
+	const FLandChoicesKey B = LandChoices::KeyFor(Second.Net, Near);
+	TestTrue(TEXT("the same runway seed on each"), A.bHasRunway && B.bHasRunway && A.Seed == B.Seed);
+	TestTrue(TEXT("and still two keys: the network is on it"), A != B);
+	TestTrue(TEXT("one network is one key"), A == LandChoices::KeyFor(First.Net, Near));
+	return true;
+}
+
 #endif

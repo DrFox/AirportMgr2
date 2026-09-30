@@ -8,6 +8,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/InspectFacts.h"
 #include "Model/JobBoard.h"
+#include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -83,6 +84,17 @@ bool FInspectorCacheQuietTest::RunTest(const FString&)
 	using namespace InspectorCacheTest;
 	FRig Rig;
 	if (!TestTrue(TEXT("the rig"), Rig.Ok())) { return false; }
+	// TRAFFIC MOVES THROUGH THE QUIET FRAMES (PR E review): an aircraft taxiing on a line of its own, far from the
+	// field. Its claims churn every tick; nothing any of the three cards reads does.
+	const FGuidelineNodeId LineA = TestGraph::Node(*Rig.Net, -250000.0, 250000.0);
+	const FGuidelineNodeId LineB = TestGraph::Node(*Rig.Net, -50000.0, 250000.0);
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	TestGraph::Join(*Rig.Net, LineA, LineB, Options);
+	if (!TestTrue(TEXT("an aircraft dispatched"), Rig.Actor->DispatchAgent(TestGraph::Probe(*Rig.Net, LineA, LineB,
+		ETraversalClass::Aircraft), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	const int32 Mover = Rig.Actor->GetTraffic()->GetNewestAgentId();
+	const FVector2D Start = Rig.Traffic().FindAgent(Mover)->LastMotion.Position;
 	const TPair<ESelectionKind, int32> Cards[] = {
 		{ ESelectionKind::Stand, Rig.Field.Stands[0].Index },
 		{ ESelectionKind::Runway, Rig.RunwaySegment() },
@@ -100,6 +112,9 @@ bool FInspectorCacheQuietTest::RunTest(const FString&)
 		TestEqual(FString::Printf(TEXT("card %d: 30 quiet frames describe it once"), static_cast<int32>(Card.Key)),
 			Rig.Panel->CardDescribeCountForTest() - Before, 1);
 	}
+	const FRoadAgent* Moved = Rig.Traffic().FindAgent(Mover);
+	TestTrue(TEXT("and the aircraft was moving all the while"),
+		Moved != nullptr && FVector2D::Distance(Moved->LastMotion.Position, Start) > 100.0);
 
 	// A RUNWAY CARD READS NO OCCUPANCY: a hold elsewhere does not recompose it.
 	const FSelection Runway = Rig.Select(ESelectionKind::Runway, Rig.RunwaySegment());
