@@ -125,3 +125,61 @@ watched aircraft per call - a push is 2-4 steps, so ~8 table lookups; 0-2 aircra
    (PushGroundFreedIsBridged, DepartsTheFrameAfter); dirtier off (DepartsTheFrameAfter); bDepartureWaiting back
    (NoPushbackRouteIsQuiet); safety Warning off (SafetyNetDepartsAMissedOne).
 7. **Full suite**, counts, report.
+
+## Execution notes (2026-09-30)
+
+Full suite: `1584 test(s) run, 0 failed, 0 crashed` (+13: 5 Airside, 5 ops composition, 3 fuel quiet guards). Check-Architecture
+PASS, rule-12 warnings 111 (unchanged).
+
+Red lines before implementation:
+
+- `Airside.Model.Traffic.PushGroundFreed.*` (watch not registered): TaxiingBlockerClears "and it is watched" expected 1, got 0;
+  "it fired once, when the ground cleared" 1, got 0; ReleaseOutsideAdvance "the release fires at once, with no Advance" 1, got 0;
+  RunwayFlipReplans "runway 1 busy: ... fired" 1, got 0; RebuildRederives "and keeps the aircraft watched" 1, got 0.
+  RetiredWatchedFiresNothing is a guard (its red is the mutation below).
+- `AirportOps.Present.Bus.PushGroundFreedIsBridged`: "a freed push ground is published onto the bus" expected 4, got 3.
+- `AirportOps.Present.PushGroundFreed.NoPushbackRouteIsQuiet`: "five quiet seconds run no job board step" expected 3, got 153.
+- DepartsTheFrameAfter, SafetyNetDepartsAMissedOne, NetArmedAndCancelled: written with the pass; their reds are the mutations.
+  (First run also showed the rig's own error: a hold on the taxiway's far end is off the push ground - the push is 12490 uu and
+  ends at FAnchorLink's back tangent node, so the rig blocks that node, found by position.)
+
+Mutations (each restored by copy + touch, rebuilt, green after):
+
+| Mutation | Red |
+|---|---|
+| watch diff never frees (`FreedPushes.Add` off) | all four Airside firing tests; `DepartsTheFrameAfter` ("no safety Warning" expected 0, got 1; "freed -1, departed 930") |
+| runway-held key off the watch | `RunwayFlipReplans` ("fired" 1, got 0) |
+| rebuild clears the watch | `RebuildRederives` ("keeps the aircraft watched" 1, got 0) |
+| a gone agent fires instead of dropping | `RetiredWatchedFiresNothing` ("nothing fired for the retired aircraft" 0, got 1) |
+| Attach bridge off | `PushGroundFreedIsBridged` (4, got 3); `DepartsTheFrameAfter` ("freed 243, departed 930"; Warning 1) |
+| PushGroundFreed subscriber a no-op | `DepartsTheFrameAfter` ("freed 243, departed 930"; Warning 1) |
+| `bDepartureWaiting` back (`|| HasRefusedDeparture`) | `NoPushbackRouteIsQuiet` (3, got 153); `SafetyNetDepartsAMissedOne` (departed before the net; Warning 0) |
+| safety Warning off | `SafetyNetDepartsAMissedOne` ("said so, once" 1, got 0) |
+| CancelSafetyNet leaves the departure half | `NetArmedAndCancelled` ("a detach cancels it", "a load cancels the net") |
+| departure half never wanted | `NetArmedAndCancelled` ("a refused departure arms the net"); `SafetyNetDepartsAMissedOne` (never departs, 1200 frames) |
+| every Idle / Serving vehicle "waiting" | `QuietBoard.TimedStepDue`, `.IdleWithAQueue` (300 of 300) |
+| StartNext never sends a jobless vehicle home | `QuietBoard.ServingWithNoJob` (300 of 300) |
+
+Item 5 finding: no part of `bVehicleWaiting` repeats every frame in production. Timed-and-due is finished by the next Step's due
+loop; Idle-with-queue settles (the job goes back to the board and is refused); Serving-with-no-job goes home on the next Step.
+The only per-frame repeaters are an open prerequisite (`FServiceJob::Prerequisites` is populated nowhere outside tests) and
+StartNext's "refused at home with a route there" (a Found route DispatchAgent will not drive - under two points or zero long;
+Start == Goal is SameNode, not Found), neither stageable. The tests stay as guards; no fix.
+
+Deviations: the push watch re-asks DepartAgent's whole planning (AskDeparture) when its key moves, not only the stored route -
+PlanAny's runway ranking can move the push to the other arm (RunwayFlipReplans). The net's clock entry is shared by both halves
+(`SafetyNetHandle`; `IsQueueSafetyNetArmedForTest` renamed `IsSafetyNetArmedForTest`, `QueueSafetySeconds` -> `SafetyNetSeconds`).
+All JobBoard dirtiers go through `DirtyJobBoard` (the deadline and the Unstick command included), so a safety run knows it was
+uncovered.
+
+Finding (pre-existing, not fixed): an in-play rebuild leaves no taxiing body claims in the table until the next Advance; a
+DepartAgent in that window (the NetworkChanged retry) reads push ground free that a taxiing aircraft stands on. The watch's
+re-derive reads the same table and may wake an aircraft once, early. Unverified whether the runtime can drain between a rebuild
+and the next Advance in PIE.
+
+UE_LOG / comment lines, `ab5e7a40` -> now (none fell): GroundTraffic.h 0/775 -> 0/824; GroundTraffic.cpp 34/616 -> 35/633;
+AirsideTraffic.h 0/188 -> 0/189; AirsideTraffic.cpp 7/97 -> 7/97; OpsEventBus.h 2/159 -> 2/165; OpsEventBus.cpp 8/9 -> 8/9;
+JobBoard.h 0/447 -> 0/464; JobBoard.cpp 23/197 -> 23/202; ServiceJob.h 0/134 -> 0/136; OpsRuntime.h 0/193 -> 0/206;
+OpsRuntime.cpp 25/366 -> 26/380.
+
+Unverified in PIE: all of it.

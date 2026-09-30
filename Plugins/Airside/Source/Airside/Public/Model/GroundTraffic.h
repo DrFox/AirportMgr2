@@ -971,7 +971,11 @@ private:
 	 * THE PUSH WATCH, by agent id - see OnPushGroundFreed. NOT SAVED: agents are not saved, and neither is
 	 * anything that names one. A REBUILD RE-DERIVES IT rather than clearing it: the rebuild moves the guideline
 	 * revision, so DiffFreedom asks every entry whole. Clearing would leave the aircraft's wake-up to a caller
-	 * retrying on its own NetworkChanged - a contract with a plugin this one must not know exists.
+	 * retrying on its own NetworkChanged - a contract with a plugin this one must not know exists. The re-derive
+	 * reads the table the rebuild left, which holds goals and holds but no taxiing bodies until the next Advance's
+	 * claim pass - so a body standing on the push ground reads free there and the aircraft is woken once, early;
+	 * a DepartAgent in that window reads the same table, which is the rebuild's window, not the watch's.
+	 * ENFORCED BY: Airside.Model.Traffic.PushGroundFreed.RebuildRederives
 	 *
 	 * Cost, per DiffFreedom: one IsPushGroundFree per entry - an IsAnyHeld over 2 resources per push step, and a
 	 * push is 2-4 steps - plus a revision compare and a set compare of 0-2 strips. Entries: 0-2 in every test
