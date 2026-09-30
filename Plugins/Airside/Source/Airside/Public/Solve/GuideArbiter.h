@@ -42,7 +42,7 @@ namespace SnapGuide
 		 * files, plus FParallelGuideSource and eighteen uses of bParallel - and a good number of
 		 * those are comments that REASON about Parallel by name, which a substitution would
 		 * flatten. A name only developers read did not justify that; this paragraph is the tie
-		 * between the two instead. See BuildActions.cpp's snap.direction.
+		 * between the two instead. See SnapToggleRegistry.cpp's snap.direction.
 		 */
 		Parallel,
 

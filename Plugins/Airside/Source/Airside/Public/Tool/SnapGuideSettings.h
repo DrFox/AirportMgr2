@@ -184,7 +184,7 @@ struct AIRSIDE_API FSnapGuideSettings
 	UPROPERTY(EditAnywhere, Category = "Grid")
 	EGridOrientation GridOrientation = EGridOrientation::Follow;
 
-	/** Follow <-> World. What the bar's Grid follows button and H do. */
+	/** Follow <-> World. What the Grid follows button does (PIE bar, editor Snap palette). */
 	void ToggleGridOrientation();
 
 	/**

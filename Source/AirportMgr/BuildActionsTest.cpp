@@ -13,6 +13,8 @@
 #include "Model/Airport.h"
 #include "Entities/EntityDefinition.h"
 #include "BuildActions.h"
+#include "Tool/SnapGuideSettings.h"
+#include "Tool/SnapToggleRegistry.h"
 #include "BuildHudLayer.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadNetwork.h"
@@ -233,7 +235,7 @@ bool FGuideGridIsInTheRegistryTest::RunTest(const FString& Parameters)
 		{ SnapGuide::ERelation::LevelWith,   TEXT("snap.levelwith")   },
 		// THE ID IS NOT THE ENUM'S NAME, and this is the one row where they differ: the button
 		// reads "Direction" because the row offers a direction AND its perpendicular AND the
-		// world axes. See BuildActions.cpp, and ERelation::Parallel's own comment.
+		// world axes. See SnapToggleRegistry.cpp, and ERelation::Parallel's own comment.
 		{ SnapGuide::ERelation::Parallel,    TEXT("snap.direction")   },
 		{ SnapGuide::ERelation::Collinear,   TEXT("snap.collinear")   },
 		{ SnapGuide::ERelation::AngledFrom,  TEXT("snap.angledfrom")  },
@@ -527,12 +529,14 @@ bool FBuildActionsModalChordTest::RunTest(const FString& Parameters)
 }
 
 /**
- * THE GRID'S ORIENTATION TOGGLE, ON H - the one snap toggle with a key, by the player's request
- * (grid-follows-snap design): it is switched mid-gesture, which is the NO KEYS rule's own test.
+ * THE GRID'S ORIENTATION TOGGLE, BAR-ONLY SINCE 2026-09-30. It was on H (grid-follows-snap design,
+ * 2026-09-28, the one snap toggle with a key); the owner dropped the key once the snap rows became
+ * both drivers' one table (#440), because the level editor's H is Toggle Selected Hierarchy
+ * Visibility and the Road Build mode would have taken it. H must now run nothing at all in PIE.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FGridOrientButtonIsInTheRegistryTest,
-	"AirportMgr.Actions.GridOrientButtonIsOnH",
+	"AirportMgr.Actions.GridOrientButtonHasNoKey",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FGridOrientButtonIsInTheRegistryTest::RunTest(const FString& Parameters)
@@ -540,10 +544,10 @@ bool FGridOrientButtonIsInTheRegistryTest::RunTest(const FString& Parameters)
 	const FBuildAction* Action = FindAction(FName(TEXT("snap.gridorient")));
 	if (!TestNotNull(TEXT("snap.gridorient is registered"), Action)) { return false; }
 	TestEqual(TEXT("in the Snap section"), Action->Section, EActionSection::Snap);
-	TestTrue(TEXT("on H"), Action->Key == EKeys::H);
+	TestFalse(TEXT("bar-only: no key, by the owner's 2026-09-30 ruling"), Action->Key.IsValid());
 	TestFalse(TEXT("no Ctrl"), Action->bRequiresCtrl);
-	TestTrue(TEXT("FindAction(H) is this action - the binding loop reads the same table"),
-		FindAction(EKeys::H, false) == Action);
+	TestNull(TEXT("H runs no action in PIE - the binding loop reads the same table, so no row claims it"),
+		FindAction(EKeys::H, false));
 	TestTrue(TEXT("can be executed"), static_cast<bool>(Action->Execute));
 	TestTrue(TEXT("reports whether it is lit"), static_cast<bool>(Action->IsActive));
 	TestTrue(TEXT("has a caption that follows the orientation"), static_cast<bool>(Action->DynamicLabel));
@@ -856,6 +860,89 @@ bool FLandGreyedWhileClosedTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("CONTROL: open with a runway, Land is enabled"), Land->IsEnabled(Ctx));
 	Runtime->SetAirportClosed(true);
 	TestFalse(TEXT("closed: Land is greyed"), Land->IsEnabled(Ctx));
+	return true;
+}
+
+/**
+ * THE BAR'S SNAP ROWS COME FROM THE PLUGIN'S TABLE (issue #440), not a copy typed here: one row
+ * per SnapToggleRegistry() entry, under its id, in its group's section, on its key, with its
+ * caption - and no Snap/Snap to row the table does not have. Then the seam itself: TryRun on each
+ * row, through a real controller with a real airport, changes the airport's FSnapGuideSettings
+ * exactly as the registry's Apply does (ARoadBuildController::ApplySnapToggle, the door that
+ * replaced eight proxies), and the row lights from the airport. The editor's twin is
+ * Airside.Editor.SnapCommandsReachTheAirport; a toggle added to the table reaches both or neither.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSnapRowsComeFromTheRegistryTest,
+	"AirportMgr.Actions.SnapRowsComeFromTheRegistry",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSnapRowsComeFromTheRegistryTest::RunTest(const FString& Parameters)
+{
+	const TConstArrayView<FSnapToggleRegistration> Registry = SnapToggleRegistry();
+	int32 SnapRows = 0;
+	for (const FBuildAction& Action : BuildActions())
+	{
+		SnapRows += (Action.Section == EActionSection::Snap || Action.Section == EActionSection::SnapTo) ? 1 : 0;
+	}
+	TestEqual(TEXT("every Snap and Snap to row is a registry toggle - none typed here beside the table"),
+		SnapRows, Registry.Num());
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world with an airport"), TestWorld.Actor)) { return false; }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+
+	// NO AIRPORT FIRST (BuildActions.cpp's snap loop; #468's review): before SetTargetForTest this
+	// controller has no target. A row stays ENABLED (inert, not illegal - ApplySnapToggle logs the
+	// no-op), is NOT lit, and a caption row reads its fixed Name rather than claiming a state no
+	// airport holds - the one behaviour #440 changed on purpose ("Grid: world" used to show here).
+	const FSnapGuideSettings Untouched = TestWorld.Actor->GuideSources;
+	{
+		const FBuildActionContext NoAirport(*C);
+		TestNull(TEXT("control: the controller has no airport yet"), NoAirport.Target);
+		for (const FSnapToggleRegistration& Toggle : Registry)
+		{
+			const FString Id = Toggle.Id.ToString();
+			const FBuildAction* Row = FindAction(Toggle.Id);
+			if (!TestNotNull(*FString::Printf(TEXT("%s has a bar row"), *Id), Row)) { continue; }
+			TestTrue(*FString::Printf(TEXT("%s: no airport, still enabled"), *Id), Row->IsEnabled(NoAirport));
+			TestFalse(*FString::Printf(TEXT("%s: no airport, not lit"), *Id), Row->IsActive(NoAirport));
+			if (Row->DynamicLabel)
+			{
+				TestEqual(*FString::Printf(TEXT("%s: no airport, the caption is the fixed name"), *Id),
+					Row->DynamicLabel(NoAirport).ToString(), Toggle.Name.ToString());
+			}
+			TestTrue(*FString::Printf(TEXT("%s: no airport, it still runs (and logs the no-op)"), *Id), Row->TryRun(*C, TEXT("Test")));
+		}
+	}
+	TestTrue(TEXT("with no airport, no toggle reached the level's settings"),
+		FSnapGuideSettings::StaticStruct()->CompareScriptStruct(&Untouched, &TestWorld.Actor->GuideSources, PPF_None));
+
+	C->SetTargetForTest(TestWorld.Actor);
+
+	UScriptStruct* SettingsStruct = FSnapGuideSettings::StaticStruct();
+	for (const FSnapToggleRegistration& Toggle : Registry)
+	{
+		const FString Id = Toggle.Id.ToString();
+		const FBuildAction* Row = FindAction(Toggle.Id);
+		if (!TestNotNull(*FString::Printf(TEXT("%s has a bar row under the registry's own id"), *Id), Row)) { continue; }
+		TestEqual(*FString::Printf(TEXT("%s sits in its group's section"), *Id), Row->Section,
+			Toggle.Group == ESnapToggleGroup::SnapTo ? EActionSection::SnapTo : EActionSection::Snap);
+		TestTrue(*FString::Printf(TEXT("%s is on the registry's key"), *Id), Row->Key == Toggle.Key);
+		TestEqual(*FString::Printf(TEXT("%s reads the registry's name"), *Id), Row->Label.ToString(), Toggle.Name.ToString());
+		TestTrue(*FString::Printf(TEXT("%s has a caption exactly when the registry gives one"), *Id),
+			static_cast<bool>(Row->DynamicLabel) == static_cast<bool>(Toggle.DynamicLabel));
+
+		FSnapGuideSettings Expected = TestWorld.Actor->GuideSources;
+		Toggle.Apply(Expected);
+		TestTrue(*FString::Printf(TEXT("%s runs"), *Id), Row->TryRun(*C, TEXT("Test")));
+		TestTrue(*FString::Printf(TEXT("%s changed the airport exactly as the registry's Apply does"), *Id),
+			SettingsStruct->CompareScriptStruct(&Expected, &TestWorld.Actor->GuideSources, PPF_None));
+		const FBuildActionContext Ctx(*C);
+		TestTrue(*FString::Printf(TEXT("%s is lit from the airport's own settings"), *Id),
+			Row->IsActive(Ctx) == Toggle.IsActive(TestWorld.Actor->GuideSources));
+	}
 	return true;
 }
 

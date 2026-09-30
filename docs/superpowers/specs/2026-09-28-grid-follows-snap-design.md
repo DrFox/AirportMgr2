@@ -108,6 +108,10 @@ runway's "square to" winning during a stand's depth drag phased the grid off the
 - `snap.gridorient` action, `EActionSection::Snap`, beside `snap.grid`; caption
   "Grid: follow" / "Grid: world". Key H - plan checks H is unbound in BOTH drivers
   (`ARoadBuildController`, `URoadBuildEdMode`) and in the registry.
+  **Revised 2026-09-30 (owner ruling, #440/#468): no key.** The snap rows became one table both
+  drivers read (`SnapToggleRegistry`), and H is the level editor's Toggle Selected Hierarchy
+  Visibility, which the Road Build mode would have taken. Reached from the PIE bar button and the
+  editor's Snap palette.
 - `ARoadBuildController::ToggleGridOrientation`. EDITOR MODE: no button or key - it reads
   `GuideSources.GridOrientation` from the actor's Details panel, as it already does `GridStep`; H is
   the level editor's Hide Selected (ruling, review 2026-09-28).
@@ -146,6 +150,7 @@ runway's "square to" winning during a stand's depth drag phased the grid off the
 - Session seam: spy sink sees overlay pieces rotated with Follow, axis-aligned with World - fails if
   the session never passes the frame.
 - Registry: `snap.gridorient` present in Snap; H bound in the PIE driver (from the registry), checked by name.
+  (Revised 2026-09-30: no key in either driver - see above.)
 - Tunables: changing `GridOrientation` invalidates the frame cache.
 
 ## Verification in PIE

@@ -130,8 +130,8 @@ TConstArrayView<FBuildVerbRegistration> BuildVerbRegistry()
 
 		// EDIT IS THE ONE WITH A KEY, because it is the one you enter deliberately and stay in -
 		// M, not E (Q/E is camera turn, polled every frame in PIE's UpdateView), and mnemonic
-		// for move and merge. GREYED when the lit tool exposes no handles, so the bar (and, once
-		// wired, the editor palette) answers "why can I not edit this" rather than lighting over
+		// for move and merge. GREYED when the lit tool exposes no handles, so the bar (and, since
+		// #440, the editor's Edit palette) answers "why can I not edit this" rather than lighting over
 		// a mode that would do nothing at all - see FToolRegistration::EditHandles, the one list
 		// this reads instead of a second copy of which tools are editable.
 		{ EKeys::M, TEXT("EditMode"), LOCTEXT("EditMode", "Edit"),

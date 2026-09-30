@@ -267,6 +267,10 @@ int32 FRoadEditScope::SnapshotsTaken = 0;
 
 URoadNetwork* FRoadEditScope::SnapshotForRollback(const URoadNetwork& Net)
 {
+	// THE COUNTER'S "game thread only" MADE A CHECK (#460's review): a plain int32 bumped from two threads is a
+	// torn count the copy-cost tests would read as a real one. checkSlow, not check: it fires in Debug builds only
+	// (DO_GUARD_SLOW), so Development pays nothing and an off-thread caller is caught the first time Debug runs.
+	checkSlow(IsInGameThread());
 	++SnapshotsTaken;
 	return DuplicateObject<URoadNetwork>(&Net, GetTransientPackage());
 }

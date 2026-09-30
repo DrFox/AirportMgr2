@@ -284,6 +284,10 @@ struct FBuildSessionTunables
 			&& Snap.bSnapToSegments == Other.Snap.bSnapToSegments
 			&& Snap.MinSplitFromEndpoint == Other.Snap.MinSplitFromEndpoint
 			&& Snap.JunctionSnapFactor == Other.Snap.JunctionSnapFactor
+			// A SNAP TOGGLE UNDER A STILL CURSOR RE-READS BECAUSE OF THESE LINES: neither driver's
+			// ApplySnapToggle invalidates the frame cache (#440's review, 2026-09-30) - the key sees the
+			// settings instead, so a GuideSources field missing here is a guide switch that lags a frame.
+			// ENFORCED BY: AirportMgr.Actions.SnapToggleRereadsTheStillCursor (red with GridStep dropped)
 			&& GuideSources.bExtending == Other.GuideSources.bExtending
 			&& GuideSources.bLevelWith == Other.GuideSources.bLevelWith
 			&& GuideSources.bParallel == Other.GuideSources.bParallel

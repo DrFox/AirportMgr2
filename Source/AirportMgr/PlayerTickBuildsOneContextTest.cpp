@@ -3,6 +3,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
 #include "Testing/AirsideTestWorld.h"
+#include "Tool/SnapToggleRegistry.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -60,6 +61,57 @@ bool FPlayerTickBuildsOneContextTest::RunTest(const FString& Parameters)
 					"together - this goes to 2 or more if either stops reading FrameContext"),
 		After - Before, 1);
 
+	return true;
+}
+
+/**
+ * A SNAP TOGGLE UNDER A STILL CURSOR RE-READS (#468's review). The frame's context is cached on a
+ * key (FBuildSession's FFrameContextKey), and a switched guide or grid step must not keep serving
+ * the previous frame's context until the cursor moves - the preview would snap to a guide the
+ * player had just turned off. It does not, and NOT because ARoadBuildController::ApplySnapToggle
+ * invalidates (it does not; the review asked for that on the premise that the key lacked the
+ * settings): the key's Tunables carry the airport's GuideSources, and FBuildSessionTunables::
+ * operator== compares every field. This pins THAT, counted through the chokepoint
+ * PlayerTickBuildsOneContext above already uses.
+ *
+ * MUTATION-CHECKED (2026-09-30): with GuideSources.GridStep dropped from that operator==, the tick
+ * after a Grid toggle built 0 contexts and this failed; restored, it builds 1.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSnapToggleRereadsTheStillCursorTest,
+	"AirportMgr.Actions.SnapToggleRereadsTheStillCursor",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSnapToggleRereadsTheStillCursorTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world with an airport"), TestWorld.Actor)) { return false; }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(TestWorld.Actor);
+	C->InitInputSystem();   // PlayerTickBuildsOneContext's reason: TickPlayerInput needs one.
+	C->SelectTool(1);
+
+	// Settle, then CONTROL: a second still tick is served from the cache - otherwise the count
+	// below would move with or without the toggle and measure nothing.
+	C->PlayerTickForTest(1.0f / 60.0f);
+	const int32 Settled = C->MakeContextCallCountForTest();
+	C->PlayerTickForTest(1.0f / 60.0f);
+	if (!TestEqual(TEXT("control: a still cursor's second tick reuses the frame's context"),
+		C->MakeContextCallCountForTest() - Settled, 0))
+	{
+		return false;
+	}
+
+	const FSnapToggleRegistration* Grid = SnapToggleRegistry().FindByPredicate(
+		[](const FSnapToggleRegistration& Toggle) { return Toggle.Id == FName(TEXT("snap.grid")); });
+	if (!TestNotNull(TEXT("the registry has the Grid toggle"), Grid)) { return false; }
+	C->ApplySnapToggle(*Grid);
+
+	const int32 BeforeTick = C->MakeContextCallCountForTest();
+	C->PlayerTickForTest(1.0f / 60.0f);
+	TestEqual(TEXT("the tick after a snap toggle rebuilds the context - the cursor did not move, the grid did"),
+		C->MakeContextCallCountForTest() - BeforeTick, 1);
 	return true;
 }
 

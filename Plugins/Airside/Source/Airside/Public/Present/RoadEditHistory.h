@@ -264,7 +264,11 @@ public:
 	 * is a bare `Edit.Rollback();` on a refusal path that cannot act on the answer, so a scope
 	 * that could not restore - its edit already ended, nothing to restore from - is a failure
 	 * only the log can carry. An inert scope had nothing to edit and stays silent.
-	 * ENFORCED BY: Airside.Present.EditScopeRollbackEdges
+	 * ENFORCED BY: Airside.Present.EditScopeRollbackEdges, per branch - the inert scope (silent
+	 * false), the edit already ended ("refused" Error), the history's pending snapshot gone ("failed"
+	 * Error, after a mid-edit Clear); Airside.Present.EditScopeRollsBackBitwise for both successes.
+	 * NOT COVERED: a history-less scope with no local snapshot - its constructor always takes one,
+	 * so only a failed DuplicateObject reaches that Error, and no test can make one fail (2026-09-30).
 	 */
 	bool Rollback();
 
@@ -278,7 +282,8 @@ public:
 	static URoadNetwork* SnapshotForRollback(const URoadNetwork& Net);
 
 	/** How many snapshots SnapshotForRollback has taken this session - for the tests that pin
-	 *  how many copies an edit costs. Game thread only, like every edit. */
+	 *  how many copies an edit costs. Game thread only, like every edit.
+	 *  ENFORCED BY: checkSlow(IsInGameThread()) in SnapshotForRollback, the one writer (Debug builds). */
 	static int32 SnapshotsTakenForTest() { return SnapshotsTaken; }
 
 private:

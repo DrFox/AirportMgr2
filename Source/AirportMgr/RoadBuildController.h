@@ -20,6 +20,7 @@
 
 class FGamePlayerSettingsSink;
 struct FBuildAction;
+struct FSnapToggleRegistration;
 
 class AAirsideBuildingsActor;
 class ARoadNetworkActor;
@@ -181,40 +182,25 @@ public:
 	ARoadNetworkActor* GetTarget() const { return Target; }
 
 	/**
-	 * Flip one guide source on the airport this controller drives. The bar buttons call this.
+	 * Applies one SnapToggleRegistry() entry - a guide relation (ALIGN BY), a reference (SNAP TO),
+	 * the Grid button's Off -> 1 m -> 5 m -> 10 m cycle, or the grid's Follow <-> World - to the
+	 * airport this controller drives. The bar's snap rows all call this. Logs
+	 * "Snap toggle <id> -> <state>" ("snap.grid -> Grid: 5 m"), or that it was ignored with no airport.
 	 *
 	 * THROUGH THE TARGET, because the settings live on the airport and not on the driver - see
 	 * FSnapGuideSettings. A copy here would be a second place for them to drift, which is the
 	 * failure FRoadSnapSettings already records.
+	 *
+	 * ENFORCED BY: AirportMgr.Actions.SnapRowsComeFromTheRegistry (every snap row, run through TryRun,
+	 * lands on the airport exactly as the registry's Apply) - for the paragraph below.
+	 * ONE DOOR, NOT EIGHT (issue #440): this replaced ToggleGuideRelation/IsGuideRelationOn,
+	 * ToggleGuideReference/IsGuideReferenceOn, CycleGridStep/GetGridStepUu and
+	 * ToggleGridOrientation/IsGridFollowing - proxies that existed only so game-module rows could
+	 * reach settings the editor could not, which is why the editor mode had none of them. The
+	 * lit/caption half needs no door at all: a bar row reads Ctx.Target->GuideSources itself.
+	 * URoadBuildEdMode::ApplySnapToggle is the editor's twin, from the same table.
 	 */
-	void ToggleGuideRelation(SnapGuide::ERelation Relation);
-
-	/** Whether that row is lit. */
-	bool IsGuideRelationOn(SnapGuide::ERelation Relation) const;
-
-	/** Flips one COLUMN of the guide grid - what a SNAP TO button does. Same ownership rule. */
-	void ToggleGuideReference(SnapGuide::EReference Reference);
-
-	/** Whether that column is lit. */
-	bool IsGuideReferenceOn(SnapGuide::EReference Reference) const;
-
-	/**
-	 * Off -> 1 m -> 5 m -> 10 m -> Off: the Grid button. Same ownership rule as the two above -
-	 * the step lives on the airport's FSnapGuideSettings. Logs "Grid step -> <n>".
-	 */
-	void CycleGridStep();
-
-	/** The airport's grid step in uu, 0 when off or when there is no airport. */
-	double GetGridStepUu() const;
-
-	/**
-	 * Follow <-> World: the Grid follows button and H. Same ownership rule as CycleGridStep - the
-	 * orientation lives on the airport's FSnapGuideSettings. Logs "Grid orientation -> <way>".
-	 */
-	void ToggleGridOrientation();
-
-	/** Whether the airport's grid follows the snap. False with no airport. */
-	bool IsGridFollowing() const;
+	void ApplySnapToggle(const FSnapToggleRegistration& Toggle);
 
 	/** The tool the number keys selected, or null before BeginPlay has built them. */
 	IBuildTool* GetActiveTool() const;
@@ -906,7 +892,7 @@ private:
 
 		/** The grid: pressing Grid changes the readout (a plot's frontage, its letter)
 		 *  with the cursor sitting still - review, 2026-09-27. The whole FRAME since
-		 *  2026-09-28: pressing H, or the grid turning to a new road, does the same. */
+		 *  2026-09-28: Grid follows (H until 2026-09-30), or the grid turning to a new road, does the same. */
 		GridSnap::FGridFrame Grid;
 
 		/**

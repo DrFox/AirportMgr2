@@ -35,6 +35,7 @@
 #include "SceneView.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/ScreenPick.h"
+#include "Tool/SnapToggleRegistry.h"
 
 // LogRoadBuild is declared AND defined in RoadBuildLog.h/.cpp now - see that header's own
 // comment for why a component logging under this category should not have to include this
@@ -510,68 +511,25 @@ FToolContext ARoadBuildController::MakeToolContext() const
 		HoverAgentUnderCursor());
 }
 
-void ARoadBuildController::ToggleGuideRelation(SnapGuide::ERelation Relation)
+void ARoadBuildController::ApplySnapToggle(const FSnapToggleRegistration& Toggle)
 {
-	if (ARoadNetworkActor* Actor = GetTarget())
+	ARoadNetworkActor* Actor = GetTarget();
+	if (Actor == nullptr)
 	{
-		Actor->GuideSources.ToggleRelation(Relation);
+		// SAID, not silent: before #440 a snap button with no airport returned without a word,
+		// and "the key does nothing" is diagnosed from this log.
+		UE_LOG(LogRoadBuild, Warning, TEXT("Snap toggle %s ignored: no airport (road network) to set it on"),
+			*Toggle.Id.ToString());
+		return;
 	}
-}
 
-bool ARoadBuildController::IsGuideRelationOn(SnapGuide::ERelation Relation) const
-{
-	const ARoadNetworkActor* Actor = GetTarget();
-	return Actor != nullptr && Actor->GuideSources.IsRelationOn(Relation);
-}
+	Toggle.Apply(Actor->GuideSources);
 
-void ARoadBuildController::ToggleGuideReference(SnapGuide::EReference Reference)
-{
-	if (ARoadNetworkActor* Actor = GetTarget())
-	{
-		Actor->GuideSources.ToggleReference(Reference);
-	}
-}
-
-// THE ROW FLAG ALONE, not IsEnabled: a button is lit when its own axis is on, and a cell that
-// happens to be a hole must not make the column look switched off. The AND belongs in the
-// chain, where a candidate is judged - not in what the bar draws.
-bool ARoadBuildController::IsGuideReferenceOn(SnapGuide::EReference Reference) const
-{
-	const ARoadNetworkActor* Actor = GetTarget();
-	return Actor != nullptr && Actor->GuideSources.IsReferenceOn(Reference);
-}
-
-void ARoadBuildController::CycleGridStep()
-{
-	if (ARoadNetworkActor* Actor = GetTarget())
-	{
-		Actor->GuideSources.CycleGridStep();
-		const double Step = Actor->GuideSources.GridStepUu();
-		UE_LOG(LogRoadBuild, Log, TEXT("Grid step -> %s"),
-			Step > 0.0 ? *FString::Printf(TEXT("%.0f m"), Step / 100.0) : TEXT("off"));
-	}
-}
-
-double ARoadBuildController::GetGridStepUu() const
-{
-	const ARoadNetworkActor* Actor = GetTarget();
-	return Actor != nullptr ? Actor->GuideSources.GridStepUu() : 0.0;
-}
-
-void ARoadBuildController::ToggleGridOrientation()
-{
-	if (ARoadNetworkActor* Actor = GetTarget())
-	{
-		Actor->GuideSources.ToggleGridOrientation();
-		UE_LOG(LogRoadBuild, Log, TEXT("Grid orientation -> %s"),
-			Actor->GuideSources.GridOrientation == EGridOrientation::Follow ? TEXT("follow") : TEXT("world"));
-	}
-}
-
-bool ARoadBuildController::IsGridFollowing() const
-{
-	const ARoadNetworkActor* Actor = GetTarget();
-	return Actor != nullptr && Actor->GuideSources.GridOrientation == EGridOrientation::Follow;
+	// ONE LINE FOR ALL FOURTEEN, replacing "Grid step -> <n>" and "Grid orientation -> <way>",
+	// which covered two: the state AFTER the toggle, in the wording the editor mode logs too
+	// (DescribeSnapToggle) - "snap.grid -> Grid: 5 m", "snapto.runway -> Runway: on".
+	UE_LOG(LogRoadBuild, Log, TEXT("Snap toggle %s -> %s"), *Toggle.Id.ToString(),
+		*DescribeSnapToggle(Toggle, Actor->GuideSources));
 }
 
 int32 ARoadBuildController::HoverAgentUnderCursor() const

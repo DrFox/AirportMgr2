@@ -7,8 +7,16 @@
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildEdModeCommands.h"
 #include "RoadBuildEditorTool.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "ScopedTransaction.h"
+#include "Styling/AppStyle.h"
 #include "Tool/BuildSession.h"
+#include "Tool/SnapToggleRegistry.h"
 #include "Toolkits/BaseToolkit.h"
+#include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Layout/SWrapBox.h"
+#include "Widgets/SBoxPanel.h"
+#include "Widgets/Text/STextBlock.h"
 
 #define LOCTEXT_NAMESPACE "RoadBuildEdMode"
 
@@ -22,6 +30,148 @@
 
 namespace
 {
+	/**
+	 * The active tool's variant rows in the mode panel - the editor's twin of the PIE bar's
+	 * popout row (UBuildBarWidget::RefreshVariantsFor), issue #440. One line per axis: its
+	 * heading, then one toggle per option, lit on FToolVariantAxis::Current and greyed where
+	 * bEnabled is false. A click is URoadBuildEdMode::SelectActiveVariant.
+	 *
+	 * POLLED EVERY TICK and rebuilt only when the SIGNATURE moves (the tool index, every axis Id
+	 * and option Id) - the bar's own rule, for the bar's own reason: a tool switch, a content
+	 * edit and an Upgrade row appearing all change it, and subscribing to each separately is the
+	 * lifetime bookkeeping that rule was written to avoid. The lit/enabled state is read from the
+	 * rows cached by the last poll, never recomputed per button per paint.
+	 *
+	 * NEVER COLLAPSED: a collapsed widget is not painted, so it would not tick, so it could never
+	 * see the rows come back. With no rows it says so in one muted line instead.
+	 */
+	class SRoadBuildVariantPanel : public SCompoundWidget
+	{
+	public:
+		SLATE_BEGIN_ARGS(SRoadBuildVariantPanel) {}
+		SLATE_END_ARGS()
+
+		void Construct(const FArguments& InArgs, URoadBuildEdMode* InMode)
+		{
+			Mode = InMode;
+			ChildSlot
+			[
+				SAssignNew(Rows, SVerticalBox)
+			];
+			Refresh();
+		}
+
+		virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override
+		{
+			SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
+			Refresh();
+		}
+
+	private:
+		void Refresh()
+		{
+			URoadBuildEdMode* Owner = Mode.Get();
+			Axes.Reset();
+			if (Owner != nullptr)
+			{
+				Owner->GetActiveVariantAxes(Axes);
+			}
+
+			TArray<FName> Next;
+			Next.Add(FName(*FString::FromInt(Owner != nullptr ? Owner->GetSession().GetActiveToolIndex() : INDEX_NONE)));
+			for (const FToolVariantAxis& Axis : Axes)
+			{
+				Next.Add(Axis.Id);
+				for (const FToolVariant& Option : Axis.Options)
+				{
+					Next.Add(Option.Id);
+				}
+			}
+			if (Next != Signature)
+			{
+				Signature = MoveTemp(Next);
+				Rebuild();
+			}
+		}
+
+		void Rebuild()
+		{
+			Rows->ClearChildren();
+			if (Axes.Num() == 0)
+			{
+				Rows->AddSlot()
+				.AutoHeight()
+				[
+					SNew(STextBlock)
+					.Text(LOCTEXT("NoVariants", "The active tool has no options."))
+					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				];
+				return;
+			}
+
+			for (int32 AxisIndex = 0; AxisIndex < Axes.Num(); ++AxisIndex)
+			{
+				TSharedRef<SWrapBox> Line = SNew(SWrapBox).UseAllottedSize(true);
+				// THE AXIS NAMED, as the bar heads its lines: a runway's rows would otherwise be
+				// runs of buttons with nothing to say which is the surface.
+				Line->AddSlot()
+				.Padding(0.0f, 0.0f, 8.0f, 0.0f)
+				.VAlign(VAlign_Center)
+				[
+					SNew(STextBlock).Text(Axes[AxisIndex].Label)
+				];
+				for (int32 OptionIndex = 0; OptionIndex < Axes[AxisIndex].Options.Num(); ++OptionIndex)
+				{
+					const FToolVariant& Option = Axes[AxisIndex].Options[OptionIndex];
+					Line->AddSlot()
+					.Padding(2.0f)
+					[
+						SNew(SCheckBox)
+						.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
+						.ToolTipText(Option.Detail)
+						.IsEnabled_Lambda([this, AxisIndex, OptionIndex]()
+						{
+							return Axes.IsValidIndex(AxisIndex) && Axes[AxisIndex].Options.IsValidIndex(OptionIndex)
+								&& Axes[AxisIndex].Options[OptionIndex].bEnabled;
+						})
+						.IsChecked_Lambda([this, AxisIndex, OptionIndex]()
+						{
+							return Axes.IsValidIndex(AxisIndex) && Axes[AxisIndex].Current == OptionIndex
+								? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+						})
+						// A PICK, whichever way the box would flip: picking the lit option again is
+						// SelectVariant's own no-op, and the lit state follows the rows, not the box.
+						.OnCheckStateChanged_Lambda([this, AxisIndex, OptionIndex](ECheckBoxState)
+						{
+							if (URoadBuildEdMode* Owner = Mode.Get())
+							{
+								// THE ANSWER IS DISCARDED ON PURPOSE: taken or refused, the tool's own
+								// log line already says which, and the lit state is re-read from the
+								// rows on the next tick either way - nothing for a click handler to do
+								// with it that the next poll does not.
+								(void)Owner->SelectActiveVariant(AxisIndex, OptionIndex);
+							}
+						})
+						[
+							SNew(STextBlock).Text(Option.Label)
+						]
+					];
+				}
+				Rows->AddSlot()
+				.AutoHeight()
+				.Padding(0.0f, 2.0f)
+				[
+					Line
+				];
+			}
+		}
+
+		TWeakObjectPtr<URoadBuildEdMode> Mode;
+		TSharedPtr<SVerticalBox> Rows;
+		TArray<FToolVariantAxis> Axes;
+		TArray<FName> Signature;
+	};
+
 	/**
 	 * A toolkit that actually SHOWS the mode's palette.
 	 *
@@ -37,17 +187,71 @@ namespace
 	class FRoadBuildModeToolkit : public FModeToolkit
 	{
 	public:
+		/**
+		 * THE OWNER AT CONSTRUCTION, not only at Init: FModeToolkit::BuildToolPalette reads
+		 * OwningEditorMode, and Init (which sets it to this same mode in a real Enter()) needs a
+		 * live IToolkitHost a headless test cannot build - so without this,
+		 * URoadBuildEdMode::DrawnPalettesForTest could only ever report what the engine's
+		 * consumer draws with no mode at all: nothing.
+		 */
+		explicit FRoadBuildModeToolkit(URoadBuildEdMode* InOwner)
+		{
+			OwningEditorMode = InOwner;
+			OwnerMode = InOwner;
+		}
+
 		virtual void GetToolPaletteNames(TArray<FName>& PaletteNames) const override
 		{
-			// Must match the key GetModeCommands fills in, or the lookup misses and this
-			// is right back to drawing nothing.
-			PaletteNames.Add(FName(TEXT("Build")));
+			// Must match the key GetModeCommands fills in, or the lookup misses and this is
+			// right back to drawing nothing - so it is READ FROM THE SAME TABLE GetModeCommands
+			// is keyed from (issue #440), where it used to rest on two hand-typed "Build"s.
+			for (const FRoadBuildPalette& Palette : FRoadBuildEdModeCommands::Palettes())
+			{
+				PaletteNames.Add(Palette.Name);
+			}
 		}
 
 		virtual FText GetToolPaletteDisplayName(FName Palette) const override
 		{
-			return LOCTEXT("BuildPalette", "Build");
+			for (const FRoadBuildPalette& Entry : FRoadBuildEdModeCommands::Palettes())
+			{
+				if (Entry.Name == Palette)
+				{
+					return Entry.DisplayName;
+				}
+			}
+			return FText::FromName(Palette);
 		}
+
+		/**
+		 * THE VARIANT ROWS, ABOVE WHAT FModeToolkit SHOWS HERE BY DEFAULT (issue #440): the mode
+		 * panel puts this under the palettes (FModeToolkit::UpdatePrimaryModePanel hands it to
+		 * InlineContentHolder), which is where PIE's bar puts its variant row - under the tools.
+		 * The stock details views follow once Init has built them; they are null before it, and
+		 * the stock GetInlineContent would dereference them.
+		 */
+		virtual TSharedPtr<SWidget> GetInlineContent() const override
+		{
+			TSharedRef<SVerticalBox> Content = SNew(SVerticalBox)
+				+ SVerticalBox::Slot()
+				.AutoHeight()
+				.Padding(4.0f)
+				[
+					SNew(SRoadBuildVariantPanel, OwnerMode.Get())
+				];
+			if (ModeDetailsView.IsValid() && DetailsView.IsValid())
+			{
+				Content->AddSlot()
+				[
+					FModeToolkit::GetInlineContent().ToSharedRef()
+				];
+			}
+			return Content;
+		}
+
+	private:
+		/** OwningEditorMode is a UEdMode; the panel needs this mode's own API. */
+		TWeakObjectPtr<URoadBuildEdMode> OwnerMode;
 	};
 }
 
@@ -201,8 +405,20 @@ void URoadBuildEdMode::BindCommands()
 		{
 			Toolkit->GetToolkitCommands()->MapAction(VerbCommands[Index],
 				FExecuteAction::CreateUObject(this, &URoadBuildEdMode::ApplyVerb, Index),
-				FCanExecuteAction(),
+				FCanExecuteAction::CreateUObject(this, &URoadBuildEdMode::IsVerbEnabled, Index),
 				FIsActionChecked::CreateUObject(this, &URoadBuildEdMode::IsVerbActive, Index));
+		}
+
+		// ONE PER SnapToggleRegistry() ENTRY (issue #440), the verbs' loop again: the same table
+		// PIE's bar rows are built from, so the guide switches and the Grid step cannot be
+		// reachable in one driver and not the other.
+		const TArray<TSharedPtr<FUICommandInfo>> SnapCommands = Commands.SnapCommandsInOrder();
+		for (int32 Index = 0; Index < SnapCommands.Num(); ++Index)
+		{
+			Toolkit->GetToolkitCommands()->MapAction(SnapCommands[Index],
+				FExecuteAction::CreateUObject(this, &URoadBuildEdMode::ApplySnapToggle, Index),
+				FCanExecuteAction(),
+				FIsActionChecked::CreateUObject(this, &URoadBuildEdMode::IsSnapToggleOn, Index));
 		}
 	}
 
@@ -374,10 +590,107 @@ bool URoadBuildEdMode::IsVerbActive(int32 VerbIndex) const
 	return Registry.IsValidIndex(VerbIndex) && Registry[VerbIndex].IsActive(Session);
 }
 
+bool URoadBuildEdMode::IsVerbEnabled(int32 VerbIndex) const
+{
+	const TConstArrayView<FBuildVerbRegistration> Registry = BuildVerbRegistry();
+	return Registry.IsValidIndex(VerbIndex) && Registry[VerbIndex].IsEnabled(Session);
+}
+
+void URoadBuildEdMode::ApplySnapToggle(int32 Index)
+{
+	const TConstArrayView<FSnapToggleRegistration> Registry = SnapToggleRegistry();
+	if (!Registry.IsValidIndex(Index))
+	{
+		return;
+	}
+	const FSnapToggleRegistration& Toggle = Registry[Index];
+
+	ARoadNetworkActor* Airport = ARoadNetworkActor::Find(GetWorld());
+	if (Airport == nullptr)
+	{
+		// ARoadBuildController::ApplySnapToggle's wording (2026-09-30), so one grep finds either driver's.
+		UE_LOG(LogAirsideEditor, Warning, TEXT("Snap toggle %s ignored: no airport (road network) to set it on"),
+			*Toggle.Id.ToString());
+		return;
+	}
+
+	// A LEVEL EDIT - see the header: undoable, and saved with the level, as the Details panel's
+	// edit of this same UPROPERTY already is.
+	const FScopedTransaction Transaction(FText::Format(LOCTEXT("SnapToggleTransaction", "Snap: {0}"), Toggle.Name));
+	Airport->Modify();
+	Toggle.Apply(Airport->GuideSources);
+	UE_LOG(LogAirsideEditor, Log, TEXT("Snap toggle %s -> %s"), *Toggle.Id.ToString(),
+		*DescribeSnapToggle(Toggle, Airport->GuideSources));
+
+	// NO FRAME-CACHE INVALIDATION HERE, and none is missing: the next frame's key carries the
+	// airport's GuideSources (URoadEditFacade::MakeTunables -> FBuildSessionTunables::operator==),
+	// so a switched guide rebuilds the context under a still cursor by itself - PIE's door relies on
+	// the same comparison (#468's review found a first cut invalidating here on a wrong premise).
+}
+
+bool URoadBuildEdMode::IsSnapToggleOn(int32 Index) const
+{
+	const TConstArrayView<FSnapToggleRegistration> Registry = SnapToggleRegistry();
+	const ARoadNetworkActor* Airport = ARoadNetworkActor::Find(GetWorld());
+	return Airport != nullptr && Registry.IsValidIndex(Index) && Registry[Index].IsActive(Airport->GuideSources);
+}
+
+void URoadBuildEdMode::GetActiveVariantAxes(TArray<FToolVariantAxis>& Out) const
+{
+	// ARoadBuildController::MakeVariantContext's shape: the target and nothing else.
+	FToolContext Context;
+	Context.Target = ARoadNetworkActor::Find(GetWorld());
+	Session.GetActiveVariantAxes(Context, Out);
+}
+
+bool URoadBuildEdMode::SelectActiveVariant(int32 Axis, int32 Option)
+{
+	// SAME CAST-AND-FORWARD as ApplyVerb: the tool owns the transaction and the hover context.
+	if (UInteractiveToolManager* Manager = GetToolManager())
+	{
+		if (URoadBuildEditorTool* Tool = Cast<URoadBuildEditorTool>(Manager->GetActiveTool(EToolSide::Mouse)))
+		{
+			return Tool->SelectVariant(Axis, Option);
+		}
+	}
+	UE_LOG(LogAirsideEditor, Warning, TEXT("Variant row %d -> option %d ignored: no build tool is active"), Axis, Option);
+	return false;
+}
+
+TArray<TPair<FName, TArray<TSharedPtr<const FUICommandInfo>>>> URoadBuildEdMode::DrawnPalettesForTest() const
+{
+	TArray<TPair<FName, TArray<TSharedPtr<const FUICommandInfo>>>> Drawn;
+	if (!Toolkit.IsValid())
+	{
+		return Drawn;
+	}
+
+	TArray<FName> Names;
+	Toolkit->GetToolPaletteNames(Names);
+	for (const FName& Name : Names)
+	{
+		// FModeToolkit::CreatePaletteWidget's own builder and call, minus MakeWidget - the blocks
+		// are what the widget would be made from.
+		FUniformToolBarBuilder Builder(Toolkit->GetToolkitCommands(), FMultiBoxCustomization::None);
+		Toolkit->BuildToolPalette(Name, Builder);
+		TArray<TSharedPtr<const FUICommandInfo>>& Buttons = Drawn.Emplace_GetRef(Name, TArray<TSharedPtr<const FUICommandInfo>>()).Value;
+		for (const TSharedRef<const FMultiBlock>& Block : Builder.GetMultiBox()->GetBlocks())
+		{
+			Buttons.Add(Block->GetAction());
+		}
+	}
+	return Drawn;
+}
+
+TSharedPtr<SWidget> URoadBuildEdMode::InlineContentForTest() const
+{
+	return Toolkit.IsValid() ? Toolkit->GetInlineContent() : nullptr;
+}
+
 void URoadBuildEdMode::CreateToolkit()
 {
 	// Not FModeToolkit: the stock one names no palettes and so draws no buttons.
-	Toolkit = MakeShareable(new FRoadBuildModeToolkit);
+	Toolkit = MakeShareable(new FRoadBuildModeToolkit(this));
 }
 
 TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> URoadBuildEdMode::GetModeCommands() const
