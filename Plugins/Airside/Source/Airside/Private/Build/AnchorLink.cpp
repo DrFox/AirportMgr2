@@ -1188,7 +1188,7 @@ int32 FAnchorLink::Build(URoadNetwork& Network, const FChassis& LargestServiceVe
 	// missing a shed or a pump, which is a fact about a PLOT's modules and has nothing to do
 	// with joining a lead-in - it only ever ran here because this was the last thing a Topology
 	// rebuild touched Network with. It is DepotKit::ReportIncomplete now, called from
-	// URoadSurfacePresenter::RebuildInternal's Topology branch right after this Build, so it
+	// AirsideDerivation::Derive (#438; the presenter's Topology branch until then) right after this Build, so it
 	// still runs exactly once per rebuild and still runs again after every edit.
 
 	return Joined;

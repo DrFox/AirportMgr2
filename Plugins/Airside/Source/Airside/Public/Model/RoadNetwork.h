@@ -143,8 +143,8 @@ public:
 	uint32 GetEditRevision() const { return EditRevision; }
 
 	/**
-	 * The DERIVED guideline graph is behind the road: FRoadGuidelineBuilder::Build ran at least
-	 * once and a node or segment has changed since. True for a drag's duration - a drag
+	 * The DERIVED guideline graph is behind the road: the derivation (AirsideDerivation::Derive) ran
+	 * at least once and a node or segment has changed since. True for a drag's duration - a drag
 	 * rebuilds geometry only (#165) - and the planners refuse while it holds, so no route is
 	 * searched over lines the player has already moved (2026-09-27; Airside.Model.
 	 * NoPlanOnAGraphMidEdit). FALSE for a graph never derived: a hand-authored test graph has
@@ -157,7 +157,8 @@ public:
 	}
 
 	/** Stamps the current EditRevision as the one the guideline graph was derived from.
-	 *  FRoadGuidelineBuilder::Build's last act - see AreGuidelinesBehindRoad. */
+	 *  AirsideDerivation::Derive's last act, after every pass its scope ran (#438; the builder's
+	 *  own last act until then) - see AreGuidelinesBehindRoad. */
 	void MarkGuidelinesDerived() { GuidelinesDerivedAt = EditRevision; }
 
 	/** Which side of a two-lane road traffic keeps to. See EDriveSide. */

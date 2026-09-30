@@ -6,6 +6,7 @@
 #include "Model/BuildPurse.h"
 
 #include "AirsideLog.h"
+#include "Build/AirsideDerivation.h"
 
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
@@ -959,9 +960,15 @@ void FRoadDrawTool::PreviewUpgrade(const FToolContext& Context, IToolPreviewSink
 				// THE RESTRICTION PASS RUN ON IT, quietly, as the rebuild will run it on the real one -
 				// so the closures below read the strip at the letter it will OPERATE (StripWidthOf's
 				// ruling), and a neighbour the new pavement restricts is restricted here too.
+				// THROUGH THE DERIVATION'S Facts SCOPE (#438), not TaxiwayRestriction::Apply by name: the
+				// passes the road alone determines, the ones these closures read, so a fact pass the
+				// rebuild gains reaches this preview without a second edit. Not the Full scope: the
+				// guideline builder has no quiet mode, and nothing asked below reads the graph.
 				URoadNetwork* Ghost = DuplicateObject<URoadNetwork>(Network, GetTransientPackage());
 				Ghost->SetSegmentProfile(Id, New);
-				TaxiwayRestriction::Apply(*Ghost, /*bLog=*/false);
+				AirsideDerivation::FDeriveInputs WhatIf;
+				WhatIf.Scope = AirsideDerivation::EDeriveScope::Facts;
+				AirsideDerivation::Derive(*Ghost, WhatIf);
 				TArray<FString> Effects;
 				TaxiwayRestriction::FObstruction Worst;
 				if (const TOptional<EIcaoCode> Restricted = TaxiwayRestriction::RestrictionOf(*Ghost, Id, &Worst))

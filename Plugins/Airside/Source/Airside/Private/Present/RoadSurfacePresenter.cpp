@@ -1,8 +1,8 @@
 #include "Present/RoadSurfacePresenter.h"
 
 #include "AirsideLog.h"
+#include "Build/AirsideDerivation.h"
 #include "Build/AnchorLink.h"
-#include "Build/DepotKit.h"
 #include "Build/HoldingPositionMarkingBuilder.h"
 #include "Build/RoadLaneMarkingBuilder.h"
 #include "Build/RoadGuidelineBuilder.h"
@@ -662,72 +662,40 @@ void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfac
 		return;
 	}
 
+	// THE DERIVATION, THEN THE MESH (#438). Everything the routing graph is - the default
+	// profile, the solve, the restriction, the guidelines, the anchor links, the census, the
+	// Derived stamp - is AirsideDerivation::Derive's, in Build/, which TestGraph, the upgrade
+	// tool's what-if and the ops tests call too; this class meshes from the solve it returns.
+	// Every pass's own WHY travelled with it - see Derive.
+	//
+	// BEFORE THE RENDER-COMPONENT CHECK, deliberately: that check used to sit above all of it,
+	// so a presenter with no Road mesh derived NOTHING, and the routing graph traffic and the
+	// ops load read existed only as a side effect of there being a mesh to draw. A presenter
+	// with no component now derives the graph and draws nothing, which is the honest split.
+	// ENFORCED BY: Airside.Present.Derivation.RunsWithoutARenderComponent
+	//
+	// TOPOLOGY ONLY, PAST THE SOLVE (issue #165) - the Surface scope. A Geometry change - a
+	// MoveNode or MoveApronCorner drag frame - moved positions and nothing else, so the graph's
+	// SHAPE is exactly what it was; re-deriving it every frame of a drag is the cost issue #165
+	// is about. See RebuildSurfaceOnly's own comment for what that leaves stale and why that is
+	// tolerated for a drag's duration.
+	AirsideDerivation::FDeriveInputs Derivation;
+	Derivation.Scope = Kind == EChangeKind::Topology ? AirsideDerivation::EDeriveScope::Full
+		: AirsideDerivation::EDeriveScope::Surface;
+	// Settings.Profile is ARoadNetworkActor::ResolveProfile()'s OUTPUT, never resolved here:
+	// this class must not decide content defaults, only draw what it is told.
+	Derivation.DefaultProfile = Settings.Profile;
+	// RESOLVED ONCE, BY THE ACTOR, AND PASSED DOWN (issue #190) - see Settings.DesignVehicles'
+	// own comment. A pointer into Settings, which outlives the call: no copy per drag frame.
+	Derivation.DesignVehicles = &Settings.DesignVehicles;
+	Derivation.ServiceLinkRadius = Settings.ServiceLinkRadius;
+	Derivation.DepotKits = Settings.DepotKits;
+	const FRoadSolveResult Solved = AirsideDerivation::Derive(Network, Derivation);
+
 	UDynamicMeshComponent* MeshComponent = GetLayerComponent(ESurfaceLayer::Road);
 	if (MeshComponent == nullptr)
 	{
 		return;
-	}
-
-	// BEFORE the solve, because the solver reads it. Segments made in this session already
-	// carry this profile; segments reloaded from a saved level carry null, because the
-	// profile they were given lived in the transient package and never survived the save.
-	// Handing it to the network repairs both cases through one accessor - see
-	// URoadNetwork::ProfileFor, and Airside.Build.ProfileFallback for what it is worth.
-	// Settings.Profile is ARoadNetworkActor::ResolveProfile()'s OUTPUT, never resolved here:
-	// this class must not decide content defaults, only draw what it is told.
-	Network.DefaultProfile = Settings.Profile;
-
-	// RESOLVED ONCE, HERE, AND PASSED DOWN (issue #190) - see Settings.LargestServiceVehicle's
-	// own comment. SolveAll's BuildNodeInput asks a profile's ResolvedFilletRadius per arm of
-	// every node it visits; without this, that ran UAirsideSettings::ResolveLargestServiceVehicle
-	// fresh each time, on every Geometry rebuild a drag frame produces as well as every Topology
-	// one.
-	// A TOPOLOGY REBUILD TRACES the bends' widening (EWideningTrace); a drag's Geometry frame
-	// reads what the last one traced, so a drag never drives a vehicle per frame.
-	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Network, 12, &Settings.DesignVehicles,
-		Kind == EChangeKind::Topology ? EWideningTrace::Trace : EWideningTrace::ReadCached);
-
-	// TOPOLOGY ONLY, PAST HERE (issue #165). A Geometry change - a MoveNode or
-	// MoveApronCorner drag frame - moved positions and nothing else, so the graph's SHAPE is
-	// exactly what it was; re-deriving it every frame of a drag is the cost issue #165 is
-	// about. See RebuildSurfaceOnly's own comment for what that leaves stale and why that is
-	// tolerated for a drag's duration.
-	if (Kind == EChangeKind::Topology)
-	{
-		// The guideline graph is derived from the same solve, and until this call existed it
-		// was derived NOWHERE outside the tests - so every route query at runtime ran against
-		// an empty graph and correctly reported that nothing was connected.
-		//
-		// Anchor lead-ins go second and must: they join stands to guidelines that only exist
-		// once the line above has run, and both are swept and rebuilt together. Both take the
-		// SAME resolved vehicle SolveAll just used, rather than resolving their own (#190).
-		//
-		// THE RESTRICTION PASS FIRST (strip stage 6): the builder writes every taxiway edge's
-		// MaxWingspan from its EFFECTIVE letter, which reads the RestrictedLetter this writes -
-		// run after, it would route on the previous edit's restriction. After SolveAll, which it
-		// does not read, so the order against the solve is free.
-		TaxiwayRestriction::Apply(Network);
-		FRoadGuidelineBuilder::Build(Network, Solved, Settings.DesignVehicles);
-		//
-		// THE SERVICE RADIUS COMES DOWN FROM THE LEVEL - see ARoadNetworkActor::ServiceLinkRadius.
-		// The aircraft cap keeps FAnchorLink's own default beside it, deliberately: one is
-		// per-airport gameplay tuning and the other is a fact about a painted line.
-		// THE DEFAULT, NOT PER TIER: a stand or depot link is driven by the rigid trucks that
-		// service stands and live in depots. The rig has no stand or depot to go to yet (spec
-		// §"Out of this step", step 3); sizing every link's lane radius for it would widen every
-		// yard approach for a vehicle that never uses one.
-		// SOLVED, PASSED DOWN (issue #324): the same solve FRoadGuidelineBuilder::Build just
-		// derived the turn paths from, so Join can re-measure a piece it splits off one
-		// instead of leaving it unmeasured for every rebuild's lifetime (#288's own gap).
-		FAnchorLink::Build(Network, Settings.DesignVehicles.Default.Chassis, FAnchorLink::DefaultMaxLeadIn,
-			Settings.ServiceLinkRadius, &Solved);
-
-		// THE FUEL-DEPOT MODULE CENSUS (#306): moved out of FAnchorLink::Build, which a depot's
-		// missing shed or pump has nothing to do with, and run from here instead - the same
-		// Topology census the anchor links above are part of, and for the same reason: it must
-		// say so again after every edit, not just once at placement (DepotKit::ReportIncomplete's
-		// own header comment).
-		DepotKit::ReportIncomplete(Network, Settings.DepotKits);
 	}
 
 	// THROUGH THE RESOLVED SETTING, never a raw property: an unset MaterialSet means "single
