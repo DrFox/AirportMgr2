@@ -165,6 +165,10 @@ public:
  * as path names and are re-found by path on load, which is what content assets support and
  * transient objects do not. Views are never saved; Present/ rebuilds from the model.
  *
+ * EXCEPT AN ACTOR'S FALLBACK ROAD PROFILE (URoadProfile::bActorFallback, #459): a transient object
+ * every default-width road names, written as NONE - "the default", which the loading actor
+ * re-resolves - because its path would name nothing in a new process. See SerializeObject.
+ *
  * SO A POINTER TO A RUNTIME OBJECT IS NEVER SAVED (#425): wiring between model objects is Transient
  * (Tools/Check-Architecture.ps1 rule 37), and a runtime object that IS state - a flight - is written by
  * value by its owner (UFlightBoard::Serialize). Before that, the flight board's blob held paths alone.

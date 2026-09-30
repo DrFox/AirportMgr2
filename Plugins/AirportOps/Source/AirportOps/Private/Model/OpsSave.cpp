@@ -6,7 +6,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
-#include "Profiles/RoadProfile.h"   // TransientDefaultProfile hands back a URoadProfile, written as a UObject
+#include "Profiles/RoadProfile.h"   // FSaveArchive asks a URoadProfile whether it is an actor's fallback
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
 #include "Serialization/ObjectAndNameAsStringProxyArchive.h"
@@ -18,56 +18,47 @@ namespace
 	const FName NetworkBlobName(TEXT("Network"));
 
 	/**
-	 * THE SAVE ARCHIVE, WRITING ONE OBJECT AS NONE (#459). The network's transient default profile - the actor's
-	 * fallback, URoadNetwork::TransientDefaultProfile - has a path no other process can re-find, and in this one may
-	 * re-find something else. Written as null, it loads as "no profile of its own", which URoadNetwork::ProfileFor
-	 * reads as the default and the loading actor re-resolves (ARoadNetworkActor::RepairLoadedNetwork): the stable id
-	 * the issue asked for is "the default" itself. A LEVEL save has always written it so.
+	 * THE SAVE ARCHIVE, WRITING EVERY ACTOR FALLBACK PROFILE AS NONE (#459). ARoadNetworkActor::ResolveProfile's
+	 * fallback (URoadProfile::bActorFallback) lives in the transient package: its path names nothing in another process,
+	 * and in this one may name something else. Written as null, it loads as "no profile of its own", which
+	 * URoadNetwork::ProfileFor reads as the default and the loading actor re-resolves (RepairLoadedNetwork): the stable
+	 * id the issue asked for is "the default" itself. A LEVEL save has always written it so.
 	 *
-	 * ONE OBJECT, BY IDENTITY, and not "every transient object": a test's transient runway profile round-trips in the
-	 * same process only because its path is written, and nothing in production puts any other transient object in the
-	 * network. Every reference type the proxy archive serialises comes through operator<<(UObject*&) - FObjectPtr's
-	 * does too (FArchiveUObject::SerializeObjectPtr) - so this one override covers TObjectPtr members.
+	 * BY THE MARKER, not by identity with the network's current DefaultProfile - roads the EDITOR laid name the editor
+	 * actor's fallback, which a PIE copy keeps while its DefaultProfile becomes the PIE actor's (see the field) - and not
+	 * "every transient object": a test's transient runway round-trips in the same process only because its path is
+	 * written. EVERY BLOB goes through it, not only the network's: only the network holds a profile, and the rule is
+	 * true of any reference to one. Every reference type the proxy archive serialises comes through
+	 * operator<<(UObject*&) - FObjectPtr's too (FArchiveUObject::SerializeObjectPtr) - so this one override covers
+	 * TObjectPtr members.
 	 */
-	class FSaveArchiveWritingOneAsNone : public FObjectAndNameAsStringProxyArchive
+	class FSaveArchive : public FObjectAndNameAsStringProxyArchive
 	{
 	public:
-		FSaveArchiveWritingOneAsNone(FArchive& Inner, const UObject* InWriteAsNone)
-			: FObjectAndNameAsStringProxyArchive(Inner, /*bInLoadIfFindFails*/ false), WriteAsNone(InWriteAsNone)
+		explicit FSaveArchive(FArchive& Inner)
+			: FObjectAndNameAsStringProxyArchive(Inner, /*bInLoadIfFindFails*/ false)
 		{
 		}
 
 		using FObjectAndNameAsStringProxyArchive::operator<<;
 		virtual FArchive& operator<<(UObject*& Obj) override
 		{
-			if (Obj != nullptr && Obj == WriteAsNone)
+			if (const URoadProfile* Profile = Cast<URoadProfile>(Obj); Profile != nullptr && Profile->bActorFallback)
 			{
 				UObject* None = nullptr;
 				return FObjectAndNameAsStringProxyArchive::operator<<(None);
 			}
 			return FObjectAndNameAsStringProxyArchive::operator<<(Obj);
 		}
-
-	private:
-		const UObject* WriteAsNone;
 	};
-
-	/** The network's blob - OpsSave::SerializeObject's shape, through the archive above. */
-	void SerializeNetwork(const URoadNetwork& Network, TArray<uint8>& OutBytes)
-	{
-		OutBytes.Reset();
-		FMemoryWriter Writer(OutBytes, /*bIsPersistent*/ true);
-		FSaveArchiveWritingOneAsNone Ar(Writer, Network.TransientDefaultProfile());
-		// Serialize is non-const on UObject; the archive is saving, so nothing is written to the network.
-		const_cast<URoadNetwork&>(Network).Serialize(Ar);
-	}
 }
 
 void OpsSave::SerializeObject(UObject& Object, TArray<uint8>& OutBytes)
 {
 	OutBytes.Reset();
 	FMemoryWriter Writer(OutBytes, /*bIsPersistent*/ true);
-	FObjectAndNameAsStringProxyArchive Ar(Writer, /*bInLoadIfFindFails*/ false);
+	// THE ONE SAVE ARCHIVE - see FSaveArchive: an actor's fallback road profile is written as none, whichever blob.
+	FSaveArchive Ar(Writer);
 	// ArIsSaveGame deliberately left false - see the namespace comment in the header.
 	Object.Serialize(Ar);
 }
@@ -109,10 +100,10 @@ void OpsSave::Capture(TArrayView<IOpsPersistent* const> Persistents,
 	Out.Network.Reset();
 	Out.Flights.Reset();
 
-	// THROUGH SerializeNetwork, not SerializeObject: the one blob with a reference no other process can resolve - see
-	// FSaveArchiveWritingOneAsNone (#459).
+	// Serialize is non-const on UObject; the archive is saving, so nothing is written to them. THROUGH SerializeObject's
+	// FSaveArchive like every blob, which writes an actor's fallback road profile as none (#459).
 	// ENFORCED BY: AirportOps.Model.Save.FallbackProfileIsSavedAsTheDefault
-	SerializeNetwork(Network, Out.Blobs.FindOrAdd(NetworkBlobName).Bytes);
+	SerializeObject(const_cast<URoadNetwork&>(Network), Out.Blobs.FindOrAdd(NetworkBlobName).Bytes);
 
 	for (IOpsPersistent* Persistent : Persistents)
 	{

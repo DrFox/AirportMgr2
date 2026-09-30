@@ -592,15 +592,17 @@ $AllowedCallers = @(
         # means the network's default (a level load has always produced one; a save game's load does on purpose since
         # #459). Five readers dereferenced or null-tested the raw field: one crashed on the null a new-process load
         # left (StandTurnOffMarkingBuilder), four answered as if the road had no profile. The shape is `.Profile->` or
-        # `.Profile == / != nullptr`, a ternary arm, a copy or an argument - `.Profile` followed by `->`, a null test,
-        # `:`, `;` or `)`. Grep on 2026-09-30 found that on FRoadSegment alone, bar URoadSurfacePresenter's
-        # FSurfaceSettings::Profile (excluded by name); it also found a SIXTH raw reader the issue's list missed
-        # (EditTool's guide half-widths). ProfileFor itself reads the field and the graph surgery copies it
+        # `.Profile == / != nullptr`, `.Get()`, a ternary condition or arm, a comparison, an argument, a copy - EVERY use
+        # of `.Profile` / `->Profile` that is not an assignment TO it (#465 review: the first pattern listed the shapes
+        # it had seen, and `Seg.Profile ? Seg.Profile.Get() : Net.DefaultProfile.Get()` walked past it). Grep on
+        # 2026-09-30 found that on FRoadSegment alone, bar two other types excluded by name - URoadSurfacePresenter's
+        # FSurfaceSettings::Profile and a follower's FSpeedProfile (Follower.Profile). It also found a SIXTH raw reader
+        # the issue's list missed (EditTool's guide half-widths). ProfileFor itself reads the field and the graph surgery copies it
         # (RoadNetwork.cpp); the rebuild census counts own-profile against fallback on purpose (RoadRebuildCensus.cpp);
         # RoadHeal copies an arm's raw profile into the heal plan, where null still means the default
         # (FRoadDeletionPlan::HealProfile) - a copy, not a read of a width.
         Name        = 'FRoadSegment::Profile read raw'
-        Pattern     = '(?<!Settings)(\.|->)Profile\s*(->|[!=]=\s*nullptr|:|;|\))'
+        Pattern     = '(?<!Settings)(?<!Follower)(\.|->)Profile\b(?!\s*=(?!=))'
         ProdAllowed = @('Private\Model\RoadNetwork.cpp', 'Private\Debug\RoadRebuildCensus.cpp', 'Private\Tool\RoadHeal.cpp')
         TestExempt  = $true
         ProdReason  = "read a segment's profile through URoadNetwork::ProfileFor - a null one is legal and means the network's default (#459)"

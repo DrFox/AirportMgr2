@@ -43,12 +43,17 @@ namespace
 			{
 				continue;
 			}
+			// THROUGH ProfileFor (#459): a road with no profile of its own is legal and means the network's
+			// default - read raw, this dereferenced the null a new-process load leaves. GUARDED, not trusted to
+			// HasStrip having asked the same question: this is the line #459 crashed on, and a guard costs a branch.
+			const URoadProfile* Profile = Network.ProfileFor(Segments[Index]);
+			if (Profile == nullptr)
+			{
+				continue;
+			}
 			FPavedTaxiway Paved;
 			GuidelineGeom::Sample(A, Segments[Index].Control, B, Paved.Centre);
-			// THROUGH ProfileFor (#459): a road with no profile of its own is legal and means the network's
-			// default - read raw, this dereferenced the null a new-process load leaves. HasStrip has already
-			// proved ProfileFor non-null (TaxiwayStrip::StripWidthOf's own reading).
-			Paved.HalfWidth = Network.ProfileFor(Segments[Index])->GetMaxHalfWidth();
+			Paved.HalfWidth = Profile->GetMaxHalfWidth();
 			for (const FVector2D& P : Paved.Centre)
 			{
 				Paved.Bounds += P;

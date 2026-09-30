@@ -805,4 +805,40 @@ bool FRepairRepointsOnlyASaveGameTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * #459 / #465 review: A LOAD THAT BROUGHT NO DefaultProfile GETS THIS ACTOR'S, FROM THE REPAIR ITSELF. A save writes every
+ * actor fallback as none, DefaultProfile included, and the rebuild after a load sets it again - so a pin measured after
+ * the rebuild could not tell the repair from the rebuild. Measured with no rebuild at all.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRepairReResolvesAMissingDefaultTest,
+	"Airside.Present.RepairReResolvesAMissingDefault",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRepairReResolvesAMissingDefaultTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a target actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 0.0));
+	URoadNetwork* Net = Actor->Network;
+	if (!TestNotNull(TEXT("the first edit made a network"), Net)) { return false; }
+
+	// AS A LOAD LEAVES IT: no default, and a road with no profile of its own.
+	Net->DefaultProfile = nullptr;
+	const FRoadSegmentId Road = Net->AddStraightSegment(Net->AddNode(FVector2D(0.0, 20000.0)),
+		Net->AddNode(FVector2D(20000.0, 20000.0)), nullptr);
+	const int32 Rebuilds = Actor->RebuildCountForTest();
+
+	Actor->RepairLoadedNetwork(ELoadedFrom::SaveGame);
+	TestEqual(TEXT("control: nothing rebuilt - what follows is the repair's, not a rebuild's"), Actor->RebuildCountForTest(), Rebuilds);
+	TestTrue(TEXT("the repair re-resolved the default from this actor"), Net->DefaultProfile == Actor->ResolveProfile());
+	TestTrue(TEXT("so the road with no profile of its own reads live, before any rebuild"),
+		Net->ProfileFor(*Net->GetSegment(Road)) == Actor->ResolveProfile());
+	TestTrue(TEXT("and the fallback it resolved is marked as one, so a save writes it as none"),
+		Actor->ResolveProfile() != nullptr && Actor->ResolveProfile()->bActorFallback);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

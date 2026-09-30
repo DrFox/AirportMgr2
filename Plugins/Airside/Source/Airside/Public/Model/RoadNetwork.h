@@ -270,22 +270,24 @@ public:
 	 * round trip. Null is still legal and still means what it meant before.
 	 *
 	 * A NULL SEGMENT PROFILE IS LEGAL, AND MEANS "THE DEFAULT" (#459, decided rather than left to each reader): a level
-	 * load has always produced it, and a save game's load produces it on purpose now - OpsSave writes the actor's
-	 * transient fallback as null (TransientDefaultProfile below) because no other process can resolve its path. So
-	 * EVERY reader asks ProfileFor, never FRoadSegment::Profile: five read it raw until #459, one crashed on a null
-	 * (StandTurnOffMarkingBuilder) and four answered as if the road had no width (a plot built over the carriageway,
-	 * a stand letter missing, a snap with no half-width).
-	 * ENFORCED BY: Check-Architecture rule 4 ('FRoadSegment::Profile read raw' - RoadNetwork.cpp and the rebuild census only)
+	 * load has always produced it, and a save game's load produces it on purpose now - OpsSave writes every actor
+	 * fallback profile as null (URoadProfile::bActorFallback) because no other process can resolve its path. So EVERY
+	 * reader asks ProfileFor, never FRoadSegment::Profile: six read it raw until #459, one crashed on a null
+	 * (StandTurnOffMarkingBuilder) and five answered as if the road had no width (a plot built over the carriageway, a
+	 * stand letter missing, a snap with no half-width, an edit guide without the arm, a service road named "taxiway").
+	 * ENFORCED BY: Check-Architecture rule 4 ('FRoadSegment::Profile read raw' - RoadNetwork.cpp, the rebuild census and
+	 * RoadHeal's copies only)
 	 */
 	UPROPERTY() TObjectPtr<URoadProfile> DefaultProfile;
 
 	/**
 	 * DefaultProfile when it is an object in the TRANSIENT package - ARoadNetworkActor::ResolveProfile's fallback,
-	 * made on demand from the actor's own FallbackWidth - else null. The one reference this network holds that no
-	 * other process can re-find by path. ONE SPELLING of "the default is transient" for both of its readers: OpsSave,
-	 * which writes it as null (so a load answers "the default", re-resolved by the loading actor, #459), and
-	 * RepointTransientDefaultProfile, which repairs a snapshot that wrote its path anyway.
-	 * ENFORCED BY: AirportOps.Model.Save.FallbackProfileIsSavedAsTheDefault
+	 * made on demand from the actor's own FallbackWidth - else null. For RepointTransientDefaultProfile, which repairs a
+	 * snapshot that wrote such a path. NOT the save's test any more: OpsSave keys on URoadProfile::bActorFallback, since
+	 * a network can hold a SECOND actor's fallback - roads the editor laid name the editor actor's, which a PIE copy keeps
+	 * while its DefaultProfile becomes the PIE actor's. Harmless in memory (null or not, ProfileFor answers; the editor's
+	 * fallback is alive and the same width), and since #459 written as none too.
+	 * ENFORCED BY: Airside.Present.RepairRepointsOnlyASaveGame
 	 */
 	URoadProfile* TransientDefaultProfile() const;
 
@@ -303,11 +305,11 @@ public:
 	 * or a test since, whichever same-named transient profile that process happens to hold. That last is the one this
 	 * repairs: a road following a profile some other actor or session made. BY IDENTITY WITH THE SAVED DEFAULT, because
 	 * both pointers were written as the same path and re-found as the same object, whichever that turned out to be.
-	 * RE-POINTED, NOT NULLED - null means the same through ProfileFor, but five readers dereferenced FRoadSegment::
-	 * Profile raw until #459 (StandTurnOffMarkingBuilder, PlotGesture, RoadNaming, RoadSnap, StandPlotTool), and
-	 * nulling crashed the first on the first load that tried it; re-pointing keeps a repaired road exactly as concrete
-	 * as it was laid. SINCE #459 a save no longer writes the path this repairs (OpsSave writes TransientDefaultProfile
-	 * as null), so this is for a snapshot written before that. A SEGMENT WHOSE PROFILE IS NOT THE SAVED DEFAULT IS LEFT ALONE - an
+	 * RE-POINTED, NOT NULLED - null means the same through ProfileFor, but six readers dereferenced FRoadSegment::
+	 * Profile raw until #459 (StandTurnOffMarkingBuilder, PlotGesture x2, RoadNaming, RoadSnap, StandPlotTool, EditTool),
+	 * and nulling crashed the first on the first load that tried it; re-pointing keeps a repaired road exactly as
+	 * concrete as it was laid. SINCE #459 a save no longer writes the path this repairs (OpsSave writes every actor
+	 * fallback as none), so this is for a snapshot written before that. A SEGMENT WHOSE PROFILE IS NOT THE SAVED DEFAULT IS LEFT ALONE - an
 	 * authored width tier is a content asset and resolves correctly, and a road drawn deliberately narrow stays
 	 * narrow - and so is every segment when the saved default was a content asset, or came back null (nothing
 	 * resolved: ProfileFor's fallback, as after a level load).

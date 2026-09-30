@@ -550,9 +550,12 @@ int32 ARoadNetworkActor::RepairLoadedNetwork(ELoadedFrom From)
 	// profile of its own means "this actor's default", and this makes ProfileFor answer live from here on, before
 	// the rebuild that would set it anyway. BOTH PATHS: DefaultProfile is overwritten by every rebuild, so this pins
 	// nothing (unlike re-pointing the roads themselves - see RepointTransientDefaultProfile below).
+	// ENFORCED BY: Airside.Present.RepairReResolvesAMissingDefault (asserted before any rebuild could set it)
+	int32 DefaultsResolved = 0;
 	if (Network->DefaultProfile == nullptr)
 	{
 		Network->DefaultProfile = ResolveProfile();
+		DefaultsResolved = Network->DefaultProfile != nullptr ? 1 : 0;
 	}
 
 	// OUTLINES FIRST: a stand saved before stands had them gets its Code C box, and only a
@@ -595,12 +598,12 @@ int32 ARoadNetworkActor::RepairLoadedNetwork(ELoadedFrom From)
 	// ONE LINE WHEN A LOAD REPAIRED ANYTHING, so "did it" is one grep - the questions the
 	// comments above answer by reasoning, answered by measurement. Silent when nothing needed
 	// it: PostRegisterAllComponents re-runs on every editor re-registration of this actor.
-	const int32 Total = Outlined + Numbered + Rebound + RefreshedAnchors + Forgotten;
+	const int32 Total = DefaultsResolved + Outlined + Numbered + Rebound + RefreshedAnchors + Forgotten;
 	if (Total > 0)
 	{
 		UE_LOG(LogRoadMesh, Log,
-			TEXT("Load repairs on %s: %d outline(s), %d number(s), %d definition(s), %d anchor(s), %d transient profile ref(s)"),
-			*GetName(), Outlined, Numbered, Rebound, RefreshedAnchors, Forgotten);
+			TEXT("Load repairs on %s: %d default re-resolved, %d outline(s), %d number(s), %d definition(s), %d anchor(s), %d transient profile ref(s)"),
+			*GetName(), DefaultsResolved, Outlined, Numbered, Rebound, RefreshedAnchors, Forgotten);
 	}
 	return Total;
 }
@@ -707,6 +710,9 @@ URoadProfile* ARoadNetworkActor::ResolveProfile()
 		// band to fade and the road ends in a knife edge against the ground.
 		RuntimeProfile = URoadProfile::MakeTransient(
 			FallbackWidth, FallbackFilletRadius, FallbackWidth * 0.1);
+		// MARKED AS A FALLBACK (#459), so a save writes every road laid with it - this actor's, or the editor actor's
+		// a PIE copy still names - as "the default" rather than a path no other process can resolve. See the field.
+		RuntimeProfile->bActorFallback = true;
 	}
 
 	return RuntimeProfile;
