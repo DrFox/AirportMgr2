@@ -21,6 +21,12 @@
 // Forward declared only for the friends below - see FRoadAgent::CrossingRunway.
 class UGroundTraffic;
 struct FClaimPass;
+// Forward declared, as parameter types only: ApplyRouteChange (Model/RouteChange.h - its callers include it) and
+// LiveTowSeedAtRest (Model/RoadGuideline.h). Neither is read by anything inline in this header. An enum class with
+// an explicit underlying type forward-declares as a by-value parameter type (TrafficRules.h's precedent, #175).
+struct FRouteChange;
+enum class ERouteGoal : uint8;
+struct FGuidelineNode;
 
 /**
  * WHICH BUNDLE an agent was started with - and so which of FRoadAgent's two it may read.
@@ -500,9 +506,11 @@ public:
 	/** Forget the refusal - a new network object, whose revisions are not comparable. See TaxiOutRefusedAt. */
 	void ForgetTaxiOutRefusal() { TaxiOutRefusedAt.Reset(); }
 
-	/** A new taxi out, restarted from where a TAXIING aeroplane holds - the taxi-complete
-	 *  guard's hold (RoadAgent.cpp). Keeps its pose, heading and engine spool. */
-	void ResumeTaxiOut(const FRoutePlan& Route);
+	/** The hold for a taxi out is over: a new route has been found (AdoptTaxiOut's, or for a TAXIING aeroplane that
+	 *  held where the taxi-complete guard stopped it, UGroundTraffic::ReplanHeldTaxiOuts' restart through
+	 *  ChangeRoute - which keeps its pose, heading and engine spool, as this used to by calling RestartTaxi itself
+	 *  before issue #429 put every route change through one seam). Its hold line and refusal are forgotten. */
+	void EndTaxiOutHold();
 
 	/** Waiting for a way to the runway it can drive - see bTaxiOutStale. At the end of a push,
 	 *  or where a stranded taxi out left it. */
@@ -626,12 +634,14 @@ public:
 	 * rather than an unset FVector2D - which is how this project has twice put things at the
 	 * world origin. See Advance.
 	 *
-	 * LEFT PUBLIC (issue #295's review): the one external WRITE (GroundTrafficRebuild.cpp's
-	 * drive-side rejoin) goes through RebaseLastMotionPosition below, but a dozen-plus READ
-	 * call sites across InspectFacts.cpp, AirsideTraffic.cpp, TrafficClaims.cpp and
-	 * GroundTraffic(Rebuild).cpp would each need converting to a getter for no behaviour
-	 * change - the "more than ~10 sites" exception the brief for this issue allows. See the
-	 * PR body for the count.
+	 * LEFT PUBLIC (issue #295's review): a dozen-plus READ call sites across InspectFacts.cpp,
+	 * AirsideTraffic.cpp, TrafficClaims.cpp and GroundTraffic(Rebuild).cpp would each need
+	 * converting to a getter for no behaviour change - the "more than ~10 sites" exception the
+	 * brief for this issue allows. See the PR body for the count. NO EXTERNAL WRITE REMAINS
+	 * (issue #429): the one there was, the drive-side rejoin's RebaseLastMotionPosition after a
+	 * RestartTaxi, went when the flip rejoined through RejoinTaxi like its two siblings - which
+	 * re-seats the position itself and keeps the rest of the pose.
+	 * ENFORCED BY: Check-Architecture rule 6 (no `Agent.<field>... =` outside RoadAgent.cpp)
 	 */
 	UPROPERTY() FAgentMotion LastMotion;
 
@@ -643,15 +653,6 @@ public:
 	 * reaching LastMotion.Position itself (#104).
 	 */
 	FVector2D GroundPosition() const { return LastMotion.Position; }
-
-	/**
-	 * Re-seats LastMotion.Position only, leaving Heading/Altitude/GroundSpeed/etc as they are -
-	 * FPlanReResolver::ReResolvePlan's rejoin-after-a-drive-side-flip case, where RestartTaxi's
-	 * own fallback pose (the new plan's first point) is wrong for a vehicle that is actually
-	 * part-way along it. NAMED rather than a bare `Agent.LastMotion.Position = At` (issue #295)
-	 * so the one external write of this field is a call, not a direct reach into it.
-	 */
-	void RebaseLastMotionPosition(const FVector2D& At) { LastMotion.Position = At; }
 
 	/**
 	 * Where each link of the vehicle's tow has its axle, road-plane XY - one per FTowLink, and
@@ -667,6 +668,46 @@ public:
 
 	/** The link that jack-knifed, which stopped this agent, or INDEX_NONE. See JackknifedLink. */
 	int32 GetJackknifedLink() const { return JackknifedLink; }
+
+	/**
+	 * THIS TOW AS IT STANDS, for VehicleFit::JudgePlan to judge a route from instead of a chain laid straight (review
+	 * of 9441ccf1): its axles (a VIEW of TowAxles - the agent must outlive the judgement), the cab's heading and body
+	 * origin as SHOWN (LastMotion), and the follower's speed and Travelled - right for a plan that shares the live
+	 * one's prefix (a splice, an extension, a re-resolve). A plan that starts somewhere else overwrites Travelled and
+	 * Speed with where it starts (a rejoin), or asks LiveTowSeedAtRest below.
+	 *
+	 * ONE BUILDER (issue #429, #313): the seed was built by hand at five sites in three modules - ExtendRoute,
+	 * RerouteAgent and FPlanReResolver::QueryFor here, UJobBoard::DriveVehicleTo in AirportOps and FRigYard::PlanTo
+	 * in the game module - and they had drifted: one read the follower's heading where the rest had been "aligned
+	 * 2026-09-27" by hand to LastMotion's, two left the fold unchecked. A change to how a tow is judged is made here.
+	 * ENFORCED BY: Check-Architecture rule 4 ('FTowSeed built' row) and rule 53 (no FTowSeed in AirportOps or the game module)
+	 *
+	 * UNSET WHEN THERE IS NO LIVE CHAIN TO JUDGE FROM: anything without a trailer, a chain not laid one axle per link,
+	 * or a folded one - a jack-knifed tow is going nowhere, and a seed from its fold would judge a truck that cannot
+	 * drive. The caller then judges unseeded, as it would a rigid vehicle.
+	 * ENFORCED BY: Airside.Model.Tow.LiveTowSeed
+	 */
+	TOptional<FTowSeed> LiveTowSeed() const;
+
+	/**
+	 * LiveTowSeed for a tow AT REST, about to be sent out on a route that starts at RouteStart: Speed 0, and Travelled
+	 * how far along that route its STEERED axle already is - its distance from RouteStart. Zero at a service point,
+	 * where it parked on the node the route starts from; a chain's length up the exit for a tow that backed into a bay
+	 * and stands with its trailer axle on the bay end (where RedirectAgent seats it). RouteStart null - a start that
+	 * does not resolve - reads as zero, as both callers did by hand.
+	 * ENFORCED BY: Airside.Model.Tow.LiveTowSeed
+	 */
+	TOptional<FTowSeed> LiveTowSeedAtRest(const FGuidelineNode* RouteStart) const;
+
+	/**
+	 * LiveTowSeed for a tow about to REJOIN other pavement (a rebuild's rejoin, the drive-side flip, the player's
+	 * rescue - FPlanReResolver's RejoinNearby): Travelled is how far along the new plan's first step the cab is seated,
+	 * and the speed is the follower's, because RejoinTaxi carries it on - the judge drives what the agent will. It
+	 * judged from REST until the #429 review, on "from rest (RestartTaxi below)": true of the drive-side flip alone,
+	 * and that flip rejoins at speed now too.
+	 * ENFORCED BY: Airside.Model.Tow.LiveTowSeed; Check-Architecture rule 4 ('FTowSeed shaped by hand' row)
+	 */
+	TOptional<FTowSeed> LiveTowSeedJoining(double TravelledOnNewPlan) const;
 
 	/**
 	 * The plan this agent is walking, how far along it, and how fast - from whichever struct
@@ -764,7 +805,8 @@ public:
 	 *
 	 * A NAMED CALL, NOT `Agent.Follower.Travelled -= Dropped` AT THE CALL SITE (issue #295):
 	 * Follower is a public sub-phase struct FRoadAgent does not otherwise reach through by
-	 * hand, and this was the one place outside RoadAgent.cpp that did.
+	 * hand, and this was the one place outside RoadAgent.cpp that did. Called by
+	 * ApplyRouteChange's Extend since issue #429, straight after the Replace it must follow.
 	 */
 	void RebaseTravelled(double Dropped) { Follower.Travelled -= Dropped; }
 
@@ -1187,27 +1229,24 @@ public:
 	void StartDrive(const FRoutePlan& Plan, const FVehicle& InVehicle);
 
 	/**
-	 * Restarts a taxi along a new plan with the bundle this agent already carries, whichever
-	 * kind it is - UGroundTraffic::RedirectAgent's "a redirect changes where it goes, not what
-	 * it is". Replaces that function copying Agent.Airframe out and handing it back to
-	 * StartTaxi, which cannot be written for an agent that may hold either bundle.
+	 * THE ROUTE CHANGE, the agent's half of it (issue #429; see Model/RouteChange.h): the follower takes Change.Plan
+	 * the way Change.Motion says, the claims Change.Release names are let go from Occupancy, the wait ends unless the
+	 * motion is an Extend or a Truncate (arbitration cleared, stall clock reset), the engine and pose carry on as the
+	 * motion says, and the goal is kept or re-pointed as Goal says. IN THAT ORDER, ONCE, for every caller - where nine
+	 * operations each used to spell their own subset.
+	 * ENFORCED BY: Airside.Model.RouteChange.ReleaseByMotion (one row per motion)
 	 *
-	 * InitialHeading, when set, is the body heading to start from instead of the line's own at
-	 * the start: UGroundTraffic::RedirectAgent passes a TOW's current heading, see there.
-	 */
-	void RestartTaxi(const FRoutePlan& Plan, double InitialTravelled = 0.0,
-		TOptional<double> InitialHeading = TOptional<double>());
-
-	/**
-	 * The same body carrying on along a new plan from part-way along its first step: speed,
-	 * heading and engine spool kept, position rebased to At (the point on the plan's first step
-	 * the agent was projected onto). Phase becomes Taxiing.
+	 * THE ONE DOOR to RestartTaxi, RejoinTaxi and the follower's Replace for a live agent, which is why the first two
+	 * are private below: a caller that could reach them would be a tenth aftermath.
+	 * ENFORCED BY: C++ access (RestartTaxi, RejoinTaxi); Check-Architecture rule 4 ('Follower.Replace' row)
 	 *
-	 * NOT RestartTaxi, which starts from rest and spools from cold - right for a redirect from a
-	 * stand, wrong for an aeroplane rolling along a taxiway that a rebuild split under it (issue
-	 * #396): it would stop dead on the edit's frame and pull away again.
+	 * A GOAL THAT MOVES IS NOT ASKABLE HERE: ERouteGoal has no Move. Its claims (the old goal's, the stand-freed flag,
+	 * the new goal's departure arming and claim) are UGroundTraffic's, so UGroundTraffic::ChangeRoute brackets this
+	 * call with them and passes Keep. Callers without a UGroundTraffic - FPlanReResolver's replan and the rebuild's
+	 * rejoins and truncation - keep or re-point. NOTHING TO REFUSE, SO NOTHING TO RETURN (#429 review): this was a
+	 * bool, false for a Move handed to the agent alone, and all five callers discarded it.
 	 */
-	void RejoinTaxi(const FRoutePlan& Plan, double InitialTravelled, const FVector2D& At);
+	void ApplyRouteChange(const FRouteChange& Change, ERouteGoal Goal, FTrafficOccupancy& Occupancy);
 
 	/**
 	 * Sends a parked aeroplane off its stand: Phase becomes Manoeuvring. False, and leaves
@@ -1300,6 +1339,34 @@ public:
 	bool Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEvent& OutEvent);
 
 private:
+	/**
+	 * Restarts a taxi along a new plan with the bundle this agent already carries, whichever
+	 * kind it is - UGroundTraffic::RedirectAgent's "a redirect changes where it goes, not what
+	 * it is". Replaces that function copying Agent.Airframe out and handing it back to
+	 * StartTaxi, which cannot be written for an agent that may hold either bundle.
+	 *
+	 * InitialHeading, when set, is the body heading to start from instead of the line's own at
+	 * the start: UGroundTraffic::RedirectAgent passes a TOW's current heading, see there.
+	 *
+	 * PRIVATE SINCE ISSUE #429: the dispatches (StartTaxi, StartDrive) call it from cold, and a
+	 * live agent reaches it only through ApplyRouteChange's Restart, which carries the engine on.
+	 */
+	void RestartTaxi(const FRoutePlan& Plan, double InitialTravelled = 0.0,
+		TOptional<double> InitialHeading = TOptional<double>());
+
+	/**
+	 * The same body carrying on along a new plan from part-way along its first step: speed,
+	 * heading and engine spool kept, position rebased to At (the point on the plan's first step
+	 * the agent was projected onto). Phase becomes Taxiing.
+	 *
+	 * NOT RestartTaxi, which starts from rest and spools from cold - right for a redirect from a
+	 * stand, wrong for an aeroplane rolling along a taxiway that a rebuild split under it (issue
+	 * #396): it would stop dead on the edit's frame and pull away again.
+	 *
+	 * PRIVATE SINCE ISSUE #429: reached only through ApplyRouteChange's Rejoin.
+	 */
+	void RejoinTaxi(const FRoutePlan& Plan, double InitialTravelled, const FVector2D& At);
+
 	/** Which of the two bundles below is live - see EAgentBody. Written only by the Start* calls. */
 	UPROPERTY() EAgentBody Body = EAgentBody::Aircraft;
 

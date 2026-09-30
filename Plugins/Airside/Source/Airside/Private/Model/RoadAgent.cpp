@@ -1,6 +1,9 @@
 #include "Model/RoadAgent.h"
 
 #include "AirsideLog.h"
+#include "Model/ExhaustiveSwitch.h"
+#include "Model/RoadGuideline.h"
+#include "Model/RouteChange.h"
 #include "Model/VehicleFit.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/VehicleSweep.h"
@@ -500,8 +503,10 @@ void FRoadAgent::RestartTaxi(const FRoutePlan& Plan, double InitialTravelled, TO
 	// the bundle is whatever the caller (StartTaxi, StartDrive, or a redirect keeping its own)
 	// has already put in place, and Chassis() reads the right one of the two.
 	Phase = EAgentPhase::Taxiing;
-	// InitialTravelled is non-zero for one caller: a vehicle rejoining its lane MID-EDGE after a
-	// drive-side flip (FPlanReResolver), which starts part-way along the plan's first step.
+	// InitialTravelled is non-zero for one caller: RedirectAgent's TOW seated part-way along the new
+	// line (a cab whose trailer axle stands on a bay end, its steered axle a chain's length up the
+	// exit), through ApplyRouteChange's Restart. It was the drive-side flip's rejoin until issue #429
+	// made the flip a Rejoin (RejoinTaxi), which starts part-way along by its own argument.
 	Follower.Start(Plan, Chassis(), 0.0, InitialHeading, InitialTravelled);
 
 	bEngineRunning = true;
@@ -560,21 +565,193 @@ void FRoadAgent::MarkTaxiOutStale()
 void FRoadAgent::AdoptTaxiOut(const FRoutePlan& Route)
 {
 	TaxiOutPlan = Route;
+	EndTaxiOutHold();
+}
+
+void FRoadAgent::EndTaxiOutHold()
+{
 	bTaxiOutStale = false;
 	bTaxiOutHoldSaid = false;
 	TaxiOutRefusedAt.Reset();
 }
 
-void FRoadAgent::ResumeTaxiOut(const FRoutePlan& Route)
+// ONE FUNCTION, SWITCHED ON EVERY ONE OF THE THREE ENUMS WITH NO default: - a fourth motion, release or goal is a
+// build error at each switch below, which is what makes "every route change has every step decided" a contract.
+// ENFORCED BY: AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (C4062 as an error over this function; checked 2026-09-30 by a stray enumerator in each of the three enums: the build failed at all four switches, re-checked after ERouteGoal lost Move)
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+void FRoadAgent::ApplyRouteChange(const FRouteChange& Change, ERouteGoal Goal, FTrafficOccupancy& Occupancy)
 {
-	bTaxiOutStale = false;
-	bTaxiOutHoldSaid = false;
-	TaxiOutRefusedAt.Reset();
-	// THE ENGINE IS ALREADY TURNING: RestartTaxi spools from cold, which is right for a stand
-	// and wrong for an aeroplane that stopped on the taxiway a moment ago.
-	const double Spool = EngineRPM;
-	RestartTaxi(Route, 0.0, LastMotion.Heading);
-	EngineRPM = Spool;
+	// NO REFUSAL: a goal that moves is not a value of ERouteGoal (see there), so there is nothing here that could be
+	// asked and not honoured. It was a Move refused with an Error and a false every caller discarded (#429 review).
+	const FRoutePlan& Plan = Change.Plan;
+
+	// 1. THE FOLLOWER TAKES THE PLAN, with the pose and the engine the motion keeps.
+	switch (Change.Motion)
+	{
+	case ERouteMotion::Extend:
+		Follower.Replace(Plan, Chassis());
+		// REBASED AFTER Replace, before any Advance: Replace resets the follower's walk cursor to the
+		// polyline's start, so the cursor and the rebased Travelled agree from the first step on.
+		RebaseTravelled(Change.Travelled);
+		break;
+
+	case ERouteMotion::Truncate:
+	case ERouteMotion::Splice:
+		// Replace, NOT Start: the line up to the splice is unchanged and the agent is part way
+		// along it, so Travelled, Speed and Heading all survive. See FRouteFollower::Replace. A
+		// truncation's Plan ALIASES Follower.Plan (cut in place by the rebuild), which Replace
+		// handles: TArray's assignment guards self-assignment.
+		Follower.Replace(Plan, Chassis());
+		break;
+
+	case ERouteMotion::Restart:
+	{
+		// CAPTURED BEFORE RestartTaxi, which always primes a cold start of its own
+		// (bEngineRunning=true, EngineRPM=0.0) - so these are whether the engine was running and
+		// what RPM it actually had a moment ago, not the post-RestartTaxi state that call is about
+		// to overwrite both with.
+		const bool bWasRunning = bEngineRunning;
+		const double PriorRPM = EngineRPM;
+		RestartTaxi(Plan, Change.Travelled, Change.KeptHeading);
+		if (bWasRunning)
+		{
+			// AND THE ENGINE IS ALREADY TURNING. RestartTaxi starts from cold, which is right for a
+			// plain dispatch and wrong for an aeroplane that was already taxiing, or has spent a
+			// turnaround on a stand where its engines were started long before it rolled and
+			// never stopped. Left cold, the propeller was still winding up while the aircraft
+			// taxied out at full speed - reported from play as the prop never having time to spin
+			// up on departure. A held taxi out planned again is the same aeroplane "stopped on the
+			// taxiway a moment ago" (FRoadAgent::ResumeTaxiOut's words, before issue #429 folded
+			// its own spool-keeping in here): its engine has run through the push and the taxi.
+			// ENFORCED BY: Airside.Model.Traffic.RedirectStartsTheEngineAtSpeed
+			StartEngineAtSpeed();
+		}
+		else
+		{
+			// THE ENGINE WAS NOT RUNNING (#107 item 2) - DepartAgent on a parked aircraft that ran
+			// out its post-arrival shutdown pause, or ReofferStands on one that is stranded and
+			// parked with its own shutdown countdown running. StartEngineAtSpeed's own header says
+			// what it is FOR - "as it is for an aeroplane that has spent a turnaround ... before it
+			// taxied out" - which presumes the engine was already running; calling it
+			// unconditionally snapped a stopped propeller straight to full power in one frame,
+			// with no spool-up at all.
+			//
+			// PriorRPM RESTORED, NOT LEFT AT ZERO: bEngineRunning false does not mean the
+			// propeller has actually stopped turning - AdvanceEngine spools it DOWN over
+			// SpoolDownSeconds, so a redirect that lands mid-decay (the ReofferStands case above)
+			// still has real RPM on it. RestartTaxi's own cold start just wrote EngineRPM=0.0 over
+			// that, which would have snapped a spooling-down propeller to a dead stop and then
+			// spooled it back UP from zero - the same one-frame snap this fix exists to remove,
+			// only downward first. Restoring it here means AdvanceEngine picks up the ramp exactly
+			// where it actually was, whichever direction it was headed.
+			// ENFORCED BY: Airside.Model.Traffic.RedirectDoesNotWarmStartAShutDownEngine
+			RestoreEngineRPM(PriorRPM);
+		}
+		break;
+	}
+
+	case ERouteMotion::Rejoin:
+		RejoinTaxi(Plan, Change.Travelled, Change.At);
+		break;
+	}
+
+	// 2. THE OLD ROUTE'S CLAIMS, as far as the change says - see ERouteRelease for what each keeps and why.
+	switch (Change.Release)
+	{
+	case ERouteRelease::None:
+		break;
+	case ERouteRelease::Reservations:
+		Occupancy.ReleaseReservations(Id);
+		break;
+	case ERouteRelease::ReservationsAndGuidelines:
+		Occupancy.ReleaseReservations(Id);
+		Occupancy.ReleaseGuidelineClaimsOf(Id);
+		break;
+	}
+
+	// 3. THE WAIT IS OVER BY CONSTRUCTION for every motion but an extension or a truncation (see ERouteMotion for why
+	// those two keep it) - the thing it was waiting for is not on its route any more - so the arbitration fields say
+	// so at once rather than a tick later, and the stall clock resets with them, or the deadlock pass would count the
+	// old wait against the new route (a redirected waiter carried its seconds on until issue #429, and read as a
+	// stalled cycle member on its first refusal).
+	// ENFORCED BY: Airside.Model.RouteChange.ReleaseByMotion, Airside.Model.RouteChange.RestartEndsTheWait,
+	// Airside.Model.RouteChange.ExtendKeepsTheWait
+	switch (Change.Motion)
+	{
+	case ERouteMotion::Extend:
+	case ERouteMotion::Truncate:
+		break;
+	case ERouteMotion::Splice:
+	case ERouteMotion::Restart:
+	case ERouteMotion::Rejoin:
+		ClearArbitration();
+		ResetStall();
+		break;
+	}
+
+	// 4. THE GOAL, kept or re-pointed. A goal that MOVES is UGroundTraffic::ChangeRoute's, around this call.
+	switch (Goal)
+	{
+	case ERouteGoal::Keep:
+		break;
+	case ERouteGoal::Repoint:
+		SetGoalFrom(Plan);
+		break;
+	}
+}
+AIRSIDE_EXHAUSTIVE_SWITCH_END
+
+TOptional<FTowSeed> FRoadAgent::LiveTowSeed() const
+{
+	// Not for a folded tow: it is going nowhere. See the declaration.
+	const FVehicle* Own = AsVehicle();
+	if (Own == nullptr || !Own->HasTrailer() || TowAxles.Num() != Own->Tow.Num() || JackknifedLink != INDEX_NONE)
+	{
+		return TOptional<FTowSeed>();
+	}
+	FTowSeed Seed;
+	Seed.Axles = TowAxles;
+	// THE CAB'S HEADING AS SHOWN (LastMotion), not the follower's - the pair Origin below
+	// is read from, and what UJobBoard::DriveVehicleTo and ARigYard seed with (aligned
+	// 2026-09-27). The two agree while a tow drives forward; after a tow reverse the
+	// follower, which did not run during it, still holds the pose it had at the reverse's
+	// start (see RedirectAgent's own note), so only LastMotion describes the cab there.
+	Seed.Heading = LastMotion.Heading;
+	Seed.Speed = Follower.Speed;
+	Seed.Travelled = Follower.Travelled;
+	// AND THE CAB, for a route that opens with a reverse - see FTowSeed::Origin.
+	Seed.Origin = LastMotion.Position;
+	return Seed;
+}
+
+TOptional<FTowSeed> FRoadAgent::LiveTowSeedAtRest(const FGuidelineNode* RouteStart) const
+{
+	TOptional<FTowSeed> Seed = LiveTowSeed();
+	if (Seed.IsSet())
+	{
+		// WHERE THE STEERED AXLE STANDS, a wheelbase ahead of the body origin along the cab's heading - the point the
+		// follower seats on a route (RedirectAgent's own reading of the same thing).
+		const FVector2D Steered = LastMotion.Position
+			+ FVector2D(FMath::Cos(LastMotion.Heading), FMath::Sin(LastMotion.Heading)) * Chassis().SteerAxleX;
+		Seed->Speed = 0.0;
+		// HOW FAR ALONG THE ROUTE THE STEERED AXLE ALREADY IS - zero at a service point, where it
+		// parked on the node the route starts from.
+		Seed->Travelled = RouteStart != nullptr ? FVector2D::Distance(RouteStart->Position, Steered) : 0.0;
+	}
+	return Seed;
+}
+
+TOptional<FTowSeed> FRoadAgent::LiveTowSeedJoining(double TravelledOnNewPlan) const
+{
+	TOptional<FTowSeed> Seed = LiveTowSeed();
+	if (Seed.IsSet())
+	{
+		// THE REJOIN STARTS PART-WAY ALONG ITS FIRST STEP, AT THE FOLLOWER'S SPEED (RejoinTaxi keeps it), so that is
+		// where and how its tow is judged - the chain as it is, not laid straight. LiveTowSeed's Speed already is the
+		// follower's; only where along the NEW plan the cab sits changes. See the declaration for why not from rest.
+		Seed->Travelled = TravelledOnNewPlan;
+	}
+	return Seed;
 }
 
 bool FRoadAgent::StartPushback(const FRoutePlan& PushPlan, const FRoutePlan& InTaxiOutPlan,

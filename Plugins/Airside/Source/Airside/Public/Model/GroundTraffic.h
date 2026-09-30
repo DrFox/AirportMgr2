@@ -236,6 +236,10 @@ public:
 	 * Cause is what the phase change it makes is announced with (#436): Redirected for a caller with no more specific
 	 * reason; ReofferStands says ReOffered, DepartAgent's straight-out DepartOrdered, the player's Unstick Rescued -
 	 * the facts UFlightBoard used to re-derive from the live agent a drain late (a taxi in or a taxi out).
+	 *
+	 * A RESTART THROUGH ChangeRoute (issue #429): the old route's reservations let go and a waiter's wait ended - its
+	 * refusal cleared and its stall clock reset - as every other change of route does; what it stands on stays claimed.
+	 * ENFORCED BY: Airside.Model.RouteChange.RestartEndsTheWait
 	 */
 	bool RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan,
 		EAgentEvent Cause = EAgentEvent::Redirected);
@@ -829,10 +833,25 @@ private:
 	 * THE GOAL CHANGE, in two halves because RedirectAgent restarts the follower between them:
 	 * ReleaseGoal lets the old goal's claim and any stand wait go; TakeGoal sets the new goal
 	 * from Plan, arms or disarms its departure and claims it. RedirectAgent and ExtendRoute
-	 * both call exactly these, so the two ways of moving a goal cannot drift apart.
+	 * both call exactly these, so the two ways of moving a goal cannot drift apart. Since issue
+	 * #429 every route change's goal move is ChangeRoute's bracket, below; the two direct callers
+	 * left - DepartAgent's push and a pushed aeroplane's adopted taxi out - change no follower.
 	 */
 	void ReleaseGoal(FRoadAgent& Agent, int32 AgentId);
 	void TakeGoal(FRoadAgent& Agent, int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan);
+
+	/**
+	 * THE ROUTE CHANGE WHOSE GOAL MOVES (issue #429; Model/RouteChange.h): FRoadAgent::ApplyRouteChange - the
+	 * follower, the claims it gives back, the wait, the engine and the pose, its goal Kept - bracketed by the goal's
+	 * claim: ReleaseGoal before, TakeGoal after (release before take: ReleaseGoal reads the goal the agent had, TakeGoal
+	 * the plan it now has). Every operation here that hands a live agent a new plan (RedirectAgent, ExtendRoute,
+	 * RerouteAgent, RescueStranded, ReplanHeldTaxiOuts) is a guard over this call and nothing else; the replan
+	 * mechanism (FPlanReResolver), which has no UGroundTraffic and whose goal does not move, calls the agent's half
+	 * directly and keeps or re-points it. Network is TakeGoal's, for the departure arming and the claim.
+	 * ENFORCED BY: Airside.Model.RouteChange.* (each entry point's aftermath, at this level, with real agents),
+	 * Airside.Model.Traffic.StandClaim (the old stand released and the new one held at the redirect)
+	 */
+	void ChangeRoute(FRoadAgent& Agent, const FRouteChange& Change, const URoadNetwork* Network);
 
 	/**
 	 * Everything both DispatchAgent overloads do once the agent is started with its bundle:

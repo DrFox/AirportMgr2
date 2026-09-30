@@ -10,6 +10,7 @@
 #include "Model/ArrivalPlanner.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoutePolicy.h"
+#include "Model/RouteChange.h"
 #include "Model/RunwayQuery.h"
 #include "Model/TrafficClaims.h"
 #include "Model/TrafficContext.h"
@@ -169,8 +170,7 @@ bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, int32 SpliceStep, FGuidelineEd
 
 	// Replace, NOT Start: the line up to the splice is unchanged and the agent is part way
 	// along it, so Travelled, Speed and Heading all survive. See FRouteFollower::Replace.
-	Agent.Follower.Replace(Spliced, Agent.Chassis());
-
+	//
 	// THE RESERVATIONS, AND ONLY THOSE. They were made for a route that no longer exists past
 	// the splice, so holding them would block the line the agent has just been re-routed away
 	// from, for a journey nobody is making. What the agent is STANDING on is a different
@@ -189,8 +189,7 @@ bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, int32 SpliceStep, FGuidelineEd
 	//
 	// A stale OCCUPIED claim on an edge the new plan does not use is dropped by the next
 	// FClaimPass::Run's ReleaseExcept, which keeps only what was asked for this pass.
-	Occupancy.ReleaseReservations(Agent.Id);
-
+	//
 	// The wait is over BY CONSTRUCTION - the thing it was waiting for is not on its route
 	// any more - so the arbitration fields say so at once rather than a tick later. The
 	// stall clock resets with them, or the deadlock pass that asked for this replan would
@@ -201,8 +200,13 @@ bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, int32 SpliceStep, FGuidelineEd
 	// tick's Arbitrate, which overwrites it for every Taxiing/Manoeuvring agent regardless
 	// (issue #174 - this was the very triple ClearArbitration exists for, hand-typed a
 	// fourth time because nothing had gone looking for other copies of it).
-	Agent.ClearArbitration();
-	Agent.ResetStall();
+	//
+	// ALL OF IT IS ONE Splice (issue #429): Replace, the reservations, the arbitration fields and the stall clock, in
+	// that order, by FRoadAgent::ApplyRouteChange - the aftermath every route change shares, where this was one of
+	// nine hand-typed subsets. The goal is KEPT: the search above was to the agent's own goal, so the spliced plan
+	// ends where the old one did, and a replan owes the goal node no claim traffic.
+	// ENFORCED BY: Airside.Model.RouteChange.SpliceEndsTheWait (the resolver's replan, with the goal kept)
+	Agent.ApplyRouteChange(FRouteChange::Splice(Spliced), ERouteGoal::Keep, Occupancy);
 
 	// CrossingRunway AND CrossingPhase ARE DELIBERATELY LEFT ALONE. Between them they say the
 	// agent's body is physically on a strip, which is a fact about where the aeroplane IS,
@@ -639,21 +643,10 @@ FRouteQuery FPlanReResolver::QueryFor(ERouteErrand Errand, FGuidelineNodeId Star
 		// trailer IS, not from a straight lay: its axles, heading and speed, and Travelled along
 		// its CURRENT plan - right for a splice's kept prefix (SpliceReplan), and overwritten by a
 		// rejoin with where it starts on the new one. Not for a folded tow: it is going nowhere.
-		if (Vehicle->HasTrailer() && Agent.TowAxles.Num() == Vehicle->Tow.Num() && Agent.GetJackknifedLink() == INDEX_NONE)
-		{
-			FTowSeed& Seed = Query.TowSeed.Emplace();
-			Seed.Axles = Agent.TowAxles;
-			// THE CAB'S HEADING AS SHOWN (LastMotion), not the follower's - the pair Origin below
-			// is read from, and what UJobBoard::DriveVehicleTo and ARigYard seed with (aligned
-			// 2026-09-27). The two agree while a tow drives forward; after a tow reverse the
-			// follower, which did not run during it, still holds the pose it had at the reverse's
-			// start (see RedirectAgent's own note), so only LastMotion describes the cab there.
-			Seed.Heading = Agent.LastMotion.Heading;
-			Seed.Speed = Agent.Follower.Speed;
-			Seed.Travelled = Agent.Follower.Travelled;
-			// AND THE CAB, for a route that opens with a reverse - see FTowSeed::Origin.
-			Seed.Origin = Agent.LastMotion.Position;
-		}
+		// FRoadAgent::LiveTowSeed since issue #429 - the heading, origin and fold rules this
+		// function spelled out are that function's now, and four other sites in three modules
+		// that built the same seed by hand call it too.
+		Query.TowSeed = Agent.LiveTowSeed();
 	}
 	return Query;
 }
@@ -776,8 +769,15 @@ namespace
 	 * (SplitRejoinRadius - see there). A THIRD, the player's rescue of a stranded agent
 	 * (UGroundTraffic::RescueStranded, RescueRejoinRadius), passes WantedGoal: Send home and Find
 	 * stand rescue toward a goal that is not the agent's own.
+	 *
+	 * FINDS, AND WRITES NOTHING TO THE AGENT (issue #429). It used to set the goal it found on the
+	 * agent before returning, which was right for the rebuild (same goal, new handle) and wrong for
+	 * the rescue, which had to put the old goal back so ReleaseGoal could free it and then let
+	 * TakeGoal write the new one a third time. The found route ENDS at that goal, so each caller's
+	 * route change says how the goal follows it: Repoint for the rebuild, Move for the rescue.
+	 * ENFORCED BY: C++ const (Agent is const here)
 	 */
-	bool RejoinNearby(FRoadAgent& Agent, const FRoutePlan& Plan, const FTrafficContext& Context,
+	bool RejoinNearby(const FRoadAgent& Agent, const FRoutePlan& Plan, const FTrafficContext& Context,
 		double Radius, FRoutePlan& OutPlan, double& OutTravelled, FVector2D& OutAt,
 		FGuidelineNodeId WantedGoal = FGuidelineNodeId())
 	{
@@ -911,13 +911,13 @@ namespace
 			// THE RULES IN FORCE, runway penalty included (#449): this took the congestion weight alone, so a level's
 			// tuned RunwayPenalty was obeyed everywhere except the rejoin every split, flip and Unstick takes.
 			Query.WithRules(Context.Rules, Context.Occupancy, Agent.Id);
-			// THE REJOIN STARTS PART-WAY ALONG ITS FIRST STEP, from rest (RestartTaxi below), so
-			// that is where its tow is judged from - the chain as it is, not laid straight.
-			if (Query.TowSeed.IsSet())
-			{
-				Query.TowSeed->Travelled = Candidate.Along;
-				Query.TowSeed->Speed = 0.0;
-			}
+			// THE REJOIN STARTS PART-WAY ALONG ITS FIRST STEP, so that is where its tow is judged
+			// from - the chain as it is, not laid straight - and AT THE FOLLOWER'S SPEED, which
+			// RejoinTaxi carries on for all three callers. This said "from rest (RestartTaxi below)"
+			// and seeded Speed 0: true of the drive-side flip alone, which rejoins at speed since
+			// issue #429 like the other two. FRoadAgent::LiveTowSeedJoining (see there).
+			// ENFORCED BY: Airside.Model.Tow.LiveTowSeed; Check-Architecture rule 4 ('FTowSeed shaped by hand')
+			Query.TowSeed = Agent.LiveTowSeedJoining(Candidate.Along);
 			const FRoutePlan Found = RouteSearch::Find(Network, Query);
 			// The route must BEGIN with the edge the vehicle is on, or starting it part-way
 			// along the first step would put it on some other road.
@@ -926,7 +926,6 @@ namespace
 				OutPlan = Found;
 				OutTravelled = Candidate.Along;
 				OutAt = Candidate.At;
-				Agent.SetGoal(Goal);
 				return true;
 			}
 		}
@@ -1046,13 +1045,10 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 			return false;
 		}
 		const double Sideways = FVector2D::Distance(Agent.LastMotion.Position, At);
-		Occupancy.ReleaseReservations(Agent.Id);
-		Occupancy.ReleaseGuidelineClaimsOf(Agent.Id);
-		Agent.ClearArbitration();
-		Agent.ResetStall();
-		const FGuidelineNodeId Goal = Agent.GoalNode;
-		Agent.RejoinTaxi(Rejoined, Travelled, At);
-		Agent.SetGoal(Goal);
+		// ONE Rejoin (issue #429): every guideline claim let go, the wait ended, speed, heading and
+		// engine kept, the goal RE-POINTED at the rejoined route's end - the same place, maybe a new
+		// handle, with no claim traffic: this rebuild re-makes every claim in its own pass.
+		Agent.ApplyRouteChange(FRouteChange::Rejoin(Rejoined, Travelled, At), ERouteGoal::Repoint, Occupancy);
 		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("Agent %d rejoined the pavement under it after the rebuild: %.0f uu sideways, %.0f uu to go"),
 			Agent.Id, Sideways, Rejoined.Length - Travelled);
@@ -1082,15 +1078,15 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		{
 			return Strand(TEXT("the drive side flipped and no lane running its way reaches its goal"));
 		}
-		Occupancy.ReleaseReservations(Agent.Id);
-		Occupancy.ReleaseGuidelineClaimsOf(Agent.Id);
-		Agent.ClearArbitration();
-		Agent.ResetStall();
-		const FGuidelineNodeId Goal = Agent.GoalNode;
-		Agent.RestartTaxi(Rejoined, Travelled);
-		// RestartTaxi's fallback pose is the plan's first point; the vehicle is part-way along.
-		Agent.RebaseLastMotionPosition(At);
-		Agent.SetGoal(Goal);
+		// A REJOIN, LIKE ITS TWO SIBLINGS (issue #429, #314): the truck carries on at its speed and
+		// heading, its pose moved onto the new lane. This was RestartTaxi, then the pose's position
+		// re-seated by hand: the flip stopped every truck on the road dead and, until its next
+		// Advance, posed it facing east (RestartTaxi's fallback LastMotion is a bare FAgentMotion - a
+		// paused flip showed it so for as long as the pause lasted), where the split rejoin and the
+		// rescue already kept both. RestartTaxi's fallback pose was the plan's first point; the
+		// vehicle is part-way along - RejoinTaxi seats it At, where it was projected.
+		// ENFORCED BY: Airside.Present.DriveSide.FlipKeepsSpeedAndHeading
+		Agent.ApplyRouteChange(FRouteChange::Rejoin(Rejoined, Travelled, At), ERouteGoal::Repoint, Occupancy);
 		UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d rejoined its side after the drive side flipped: %.0f uu to go"),
 			Agent.Id, Rejoined.Length - Travelled);
 		return EReResolve::Replanned;
@@ -1385,7 +1381,6 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	Plan.Steps.SetNum(Failed);
 	Plan.Polyline.SetNum(Plan.Steps.Last().EndVertex + 1);
 	Plan.Length = Plan.Steps.Last().EndDistance;
-	Agent.SetGoalFrom(Plan);
 
 	if (bDriving)
 	{
@@ -1394,7 +1389,18 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		// the truncation was applied in place - which Replace handles: TArray's assignment
 		// guards self-assignment, and what this call is here for is the speed profile, rebuilt
 		// so the agent brakes to the new end instead of running off it.
-		Agent.Follower.Replace(Plan, Agent.Chassis());
+		//
+		// A Truncate through the seam (issue #429), with its goal RE-POINTED at the new end - the
+		// SetGoalFrom this used to make itself, for every plan, just before. Nothing let go, the
+		// wait left standing: see ERouteMotion::Truncate for why the rebuild's own claim pass is
+		// what settles both.
+		// ENFORCED BY: Airside.Model.RouteChange.TruncateKeepsTheWait
+		Agent.ApplyRouteChange(FRouteChange::Truncate(Plan), ERouteGoal::Repoint, Occupancy);
+	}
+	else
+	{
+		// A PLAN NO FOLLOWER IS ON (a taxi-in, a push, a reverse's remainder): only the goal follows it.
+		Agent.SetGoalFrom(Plan);
 	}
 
 	UE_LOG(LogAirsideTraffic, Log,
@@ -1543,20 +1549,18 @@ bool UGroundTraffic::RescueStranded(int32 AgentId, const URoadNetwork& Network, 
 
 	// THE GOAL MOVES THE WAY EVERY GOAL MOVES - ReleaseGoal then TakeGoal, as RedirectAgent and
 	// ExtendRoute do - so the old goal's claim lets go and the departure is re-armed for the new
-	// end. RejoinNearby wrote the goal straight onto the agent, which is right for the rebuild (same
-	// goal, new handle) and skips both here, so the old one is put back first for ReleaseGoal to free.
-	Agent.SetGoal(WasGoal);
-	ReleaseGoal(Agent, AgentId);
-
+	// end. RejoinNearby used to write the goal straight onto the agent, which is right for the
+	// rebuild (same goal, new handle) and skipped both here, so the old one was put back first for
+	// ReleaseGoal to free (issue #429). It writes nothing now: the goal is still the old one here,
+	// and ChangeRoute's Move releases it and takes the rejoined route's end.
+	// ENFORCED BY: Airside.Model.Traffic.RescueStranded.NewGoal (the goal moves to D), Airside.Model.Traffic.StandClaim
+	// (ChangeRoute's bracket: the old stand released and the new one held, at the redirect)
+	//
 	// The split rejoin's aftermath, for its reason: a new route owns none of the old one's
-	// reservations, and a stall clock that ran while stranded is not a stall on this line.
+	// reservations, and a stall clock that ran while stranded is not a stall on this line. One
+	// Rejoin through ChangeRoute, the same change the rebuild's two rejoins make.
 	const double Sideways = FVector2D::Distance(Agent.LastMotion.Position, At);
-	Occupancy.ReleaseReservations(AgentId);
-	Occupancy.ReleaseGuidelineClaimsOf(AgentId);
-	Agent.ClearArbitration();
-	Agent.ResetStall();
-	Agent.RejoinTaxi(Rejoined, Travelled, At);
-	TakeGoal(Agent, AgentId, &Network, Rejoined);
+	ChangeRoute(Agent, FRouteChange::Rejoin(Rejoined, Travelled, At), &Network);
 
 	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d rescued: %.0f uu sideways, %.0f uu to node %d"),
 		AgentId, Sideways, Rejoined.Length - Travelled, Agent.GoalNode.Index);

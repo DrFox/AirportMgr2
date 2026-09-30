@@ -852,6 +852,72 @@ $AllowedCallers = @(
         ProdAllowed = @('Public\Model\RouteSearch.h', 'Private\Model\RouteSearch.cpp', 'Public\Model\TrafficRules.h')
         TestExempt  = $true
         ProdReason  = 'build the query with FRouteQuery::WithRules(Rules, Occupancy, Agent) - both figures, from the rules in force (#449)'
+    },
+    @{
+        # A LIVE AGENT'S ROUTE CHANGES IN ONE PLACE (#429). Nine operations each took a new plan with their own subset
+        # of the aftermath - reservations, guideline claims, arbitration, stall, engine, pose, goal - and the ops plugin
+        # and the game module composed two more. FRoadAgent::ApplyRouteChange is the one door to the follower's
+        # Replace, RestartTaxi and RejoinTaxi; RestartTaxi and RejoinTaxi are private as well (the dispatches in
+        # RoadAgent.cpp call RestartTaxi from cold, which is a birth, not a change of route), so these two rows are
+        # the lint's half of what C++ access already refuses, and the Replace row is the whole of it - Follower is a
+        # public member. VehicleFit's own local FRouteFollower (named Follower) calls Start and Advance, never Replace.
+        Name        = 'Follower.Replace (a live route change)'
+        Pattern     = '\bFollower\.Replace\s*\('
+        ProdAllowed = @('Private\Model\RoadAgent.cpp')
+        TestExempt  = $true
+        ProdReason  = 'change a live agent''s route through UGroundTraffic::ChangeRoute (or FRoadAgent::ApplyRouteChange where there is no traffic) - a caller that replaces the follower by hand picks its own aftermath (#429)'
+    },
+    @{
+        Name        = 'FRoadAgent::RestartTaxi'
+        Pattern     = '\bRestartTaxi\s*\('
+        ProdAllowed = @('Public\Model\RoadAgent.h', 'Private\Model\RoadAgent.cpp')
+        TestExempt  = $true
+        ProdReason  = 'restart through a Restart route change (FRouteChange::Restart via UGroundTraffic::ChangeRoute), which carries the engine and ends the wait (#429)'
+    },
+    @{
+        Name        = 'FRoadAgent::RejoinTaxi'
+        Pattern     = '\bRejoinTaxi\s*\('
+        ProdAllowed = @('Public\Model\RoadAgent.h', 'Private\Model\RoadAgent.cpp')
+        TestExempt  = $true
+        ProdReason  = 'rejoin through a Rejoin route change (FRouteChange::Rejoin via UGroundTraffic::ChangeRoute or FRoadAgent::ApplyRouteChange), which lets go of the old claims and moves the goal (#429)'
+    },
+    @{
+        # THE AGENT'S HALF OF THE SEAM (#429) has two production callers: UGroundTraffic::ChangeRoute (GroundTraffic.cpp),
+        # which brackets it with the goal's claims, and FPlanReResolver (GroundTrafficRebuild.cpp), which has no
+        # UGroundTraffic and only keeps or re-points a goal. A third caller is a route change that skips the traffic's
+        # goal bracket - one that cannot MOVE the goal, since ERouteGoal has no Move (#429 review), but can still skip
+        # the ChangeRoute its operation should have been.
+        Name        = 'FRoadAgent::ApplyRouteChange'
+        Pattern     = '\bApplyRouteChange\s*\('
+        ProdAllowed = @('Public\Model\RoadAgent.h', 'Private\Model\RoadAgent.cpp', 'Private\Model\GroundTraffic.cpp', 'Private\Model\GroundTrafficRebuild.cpp')
+        TestExempt  = $true
+        ProdReason  = 'change a route through UGroundTraffic::ChangeRoute, which moves the goal with its claim (#429)'
+    },
+    @{
+        # ONE TOW SEED BUILDER (#429, #313): FRoadAgent::LiveTowSeed / LiveTowSeedAtRest. Five sites in three modules built
+        # the seed by hand and had drifted (one heading from the follower where the rest read LastMotion; two with no
+        # fold check). VehicleFit's own NextSeed is the section-to-section seed INSIDE JudgePlan - the judge carrying
+        # its chain across a reverse, not a caller seeding it. Declarations and pointer/reference parameters
+        # (`const FTowSeed* Seed`) do not match: only a local constructed, a temporary - braced or `FTowSeed()` (#429
+        # review) - or an Emplace.
+        Name        = 'FTowSeed built'
+        Pattern     = '\bFTowSeed\s+\w+\s*[;={(]|\bFTowSeed\s*[({]|\bTowSeed\.Emplace\s*\('
+        ProdAllowed = @('Private\Model\RoadAgent.cpp', 'Private\Model\VehicleFit.cpp')
+        TestExempt  = $true
+        ProdReason  = 'seed a tow''s judgement from FRoadAgent::LiveTowSeed (or LiveTowSeedAtRest for a parked tow) - a second builder is how the five copies drifted (#429, #313)'
+    },
+    @{
+        # A QUERY'S SEED IS SHAPED BY ITS BUILDER, NOT AFTER IT (#429 review). RejoinNearby took the live seed and wrote
+        # `TowSeed->Speed = 0.0` over it - "from rest (RestartTaxi below)" - which was true of one caller of three and
+        # then of none, while the agent it judged rejoined at speed. Where along a new plan the cab starts and how fast
+        # it is going are LiveTowSeedAtRest's and LiveTowSeedJoining's to say; a field written into a query's seed by
+        # hand is a sixth builder. (ExtendRoute's `Seed->Travelled -= Dropped` on its own local re-bases the seed to
+        # the TRIMMED plan it judges - a plan offset, not a guess at the pose - and is not a query's seed.)
+        Name        = 'FTowSeed shaped by hand'
+        Pattern     = '\bTowSeed\s*->\s*\w+\s*[-+*/]?=(?!=)|\bTowSeed\.GetValue\(\)\.\w+\s*[-+*/]?=(?!=)'
+        ProdAllowed = @('Private\Model\RoadAgent.cpp')
+        TestExempt  = $true
+        ProdReason  = 'take the seed whole from FRoadAgent::LiveTowSeed / LiveTowSeedAtRest / LiveTowSeedJoining - a field written into it afterwards is a second opinion on where and how fast the tow is (#429)'
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -932,14 +998,44 @@ $ranRules.Add('hand-built handles')
 # excludes `==`/`!=`/`>=`/`<=` comparisons, which a bare `=` check would otherwise also match
 # (an assignment's `=` is a leading substring of all four). RoadAgent.cpp itself is exempt -
 # it is the one file allowed to write these fields, being where the mutators are defined.
-$agentFieldPattern = '(Agent|Agents\[[A-Za-z0-9_]+\])\.(?<field>\w+)\s*=[^=]'
+#
+# WIDENED TO MEMBER CHAINS (issue #429): `Agents[Index].Follower.Plan.Result =` is a write of the
+# agent's route by hand, and the one-level pattern never saw it - `\.(?<field>\w+)\s*=` fails at
+# the second dot. The chain is now any run of `.member` / `[index]` after the root, and what is
+# allow-listed is the WHOLE chain (e.g. 'Class', 'Follower.Plan.Result'), so allowing one nested
+# write does not allow its siblings.
+# The chain OPENS WITH A MEMBER, as the one-level pattern's did: `PrevAgent[Slot] =` is an int array
+# whose name ends in Agent, not an agent's field.
+# AND THROUGH A POINTER, AND COMPOUND (#429 review): `Agent->Phase =` is the same write through an
+# FRoadAgent*, and `Agent.Follower.Travelled -= Dropped` - the very shape RebaseTravelled exists to
+# name - was an assignment the plain `=` could not see (`-=`, `+=`, `*=`, `/=`, `%=`, `|=`, `&=`,
+# `^=`). `(?!=)` after the `=` keeps `==` out; `<=`, `>=` and `!=` never match, because nothing
+# before their `=` is a member name or one of the compound operators.
+$agentFieldPattern = '(Agent|Agents\[[A-Za-z0-9_]+\])(?<chain>(\.|->)\w+(\.\w+|\[[^\]]*\])*)\s*[-+*/%|&^]?=(?!=)'
 # THE ONE DELIBERATE REMAINDER (issue #295): Class stays PUBLIC on FRoadAgent (see its own
 # comment in RoadAgent.h) and is set directly at its two birth sites, both in
 # GroundTraffic.cpp (DispatchArrival, AdmitDispatched). Allow-listed BY FILE AND FIELD NAME,
 # not by exempting the file outright - a future direct write of any OTHER field in
 # GroundTraffic.cpp still fails this rule. A LISTED FILE THAT STOPS EXISTING, or a field name
 # that stops appearing there, is not this rule's problem to notice; it just stops matching.
-$agentFieldAllowlist = @{ 'GroundTraffic.cpp' = @('Class') }
+# AND ONE CHAIN (issue #429): UGroundTraffic::StrandForTest marks the live plan unreachable by hand -
+# a test hook reached only through FGroundTrafficTestAccess, standing in for the rebuild's Strand
+# (see its declaration), and not a route change: nothing is re-planned, the plan just dies.
+$agentFieldAllowlist = @{ 'GroundTraffic.cpp' = @('Class', 'Follower.Plan.Result') }
+# TAKING THE PLAN'S ADDRESS IS A WRITE WAITING TO HAPPEN (issue #429): the rebuild holds
+# `Plan = &Agent.Follower.Plan` and writes Steps, Start and Result through the pointer, which no
+# assignment pattern can see. Outside RoadAgent.cpp only the rebuild's re-resolve may - it
+# re-points a live plan's HANDLES in place after the graph was rebuilt, which is not a change of
+# route (FPlanReResolver::ReResolvePlan; the route changes it makes go through the seam, FRoadAgent::
+# ApplyRouteChange) - and only as often as it does today: the three plan selections in
+# OnGraphRebuilt and ReResolvePlan's "is this the follower's plan" comparison. A fifth is a new
+# writer, and the cap says so rather than the file being waved through.
+# ANY ROOT, AN INDEX OR A POINTER (#429 review): `&Agents[i].Follower.Plan` and `&Truck->Follower.Plan`
+# take the same address. The `&` must be a unary one - not the second of `&&`, and not a binary `&`
+# after an operand (an identifier, `)` or `]`, spaces allowed): `Phase == Taxiing && Truck->Follower.Plan`
+# reads the plan, it does not take its address.
+$agentPlanAddressPattern = '(?<![\w\)\]&]\s*)&(?!&)\s*\w+(\[[^\]]*\])?(\.|->)(Follower|Pushback)\.Plan\b'
+$agentPlanAddressAllowed = @{ 'GroundTrafficRebuild.cpp' = 4 }
 foreach ($tree in $trees) {
     foreach ($file in Get-Sources $tree @('.cpp')) {
         if ($file.Name -eq 'RoadAgent.cpp') { continue }
@@ -949,10 +1045,17 @@ foreach ($tree in $trees) {
             # A WHY comment naming the banned shape (this rule's own fix does, at
             # GroundTrafficRebuild.cpp) is not the shape itself - same exemption as rule 5.
             if ($h.Line.Trim().StartsWith('//')) { continue }
-            $field = [regex]::Match($h.Line, $agentFieldPattern).Groups['field'].Value
+            $field = [regex]::Match($h.Line, $agentFieldPattern).Groups['chain'].Value -replace '^(\.|->)', ''
             $allowedFields = $agentFieldAllowlist[$file.Name]
             if ($allowedFields -and ($allowedFields -contains $field)) { continue }
             $failures.Add("agent-field-write: $($file.FullName):$($h.LineNumber) writes FRoadAgent's $field by hand outside RoadAgent.cpp; add or use its mutator: $($h.Line.Trim())")
+        }
+        $addressHits = @(Select-String -Path $file.FullName -Pattern $agentPlanAddressPattern | Where-Object { -not $_.Line.Trim().StartsWith('//') })
+        $cap = if ($agentPlanAddressAllowed.ContainsKey($file.Name)) { $agentPlanAddressAllowed[$file.Name] } else { 0 }
+        if ($addressHits.Count -gt $cap) {
+            foreach ($h in $addressHits) {
+                $failures.Add("agent-plan-address: $($file.FullName):$($h.LineNumber) takes the address of an agent's live plan ($($addressHits.Count) in this file, $cap allowed) - change a route through UGroundTraffic::ChangeRoute / FRoadAgent::ApplyRouteChange (#429): $($h.Line.Trim())")
+            }
         }
     }
 }
@@ -3064,6 +3167,74 @@ foreach ($lookupTree in @($plugin, $editor, $ops, (Join-Path $Root 'Source\Airpo
     }
 }
 $ranRules.Add('one-airport-lookup')
+
+# --- 53. OPS AND THE GAME MODULE DO NOT CHANGE A ROUTE FROM THE AGENT'S INTERNALS ----------------------
+# Issue #429. Airside had no "change this agent's route" seam, so AirportOps (UJobBoard::DriveVehicleTo) computed
+# splice points from Follower.Plan / Follower.Travelled, picked RerouteAgent or a rescue by phase and seeded a tow by
+# hand, and the game module's rig yard copied that seed character for character. JobBoard.h states the boundary -
+# "Airside knows how a thing MOVES and must never learn what it is FOR" - and these tokens are where it was crossed:
+# a tow seed built (FTowSeed, TowSeed.Emplace), a splice composed (RerouteAgent, Follower.Plan / Follower.Travelled),
+# and in ops the deadlock resolver's replan called directly (ReplanAt - the Unstick copying the resolver's ban).
+# Comments and string literals are stripped first (rule 34's stripper), so a WHY comment may name them.
+#
+# THE ALLOW-LIST IS PER FILE AND PER TOKEN, and every entry is a debt with its payer named:
+# - RigTestCourseTest.cpp reads Follower.Travelled for its speed-limit probe until #301 moves the course's checks
+#   onto Airside's own accessors.
+# - JobBoardDrive.cpp, JobBoard.h (MayDriveUngated's seed parameter), JobBoardBid.cpp (the bid's ETA) and
+#   AgentRescue.cpp (the Unstick's replan) are #429 PART 2: SendAgentTo, RemainingDriveSeconds and
+#   ReplanAroundBlocker take them over, and part 2 deletes these rows. A token NOT listed for a file fails there
+#   already - JobBoardDrive.cpp may not build a seed (TowSeed.Emplace) again, which part 1 removed.
+# A LISTED TOKEN THAT NO LONGER APPEARS FAILS TOO: an allow-list entry that allows nothing is a pin loosened for
+# free, and the next writer in that file would be waved through by it. Delete the entry with the code.
+$routeInternals = @(
+    @{ Token = 'FTowSeed';           Pattern = '\bFTowSeed\b';            OpsOnly = $false },
+    @{ Token = 'TowSeed.Emplace';    Pattern = '\bTowSeed\.Emplace\s*\('; OpsOnly = $false },
+    @{ Token = 'RerouteAgent(';      Pattern = '\bRerouteAgent\s*\(';     OpsOnly = $false },
+    @{ Token = 'Follower.Travelled'; Pattern = '\bFollower\.Travelled\b'; OpsOnly = $false },
+    @{ Token = 'Follower.Plan';      Pattern = '\bFollower\.Plan\b';      OpsOnly = $false },
+    @{ Token = 'ReplanAt(';          Pattern = '\bReplanAt\s*\(';         OpsOnly = $true }
+)
+$routeInternalsAllowed = @{
+    'Source\AirportMgr\RigTestCourseTest.cpp'                         = @('Follower.Travelled')
+    'AirportOps\Private\Model\JobBoardDrive.cpp'                      = @('FTowSeed', 'RerouteAgent(', 'Follower.Plan', 'Follower.Travelled')
+    'AirportOps\Public\Model\JobBoard.h'                              = @('FTowSeed')
+    'AirportOps\Private\Model\JobBoardBid.cpp'                        = @('Follower.Plan', 'Follower.Travelled')
+    'AirportOps\Private\Model\AgentRescue.cpp'                        = @('Follower.Plan', 'Follower.Travelled', 'ReplanAt(')
+}
+$routeInternalsSeen = @{}
+$gameModule = Join-Path $Root 'Source\AirportMgr'
+foreach ($dir in @($ops, $gameModule)) {
+    if (-not (Test-Path $dir)) {
+        $failures.Add("route-internals: $dir is named by rule 53 but does not exist - update the rule, do not let it check nothing")
+        continue
+    }
+    foreach ($file in Get-Sources $dir @('.h', '.cpp')) {
+        $allowedKey = $routeInternalsAllowed.Keys | Where-Object { Test-AllowedPathSuffix $file $_ } | Select-Object -First 1
+        $allowed = if ($allowedKey) { $routeInternalsAllowed[$allowedKey] } else { @() }
+        $lines = Get-Content -LiteralPath $file.FullName
+        $inBlock = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            foreach ($t in $routeInternals) {
+                if ($t.OpsOnly -and $dir -ne $ops) { continue }
+                if ($code -notmatch $t.Pattern) { continue }
+                if ($allowed -contains $t.Token) {
+                    $routeInternalsSeen["$allowedKey|$($t.Token)"] = $true
+                    continue
+                }
+                $failures.Add("route-internals: $($file.FullName):$($i + 1) names $($t.Token) - Airside changes a route and seeds a tow (UGroundTraffic's operations, FRoadAgent::LiveTowSeed); ops and the game module say where to, not how (#429): $($code.Trim())")
+            }
+        }
+    }
+}
+foreach ($key in $routeInternalsAllowed.Keys) {
+    foreach ($token in $routeInternalsAllowed[$key]) {
+        if (-not $routeInternalsSeen.ContainsKey("$key|$token")) {
+            $failures.Add("route-internals: rule 53 allows $token in $key, which no longer names it - delete the entry with the code, or the allow-list waves the next writer through (#429)")
+        }
+    }
+}
+$ranRules.Add('route-internals')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was

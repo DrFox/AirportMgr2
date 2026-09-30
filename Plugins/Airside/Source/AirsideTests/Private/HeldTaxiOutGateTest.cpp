@@ -202,4 +202,49 @@ bool FStandHoldsChurnTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHeldTaxiOutRestartKeepsPoseAndEngineTest, "Airside.Model.Traffic.HeldTaxiOut.RestartKeepsPoseAndEngine",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FHeldTaxiOutRestartKeepsPoseAndEngineTest::RunTest(const FString&)
+{
+	// ISSUE #429: A TAXIING AEROPLANE THAT HELD FOR A WAY OUT RESTARTS THROUGH THE ROUTE-CHANGE SEAM, where it used to
+	// call FRoadAgent::ResumeTaxiOut - RestartTaxi with its own heading, and its own copy of "keep the spool". Its
+	// steps survive the move: from rest WHERE it holds, FACING the way it holds, its engine carried on rather than
+	// started cold, and the goal moved to the new runway entry. One substep after the player's fix, so the agent has
+	// had exactly one substep of motion from rest - a pose from anywhere else, or a propeller wound back to zero,
+	// shows as more than a substep's worth.
+	using namespace HeldTaxiOutGateTest;
+	const FGateField F = Build();
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Id = HoldWithNoWayOut(F, *Traffic);
+	if (!TestTrue(TEXT("it holds for a way out"), Id > 0)) { return false; }
+	const FRoadAgent* Held = Traffic->FindAgent(Id);
+	const FVector2D HeldAt = Held->LastMotion.Position;
+	const double HeldHeading = Held->LastMotion.Heading;
+	const FGuidelineNodeId HeldGoal = Held->GoalNode;
+	if (!TestTrue(TEXT("precondition: its engine is running at speed while it holds"),
+		Held->bEngineRunning && Held->GetEngineRPM() > 0.0)) { return false; }
+	const double HeldRPM = Held->GetEngineRPM();
+
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	TestGraph::Join(*F.Net, F.J, TestGraph::Node(*F.Net, 0.0, 0.0), Options);
+	Traffic->Advance(1.0 / 30.0, F.Net);
+
+	const FRoadAgent* Agent = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("it restarted: taxiing and no longer holding"),
+		Agent != nullptr && Agent->Phase == EAgentPhase::Taxiing && !Agent->IsHoldingForTaxiOut())) { return false; }
+	TestTrue(FString::Printf(TEXT("from where it held (%.1f uu away after one substep from rest)"),
+		FVector2D::Distance(Agent->LastMotion.Position, HeldAt)),
+		FVector2D::Distance(Agent->LastMotion.Position, HeldAt) < 20.0);
+	TestTrue(FString::Printf(TEXT("facing the way it held (%.1f deg off)"),
+		FMath::RadiansToDegrees(FMath::Abs(FMath::UnwindRadians(Agent->LastMotion.Heading - HeldHeading)))),
+		FMath::Abs(FMath::UnwindRadians(Agent->LastMotion.Heading - HeldHeading)) < FMath::DegreesToRadians(5.0));
+	TestTrue(FString::Printf(TEXT("its engine carried on, not started cold (%.0f RPM, was %.0f)"), Agent->GetEngineRPM(), HeldRPM),
+		Agent->bEngineRunning && Agent->GetEngineRPM() >= HeldRPM - 1.0);
+	TestTrue(TEXT("and its goal moved to the runway entry the new route ends at"),
+		Agent->GoalNode.IsSet() && Agent->GoalNode != HeldGoal
+		&& Agent->GoalNode == Agent->Follower.Plan.Steps.Last().To);
+	return true;
+}
+
 #endif
