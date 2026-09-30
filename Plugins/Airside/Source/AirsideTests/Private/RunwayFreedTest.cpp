@@ -2,6 +2,7 @@
 #include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ArrivalPlanner.h"
+#include "Model/DeparturePlanner.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
@@ -322,6 +323,62 @@ bool FRunwayFreedRebuildKeepsHoldsTest::RunTest(const FString&)
 	TestFalse(TEXT("the deleted stand's holder holds nothing"),
 		Traffic->GetOccupancy().GetClaims().ContainsByPredicate([](const FTrafficClaim& C) { return C.AgentId == -7; }));
 	TestEqual(TEXT("the other hold still stands"), Traffic->HolderOfNode(Field.Pose(Field.Stands[1])), -8);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRunwayFreedRebuildCrossingTest, "Airside.Model.Traffic.RunwayFreed.RebuildKeepsCrossingHeld",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FRunwayFreedRebuildCrossingTest::RunTest(const FString&)
+{
+	// THE REBUILD WINDOW (push-ground-freed review I1), asked of the runway signal: a rebuild drops guideline claims, and
+	// the diff it runs must not read a strip a taxiing aircraft is crossing as freed. Surface claims are not guideline
+	// claims (ReleaseGuidelineClaims keeps them), so this held before the fix too - pinned, since the arrival queue lands
+	// on this event.
+	FCrossing C;
+	if (!TestTrue(TEXT("dispatched across the strip"), C.Build())) { return false; }
+	FRecorder Seen;
+	Seen.Bind(*C.Traffic);
+	if (!TestTrue(TEXT("the crossing takes the strip"), C.TickUntil(120.0, [&C]() { return C.Held(); }))) { return false; }
+	C.Traffic->OnGraphRebuilt(*C.Net);
+	TestTrue(TEXT("after the rebuild the strip is still held"), C.Held());
+	TestEqual(TEXT("and the rebuild reported no runway freed"), Seen.Runways.Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRunwayFreedRebuildLeavingStandTest, "Airside.Model.Traffic.RunwayFreed.RebuildKeepsLeavingStandHeld",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FRunwayFreedRebuildLeavingStandTest::RunTest(const FString&)
+{
+	// THE REBUILD WINDOW, asked of the stand signal: an aircraft departing a stand holds it with its BODY only - its goal
+	// is the runway now. The rebuild dropped that body claim until the next Advance, so its diff reported the stand
+	// freed with the aircraft still on it, and an arrival queue woken by it could send a flight to that stand.
+	FTestAirportOptions Options;
+	Options.StandCount = 1;
+	const FTestAirport Field = FTestAirport::Build(TestAirframes::Piper(), Options);
+	URoadNetwork* Net = Field.Net;
+	const FGuidelineNodeId Pose = Net->GetEntity(Field.Stands[0])->PoseNode;
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	FRecorder Seen;
+	Seen.Bind(*Traffic);
+
+	const FGuidelineNodeId TaxiEnd = RouteSearch::FindNearestNode(*Net, Field.ExitAt + FVector2D(0.0, -20000.0),
+		ETraversalClass::Aircraft, 5000.0);
+	const FRoutePlan ToStand = TestGraph::Probe(*Net, TaxiEnd, Pose, ETraversalClass::Aircraft);
+	const int32 Plane = ToStand.IsValid() ? Traffic->DispatchAgent(Net, ToStand, TestAirframes::Piper(), ETraversalClass::Aircraft, 0.0) : 0;
+	if (!TestTrue(TEXT("an aircraft heads for the stand"), Plane > 0)) { return false; }
+	for (int32 Tick = 0; Tick < 20000 && Traffic->FindAgent(Plane)->Phase != EAgentPhase::Parked; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+	}
+	if (!TestEqual(TEXT("parked"), Traffic->FindAgent(Plane)->Phase, EAgentPhase::Parked)) { return false; }
+	if (!TestEqual(TEXT("and sent to depart"), Traffic->DepartAgent(Plane, *Net), EDepartureRefusal::None)) { return false; }
+	Traffic->Advance(1.0 / 30.0, Net);
+	if (!TestTrue(TEXT("one frame on, its body still holds the stand"), Traffic->IsStandHeld(Pose, 0))) { return false; }
+	const int32 Before = Seen.Stands.Num();
+
+	Traffic->OnGraphRebuilt(*Net);
+	TestTrue(TEXT("after the rebuild the stand is still held by the body on it"), Traffic->IsStandHeld(Pose, 0));
+	TestEqual(TEXT("and the rebuild reported no stand freed"), Seen.Stands.Num(), Before);
 	return true;
 }
 

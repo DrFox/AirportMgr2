@@ -311,7 +311,8 @@ private:
 
 	/** Marks the JobBoard pass dirty FOR AN EVENT, a deadline or a command - every dirtier comes through here, so the
 	 *  pass can tell a run something asked for (bJobBoardCovered) from a run only the safety net asked for. The
-	 *  arrival queue's DirtyArrivalQueue, for the other pass. */
+	 *  arrival queue's DirtyArrivalQueue, for the other pass.
+	 *  ENFORCED BY: Check-Architecture rule 36 (pass-dirtied-through-funnel) */
 	void DirtyJobBoard();
 
 	/**
@@ -327,7 +328,8 @@ private:
 	void RunArrivalQueue();
 
 	/** Marks the pass dirty FOR AN EVENT - every dirtier in WireBus comes through here, so the pass can tell a run an
-	 *  event asked for (bQueueCovered) from a run only the safety net asked for. */
+	 *  event asked for (bQueueCovered) from a run only the safety net asked for.
+	 *  ENFORCED BY: Check-Architecture rule 36 (pass-dirtied-through-funnel) */
 	void DirtyArrivalQueue();
 
 	/**

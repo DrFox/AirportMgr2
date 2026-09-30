@@ -1620,6 +1620,48 @@ foreach ($factsTree in $factsTrees) {
 }
 $ranRules.Add('facts-through-facade')
 
+# --- 36. A PASS IS DIRTIED THROUGH ITS FUNNEL ---------------------------------------------------
+# Ops push-ground-freed review (I2, 2026-09-30): the JobBoard and ArrivalQueue passes tell a run an event asked for from
+# a run only the safety net asked for by a COVERED flag, which their funnels set - UOpsRuntime::DirtyJobBoard and
+# UOpsRuntime::DirtyArrivalQueue. A raw Bus.MarkDirty(TEXT("JobBoard")) anywhere else leaves the flag down, and a real
+# event's run is then logged as the net finding a missing event - a false Warning, or (worse, once the Warning is
+# trusted) a missing event hidden among false ones. So MarkDirty( naming either pass may appear only in its funnel and in
+# UOpsRuntime::ArmSafetyNet, the net's own clock entry. MarkDirtyNextDrain (a pass's own retry, which sets the flag
+# itself) and MarkAllDirty (a load's catch-up, with the net cancelled) are other calls and not matched. Comments are
+# stripped (rule 34's helper); the pass name is read from the raw line, since that helper blanks string literals.
+$passFunnels = @{ 'JobBoard' = 'UOpsRuntime::DirtyJobBoard'; 'ArrivalQueue' = 'UOpsRuntime::DirtyArrivalQueue' }
+$passOwner = Join-Path $Root 'Plugins\AirportOps\Source\AirportOps\Private\Present\OpsRuntime.cpp'
+foreach ($funnel in $passFunnels.Values + @('UOpsRuntime::ArmSafetyNet')) {
+    if (-not (Test-Path $passOwner) -or $null -eq (Select-String -Path $passOwner -SimpleMatch -Pattern "void $funnel(")) {
+        $failures.Add("pass-dirtied-through-funnel: $funnel not found in $passOwner - update rule 36, do not let it check nothing")
+    }
+}
+$passTrees = @((Join-Path $Root 'Plugins\AirportOps\Source\AirportOps'), (Join-Path $Root 'Source\AirportMgr'))
+foreach ($passTree in $passTrees) {
+    foreach ($file in Get-Sources $passTree @('.cpp', '.h')) {
+        if ($file.Name -like '*Test.cpp') { continue }
+        $lines = Get-Content -LiteralPath $file.FullName
+        $current = ''
+        $inBlock = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            if ($code.Trim() -eq '') { continue }
+            $definition = Get-ArchDefinition $code
+            if ($null -ne $definition) { $current = $definition }
+            if ($code -notmatch '\bMarkDirty\s*\(') { continue }
+            $raw = $lines[$i] -replace '//.*$', ''
+            foreach ($pass in $passFunnels.Keys) {
+                if ($raw -match ('\bMarkDirty\s*\(\s*TEXT\s*\(\s*"' + $pass + '"\s*\)')) {
+                    if ($current -ne $passFunnels[$pass] -and $current -ne 'UOpsRuntime::ArmSafetyNet') {
+                        $failures.Add("pass-dirtied-through-funnel: $($file.Name):$($i + 1) marks the $pass pass dirty from $current - go through $($passFunnels[$pass]), which sets the covered flag the safety net reads")
+                    }
+                }
+            }
+        }
+    }
+}
+$ranRules.Add('pass-dirtied-through-funnel')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

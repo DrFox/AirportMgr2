@@ -257,4 +257,62 @@ bool FPushGroundFreedRebuildTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPushGroundFreedRebuildTaxiingTest, "Airside.Model.Traffic.PushGroundFreed.RebuildKeepsTaxiingBlocker",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FPushGroundFreedRebuildTaxiingTest::RunTest(const FString&)
+{
+	// REVIEW I1: a rebuild drops every guideline claim and used to give back only goals and holds, so a TAXIING body on the
+	// push ground was out of the table until the next Advance's claim pass - and a paused game has no next Advance. The
+	// watch's re-derive read the ground free and fired; a DepartAgent in that window started the push into the blocker.
+	FPushField Field;
+	Field.Build(false);
+	const int32 Parked = Field.Park(Field.B, Field.A);
+	if (!TestTrue(TEXT("parked"), Parked > 0)) { return false; }
+	Field.SendBlocker();
+	if (!TestTrue(TEXT("a taxiing aircraft on the push ground"), Field.IsPushGroundHeld(Parked))) { return false; }
+	int32 Fired = 0;
+	Field.Traffic->OnPushGroundFreed.AddLambda([&Fired](int32) { ++Fired; });
+	if (!TestEqual(TEXT("refused, blocked"), Field.Traffic->DepartAgent(Parked, *Field.Net), EDepartureRefusal::PushbackBlocked)) { return false; }
+
+	Field.Traffic->OnGraphRebuilt(*Field.Net);
+	TestTrue(TEXT("after the rebuild the table still holds the taxiing blocker"), Field.IsPushGroundHeld(Parked));
+	TestEqual(TEXT("so the rebuild fires nothing"), Fired, 0);
+	TestEqual(TEXT("and DepartAgent, asked in that window, still refuses"), Field.Traffic->DepartAgent(Parked, *Field.Net),
+		EDepartureRefusal::PushbackBlocked);
+	TestEqual(TEXT("the aircraft is still parked"), Field.Traffic->FindAgent(Parked)->Phase, EAgentPhase::Parked);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPushGroundFreedStripsNowTest, "Airside.Model.Traffic.PushGroundFreed.RegisteredWithStripsHeldNow",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FPushGroundFreedStripsNowTest::RunTest(const FString&)
+{
+	// REVIEW M1: the watch records the strips held AT THE REFUSAL, the table PlanAny ranked by - not DiffFreedom's
+	// baseline from the last tick. Runway 1 is held after the last diff and released before the next: the baseline
+	// never saw it. PlanAny did (the departure went to runway 2, its push onto J-B, held). Recorded from the baseline,
+	// the key would read unchanged at the next diff, the J-B route would be re-asked and still held - while DepartAgent,
+	// with runway 1 free again, would push onto the free J-E. A missed wake.
+	FPushField Field;
+	Field.Build(/*bTwoRunways*/ true);
+	const int32 Parked = Field.Park(Field.B, Field.A);
+	if (!TestTrue(TEXT("parked"), Parked > 0)) { return false; }
+	Field.Traffic->Advance(PushGroundFreedTest::Frame, Field.Net);
+	for (const FTrafficResource& Surface : Field.Net->RunwaySurfaces(Field.Runway1))
+	{
+		Field.Traffic->OccupancyForTest().Assert(FTrafficClaim::Make(-9, Surface, /*bOccupied*/ true, 2));
+	}
+	if (!TestTrue(TEXT("a hold on B, the J-B arm's end"), Field.Traffic->HoldStand(-7, Field.B))) { return false; }
+	int32 Fired = 0;
+	Field.Traffic->OnPushGroundFreed.AddLambda([&Fired](int32) { ++Fired; });
+	if (!TestEqual(TEXT("runway 1 busy, runway 2's push arm held: refused, blocked"), Field.Traffic->DepartAgent(Parked, *Field.Net),
+		EDepartureRefusal::PushbackBlocked)) { return false; }
+
+	Field.Traffic->OccupancyForTest().ReleaseAll(-9);
+	Field.Traffic->Advance(PushGroundFreedTest::Frame, Field.Net);
+	TestEqual(TEXT("runway 1 free again before any diff saw it held: the next diff replans and fires"), Fired, 1);
+	TestNotEqual(TEXT("and DepartAgent agrees: not blocked"), Field.Traffic->DepartAgent(Parked, *Field.Net),
+		EDepartureRefusal::PushbackBlocked);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

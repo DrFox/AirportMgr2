@@ -374,4 +374,34 @@ bool FPushGroundFreedNetTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPushGroundFreedPausedEditTest, "AirportOps.Present.PushGroundFreed.PausedEditDepartsNothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FPushGroundFreedPausedEditTest::RunTest(const FString&)
+{
+	// REVIEW I1, END TO END: the player pauses with a pushback refused for a taxiing aircraft on its ground, and edits. The
+	// rebuild used to drop the taxiing body's claims until the next Advance - which a paused game does not reach - while the
+	// edit's NetworkChanged ran the job board every paused frame: DepartAgent read the ground free and pushed the aircraft
+	// back into the one taxiing behind it.
+	FPushRig Rig;
+	if (!TestTrue(TEXT("a field and an attached runtime"), Rig.Build(true, 1.0))) { return false; }
+	if (!TestTrue(TEXT("the aircraft parks and its turnaround opens"), Rig.ParkAndOpen())) { return false; }
+	const FRoutePlan Up = TestGraph::Probe(*Rig.Net, Rig.PushArmNode(), Rig.North, ETraversalClass::Aircraft);
+	if (!TestTrue(TEXT("a second aircraft sets off up the push arm"), Up.IsValid() && Rig.Actor->DispatchAgent(Up, Rig.Airframe))) { return false; }
+	if (!TestTrue(TEXT("refused PushbackBlocked"), Rig.TickUntilRefused(EDepartureRefusal::PushbackBlocked))) { return false; }
+
+	Rig.Runtime->TogglePause();
+	Rig.Tick();
+	if (!TestTrue(TEXT("paused"), Rig.Runtime->GetClock()->IsPaused())) { return false; }
+	// THE EDIT: the traffic model's rebuild, and a graph change the runtime sees (a line laid far off) - NetworkChanged.
+	Rig.Model->OnGraphRebuilt(*Rig.Net);
+	Rig.Lay(FVector2D(150000.0, 50000.0), FVector2D(160000.0, 50000.0));
+	for (int32 Tick = 0; Tick < 30; ++Tick)
+	{
+		Rig.Tick();
+	}
+	TestTrue(TEXT("paused through the edit, the aircraft has not pushed back into the blocker"), Rig.IsParked());
+	TestEqual(TEXT("its departure is still refused for the ground"), Rig.Refusal(), EDepartureRefusal::PushbackBlocked);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

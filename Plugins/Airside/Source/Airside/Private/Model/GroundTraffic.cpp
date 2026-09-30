@@ -1063,7 +1063,7 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 			AgentId, Push.PushRoute.Length);
 		// ON THE WATCH, with what the refusal was planned from - see FPushWatch. The strips read NOW, the instant PlanAny
 		// ranked them, not DiffFreedom's baseline from the last tick.
-		// ENFORCED BY: Airside.Model.Traffic.PushGroundFreed.TaxiingBlockerClears, .RunwayFlipReplans
+		// ENFORCED BY: Airside.Model.Traffic.PushGroundFreed.RegisteredWithStripsHeldNow, Airside.Model.Traffic.PushGroundFreed.RunwayFlipReplans
 		RefreshRunwaySeeds(Network, /*bForce*/ false);
 		FPushWatch& Watch = PushWatch.Add(AgentId);
 		Watch.PushRoute = Push.PushRoute;
@@ -1184,6 +1184,10 @@ void UGroundTraffic::ClearAgents()
 	// #169: AFTER Clear(), not folded into the loop above - the loop only announces; this is
 	// the point every claim actually goes.
 	++OccupancyRevisionCount;
+	// THE PUSH WATCH NAMES AGENTS, and there are none. DiffNow below would drop every entry as gone - but only when a
+	// network has been diffed; this does not depend on that. Agent ids are never reused within one UGroundTraffic
+	// (NextAgentId only counts up), so a stale entry could not wake a stranger - it is hygiene, not a fix.
+	PushWatch.Reset();
 	// ENFORCED BY: Airside.Model.Traffic.RunwayFreed.ClearAgents
 	DiffNow();
 }
@@ -1365,6 +1369,10 @@ void UGroundTraffic::DiffFreedom(const URoadNetwork& Network, bool bRebuilt)
 			continue;
 		}
 		FPushWatch& Watch = It.Value();
+		// !bRebuilt IS REDUNDANT TODAY: a rebuild follows a graph change, which has already moved GuidelineRevision below
+		// (every guideline mutation bumps it). Kept so the rebuild's re-derive does not rest on that. Not pinned: with the
+		// graph unchanged the revision holds, but then the stored route IS the route and both paths answer alike - there
+		// is nothing a test could see (review M2, 2026-09-30).
 		const bool bSamePlan = !bRebuilt
 			&& Watch.Network.Get() == &Network
 			&& Watch.EditRevision == Network.GetEditRevision()
