@@ -12,6 +12,7 @@
 #include "Model/ServiceJob.h"
 #include "Model/ServiceRolePolicy.h"
 #include "Model/ServiceVehicle.h"
+#include "Model/ServiceVehicleLifecycle.h"
 #include "Model/Vehicle.h"
 #include "Solve/IcaoCode.h"
 #include "UObject/Object.h"
@@ -238,7 +239,8 @@ public:
 	 *
 	 * An aircraft reaching Parked at a stand makes a turnaround and its jobs; a vehicle's agent
 	 * reaching Parked is that vehicle ARRIVING, which moves the vehicle's own state; an aircraft
-	 * LEAVING Parked drops its turnaround and jobs and moves any vehicle out for them on.
+	 * LEAVING Parked drops its turnaround and jobs and moves any vehicle out for them on; a vehicle's
+	 * agent going Gone is that vehicle LOSING its agent (LoseAgent), and a Stranded one releases its jobs.
 	 */
 	void OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock,
 		int32 AgentId, EAgentPhase From, EAgentPhase To);
@@ -275,11 +277,14 @@ public:
 	 * the ready aircraft sent.
 	 *
 	 * RETURNS TRUE WHEN SOMETHING IS LEFT UNRESOLVED and must be looked at again next frame: a vehicle
-	 * whose dispatch was refused, one parked at a stand with no decision (the final review #1
-	 * backstop), or a job still Open (a re-offered one is bid on the NEXT pass - see the body). False
-	 * means nothing here changes until an event or a deadline says so - which is what lets the ops bus
-	 * run this as a pass rather than every frame (spec 2026-09-29-ops-event-bus section 2;
-	 * UOpsRuntime::WireBus's "JobBoard" pass).
+	 * whose dispatch was refused (Idle with a queue), or a job still Open (a re-offered one is bid on the
+	 * NEXT pass - see the body). NOT A VEHICLE PARKED AT A STAND WITH NO DECISION, which the final review
+	 * #1 backstop used to keep re-running the pass for: that shape is no longer representable (Deciding
+	 * never survives a Step - StartNext always lands the decision, and the Step ensures it - see
+	 * EServiceVehicleState). False means nothing here changes until an event or a deadline says so - which
+	 * is what lets the ops bus run this as a pass rather than every frame (spec 2026-09-29-ops-event-bus
+	 * section 2; UOpsRuntime::WireBus's "JobBoard" pass).
+	 * ENFORCED BY: AirportOps.Fuel.Lifecycle.BlockedHeadJobNeverLeavesItServingWithNoJob
 	 *
 	 * A DUE TURNAROUND THAT COULD NOT LEAVE IS NOT UNRESOLVED (ops push-ground-freed, 2026-09-30): it used
 	 * to re-run this whole Step every frame for as long as it was refused. Its retries now come from what
@@ -357,10 +362,14 @@ public:
 	 * The player's Unstick for a VEHICLE (spec 2026-09-29-unstick-agent): every job it holds - the
 	 * one it is on and its whole queue - goes back to the board for another vehicle to win, then it
 	 * heads home (GoToFacility) or, bRetire, is retired where it stands and is Idle at home at once.
-	 * THE EXPLICIT FORM of what SyncFleet's "lost its agent" branch does a tick late - and that branch
-	 * reopens only the current job, leaving the queue on a vehicle nobody is driving.
+	 * THE EXPLICIT FORM of what an agent that is lost to the board does (LoseAgent): the Gone phase event
+	 * for a vehicle's agent - the player's despawn through another door, a cleared traffic model - takes the
+	 * same body, so every job it held, current AND queued, goes back to the board however the agent went. It
+	 * used to be a poll in SyncFleet that re-opened only the current job and left the queue on a vehicle nobody
+	 * was driving; the poll stays, as the net under the event.
 	 * False, nothing changed, when AgentId drives no vehicle of this board.
-	 * ENFORCED BY: AirportOps.Model.AgentRescue.VehicleSendHome, .VehicleDespawn
+	 * ENFORCED BY: AirportOps.Model.AgentRescue.VehicleSendHome, .VehicleDespawn,
+	 * AirportOps.Fuel.Lifecycle.AgentRetiredElsewhereRebidsWholeQueue, .LostAgentNetRecallsTheSameWay
 	 */
 	bool RecallVehicleOfAgent(int32 AgentId, bool bRetire, UGroundTraffic& Traffic, const URoadNetwork& Network,
 		const USimClock& Clock);
@@ -536,7 +545,8 @@ private:
 	 * first time gets Trucks x FleetTypes() vehicles, Idle at home and full; a vehicle whose depot is
 	 * gone is withdrawn (its agent retired, its jobs back to the board) and credited its resale value
 	 * to Ledger, dated by Clock; a vehicle whose agent vanished under it (retired by somebody else) is
-	 * put back Idle at home, its job re-opened.
+	 * put back Idle at home by LoseAgent, every job it held re-opened - THE NET under OnAgentPhase's Gone
+	 * branch, which is how the board normally hears of it.
 	 */
 	void SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
@@ -548,6 +558,12 @@ private:
 	 * first (the policy's NextStep), or home when the queue is empty. The ONE place the lifecycle
 	 * moves forward, so every path out of a step - serve done, refill done, recall, a job gone - reads
 	 * the same rule the bid priced.
+	 *
+	 * ALWAYS LANDS: it never returns with the vehicle Deciding. A vehicle at home stays Idle (a job held by a
+	 * prerequisite waits there, retried each Step); one on the road is set off, sent to its facility or - with
+	 * nothing it can do - taken off the road, and a job it cannot start waits at home rather than where it stands.
+	 * ENFORCED BY: AirportOps.Fuel.Lifecycle.BlockedHeadJobNeverLeavesItServingWithNoJob (the fixture's per-Step
+	 * check), AirportOps.Fuel.UnreachableQueueSendsItHome
 	 */
 	void StartNext(FServiceVehicle& Vehicle, UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
@@ -585,7 +601,10 @@ private:
 	 */
 	double LitresWanted(int32 AgentId, const FAirframe& Airframe) const;
 
-	/** A trip's pumping is over: quantities move, the job is Done or re-opened with its remainder. */
+	/**
+	 * A trip's pumping is over: quantities move, the job is Done or re-opened with its remainder. The vehicle is
+	 * left Deciding (EndServe), parked at the stand with its agent, for the re-bid and then StartNext.
+	 */
 	void FinishServe(FServiceVehicle& Vehicle, const USimClock& Clock);
 
 	/** Head for the facility (home), or - if the vehicle cannot get there - be Idle at home. */
@@ -593,6 +612,41 @@ private:
 
 	/** At the facility with no agent: time the refill, or finish it at once when there is none. */
 	void BeginFacility(FServiceVehicle& Vehicle, const URoadNetwork& Network, const USimClock& Clock);
+
+	/**
+	 * THE HANDLE for Vehicle's transitions, bound to this board's FleetRevision: every write of a vehicle's State,
+	 * AgentId and CurrentJob goes through it (FServiceVehicleLifecycle), and it bumps FleetRevision itself.
+	 * ENFORCED BY: Check-Architecture rule 37 (vehicle-lifecycle-one-writer)
+	 */
+	FServiceVehicleLifecycle Lifecycle(FServiceVehicle& Vehicle) { return FServiceVehicleLifecycle(Vehicle, FleetRevision); }
+
+	/**
+	 * THE ONE CREATION SITE for a vehicle that joins the fleet - the placeholder's seeded one and the player's
+	 * bought one were two hand copies (and AddVehicleForTest a third). Idle at Home, full, with the next id;
+	 * bumps FleetRevision. The returned reference is good until the next add or removal.
+	 */
+	FServiceVehicle& NewVehicle(const FServiceVehicleType& Type, FEntityInstanceId Home);
+
+	/**
+	 * Take Vehicle's agent off the road: the vehicle unhooks from it FIRST (LeaveRoad, Idle at home), then the
+	 * agent is retired. THAT ORDER IS THE POINT: RetireAgent broadcasts Gone, the fixtures deliver it inside the
+	 * call, and OnAgentPhase treats a Gone for a vehicle's agent as the agent being lost from under it - which
+	 * would recall a vehicle this call is already moving. Unhooked first, the broadcast finds no vehicle. Production
+	 * delivers it a drain later (#436), where either order works; the one that works in both is this one.
+	 * The one spelling of "retire where it stands" (there were six, with six different tails).
+	 * ENFORCED BY: AirportOps.Fuel.DepotGoneBeforeRecallLeavesNoAgent, AirportOps.Model.AgentRescue.VehicleDespawn
+	 */
+	void RetireAgentOf(FServiceVehicle& Vehicle, UGroundTraffic& Traffic);
+
+	/**
+	 * The vehicle's agent is already gone from the traffic model: every job it holds goes back to the board and
+	 * it is Idle at home with no agent. The body of both ways the board learns of it - OnAgentPhase's Gone branch
+	 * and SyncFleet's net - so they cannot leave different vehicles behind. Returns the jobs released. Retires
+	 * nothing: it is called from inside the broadcast of the agent's removal, where retiring again would remove
+	 * an agent from a list a clear is walking.
+	 * ENFORCED BY: AirportOps.Fuel.Lifecycle.AgentRetiredElsewhereRebidsWholeQueue, .LostAgentNetRecallsTheSameWay
+	 */
+	int32 LoseAgent(FServiceVehicle& Vehicle);
 
 	/**
 	 * Move the vehicle's agent to Goal - WAS UFuelService::SendTruckHome, which knew one goal only.
@@ -612,8 +666,8 @@ private:
 	/** A job the vehicle can no longer do goes back to the board, remainder and all. */
 	void Reopen(FServiceJob& Job);
 
-	/** Every job Vehicle holds - current and queued - Reopen'd; its CurrentJob and Queue emptied. The
-	 *  count, for the caller's log line. */
+	/** Every job Vehicle holds - current and queued - Reopen'd; its CurrentJob released (ToJob or Serving becomes
+	 *  Deciding, which the caller must then settle) and Queue emptied. The count, for the caller's log line. */
 	int32 ReleaseJobsOf(FServiceVehicle& Vehicle);
 
 	/** What Judge learned about one job, for its refusal and its log line (#103: counted once). */

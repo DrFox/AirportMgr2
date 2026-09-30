@@ -25,6 +25,7 @@ namespace JobBoardText
 		case EServiceVehicleState::Serving:    return TEXT("Serving");
 		case EServiceVehicleState::ToFacility: return TEXT("ToFacility");
 		case EServiceVehicleState::AtFacility: return TEXT("AtFacility");
+		case EServiceVehicleState::Deciding:   return TEXT("Deciding");
 		default:                               return TEXT("?");
 		}
 	}
@@ -64,12 +65,9 @@ void UJobBoard::Serialize(FArchive& Ar)
 	}
 	for (FServiceVehicle& Vehicle : Vehicles)
 	{
-		Vehicle.State = EServiceVehicleState::Idle;
-		Vehicle.AgentId = 0;
-		Vehicle.CurrentJob = 0;
-		Vehicle.Queue.Reset();
-		Vehicle.StepStartedAt = 0.0;
-		Vehicle.StepEndsAt = 0.0;
+		// EVERY VEHICLE IDLE AT HOME with nothing held - agents, and the jobs of aircraft that are not restored,
+		// are things a load clears. The lifecycle moves FleetRevision (once per vehicle).
+		Lifecycle(Vehicle).ResetForRestore();
 		// ITS DEPOT HAS BEEN SEEN: the placeholder must not add a second fleet beside a restored one.
 		// ENFORCED BY: AirportOps.Fuel.RestoredFleetIsNotReseeded
 		if (Vehicle.Home.IsSet())
@@ -77,7 +75,6 @@ void UJobBoard::Serialize(FArchive& Ar)
 			SeededDepots.Add(Vehicle.Home);
 		}
 	}
-	++FleetRevision;
 	UE_LOG(LogAirportOps, Log, TEXT("Restore: %d vehicle(s) idle at home"), Vehicles.Num());
 }
 
@@ -335,16 +332,20 @@ int32 UJobBoard::RefillingForTest() const
 FServiceVehicle& UJobBoard::AddVehicleForTest(FName TypeCode, FEntityInstanceId Home, EServiceVehicleState State, double Cargo)
 {
 	++RevisionCount;   // See Revision: every public mutator.
-	FServiceVehicle& Vehicle = Vehicles.AddDefaulted_GetRef();
-	Vehicle.Id = NextVehicleId++;
-	Vehicle.TypeCode = TypeCode;
-	Vehicle.Home = Home;
-	Vehicle.State = State;
-	Vehicle.Cargo = Cargo;
+	FServiceVehicle& Vehicle = Vehicles.Add_GetRef(FServiceVehicleLifecycle::Create(NextVehicleId++, TypeCode, EServiceRole::Fuel, Home, Cargo));
+	FServiceVehicleLifecycle::SeedStateForTest(Vehicle, State);
 	if (Home.IsSet())
 	{
 		SeededDepots.Add(Home);
 	}
+	++FleetRevision;
+	return Vehicle;
+}
+
+FServiceVehicle& UJobBoard::NewVehicle(const FServiceVehicleType& Type, FEntityInstanceId Home)
+{
+	FServiceVehicle& Vehicle = Vehicles.Add_GetRef(
+		FServiceVehicleLifecycle::Create(NextVehicleId++, Type.TypeCode, Type.Role, Home, FFuelRolePolicy::CapacityOf(Type)));
 	++FleetRevision;
 	return Vehicle;
 }
@@ -364,15 +365,8 @@ int32 UJobBoard::AddPurchasedVehicle(FName TypeCode, FEntityInstanceId Home)
 		return 0;
 	}
 	const FServiceVehicleType Type = TypeFor(TypeCode);
-	FServiceVehicle& Vehicle = Vehicles.AddDefaulted_GetRef();
-	Vehicle.Id = NextVehicleId++;
-	Vehicle.TypeCode = TypeCode;
-	Vehicle.Role = Type.Role;
-	Vehicle.Home = Home;
-	Vehicle.State = EServiceVehicleState::Idle;
-	Vehicle.Cargo = FFuelRolePolicy::CapacityOf(Type);
+	FServiceVehicle& Vehicle = NewVehicle(Type, Home);
 	const int32 Id = Vehicle.Id;
-	++FleetRevision;
 	++RevisionCount;   // See Revision: every public mutator.
 
 	// A NEW VEHICLE IS A CHANGE A REFUSED JOB CAN ANSWER DIFFERENTLY - see the header. Re-opened, not bid
@@ -388,7 +382,7 @@ int32 UJobBoard::AddPurchasedVehicle(FName TypeCode, FEntityInstanceId Home)
 		}
 	}
 	UE_LOG(LogAirportOps, Log, TEXT("Fleet: depot %d gains bought vehicle %d %s (%.0f L at %.0f L/min); %d refused job(s) ask again"),
-		Home.Index, Id, *TypeCode.ToString(), FFuelRolePolicy::CapacityOf(Type), Type.RatePerMinute, Reopened);
+		Home.Index, Id, *TypeCode.ToString(), Vehicle.Cargo, Type.RatePerMinute, Reopened);
 	return Id;
 }
 
@@ -493,8 +487,22 @@ int32 UJobBoard::ReleaseJobsOf(FServiceVehicle& Vehicle)
 			++Released;
 		}
 	}
-	Vehicle.CurrentJob = 0;
+	Lifecycle(Vehicle).ReleaseCurrentJob();
 	Vehicle.Queue.Reset();
+	return Released;
+}
+
+void UJobBoard::RetireAgentOf(FServiceVehicle& Vehicle, UGroundTraffic& Traffic)
+{
+	const int32 AgentId = Vehicle.AgentId;
+	Lifecycle(Vehicle).LeaveRoad();
+	Traffic.RetireAgent(AgentId);
+}
+
+int32 UJobBoard::LoseAgent(FServiceVehicle& Vehicle)
+{
+	const int32 Released = ReleaseJobsOf(Vehicle);
+	Lifecycle(Vehicle).LeaveRoad();
 	return Released;
 }
 
@@ -509,14 +517,11 @@ bool UJobBoard::RecallVehicleOfAgent(int32 AgentId, bool bRetire, UGroundTraffic
 		return false;
 	}
 	const int32 Released = ReleaseJobsOf(*Vehicle);
-	++FleetRevision;
 	if (bRetire)
 	{
-		// RETIRED, THEN UNHOOKED: RetireAgent's Gone broadcast reaches OnAgentPhase, which ignores a
-		// non-Parked phase, and SyncFleet then finds nothing lost - the vehicle is already home.
-		Traffic.RetireAgent(AgentId);
-		Vehicle->AgentId = 0;
-		Vehicle->State = EServiceVehicleState::Idle;
+		// UNHOOKED, THEN RETIRED (RetireAgentOf): RetireAgent's Gone broadcast reaches OnAgentPhase, which now
+		// treats a Gone for a vehicle's agent as the agent being lost - and the vehicle is already home.
+		RetireAgentOf(*Vehicle, Traffic);
 		UE_LOG(LogAirportOps, Log, TEXT("Fuel: vehicle %d (agent %d) despawned by the player; %d job(s) back to the board, Idle at depot %d"),
 			Vehicle->Id, AgentId, Released, Vehicle->Home.Index);
 		return true;
@@ -550,13 +555,7 @@ void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, 
 			for (const FName TypeCode : FleetTypes())
 			{
 				const FServiceVehicleType Type = TypeFor(TypeCode);
-				FServiceVehicle& Vehicle = Vehicles.AddDefaulted_GetRef();
-				Vehicle.Id = NextVehicleId++;
-				Vehicle.TypeCode = TypeCode;
-				Vehicle.Role = Type.Role;
-				Vehicle.Home = DepotId;
-				Vehicle.State = EServiceVehicleState::Idle;
-				Vehicle.Cargo = FFuelRolePolicy::CapacityOf(Type);
+				FServiceVehicle& Vehicle = NewVehicle(Type, DepotId);
 				UE_LOG(LogAirportOps, Log, TEXT("Fleet: depot %d gains vehicle %d %s (%.0f L at %.0f L/min)"),
 					DepotId.Index, Vehicle.Id, *TypeCode.ToString(), Vehicle.Cargo, Type.RatePerMinute);
 			}
@@ -573,34 +572,25 @@ void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, 
 		if (Home != nullptr && Home->bAlive)
 		{
 			// AN AGENT THAT VANISHED UNDER IT - retired by somebody else, a cleared traffic model. The
-			// vehicle is not lost with it: it is back at home, and its job goes back to the board.
+			// vehicle is not lost with it: it is back at home, and every job it held goes back to the board.
+			// THE NET, NOT THE CHANNEL: OnAgentPhase's Gone branch hears of this from the traffic model's own
+			// event and takes the same body (LoseAgent), so this fires only for a loss no event reached - a Gone
+			// delivered while no live model was attached, a model swapped under the board. It used to be the ONLY
+			// way the board heard, polled per vehicle per Step, and re-opened just the current job.
+			// ENFORCED BY: AirportOps.Fuel.Lifecycle.LostAgentNetRecallsTheSameWay
 			if (Vehicle.AgentId != 0 && Traffic.FindAgent(Vehicle.AgentId) == nullptr)
 			{
-				UE_LOG(LogAirportOps, Warning, TEXT("Fuel: vehicle %d lost its agent %d; back at depot %d"),
-					Vehicle.Id, Vehicle.AgentId, Vehicle.Home.Index);
-				Vehicle.AgentId = 0;
-				if (FServiceJob* Job = FindJob(Vehicle.CurrentJob))
-				{
-					Reopen(*Job);
-				}
-				Vehicle.CurrentJob = 0;
-				Vehicle.State = EServiceVehicleState::Idle;
-				++FleetRevision;
+				const int32 LostAgent = Vehicle.AgentId;
+				const int32 Released = LoseAgent(Vehicle);
+				UE_LOG(LogAirportOps, Warning, TEXT("Fuel: vehicle %d lost its agent %d with no Gone heard; %d job(s) back to the board, Idle at depot %d"),
+					Vehicle.Id, LostAgent, Released, Vehicle.Home.Index);
 			}
 			continue;
 		}
-		int32 Reopened = 0;
-		for (FServiceJob& Job : Jobs)
-		{
-			if (Job.VehicleId == Vehicle.Id && Job.State != EServiceJobState::Done)
-			{
-				Reopen(Job);
-				++Reopened;
-			}
-		}
+		const int32 Reopened = ReleaseJobsOf(Vehicle);
 		if (Vehicle.AgentId != 0)
 		{
-			Traffic.RetireAgent(Vehicle.AgentId);
+			RetireAgentOf(Vehicle, Traffic);
 		}
 		UE_LOG(LogAirportOps, Log, TEXT("Fleet: depot %d removed; vehicle %d %s withdrawn, %d job(s) back to the board"),
 			Vehicle.Home.Index, Vehicle.Id, *Vehicle.TypeCode.ToString(), Reopened);
@@ -630,9 +620,7 @@ void UJobBoard::BeginFacility(FServiceVehicle& Vehicle, const URoadNetwork& Netw
 	const FEntityInstance* Home = Network.GetEntity(Vehicle.Home);
 	const double Seconds = Policy != nullptr && Home != nullptr
 		? Policy->FacilitySeconds(Vehicle.Cargo, TypeFor(Vehicle.TypeCode), PumpsAt(*Home)) : 0.0;
-	Vehicle.State = EServiceVehicleState::AtFacility;
-	Vehicle.StepStartedAt = Clock.Now();
-	Vehicle.StepEndsAt = Clock.Now() + Seconds;
+	Lifecycle(Vehicle).BeginFacility(Clock.Now() + Seconds);
 	if (Seconds > 0.0)
 	{
 		// REFILL BEFORE IT IS FREE (spec 2026-09-28-fuel-litres): what it pumped out, at the depot's
@@ -652,6 +640,13 @@ void UJobBoard::StartNext(FServiceVehicle& Vehicle, UGroundTraffic& Traffic, con
 	const IServiceRolePolicy* Policy = PolicyFor(Vehicle.Role);
 	if (Policy == nullptr)
 	{
+		// NO RULE TO DECIDE BY. A vehicle at home stays as it is; one on the road cannot be left Deciding - that
+		// is a vehicle with an agent and nothing to do, the shape the per-Step backstop used to catch - so it
+		// goes home, which is what "nothing to do" means everywhere else in this function.
+		if (Vehicle.AgentId != 0)
+		{
+			GoToFacility(Vehicle, Traffic, Network, Clock);
+		}
 		return;
 	}
 	const FServiceVehicleType Type = TypeFor(Vehicle.TypeCode);
@@ -687,7 +682,7 @@ void UJobBoard::StartNext(FServiceVehicle& Vehicle, UGroundTraffic& Traffic, con
 					UE_LOG(LogAirportOps, Log, TEXT("Vehicle %d %s: %s -> Idle"), Vehicle.Id, *Vehicle.TypeCode.ToString(),
 						JobBoardText::StateName(Vehicle.State));
 				}
-				Vehicle.State = EServiceVehicleState::Idle;
+				Lifecycle(Vehicle).BecomeIdle();
 				return;
 			}
 			GoToFacility(Vehicle, Traffic, Network, Clock);
@@ -705,6 +700,17 @@ void UJobBoard::StartNext(FServiceVehicle& Vehicle, UGroundTraffic& Traffic, con
 			});
 		if (bWaiting)
 		{
+			// AT HOME IT WAITS THERE - Idle with its queue, which Step retries each pass. ON THE ROAD IT CANNOT
+			// WAIT WHERE IT STANDS: it would be a vehicle with an agent and no job or trip (this branch used
+			// to leave it "Serving" a job it had finished, holding the hydrant, with a backstop re-running the
+			// whole board pass every frame until the prerequisite closed), so it goes home and waits there. The
+			// blocked job stays at the head of its queue. Dead in play today - nothing populates Prerequisites
+			// while fuel is the only role - so this is the shape, staged by the test, not a measured behaviour.
+			// ENFORCED BY: AirportOps.Fuel.Lifecycle.BlockedHeadJobNeverLeavesItServingWithNoJob
+			if (!bAtHome)
+			{
+				GoToFacility(Vehicle, Traffic, Network, Clock);
+			}
 			return;
 		}
 
@@ -724,19 +730,20 @@ void UJobBoard::StartNext(FServiceVehicle& Vehicle, UGroundTraffic& Traffic, con
 
 		const FGuidelineNodeId Anchor = ServiceAnchorOf(Network, Job.Stand, Vehicle.Role);
 		Vehicle.Queue.RemoveAt(0);
-		Vehicle.CurrentJob = Job.Id;
 		Job.State = EServiceJobState::Underway;
 		Job.LastDepot = Vehicle.Home;
+		// THE JOB IS THE VEHICLE'S ONLY WHEN THE DRIVE HOLDS (SetOff, below): CurrentJob is no longer set before the
+		// attempt and cleared on each of its failures, which left a window where a vehicle "held" a job it was not
+		// going to. The state it leaves is read first, for the log line's "from".
+		const EServiceVehicleState Was = Vehicle.State;
 		if (Anchor.IsSet() && DriveVehicleTo(Vehicle, Anchor, /*bToFacility=*/false, Traffic, Network))
 		{
 			UE_LOG(LogAirportOps, Log, TEXT("Vehicle %d %s: %s -> ToJob (job %d, aircraft %d, stand %d, %.0f L on board)"),
-				Vehicle.Id, *Vehicle.TypeCode.ToString(), JobBoardText::StateName(Vehicle.State), Job.Id, Job.AircraftId,
+				Vehicle.Id, *Vehicle.TypeCode.ToString(), JobBoardText::StateName(Was), Job.Id, Job.AircraftId,
 				Job.Stand.Index, Vehicle.Cargo);
-			Vehicle.State = EServiceVehicleState::ToJob;
+			Lifecycle(Vehicle).SetOff(Job.Id);
 			return;
 		}
-
-		Vehicle.CurrentJob = 0;
 
 		// REFUSED AT HOME WITH A ROUTE THERE: the traffic model would not take a plan the search
 		// called valid (final review #5). Nothing about the AIRPORT is wrong, so the job stays at the
@@ -747,26 +754,35 @@ void UJobBoard::StartNext(FServiceVehicle& Vehicle, UGroundTraffic& Traffic, con
 		{
 			Job.State = EServiceJobState::Queued;
 			Vehicle.Queue.Insert(Job.Id, 0);
-			Vehicle.State = EServiceVehicleState::Idle;
+			Lifecycle(Vehicle).BecomeIdle();
 			return;
 		}
 
 		// COULD NOT SET OFF: the job goes back to the board, which will choose again - this vehicle
-		// included, if it is still the best - and this vehicle tries the next thing on its queue.
+		// included, if it is still the best - and this vehicle tries the next thing on its queue. A drive
+		// that retired the agent where it stood has already put the vehicle Idle at home (DriveVehicleTo's
+		// LeaveRoad), so the next pass finds it there whatever state it was in.
 		Reopen(Job);
-		if (Vehicle.AgentId == 0 && !bAtHome)
-		{
-			// Retired where it stood by the failed drive: at home now, whatever state it was in.
-			Vehicle.State = EServiceVehicleState::Idle;
-		}
+	}
+
+	// THE LOOP CANNOT END HERE: each pass returns, or removes one job from a queue whose length bounded it, and an
+	// empty queue returns from the first branch. Said, and settled, rather than assumed: a vehicle reaching this
+	// line Deciding would be the wedge again, so it goes home and the ensure names the defect.
+	// ENFORCED BY: AirportOps.Fuel.UnreachableQueueSendsItHome (the bound), the ensure below
+	if (!ensureAlwaysMsgf(Vehicle.State != EServiceVehicleState::Deciding, TEXT("Vehicle %d: StartNext's loop ended with the decision unmade"), Vehicle.Id))
+	{
+		GoToFacility(Vehicle, Traffic, Network, Clock);
 	}
 }
 
 void UJobBoard::FinishServe(FServiceVehicle& Vehicle, const USimClock& Clock)
 {
 	FServiceJob* Job = FindJob(Vehicle.CurrentJob);
-	Vehicle.CurrentJob = 0;
-	++FleetRevision;
+	// THE SOURCE OF THE "SERVING WITH NO JOB" WEDGE (issue #428): this used to clear CurrentJob and leave the state
+	// Serving until StartNext decided, so any decision that did not land left an illegal vehicle for a per-Step
+	// backstop to find. EndServe leaves it Deciding - parked at the stand with its agent, no job - which the re-bid
+	// prices as standing here and StartNext then always resolves. Moves FleetRevision, as this did.
+	Lifecycle(Vehicle).EndServe();
 	if (Job == nullptr)
 	{
 		return;
@@ -806,7 +822,8 @@ void UJobBoard::FinishServe(FServiceVehicle& Vehicle, const USimClock& Clock)
 void UJobBoard::OnVehicleArrived(FServiceVehicle& Vehicle, const FRoadAgent& Agent, UGroundTraffic& Traffic,
 	const URoadNetwork& Network, const USimClock& Clock)
 {
-	++FleetRevision;
+	// NO BUMP OF ITS OWN: every branch below is a transition, and each moves FleetRevision (an arrival that
+	// changes nothing - a state that expects none - no longer moves it either).
 	const FGuidelineNodeId Home = HomePose(Network, Vehicle);
 
 	if (Vehicle.State == EServiceVehicleState::ToFacility)
@@ -817,8 +834,7 @@ void UJobBoard::OnVehicleArrived(FServiceVehicle& Vehicle, const FRoadAgent& Age
 			// model would ever remove it (UGroundTraffic::RetireAgent exists for exactly this). The
 			// VEHICLE stays - Idle once its refill is done.
 			UE_LOG(LogAirportOps, Log, TEXT("Fuel: truck %d home at depot %d; retired"), Vehicle.AgentId, Vehicle.Home.Index);
-			Traffic.RetireAgent(Vehicle.AgentId);
-			Vehicle.AgentId = 0;
+			RetireAgentOf(Vehicle, Traffic);
 			BeginFacility(Vehicle, Network, Clock);
 			return;
 		}
@@ -840,7 +856,7 @@ void UJobBoard::OnVehicleArrived(FServiceVehicle& Vehicle, const FRoadAgent& Age
 	{
 		// AT THE WRONG SERVICE POINT - it was sent on while on its last leg to another, and finished that
 		// leg. On from here, parked, exactly as the recall's own last-leg case goes home.
-		Vehicle.CurrentJob = 0;
+		Lifecycle(Vehicle).ReleaseCurrentJob();
 		if (Job != nullptr)
 		{
 			Vehicle.Queue.Insert(Job->Id, 0);
@@ -862,9 +878,7 @@ void UJobBoard::OnVehicleArrived(FServiceVehicle& Vehicle, const FRoadAgent& Age
 	Job->TripStartedAt = Clock.Now();
 	Job->TripEndsAt = Clock.Now() + Seconds;
 	Job->TankLitres = FFuelRolePolicy::CapacityOf(Type);
-	Vehicle.State = EServiceVehicleState::Serving;
-	Vehicle.StepStartedAt = Job->TripStartedAt;
-	Vehicle.StepEndsAt = Job->TripEndsAt;
+	Lifecycle(Vehicle).BeginServe(Job->TripEndsAt);
 	UE_LOG(LogAirportOps, Log,
 		TEXT("Fuel: truck %d at stand %d for aircraft %d: %.0f L of %.0f L (trip %d), %.1f game min"),
 		Vehicle.AgentId, Job->Stand.Index, Job->AircraftId, Quantity, Job->QuantityOwed + Job->QuantityDelivered,
@@ -942,7 +956,9 @@ void UJobBoard::DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& T
 			Vehicle->Queue.Remove(JobId);
 			if (Vehicle->CurrentJob == JobId)
 			{
-				Vehicle->CurrentJob = 0;
+				// DECIDING until the StartNext below settles it - the jobs are removed first, so the vehicle's
+				// next job is chosen from what is left.
+				Lifecycle(*Vehicle).ReleaseCurrentJob();
 				Recalled.Add(Vehicle->Id);
 			}
 		}
@@ -953,7 +969,6 @@ void UJobBoard::DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& T
 	{
 		if (FServiceVehicle* Vehicle = FindVehicleMutable(VehicleId))
 		{
-			++FleetRevision;
 			StartNext(*Vehicle, Traffic, Network, Clock);
 		}
 	}
@@ -998,6 +1013,26 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 		return;
 	}
 
+	// A VEHICLE'S AGENT GONE - retired by somebody else (the player's despawn through another door, a cleared
+	// traffic model), so it will never arrive and never drive again. The vehicle is not lost with it: it is Idle at
+	// home, and EVERY job it held - the one it was on and its whole queue - goes back to the board for a bid, the same
+	// body as the player's Unstick (LoseAgent; RecallVehicleOfAgent is its explicit form). This used to be dropped by
+	// the `To != Parked` return below and found a Step later by a poll that re-opened only the current job.
+	// THE BOARD'S OWN RETIREMENTS FIND NOTHING HERE: they unhook the vehicle before retiring (RetireAgentOf), so by the
+	// time this fires - inside the call in a fixture, a drain later in production - no vehicle has that agent.
+	// ENFORCED BY: AirportOps.Fuel.Lifecycle.AgentRetiredElsewhereRebidsWholeQueue, AirportOps.Fuel.DepotGoneBeforeRecallLeavesNoAgent
+	if (To == EAgentPhase::Gone)
+	{
+		if (const FServiceVehicle* Found = VehicleForAgent(AgentId))
+		{
+			FServiceVehicle& Vehicle = *FindVehicleMutable(Found->Id);
+			const int32 Released = LoseAgent(Vehicle);
+			UE_LOG(LogAirportOps, Warning, TEXT("Fuel: vehicle %d lost its agent %d (Gone); %d job(s) back to the board, Idle at depot %d"),
+				Vehicle.Id, AgentId, Released, Vehicle.Home.Index);
+		}
+		return;
+	}
+
 	// A VEHICLE STRANDED - the road under it went (#399's follow-up). It will never arrive, so its jobs
 	// would sit assigned to it for the session and no other vehicle would bid. They go back to the board
 	// now. THE VEHICLE STAYS WHERE IT IS, for the player's Unstick: nothing automatic moves a stranded
@@ -1011,8 +1046,7 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 		{
 			FServiceVehicle& Vehicle = *FindVehicleMutable(Found->Id);
 			const int32 Released = ReleaseJobsOf(Vehicle);
-			Vehicle.State = EServiceVehicleState::ToFacility;
-			++FleetRevision;
+			Lifecycle(Vehicle).HeadHome();
 			UE_LOG(LogAirportOps, Warning, TEXT("Fuel: vehicle %d (agent %d) stranded; %d job(s) back to the board, it waits for the player"),
 				Vehicle.Id, AgentId, Released);
 		}
@@ -1115,9 +1149,7 @@ double UJobBoard::NextDeadline(double Now) const
 	double Next = TNumericLimits<double>::Max();
 	for (const FServiceVehicle& Vehicle : Vehicles)
 	{
-		const bool bTimed = (Vehicle.State == EServiceVehicleState::Serving && Vehicle.CurrentJob != 0)
-			|| Vehicle.State == EServiceVehicleState::AtFacility;
-		if (bTimed && Vehicle.StepEndsAt > Now)
+		if (FServiceVehicleLifecycle::IsTimed(Vehicle) && Vehicle.StepEndsAt > Now)
 		{
 			Next = FMath::Min(Next, Vehicle.StepEndsAt);
 		}
@@ -1140,15 +1172,15 @@ bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 	SyncFleet(Traffic, Network, Clock);
 
 	// TIMED STEPS THAT ARE DUE: a trip's pumping, a refill. GAME TIME - a pause stops both. The vehicle
-	// is left parked and jobless, and decides where next below, AFTER the bids: a trip's remainder is
+	// is left parked and jobless - Deciding - and decides where next below, AFTER the bids: a trip's remainder is
 	// bid first, so the vehicle that just pumped can win it back and price its own refill.
-	TArray<int32> Deciding;
+	TArray<int32> ToDecide;
 	for (FServiceVehicle& Vehicle : Vehicles)
 	{
-		if (Vehicle.State == EServiceVehicleState::Serving && Vehicle.CurrentJob != 0 && Clock.Now() >= Vehicle.StepEndsAt)
+		if (Vehicle.State == EServiceVehicleState::Serving && Clock.Now() >= Vehicle.StepEndsAt)
 		{
 			FinishServe(Vehicle, Clock);
-			Deciding.Add(Vehicle.Id);
+			ToDecide.Add(Vehicle.Id);
 		}
 		else if (Vehicle.State == EServiceVehicleState::AtFacility && Clock.Now() >= Vehicle.StepEndsAt)
 		{
@@ -1158,22 +1190,19 @@ bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 				Vehicle.Cargo = Policy->CargoAfterFacility(Vehicle.Cargo, TypeFor(Vehicle.TypeCode));
 			}
 			UE_LOG(LogAirportOps, Log, TEXT("Fuel: vehicle %d refilled at depot %d"), Vehicle.Id, Vehicle.Home.Index);
-			Vehicle.State = EServiceVehicleState::Idle;
-			++FleetRevision;
-			Deciding.Add(Vehicle.Id);
+			Lifecycle(Vehicle).BecomeIdle();
+			ToDecide.Add(Vehicle.Id);
 		}
 		else if (Vehicle.State == EServiceVehicleState::Idle && Vehicle.Queue.Num() > 0)
 		{
 			// A DISPATCH REFUSED LAST TICK, or a job queued while it sat at home: a free retry.
-			Deciding.Add(Vehicle.Id);
+			ToDecide.Add(Vehicle.Id);
 		}
-		else if (Vehicle.State == EServiceVehicleState::Serving && Vehicle.CurrentJob == 0)
-		{
-			// PARKED AT A STAND WITH NOTHING TO DO - a decision that did not land (a prerequisite still
-			// open, or a drive refused). Asked again every tick until it does: the backstop for the
-			// wedge final review #1 found, whatever the next path to it is.
-			Deciding.Add(Vehicle.Id);
-		}
+		// NO BRANCH FOR "SERVING WITH NO JOB": it was the backstop for the wedge final review #1 found - parked at a
+		// stand with a decision that did not land, asked again every tick until it did, which kept this whole pass
+		// running every frame. The state no longer exists (EndServe leaves the vehicle Deciding and StartNext always
+		// settles it), and the ensure below says so if a path to it comes back.
+		// ENFORCED BY: AirportOps.Fuel.Lifecycle.BlockedHeadJobNeverLeavesItServingWithNoJob
 	}
 
 	AssignOpenJobs(Traffic, Network, Clock);
@@ -1187,10 +1216,10 @@ bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 	{
 		if (Vehicle.State == EServiceVehicleState::Idle && Vehicle.Queue.Num() > 0)
 		{
-			Deciding.AddUnique(Vehicle.Id);
+			ToDecide.AddUnique(Vehicle.Id);
 		}
 	}
-	for (const int32 VehicleId : Deciding)
+	for (const int32 VehicleId : ToDecide)
 	{
 		// RE-FOUND EACH TIME: a StartNext can dispatch, the dispatch broadcasts, and the broadcast may
 		// re-enter this class and grow the vehicle array.
@@ -1199,7 +1228,6 @@ bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 			StartNext(*Vehicle, Traffic, Network, Clock);
 		}
 	}
-
 	// THE PLAYER MAY HAVE DRAWN THE ROAD. A refused job is re-offered only when the graph has actually
 	// changed SINCE THIS JOB'S OWN REFUSAL, which its own RefusedAtRevision reports without walking the
 	// graph - otherwise a job nothing can serve is retried thirty times a second, logging as it goes.
@@ -1217,6 +1245,18 @@ bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 
 	DepartTheReady(Traffic, Network, Clock);
 
+	// A DECISION ALWAYS LANDS: no vehicle finishes a Step Deciding. Walked last, after DepartTheReady, because a
+	// departure's phase change can recall a vehicle out for that aircraft (DropAircraft). The fleet is a handful per depot
+	// (Trucks x the vehicle types), so the walk is cheap. A vehicle that does finish Deciding is a path to the old wedge -
+	// said, not polled: the ensure names it in the log the moment it is made, where the backstop hid it behind a board
+	// pass that ran every frame.
+	// ENFORCED BY: AirportOps.Fuel.Lifecycle.BlockedHeadJobNeverLeavesItServingWithNoJob (FFuelFixture's per-Step check)
+	for (const FServiceVehicle& Vehicle : Vehicles)
+	{
+		ensureAlwaysMsgf(Vehicle.State != EServiceVehicleState::Deciding,
+			TEXT("Vehicle %d ends a Step Deciding - a decision that never landed"), Vehicle.Id);
+	}
+
 	// WHAT IS STILL UNRESOLVED - see the header. Each of these used to be retried simply because Tick ran
 	// every frame; now it is retried because it said so, and nothing else is.
 	const double Now = Clock.Now();
@@ -1225,11 +1265,8 @@ bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 			// A STEP DUE ALREADY - set this Step, after the due loop above ran (BeginFacility with nothing
 			// to refill books StepEndsAt = Now): NextDeadline looks strictly AFTER Now, so without this it
 			// would be neither handled nor scheduled (stage 3 review #1).
-			const bool bTimedAndDue = ((Vehicle.State == EServiceVehicleState::Serving && Vehicle.CurrentJob != 0)
-				|| Vehicle.State == EServiceVehicleState::AtFacility) && Vehicle.StepEndsAt <= Now;
-			return bTimedAndDue
-				|| (Vehicle.State == EServiceVehicleState::Idle && Vehicle.Queue.Num() > 0)
-				|| (Vehicle.State == EServiceVehicleState::Serving && Vehicle.CurrentJob == 0);
+			const bool bTimedAndDue = FServiceVehicleLifecycle::IsTimed(Vehicle) && Vehicle.StepEndsAt <= Now;
+			return bTimedAndDue || (Vehicle.State == EServiceVehicleState::Idle && Vehicle.Queue.Num() > 0);
 		});
 	const bool bJobOpen = Jobs.ContainsByPredicate([](const FServiceJob& Job) { return Job.State == EServiceJobState::Open; });
 	// NO "DEPARTURE WAITING" (ops push-ground-freed, 2026-09-30). A due turnaround nothing is serving, refused by
@@ -1343,6 +1380,7 @@ FString UJobBoard::VehicleDoing(const FServiceVehicle& Vehicle) const
 	case EServiceVehicleState::Serving:    return FString::Printf(TEXT("fuelling at stand %d"), Stand);
 	case EServiceVehicleState::ToFacility: return FString::Printf(TEXT("to depot %d"), Vehicle.Home.Index);
 	case EServiceVehicleState::AtFacility: return FString::Printf(TEXT("refilling at depot %d"), Vehicle.Home.Index);
+	case EServiceVehicleState::Deciding:   return FString(TEXT("deciding where next"));
 	default:                               return FString::Printf(TEXT("at depot %d"), Vehicle.Home.Index);
 	}
 }

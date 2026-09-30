@@ -347,8 +347,19 @@ ServiceBid::FResult UJobBoard::BidFor(const FServiceVehicle& Vehicle, const FSer
 			In.FreeAt = FMath::Max(Current->TripEndsAt, Now);
 			In.CargoWhenFree = Policy->CargoAfterServe(Vehicle.Cargo, Current->TripQuantity);
 		}
-		// PARKED AT A STAND whether or not the trip is still running: a vehicle whose serve just ended
-		// is still there, deciding where next.
+		// PARKED AT A STAND whether or not the trip is still running.
+		if (Agent != nullptr)
+		{
+			In.NodeWhenFree = NodeIndex(Agent->GoalNode);
+		}
+		break;
+	case EServiceVehicleState::Deciding:
+		// A VEHICLE WHOSE SERVE JUST ENDED (or whose job was taken from under it) is still where it stands,
+		// deciding where next: free NOW, with the cargo it has, at the node its agent is parked on. Priced as
+		// ToFacility it would be "home and refilled first", and the vehicle that just pumped could never win its own
+		// remainder back at the price StartNext will actually give it. This is what the illegal "Serving with no
+		// job" was priced as by falling through the Serving case with no Current - and the state that replaces it.
+		// ENFORCED BY: AirportOps.Fuel.ChainsStandToStandWithoutTheDepot, AirportOps.Fuel.ShortTankGoesViaTheDepot
 		if (Agent != nullptr)
 		{
 			In.NodeWhenFree = NodeIndex(Agent->GoalNode);

@@ -138,6 +138,8 @@
       31. The ops event bus is subscribed to only in OpsRuntime.cpp (UOpsRuntime::WireBus) - see the
           rule's own comment.
       32. A facade commit's affordability refusal is announced (AffordOrRefuse) - see the rule.
+      38. A service vehicle's State, AgentId and CurrentJob are written only by FServiceVehicleLifecycle
+          (issue #428) - see the rule.
 
     Rule 4 above is now a data table (issue #255) rather than one hard-coded Piper check,
     so "the only caller of X is Y" claims live as ROWS an author can add to, instead of prose
@@ -1790,6 +1792,55 @@ foreach ($allowed in $persistentRefAllowed) {
     }
 }
 $ranRules.Add('persistent-refs-transient')
+
+# --- 38. A SERVICE VEHICLE'S STATE, AGENT AND JOB ARE WRITTEN ONLY BY ITS LIFECYCLE -------------
+# Issue #428: FServiceVehicle was a passive USTRUCT whose State, AgentId and CurrentJob were assigned by whichever board
+# function happened to be running - fifteen `State =` writes, nine `AgentId =` writes, "leave the road" spelled six ways -
+# and the enum's contract (which states have an agent, which have a job) was checked nowhere, so "Serving with no job"
+# shipped and lived on behind a per-Step backstop. FServiceVehicleLifecycle (Private/Model/ServiceVehicleLifecycle.cpp)
+# is now the one writer of the three fields, and asserts the invariant on each transition; this is what keeps it so.
+# A hit is a `.State = EServiceVehicleState::...` anywhere, or an `AgentId =` / `CurrentJob =` write in a file that
+# names FServiceVehicle or EServiceVehicleState (AgentId is also a FFlight/claim field elsewhere - a file that never
+# mentions a vehicle is not scanned for it), outside the lifecycle file. Comments and string literals are stripped first
+# (rule 34's helper). Test files are exempt: a test stages a vehicle where no transition reaches, to see what the board
+# does with it (FServiceVehicleLifecycle::SeedStateForTest is the one blessed way, and a test's own poke is allowed).
+# The rule fails, rather than checking nothing, when the lifecycle file is gone or its writes no longer match the
+# patterns.
+$lifecycleFile = Join-Path $ops 'Private\Model\ServiceVehicleLifecycle.cpp'
+$lifecycleWrites = 0
+$vehicleStateWrite = '(?:\.|->)State\s*=\s*EServiceVehicleState::'
+$vehicleFieldWrite = '(?:\.|->)(?:AgentId|CurrentJob)\s*=(?!=)'
+if (-not (Test-Path $lifecycleFile)) {
+    $failures.Add("vehicle-lifecycle-one-writer: $lifecycleFile not found - update rule 38, do not let it check nothing")
+} else {
+    foreach ($line in (Get-Content -LiteralPath $lifecycleFile)) {
+        if ($line -match $vehicleFieldWrite -or $line -match '\bVehicle\.State\s*=') { $lifecycleWrites++ }
+    }
+    if ($lifecycleWrites -eq 0) {
+        $failures.Add("vehicle-lifecycle-one-writer: no State/AgentId/CurrentJob write found in $lifecycleFile - the rule's patterns no longer match; update rule 38")
+    }
+}
+$lifecycleTrees = @($ops, (Join-Path $Root 'Source\AirportMgr'))
+foreach ($lifecycleTree in $lifecycleTrees) {
+    foreach ($file in Get-Sources $lifecycleTree @('.cpp', '.h')) {
+        if ($file.Name -like '*Test.cpp' -or $file.Name -like '*Test.h' -or $file.Name -eq 'ServiceVehicleLifecycle.cpp') { continue }
+        if ($file.FullName -match '[\\/]Testing[\\/]') { continue }
+        $lines = Get-Content -LiteralPath $file.FullName
+        $namesVehicle = $null -ne ($lines | Select-String -Pattern '\bFServiceVehicle\b|\bEServiceVehicleState\b' | Select-Object -First 1)
+        $inBlock = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            if ($code.Trim() -eq '') { continue }
+            if ($code -match $vehicleStateWrite) {
+                $failures.Add("vehicle-lifecycle-one-writer: $($file.Name):$($i + 1) writes a vehicle's State by hand - go through FServiceVehicleLifecycle (UJobBoard::Lifecycle), which asserts the (State, AgentId, CurrentJob) invariant")
+            }
+            elseif ($namesVehicle -and $code -match $vehicleFieldWrite) {
+                $failures.Add("vehicle-lifecycle-one-writer: $($file.Name):$($i + 1) writes a vehicle's AgentId/CurrentJob by hand - go through FServiceVehicleLifecycle (UJobBoard::Lifecycle), which asserts the (State, AgentId, CurrentJob) invariant")
+            }
+        }
+    }
+}
+$ranRules.Add('vehicle-lifecycle-one-writer')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
