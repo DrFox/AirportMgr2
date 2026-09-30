@@ -20,6 +20,7 @@
 #include "Present/OpsRuntime.h"
 #include "Present/PlotPresenter.h"
 #include "Present/RoadEditFacade.h"
+#include "Present/RoadEditHistory.h"
 #include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
@@ -384,6 +385,54 @@ bool FFacilityMemoInvalidatesTest::RunTest(const FString&)
 	const FFacilityQuote Q = Runtime->QuoteFacility(NarrowId);
 	TestTrue(TEXT("the narrow plot's ceiling is solved afresh"), Runtime->ReservationSolvesForTest() > Solves);
 	TestTrue(TEXT("and it holds fewer sheds than the wide one"), Q.Modules.Num() == 1 && Q.Modules[0].Reserved < WideSheds);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityRollbackResolvesTest, "AirportOps.Present.Facility.RollbackResolvesTheCeiling",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilityRollbackResolvesTest::RunTest(const FString&)
+{
+	// AN IN-PLACE RESTORE KEEPS THE NETWORK OBJECT (issue #437, and #460's review): a rolled-back edit puts the
+	// old contents back into the SAME network, so a memo keyed on the pointer alone would keep quoting whatever
+	// was solved in the failed edit. Two wide depots; the second's plot is narrowed inside a scope (a stand-in
+	// for any edit that re-plots), quoted there - the memo now holds the NARROW ceiling - and the scope rolls back.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	UOpsRuntime* Runtime = nullptr;
+	const FEntityInstanceId First = FacilityWiredDepot(TestWorld, Runtime);
+	if (!TestTrue(TEXT("setup: the first depot is placed"), First.IsSet())) { return false; }
+	TArray<FVector2D> Second = FacilityWiredWidePlot();
+	for (FVector2D& Corner : Second) { Corner.Y += 20000.0; }
+	const int32 SecondIndex = Actor->PlaceEntityInPlot(Second, Second[0], Second[1],
+		{ EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump }, EPlaceableEntity::FuelDepot);
+	if (!TestTrue(TEXT("setup: the second depot is placed"), SecondIndex != INDEX_NONE)) { return false; }
+	const FEntityInstanceId Depot = Actor->Network->EntityIdAt(SecondIndex);
+
+	const int32 WideSheds = Runtime->QuoteFacility(First).Modules[0].Reserved;
+	if (!TestTrue(TEXT("setup: a wide plot reserves a second shed"), WideSheds >= 2)) { return false; }
+
+	TArray<FVector2D> Narrow = Second;
+	Narrow[1].X = Second[0].X + 2000.0;
+	Narrow[2].X = Second[0].X + 2000.0;
+	int32 NarrowSheds = INDEX_NONE;
+	{
+		FRoadEditScope Edit(nullptr, Actor->Network, TEXT("re-plot"));
+		if (!TestTrue(TEXT("setup: the plot is narrowed inside the scope"),
+			FRoadNetworkTestAccess(*Actor->Network).SetEntityOutlineForTest(Depot, Narrow))) { return false; }
+		NarrowSheds = Runtime->QuoteFacility(Depot).Modules[0].Reserved;
+		TestTrue(TEXT("control: the narrow plot holds fewer sheds - the memo now holds THAT"), NarrowSheds < WideSheds);
+		const int32 Solves = Runtime->ReservationSolvesForTest();
+
+		URoadNetwork* const LiveBefore = Actor->Network;
+		TestTrue(TEXT("the scope rolls back"), Edit.Rollback());
+		TestTrue(TEXT("in place: the network object is the one the memo was filled against"), Actor->Network == LiveBefore);
+
+		const int32 After = Runtime->QuoteFacility(Depot).Modules[0].Reserved;
+		TestTrue(TEXT("the ceiling was solved afresh - a pointer-keyed memo would answer from the failed edit"),
+			Runtime->ReservationSolvesForTest() > Solves);
+		TestEqual(TEXT("and it is the restored (wide) plot's, not the narrowed one's"), After, WideSheds);
+	}
 	return true;
 }
 

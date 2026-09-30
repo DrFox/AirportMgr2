@@ -188,10 +188,15 @@ int32 UOpsRuntime::ReservedSlotsOf(FEntityInstanceId Id, const FEntityInstance& 
 	{
 		return 0;
 	}
-	if (ReservationMemoNetwork.Get() != Target->Network)
+	// THE POINTER AND THE REVISION, not the pointer alone: an in-place restore (a rolled-back edit) keeps
+	// the network object and changes what is in it, and only the revision - which RestoreFrom moves forward -
+	// says so. See ReservedSlotsOf's header.
+	const uint32 Revision = Target->Network != nullptr ? Target->Network->GetEditRevision() : 0;
+	if (ReservationMemoNetwork.Get() != Target->Network || ReservationMemoRevision != Revision)
 	{
 		ReservationMemo.Reset();
 		ReservationMemoNetwork = Target->Network;
+		ReservationMemoRevision = Revision;
 	}
 	TArray<int32>* Ceilings = ReservationMemo.Find(Id);
 	if (Ceilings == nullptr)

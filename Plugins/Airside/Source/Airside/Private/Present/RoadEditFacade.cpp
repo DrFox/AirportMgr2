@@ -1662,9 +1662,19 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 			// URoadEditHistory::RollbackEdit. RollBackOpenEdit (issue #437) is the same "put the
 			// network back and catch the ghost up" door ApplyInteractiveMutation's own
 			// Verify-failure branch uses, through AdoptNetwork (#299)'s tail.
-			RollBackOpenEdit(History);
-			UE_LOG(LogRoadMesh, Log,
-				TEXT("Drag reverted: cannot afford the %.0f of pavement it added"), Delta.BaseAmount());
+			if (RollBackOpenEdit(History))
+			{
+				UE_LOG(LogRoadMesh, Log,
+					TEXT("Drag reverted: cannot afford the %.0f of pavement it added"), Delta.BaseAmount());
+			}
+			else
+			{
+				// A line that must not read as a revert when nothing was reverted: the pavement stays,
+				// unpaid for, and the log is where that has to show.
+				UE_LOG(LogRoadMesh, Error,
+					TEXT("Drag could NOT be reverted (nothing to roll back to): it added %.0f of pavement the "
+						 "player cannot afford, and it stays"), Delta.BaseAmount());
+			}
 			return;
 		}
 

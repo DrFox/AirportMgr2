@@ -255,15 +255,23 @@ private:
 
 	/**
 	 * UFacilityPurchases::ReservedSlotsOf's production answer: DepotKit::ReservationOf's ceiling over the
-	 * actor's one kit table, MEMOISED per (network object, depot) - the inspector re-quotes every tick and
-	 * the ceiling is a plot solve. Modules do not change what a plot holds, and no mutator moves or re-plots
-	 * a live depot today (2026-09-30), so the only invalidations are a different network (clear, load, undo
-	 * replace the object) and Detach. A FUTURE depot move / re-plot mutator must drop that depot's entry
-	 * here, or the card keeps quoting the old plot's ceiling.
-	 * ENFORCED BY: AirportOps.Present.Facility.QuoteSolvesOncePerDepot, AirportOps.Present.Facility.NewNetworkResolvesTheCeiling
+	 * actor's one kit table, MEMOISED per (network object, EditRevision, depot) - the inspector re-quotes every
+	 * tick and the ceiling is a plot solve. Modules do not change what a plot holds, and no mutator moves or
+	 * re-plots a live depot today (2026-09-30), so the invalidations are: a different network object (clear,
+	 * undo replace it); a moved URoadNetwork::GetEditRevision - a road edit, and EVERY IN-PLACE RESTORE
+	 * (a rolled-back edit through RestoreFrom, #437; a load through Serialize, #426), which keep the
+	 * pointer and move the revision forward, so a key of the pointer alone would keep quoting the plot
+	 * the restore took away; and
+	 * Detach. A module purchase moves none of them: it is an entity edit, and EditRevision is scoped to
+	 * nodes and segments. A FUTURE depot move / re-plot mutator must drop that depot's entry here, or the
+	 * card keeps quoting the old plot's ceiling.
+	 * ENFORCED BY: AirportOps.Present.Facility.QuoteSolvesOncePerDepot, AirportOps.Present.Facility.NewNetworkResolvesTheCeiling,
+	 * AirportOps.Present.Facility.RollbackResolvesTheCeiling
 	 */
 	int32 ReservedSlotsOf(FEntityInstanceId Id, const FEntityInstance& Depot, EDepotModule Module);
 	TWeakObjectPtr<const URoadNetwork> ReservationMemoNetwork;
+	/** URoadNetwork::GetEditRevision when the memo was filled - see ReservedSlotsOf. */
+	uint32 ReservationMemoRevision = 0;
 	TMap<FEntityInstanceId, TArray<int32>> ReservationMemo;
 	int32 ReservationSolves = 0;
 

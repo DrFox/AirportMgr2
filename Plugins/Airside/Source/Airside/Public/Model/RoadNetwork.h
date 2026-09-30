@@ -207,17 +207,25 @@ public:
 	 * IN PLACE, NOT A SWAPPED-IN COPY, for three reasons. The network object is what the level
 	 * saves and what the editor's transaction Modify()s at the start of a drag: a replacement
 	 * would sit outside both, and the transaction would record a change to an object nothing
-	 * points at. Identity caches keyed on `&Network` stay meaningful. And a pointer held across
-	 * the edit is not silently orphaned.
+	 * points at. And a pointer held across the edit is not silently orphaned. THE COST OF IN
+	 * PLACE: the address does not change, so a cache keyed on `&Network` ALONE cannot see a
+	 * restore - it must pair the pointer with a revision, which this moves forward
+	 * (the ops layer's depot-reservation memo was keyed on the pointer alone until it was keyed
+	 * on EditRevision too).
+	 * ENFORCED BY: AirportOps.Present.Facility.RollbackResolvesTheCeiling,
+	 * Airside.Model.RestoreFromMovesClocksForward
 	 *
 	 * THE CLOCKS MOVE FORWARD, never back to Snapshot's. A snapshot is a DuplicateObject clone, so
 	 * its non-UPROPERTY clocks read zero, and a cache that stamped itself at revision R while the
 	 * failed edit was applied must not find R again after the restore (issue #318's "revision
 	 * clocks restart at zero on every undo", closed for this path). EditRevision and
 	 * GuidelineRevision become one past the highest value either side ever showed.
-	 * GuidelinesDerivedAt is stamped current: the restored guideline graph and the restored roads
-	 * are a consistent pair - they were copied together - so AreGuidelinesBehindRoad reads false,
-	 * and the caller's Topology notify re-derives regardless.
+	 * GuidelinesDerivedAt is stamped current IF THIS NETWORK HAD EVER BEEN DERIVED: the restored
+	 * guideline graph and the restored roads are a consistent pair - they were copied together -
+	 * so AreGuidelinesBehindRoad reads false, and the caller's Topology notify re-derives
+	 * regardless. A network never derived stays MAX_uint32 - a hand-authored graph has no road
+	 * to be behind, and stamping it would make the planners refuse it after its next edit.
+	 * ENFORCED BY: Airside.Model.RestoreFromMovesClocksForward (a derived and a never-derived subject)
 	 *
 	 * Built on CopyFrom, so it is exactly as complete as that is - see its own comment.
 	 */

@@ -1,5 +1,6 @@
 #include "Present/RoadEditHistory.h"
 
+#include "AirsideLog.h"
 #include "Model/RoadNetwork.h"
 
 void URoadEditHistory::BeginEdit(const URoadNetwork& Network, const FString& Label)
@@ -179,6 +180,7 @@ void URoadEditHistory::Clear()
 FRoadEditScope::FRoadEditScope(URoadEditHistory* InHistory, URoadNetwork* InNetwork, const TCHAR* InLabel)
 	: History(InHistory)
 	, Network(InNetwork)
+	, Label(InLabel)
 {
 	if (Network == nullptr)
 	{
@@ -194,9 +196,12 @@ FRoadEditScope::FRoadEditScope(URoadEditHistory* InHistory, URoadNetwork* InNetw
 	{
 		// THE EDITOR WORLD (or any caller with no history): undo is the transaction system's, but
 		// rollback is nobody's unless the scope holds its own way back. Costs one copy of the
-		// network per edit - the same order as a game world's undo snapshot, and nothing edits
-		// per frame through here (a drag goes through ApplyInteractiveMutation, which is given
-		// its point once per drag).
+		// network per edit - the same order as a game world's undo snapshot. That copy is NOT
+		// free: 1000 nodes copy in ~4 ms and 3000 in ~11 ms (Development editor build,
+		// 2026-09-30), a quarter of a 60 Hz frame at 1000 - which is why nothing edits per frame
+		// through a scope, and a drag (ApplyInteractiveMutation) is given ONE point per drag by
+		// BeginInteractiveEdit instead of taking one per frame.
+		// ENFORCED BY: Airside.Present.EditorDragTakesOneSnapshot (K drag frames, one copy)
 		LocalSnapshot = TStrongObjectPtr<URoadNetwork>(SnapshotForRollback(*Network));
 	}
 }
@@ -229,23 +234,39 @@ bool FRoadEditScope::Rollback()
 	{
 		if (!bBegan)
 		{
+			UE_LOG(LogRoadMesh, Error,
+				TEXT("Rollback of '%s' refused: its edit has already ended (rolled back, or never began) - "
+					 "whatever the caller wrote stays"), *Label);
 			return false;
 		}
 		// THE HISTORY'S PENDING SNAPSHOT IS THE WAY BACK, and RollbackEdit ends the edit with it -
 		// so bBegan drops first, and the destructor neither commits nor abandons a second time.
 		bBegan = false;
-		return History->RollbackEdit(*Network);
+		if (!History->RollbackEdit(*Network))
+		{
+			UE_LOG(LogRoadMesh, Error,
+				TEXT("Rollback of '%s' failed: the history has no pending snapshot to restore from - "
+					 "whatever the caller wrote stays"), *Label);
+			return false;
+		}
+		return true;
 	}
 
 	if (!LocalSnapshot.IsValid())
 	{
+		UE_LOG(LogRoadMesh, Error,
+			TEXT("Rollback of '%s' failed: the scope holds no snapshot to restore from - "
+				 "whatever the caller wrote stays"), *Label);
 		return false;
 	}
 	Network->RestoreFrom(*LocalSnapshot);
 	return true;
 }
 
+int32 FRoadEditScope::SnapshotsTaken = 0;
+
 URoadNetwork* FRoadEditScope::SnapshotForRollback(const URoadNetwork& Net)
 {
+	++SnapshotsTaken;
 	return DuplicateObject<URoadNetwork>(&Net, GetTransientPackage());
 }

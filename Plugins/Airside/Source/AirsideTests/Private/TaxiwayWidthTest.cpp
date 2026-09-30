@@ -406,8 +406,9 @@ namespace
 			*FString::Join(Differing, TEXT(", "))), Differing.Num(), 0);
 		T.TestEqual(TEXT("no undo step was pushed"), Actor->History != nullptr ? Actor->History->UndoDepth() : 0, DepthBefore);
 		T.TestEqual(TEXT("and nothing was charged"), Purse.Charges.Num(), ChargesBefore);
-		T.TestEqual(TEXT("GetEditEpoch did not move: a plain scope's rollback notifies nothing, because nothing "
-			"outside it ever saw the failed edit - the revision clocks RestoreFrom moved forward cover what did"),
+		T.TestEqual(TEXT("GetEditEpoch did not move: a plain scope's rollback sends no facade notify, so nothing "
+			"memoised against the epoch saw the failed edit - the revision clocks RestoreFrom moved forward are "
+			"the part a polled reader sees"),
 			Actor->GetEditEpoch(), EpochBefore);
 		return true;
 	}
