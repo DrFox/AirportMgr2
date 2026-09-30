@@ -297,9 +297,10 @@ public:
 	UStandDefinitionCache* GetStandDefinitions() const { return StandDefinitions; }
 
 	/**
-	 * Multiplier applied to every Tick's DeltaSeconds before it reaches Traffic. Set each
-	 * frame by AirportOps from the sim clock's SPEED (x0..x8), never from its day
-	 * compression - see USimClock's class comment for why the two are different numbers.
+	 * Multiplier applied to every Tick's DeltaSeconds before it reaches Traffic. Set by
+	 * AirportOps from the sim clock's SPEED (x0..x8) WHEN THE SPEED CHANGES - attach, a speed or
+	 * pause change, a load (ops batch 3 PR E; it was set every frame to the same double) - never
+	 * from its day compression: see USimClock's class comment for why the two are different numbers.
 	 * Transient and runtime-only: it is a fact about the current session's speed setting,
 	 * not about the level, so it must not be saved into the map or a game save.
 	 */

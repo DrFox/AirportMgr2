@@ -454,6 +454,9 @@ public:
 	 */
 	int32 PendingOfferCount() const { return OfferedCount; }
 
+	/** How many times TickOffers has copied Flights to walk them - its early-out's counter. */
+	int32 OfferSnapshotCountForTest() const { return OfferSnapshots; }
+
 	/**
 	 * Copies this board's own ApproachFocus onto every flight it holds.
 	 *
@@ -552,6 +555,9 @@ private:
 	/** PendingOfferCount's O(1) answer. Maintained at every entry into and exit from the
 	 *  Offered phase; not a UPROPERTY, rebuilt in OnAfterRestore like the maps above. */
 	int32 OfferedCount = 0;
+
+	/** See OfferSnapshotCountForTest. A session counter, not saved. */
+	int32 OfferSnapshots = 0;
 
 	/** Release the hold and put it on final. False, flight still Inbound and stand re-held, if refused. */
 	bool DispatchNow(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight);

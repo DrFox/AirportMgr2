@@ -42,6 +42,7 @@ UJobBoard::UJobBoard()
 
 void UJobBoard::OnBeforeRestore()
 {
+	++RevisionCount;   // See Revision: every public mutator.
 	Jobs.Reset();
 	Turnarounds.Reset();
 	Vehicles.Reset();
@@ -53,6 +54,10 @@ void UJobBoard::OnBeforeRestore()
 void UJobBoard::Serialize(FArchive& Ar)
 {
 	Super::Serialize(Ar);
+	if (Ar.IsLoading())
+	{
+		++RevisionCount;   // See Revision: a restore is a change.
+	}
 	if (!Ar.IsLoading() || Vehicles.Num() == 0)
 	{
 		return;
@@ -104,6 +109,7 @@ const TCHAR* UJobBoard::RefusalText(EServiceRefusal Why)
 
 void UJobBoard::ResolveVehicles(TFunctionRef<FVehicle(EIcaoCode)> Resolve)
 {
+	++RevisionCount;   // See Revision: every public mutator.
 	for (int32 Index = 0; Index < LetterCount; ++Index)
 	{
 		VehiclesByLetter[Index] = Resolve(static_cast<EIcaoCode>(Index));
@@ -328,6 +334,7 @@ int32 UJobBoard::RefillingForTest() const
 
 FServiceVehicle& UJobBoard::AddVehicleForTest(FName TypeCode, FEntityInstanceId Home, EServiceVehicleState State, double Cargo)
 {
+	++RevisionCount;   // See Revision: every public mutator.
 	FServiceVehicle& Vehicle = Vehicles.AddDefaulted_GetRef();
 	Vehicle.Id = NextVehicleId++;
 	Vehicle.TypeCode = TypeCode;
@@ -424,6 +431,7 @@ FString UJobBoard::VehicleLine(const FServiceVehicle& Vehicle) const
 
 FServiceJob& UJobBoard::AddJobForTest(int32 AircraftId, EServiceJobState State, EServiceRefusal Why, uint32 RefusedAtRevision)
 {
+	++RevisionCount;   // See Revision: every public mutator.
 	FServiceJob& Job = Jobs.AddDefaulted_GetRef();
 	Job.Id = NextJobId++;
 	Job.AircraftId = AircraftId;
@@ -491,6 +499,7 @@ int32 UJobBoard::ReleaseJobsOf(FServiceVehicle& Vehicle)
 bool UJobBoard::RecallVehicleOfAgent(int32 AgentId, bool bRetire, UGroundTraffic& Traffic,
 	const URoadNetwork& Network, const USimClock& Clock)
 {
+	++RevisionCount;   // See Revision: every public mutator.
 	const FServiceVehicle* Found = AgentId != 0 ? VehicleForAgent(AgentId) : nullptr;
 	FServiceVehicle* Vehicle = Found != nullptr ? FindVehicleMutable(Found->Id) : nullptr;
 	if (Vehicle == nullptr)
@@ -941,6 +950,7 @@ void UJobBoard::DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& T
 void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Network,
 	const USimClock& Clock, int32 AgentId, EAgentPhase From, EAgentPhase To)
 {
+	++RevisionCount;   // See Revision: every public mutator.
 	// AN AIRCRAFT LEAVING ITS STAND, first: it departs, or is retired, or is deleted under the player's
 	// hand. Its turnaround and jobs go, and any vehicle out for it moves on - its next job, or home.
 	if (From == EAgentPhase::Parked && To != EAgentPhase::Parked && TurnaroundFor(AgentId) != nullptr)
@@ -1090,6 +1100,7 @@ double UJobBoard::NextDeadline(double Now) const
 bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
 {
 	++StepCount;
+	++RevisionCount;   // See Revision: every public mutator.
 	SyncFleet(Traffic, Network, Clock);
 
 	// TIMED STEPS THAT ARE DUE: a trip's pumping, a refill. GAME TIME - a pause stops both. The vehicle
@@ -1300,7 +1311,8 @@ FDepotBacklog UJobBoard::DescribeDepot(FEntityInstanceId Depot, double Now) cons
 {
 	const FString Dot = TEXT(" · ");
 	auto Litres = [](double L) { return FText::AsNumber(FMath::RoundToInt(L)).ToString() + TEXT(" L"); };
-	// WHOLE MINUTES, rounded: the card's text gate then redraws at most once a game minute.
+	// WHOLE MINUTES, rounded: with the inspector passing the minute's start as Now (see the header), its card
+	// redraws at most once a game minute.
 	auto Minutes = [](double Seconds) { return FMath::RoundToInt(FMath::Max(Seconds, 0.0) / 60.0); };
 
 	FDepotBacklog Out;
@@ -1358,6 +1370,13 @@ FDepotBacklog UJobBoard::DescribeDepot(FEntityInstanceId Depot, double Now) cons
 
 FString UJobBoard::DescribeAgent(int32 AgentId, double Now) const
 {
+	bool bMovesWithClock = false;
+	return DescribeAgent(AgentId, Now, bMovesWithClock);
+}
+
+FString UJobBoard::DescribeAgent(int32 AgentId, double Now, bool& bOutMovesWithClock) const
+{
+	bOutMovesWithClock = false;
 	if (const FServiceVehicle* Vehicle = VehicleForAgent(AgentId))
 	{
 		return DescribeVehicle(*Vehicle);
@@ -1395,6 +1414,9 @@ FString UJobBoard::DescribeAgent(int32 AgentId, double Now) const
 	double Left = Job->QuantityOwed;
 	if (Job->State == EServiceJobState::Serving && Job->TripEndsAt > Job->TripStartedAt)
 	{
+		// THE ONE ANSWER THAT MOVES WITH THE CLOCK - the three-argument overload's flag, which lets a caller keep
+		// every other answer until Revision moves.
+		bOutMovesWithClock = true;
 		const double Fraction = FMath::Clamp((Now - Job->TripStartedAt) / (Job->TripEndsAt - Job->TripStartedAt), 0.0, 1.0);
 		Left -= Job->TripQuantity * Fraction;
 	}
@@ -1415,6 +1437,7 @@ FString UJobBoard::DescribeAgent(int32 AgentId, double Now) const
 
 void UJobBoard::AddTurnaroundForTest(int32 AircraftId, double TurnaroundEndsAt, int32 JobId)
 {
+	++RevisionCount;   // See Revision: every public mutator.
 	FTurnaround& Turnaround = Turnarounds.AddDefaulted_GetRef();
 	Turnaround.AircraftId = AircraftId;
 	Turnaround.TurnaroundEndsAt = TurnaroundEndsAt;

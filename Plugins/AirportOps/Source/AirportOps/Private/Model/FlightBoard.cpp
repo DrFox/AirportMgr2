@@ -92,8 +92,17 @@ void UFlightBoard::TickOffers(const UGroundTraffic& Traffic, const URoadNetwork&
 		return;
 	}
 
+	// NO OFFERS, NOTHING TO DRAIN (ops batch 3 PR E): the walk below copied Flights every frame to find none. The count is
+	// the board's own, kept by AddOffer, every lapse and answer, and rebuilt from Flights with the indices on a load.
+	// ENFORCED BY: AirportOps.Model.FlightBoard.EmptyBoardCopiesNothing (an offer added still drains and lapses)
+	if (OfferedCount == 0)
+	{
+		return;
+	}
+
 	// SNAPSHOT: a lapse calls MoveToHistory, which removes from the array being walked.
 	const TArray<TObjectPtr<UFlight>> Snapshot = Flights;
+	++OfferSnapshots;   // See OfferSnapshotCountForTest.
 	for (const TObjectPtr<UFlight>& Each : Snapshot)
 	{
 		if (Each == nullptr || Each->Phase != EFlightPhase::Offered)

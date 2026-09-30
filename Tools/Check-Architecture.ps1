@@ -1516,6 +1516,40 @@ foreach ($queueTree in @((Join-Path $Root 'Plugins\AirportOps\Source\AirportOps'
 }
 $ranRules.Add('queue-is-a-pass')
 
+# --- 34. THE SIM TIME SCALE IS SET ON CHANGE ----------------------------------------------------
+# Ops batch 3 PR E (spec 2026-09-29-ops-batch3 §6): UOpsRuntime::Tick re-set the actor's time scale
+# every frame to the same double. It is now set only where the speed can change - Attach,
+# StepSpeed, TogglePause and LoadFromSlot all end in UOpsRuntime::ApplySpeed - and that is only
+# correct while NOTHING ELSE writes the scale: a second writer (a per-frame one back in Tick, or a
+# reset elsewhere) is either the poll returning or a scale the next speed change never hears of.
+# The one legal caller is UOpsRuntime::ApplySpeed; the setter's own definition and tests are
+# exempt. Same shape and function tracking as rule 33.
+$scaleTrees = @((Join-Path $Root 'Plugins\AirportOps\Source\AirportOps'), (Join-Path $Root 'Source\AirportMgr'),
+    (Join-Path $Root 'Plugins\Airside\Source\Airside'))
+$scaleOwner = Join-Path $Root 'Plugins\AirportOps\Source\AirportOps\Private\Present\OpsRuntime.cpp'
+if (-not (Test-Path $scaleOwner) -or $null -eq (Select-String -Path $scaleOwner -Pattern 'void UOpsRuntime::ApplySpeed\(')) {
+    $failures.Add("scale-on-change: UOpsRuntime::ApplySpeed not found in $scaleOwner - update rule 34, do not let it check nothing")
+}
+foreach ($scaleTree in $scaleTrees) {
+    foreach ($file in Get-Sources $scaleTree @('.cpp', '.h')) {
+        if ($file.Name -like '*Test.cpp') { continue }
+        $lines = Get-Content -LiteralPath $file.FullName
+        $current = ''
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $line = $lines[$i]
+            if ($line -match '^\s*(\*|/\*)') { continue }
+            $code = ($line -replace '//.*$', '')
+            if ($code -match '^[A-Za-z_][\w:<>,\*& ]*?\b((?:\w+::)?~?\w+)\s*\(') { $current = $Matches[1] }
+            $isDefinition = $code -match '\bvoid\s+SetSimTimeScale\s*\('
+            $isCall = (-not $isDefinition) -and ($code -match '\bSetSimTimeScale\s*\(' -or $code -match '&\s*\w+::SetSimTimeScale\b')
+            if ($isCall -and $current -ne 'UOpsRuntime::ApplySpeed') {
+                $failures.Add("scale-on-change: $($file.Name):$($i + 1) calls SetSimTimeScale( from $current - the actor's scale is set only by UOpsRuntime::ApplySpeed, where the speed changes")
+            }
+        }
+    }
+}
+$ranRules.Add('scale-on-change')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

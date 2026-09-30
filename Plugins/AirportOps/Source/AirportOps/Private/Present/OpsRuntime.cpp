@@ -983,9 +983,11 @@ void UOpsRuntime::Tick(double RealDeltaSeconds)
 
 	if (Target != nullptr)
 	{
-		// The MULTIPLIER, not TimeScale(): movement runs at the player's speed setting,
-		// never at the day compression. See USimClock's class comment.
-		Target->SetSimTimeScale(USimClock::Multiplier(Clock->GetSpeed()));
+		// NO SetSimTimeScale HERE since ops batch 3 PR E - it re-set the same double every frame. The actor's scale is
+		// set where the speed can change, all of which end in ApplySpeed: Attach (a new actor, whose Transient scale
+		// starts at 1), StepSpeed, TogglePause, LoadFromSlot (the clock's speed is saved). A network clear replaces the
+		// network, not the actor. Checked 2026-09-30: ApplySpeed is the only production caller of SetSimTimeScale.
+		// ENFORCED BY: AirportOps.Present.SimTimeScale.SetOnlyWhenItChanges; Check-Architecture rule 34 (scale-on-change)
 
 		// THE NETWORK IS READ FRESH, never cached: URoadEditFacade::ClearNetwork replaces the
 		// actor's network OBJECT rather than draining it, so a pointer held across a clear is
@@ -1023,6 +1025,9 @@ void UOpsRuntime::ApplySpeed(ESimSpeed Speed)
 	Clock->SetSpeed(Speed);
 	if (Target != nullptr)
 	{
+		// The MULTIPLIER, not TimeScale(): movement runs at the player's speed setting,
+		// never at the day compression. See USimClock's class comment.
+		++TimeScaleSets;
 		Target->SetSimTimeScale(USimClock::Multiplier(Speed));
 	}
 	Bus.Publish(FSpeedChangedEvent{ Speed });

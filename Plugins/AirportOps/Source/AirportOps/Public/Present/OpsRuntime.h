@@ -209,6 +209,10 @@ public:
 	/** How many plot solves ReservedSlotsOf has run - see its memo. */
 	int32 ReservationSolvesForTest() const { return ReservationSolves; }
 
+	/** How many times this runtime has set the actor's sim time scale - for the test that a quiet frame sets it
+	 *  no times (ops batch 3 PR E). Counted here, the one production caller, not on the actor. */
+	int32 TimeScaleSetsForTest() const { return TimeScaleSets; }
+
 	/** Whether the arrival queue's safety net (QueueSafetyHandle) is booked on the clock. */
 	bool IsQueueSafetyNetArmedForTest() const { return QueueSafetyHandle != INDEX_NONE; }
 
@@ -377,6 +381,9 @@ private:
 
 	/** See OfferTicksForTest. A session counter, not saved. */
 	int32 OfferTicks = 0;
+
+	/** See TimeScaleSetsForTest. A session counter, not saved. */
+	int32 TimeScaleSets = 0;
 
 	/** See GetAirlineOffers. Not a UPROPERTY: the airlines are the catalog's to hold. */
 	TArray<FAirlineOffers> AirlineOffers;
