@@ -6,6 +6,8 @@
 #include "Tools/UEdMode.h"
 #include "RoadBuildEdMode.generated.h"
 
+class SWidget;
+
 /**
  * Editor mode hosting the same build tools the runtime controller drives.
  *
@@ -112,6 +114,52 @@ public:
 	TSharedPtr<FUICommandList> ToolkitCommandsForTest() const;
 
 	/**
+	 * What the toolkit's palettes DRAW, palette by palette in GetToolPaletteNames order: each
+	 * palette run through FModeToolkit::BuildToolPalette - the engine's own consumer, which looks
+	 * GetModeCommands() up by the name GetToolPaletteNames gave it - into a real toolbar builder,
+	 * and the command behind every block read back off the result.
+	 *
+	 * NOT GetModeCommands() ITSELF (issue #440): that is the DECLARED list, and this mode has
+	 * shipped "declared, consumed by nobody" three times - a "Build" palette no toolkit asked for
+	 * (FModeToolkit::GetToolPaletteNames is empty by default) was the first. Needs CreateToolkit()
+	 * only: the toolkit is handed this mode as its owner at construction, which is what
+	 * BuildToolPalette reads (and what Init would have set, to the same mode, in a real Enter()).
+	 */
+	TArray<TPair<FName, TArray<TSharedPtr<const FUICommandInfo>>>> DrawnPalettesForTest() const;
+
+	/** FModeToolkit::GetInlineContent - what the mode panel shows under the palettes - once
+	 *  CreateToolkit() has run; null before. For the test that the variant rows are in it. */
+	TSharedPtr<SWidget> InlineContentForTest() const;
+
+	/**
+	 * The active tool's variant rows - a taxiway or road's Mode (Build / Upgrade), width and
+	 * surface, a runway's, a stand's pavement - exactly as FBuildSession::GetActiveVariantAxes
+	 * numbers them. What the mode panel's variant section draws, polled every tick the way PIE's
+	 * UBuildBarWidget::RefreshVariantsFor polls ARoadBuildController::GetActiveVariantAxes.
+	 *
+	 * ISSUE #440: the variant rows were PIE-only. FBuildSession's variant API had one production
+	 * caller, the controller, so in the editor Upgrade mode was unreachable (SelectVariant is the
+	 * only writer of FRoadDrawTool's Mode, and OnReselect never steps it) and a stand's pavement
+	 * was whatever a PIE session last wrote to the preferences ini.
+	 * ENFORCED BY: Check-Architecture rule 46 (session-api-both-drivers) - the editor must call every
+	 * FBuildSession mutator the controller calls, SelectActiveVariant included.
+	 *
+	 * THE TARGET AND NOTHING ELSE, found and never created - ARoadBuildController::
+	 * MakeVariantContext's reason (a variant answer reads the target's content lists only), and a
+	 * per-tick poll must not spawn an actor. No road network yet means no rows, not an error.
+	 */
+	void GetActiveVariantAxes(TArray<FToolVariantAxis>& Out) const;
+
+	/**
+	 * Picks Option on Axis for the active tool - the variant panel's click. Forwards to the
+	 * ACTIVE URoadBuildEditorTool's SelectVariant, the cast-and-forward ApplyVerb and
+	 * CancelActiveGesture already make, because a pick can touch the graph (a Mode switch ends a
+	 * part-drawn chain, which drops its stranded node) and the tool owns the transaction that
+	 * makes that undoable. False, changing nothing, when no build tool is active.
+	 */
+	bool SelectActiveVariant(int32 Axis, int32 Option);
+
+	/**
 	 * Substitutes for GetWorld()'s usual answer (EditorToolsContext->GetWorld()), which is
 	 * unconditionally null without Enter() and a real FEditorModeTools/viewport - see
 	 * GetWorld's own comment. Null in production; nothing here ever sets it, and
@@ -189,6 +237,25 @@ private:
 	/** BuildVerbRegistry()[VerbIndex].IsActive(Session) - what lights the palette's toggle
 	 *  button, the way MapReselectAwareToolCommand's own IsChecked lights a tool button. */
 	bool IsVerbActive(int32 VerbIndex) const;
+
+	/** BuildVerbRegistry()[VerbIndex].IsEnabled(Session) - greys the palette button (and refuses
+	 *  its key) exactly where PIE's bar greys the row and TryRun refuses it: Edit, while the lit
+	 *  tool exposes no handles (issue #440; the editor's toggle used to be always enabled). */
+	bool IsVerbEnabled(int32 VerbIndex) const;
+
+	/**
+	 * A Snap / Snap to palette button, or H (issue #440): applies SnapToggleRegistry()[Index] to
+	 * this level's airport - ARoadBuildController::ApplySnapToggle's twin, from the same table.
+	 *
+	 * A TRANSACTION, unlike PIE: GuideSources is a UPROPERTY on the level's ARoadNetworkActor, so
+	 * a switch is a level edit - Modify() is what makes Ctrl+Z reach it and the level save it, the
+	 * same as the Details panel's edit of the same field. Found, never created, like
+	 * GetActiveVariantAxes: a switch with no airport says so in the log and does nothing.
+	 */
+	void ApplySnapToggle(int32 Index);
+
+	/** Whether SnapToggleRegistry()[Index] is lit on this level's airport - the palette's check. */
+	bool IsSnapToggleOn(int32 Index) const;
 
 	/**
 	 * Starts the tool at this registry index - or, when it is already running, RESELECTS it.

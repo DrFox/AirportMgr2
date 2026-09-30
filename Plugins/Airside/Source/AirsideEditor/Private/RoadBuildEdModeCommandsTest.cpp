@@ -1,8 +1,10 @@
 #include "CoreMinimal.h"
 #include "InputCoreTypes.h"
 #include "Misc/AutomationTest.h"
+#include "RoadBuildEdMode.h"
 #include "RoadBuildEdModeCommands.h"
 #include "Tool/BuildSession.h"
+#include "Tool/SnapToggleRegistry.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -127,13 +129,103 @@ bool FRoadBuildEdModeVerbCommandsTest::RunTest(const FString& Parameters)
 			Command->GetLabel().ToString(), Registry[Index].Name.ToString());
 
 		// Remove/Insert are EKeys::Invalid - a HELD Ctrl/Shift, not a chord - so there is no
-		// key to compare there; only Edit (M) has one to check against drift.
+		// key to compare there; only Edit (M) has one to check against drift. NO KEY IS NOT NO
+		// WAY IN: whether a keyless command is DRAWN is EveryCommandIsReachable's question below -
+		// this test stopping here is how #304 closed with Remove/Insert still unreachable (#440).
 		if (Registry[Index].Key != EKeys::Invalid)
 		{
 			TestEqual(*FString::Printf(TEXT("verb %d is on the same key as at runtime"), Index),
 				Command->GetDefaultChord(EMultipleKeyBindingIndex::Primary).Key.GetFName(),
 				Registry[Index].Key.GetFName());
 		}
+	}
+
+	return true;
+}
+
+/**
+ * EVERY COMMAND IS REACHABLE: drawn as a button by the toolkit's own palette consumer, or bound to
+ * a default chord - issue #440's pin, and the one VerbCommandsMatchRegistry above never was. That
+ * test asserts the commands EXIST and are named after the registry; its own comment on Remove and
+ * Insert ("EKeys::Invalid ... no key to compare there") is where closed #304 stopped looking. A
+ * keyless command in no palette has neither a key nor a button, and IsVerbActive was lighting a
+ * toggle nothing drew.
+ *
+ * WHAT THE CONSUMER READS, not what is declared (CLAUDE.md "Check where a list is CONSUMED"):
+ * URoadBuildEdMode::DrawnPalettesForTest runs the engine's FModeToolkit::BuildToolPalette for
+ * each name the toolkit's GetToolPaletteNames gives, into a real toolbar builder - so a palette
+ * that GetModeCommands declares and GetToolPaletteNames never asks for (this mode's first bug of
+ * this shape, the stock toolkit names none) draws nothing here too.
+ *
+ * WRITTEN RED FIRST (2026-09-30), against one Tools palette: "Remove is reachable" and "Insert is
+ * reachable" failed, and so did every keyless snap toggle's line.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadBuildEdModeEveryCommandReachableTest,
+	"Airside.Editor.EveryCommandIsReachable",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadBuildEdModeEveryCommandReachableTest::RunTest(const FString& Parameters)
+{
+	if (!TestTrue(TEXT("the command set is registered"), FRoadBuildEdModeCommands::IsRegistered()))
+	{
+		return false;
+	}
+
+	// THE CASE THE PALETTE EXISTS FOR, asserted rather than assumed: were every verb to gain a
+	// chord, the "or a chord" half would pass this test on its own and the palette half would be
+	// measuring nothing (memory: a-green-test-may-measure-nothing).
+	bool bKeylessVerb = false;
+	for (const FBuildVerbRegistration& Verb : BuildVerbRegistry())
+	{
+		bKeylessVerb |= !Verb.Key.IsValid();
+	}
+	TestTrue(TEXT("BuildVerbRegistry has a keyless entry (Remove/Insert are EKeys::Invalid) - the palette's case"), bKeylessVerb);
+
+	URoadBuildEdMode* Mode = NewObject<URoadBuildEdMode>(GetTransientPackage());
+	if (!TestNotNull(TEXT("an ed mode"), Mode))
+	{
+		return false;
+	}
+	// CreateToolkit alone, as ToolCommandBindingSurvivesRegisterTool does: Enter() needs a viewport.
+	Mode->CreateToolkit();
+	const TArray<TPair<FName, TArray<TSharedPtr<const FUICommandInfo>>>> Drawn = Mode->DrawnPalettesForTest();
+	TestEqual(TEXT("the toolkit asks for every palette the command set declares"),
+		Drawn.Num(), FRoadBuildEdModeCommands::Palettes().Num());
+
+	const FRoadBuildEdModeCommands& Commands = FRoadBuildEdModeCommands::Get();
+	TArray<TSharedPtr<FUICommandInfo>> Every;
+	Every.Append(Commands.ToolCommandsInOrder());
+	Every.Append(Commands.VerbCommandsInOrder());
+	Every.Add(Commands.Build);
+	Every.Add(Commands.CancelGesture);
+	Every.Append(Commands.SnapCommandsInOrder());
+	TestEqual(TEXT("control: every snap toggle has a command to walk"),
+		Commands.SnapCommandsInOrder().Num(), SnapToggleRegistry().Num());
+
+	for (const TSharedPtr<FUICommandInfo>& Command : Every)
+	{
+		if (!TestTrue(TEXT("a registered command"), Command.IsValid()))
+		{
+			continue;
+		}
+		const FString Name = Command->GetCommandName().ToString();
+		int32 Buttons = 0;
+		for (const TPair<FName, TArray<TSharedPtr<const FUICommandInfo>>>& Palette : Drawn)
+		{
+			for (const TSharedPtr<const FUICommandInfo>& Button : Palette.Value)
+			{
+				Buttons += Button == Command ? 1 : 0;
+			}
+		}
+		const bool bChord = Command->GetDefaultChord(EMultipleKeyBindingIndex::Primary).IsValidChord();
+
+		// THE PIN: a button or a key, or the player cannot reach it at all.
+		TestTrue(*FString::Printf(TEXT("%s is reachable: drawn in a palette, or bound to a default chord"), *Name),
+			Buttons > 0 || bChord);
+		// AND THE PALETTES' OWN PROMISE (FRoadBuildEdModeCommands::Palettes): one button each, so
+		// no control is reachable only by a key the player has to already know.
+		TestEqual(*FString::Printf(TEXT("%s is drawn in exactly one palette"), *Name), Buttons, 1);
 	}
 
 	return true;

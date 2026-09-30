@@ -13,6 +13,8 @@
 #include "Model/Airport.h"
 #include "Entities/EntityDefinition.h"
 #include "BuildActions.h"
+#include "Tool/SnapGuideSettings.h"
+#include "Tool/SnapToggleRegistry.h"
 #include "BuildHudLayer.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadNetwork.h"
@@ -856,6 +858,62 @@ bool FLandGreyedWhileClosedTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("CONTROL: open with a runway, Land is enabled"), Land->IsEnabled(Ctx));
 	Runtime->SetAirportClosed(true);
 	TestFalse(TEXT("closed: Land is greyed"), Land->IsEnabled(Ctx));
+	return true;
+}
+
+/**
+ * THE BAR'S SNAP ROWS COME FROM THE PLUGIN'S TABLE (issue #440), not a copy typed here: one row
+ * per SnapToggleRegistry() entry, under its id, in its group's section, on its key, with its
+ * caption - and no Snap/Snap to row the table does not have. Then the seam itself: TryRun on each
+ * row, through a real controller with a real airport, changes the airport's FSnapGuideSettings
+ * exactly as the registry's Apply does (ARoadBuildController::ApplySnapToggle, the door that
+ * replaced eight proxies), and the row lights from the airport. The editor's twin is
+ * Airside.Editor.SnapCommandsReachTheAirport; a toggle added to the table reaches both or neither.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSnapRowsComeFromTheRegistryTest,
+	"AirportMgr.Actions.SnapRowsComeFromTheRegistry",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSnapRowsComeFromTheRegistryTest::RunTest(const FString& Parameters)
+{
+	const TConstArrayView<FSnapToggleRegistration> Registry = SnapToggleRegistry();
+	int32 SnapRows = 0;
+	for (const FBuildAction& Action : BuildActions())
+	{
+		SnapRows += (Action.Section == EActionSection::Snap || Action.Section == EActionSection::SnapTo) ? 1 : 0;
+	}
+	TestEqual(TEXT("every Snap and Snap to row is a registry toggle - none typed here beside the table"),
+		SnapRows, Registry.Num());
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world with an airport"), TestWorld.Actor)) { return false; }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(TestWorld.Actor);
+
+	UScriptStruct* SettingsStruct = FSnapGuideSettings::StaticStruct();
+	for (const FSnapToggleRegistration& Toggle : Registry)
+	{
+		const FString Id = Toggle.Id.ToString();
+		const FBuildAction* Row = FindAction(Toggle.Id);
+		if (!TestNotNull(*FString::Printf(TEXT("%s has a bar row under the registry's own id"), *Id), Row)) { continue; }
+		TestEqual(*FString::Printf(TEXT("%s sits in its group's section"), *Id), Row->Section,
+			Toggle.Group == ESnapToggleGroup::SnapTo ? EActionSection::SnapTo : EActionSection::Snap);
+		TestTrue(*FString::Printf(TEXT("%s is on the registry's key"), *Id), Row->Key == Toggle.Key);
+		TestEqual(*FString::Printf(TEXT("%s reads the registry's name"), *Id), Row->Label.ToString(), Toggle.Name.ToString());
+		TestTrue(*FString::Printf(TEXT("%s has a caption exactly when the registry gives one"), *Id),
+			static_cast<bool>(Row->DynamicLabel) == static_cast<bool>(Toggle.DynamicLabel));
+
+		FSnapGuideSettings Expected = TestWorld.Actor->GuideSources;
+		Toggle.Apply(Expected);
+		TestTrue(*FString::Printf(TEXT("%s runs"), *Id), Row->TryRun(*C, TEXT("Test")));
+		TestTrue(*FString::Printf(TEXT("%s changed the airport exactly as the registry's Apply does"), *Id),
+			SettingsStruct->CompareScriptStruct(&Expected, &TestWorld.Actor->GuideSources, PPF_None));
+		const FBuildActionContext Ctx(*C);
+		TestTrue(*FString::Printf(TEXT("%s is lit from the airport's own settings"), *Id),
+			Row->IsActive(Ctx) == Toggle.IsActive(TestWorld.Actor->GuideSources));
+	}
 	return true;
 }
 

@@ -3,7 +3,23 @@
 #include "CoreMinimal.h"
 #include "Framework/Commands/Commands.h"
 
-/** One command per build tool, so each gets a button in the mode's palette. */
+/**
+ * One palette the mode's toolkit draws: its name, the text on its tab, and its buttons in order.
+ *
+ * ONE STRUCT FOR WHAT TWO ENGINE HOOKS MUST AGREE ON (issue #440). UEdMode::GetModeCommands keys
+ * the commands by palette name, and FModeToolkit::GetToolPaletteNames lists the names the toolkit
+ * will ASK for - BuildToolPalette looks the first up by the second, so a palette in one and not
+ * the other draws nothing, silently. They were two hand-typed "Build"s; both now read
+ * FRoadBuildEdModeCommands::Palettes().
+ */
+struct FRoadBuildPalette
+{
+	FName Name;
+	FText DisplayName;
+	TArray<TSharedPtr<FUICommandInfo>> Commands;
+};
+
+/** One command per build tool, verb and snap toggle, so each gets a button in the mode's palettes. */
 class FRoadBuildEdModeCommands : public TCommands<FRoadBuildEdModeCommands>
 {
 public:
@@ -11,7 +27,21 @@ public:
 
 	virtual void RegisterCommands() override;
 
-	/** Commands grouped by palette name, for UEdMode::GetModeCommands. */
+	/**
+	 * THE PALETTES, in tab order: Tools (ToolCommandsInOrder), Edit (the verbs, then Build and
+	 * Cancel), Snap and Snap to (SnapCommandsInOrder, split by ESnapToggleGroup) - the PIE bar's
+	 * own sections, so a player finds a control under the same heading in both drivers.
+	 *
+	 * ISSUE #440: there used to be ONE palette, Tools, so Remove and Insert - which have no key
+	 * (BuildVerbRegistry gives them EKeys::Invalid: Ctrl/Shift held already mean them) - had
+	 * neither a key nor a button in the editor, and IsVerbActive lit a toggle nothing drew: closed
+	 * #304's fix, one layer down. Every command this class registers is in exactly one palette.
+	 * ENFORCED BY: Airside.Editor.EveryCommandIsReachable (through the toolkit's own palette
+	 * consumer, FModeToolkit::BuildToolPalette, not this list)
+	 */
+	static TArray<FRoadBuildPalette> Palettes();
+
+	/** Palettes() keyed by name, for UEdMode::GetModeCommands. */
 	static TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> GetCommands();
 
 	/**
@@ -46,6 +76,15 @@ public:
 	TArray<TSharedPtr<FUICommandInfo>> VerbCommandsInOrder() const { return VerbCommands; }
 
 	/**
+	 * One command per SnapToggleRegistry() entry, in registry order - the same MakeCommandInfo
+	 * loop again (issue #440). The guide grid's switches, the Grid step and the grid's orientation
+	 * (H) were BuildActions rows in the game module, which this module cannot read, so the editor
+	 * reached FSnapGuideSettings only through the Details panel. Each command's name IS the
+	 * registry Id ("snap.extending"), the same string the PIE bar row carries.
+	 */
+	TArray<TSharedPtr<FUICommandInfo>> SnapCommandsInOrder() const { return SnapCommands; }
+
+	/**
 	 * Ends the gesture in progress - a road chain, a half-drawn apron.
 	 *
 	 * Exists because RIGHT-CLICK CANNOT DO THIS IN THE EDITOR. At runtime right-click
@@ -78,4 +117,7 @@ private:
 
 	/** See VerbCommandsInOrder's own comment. */
 	TArray<TSharedPtr<FUICommandInfo>> VerbCommands;
+
+	/** See SnapCommandsInOrder's own comment. */
+	TArray<TSharedPtr<FUICommandInfo>> SnapCommands;
 };

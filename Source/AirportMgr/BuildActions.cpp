@@ -7,6 +7,7 @@
 #include "Present/OpsRuntimeSubsystem.h"
 #include "RoadBuildController.h"
 #include "Tool/BuildSession.h"
+#include "Tool/SnapToggleRegistry.h"
 
 #define LOCTEXT_NAMESPACE "AirportMgr"
 
@@ -416,135 +417,41 @@ namespace
 			Out.Add(MoveTemp(Airport));
 		}
 
-		// TWO LISTS, ONE PER AXIS, and AirportMgr.Actions.GuideGridIsInTheRegistry walks BOTH
-		// enums against them rather than counting: a row or column added without a button is a
-		// guide the player cannot switch, and nothing else would say so.
+		// THE GUIDE GRID'S SWITCHES, GENERATED FROM Airside's SnapToggleRegistry() (issue #440) - the
+		// move BuildVerbRegistry() made for the sticky verbs above, and for the same reason: these
+		// were fourteen rows typed HERE, in the game module, which the editor mode cannot read, so
+		// the editor reached them only through the Details panel and H existed in PIE alone. The
+		// WHY of each row (no keys but H, "Direction" not "Parallel", one cycling Grid button, the
+		// Taxiway/Service road split) travelled with it to SnapToggleRegistry.cpp.
 		//
-		// NO KEYS. Ten more bindings would crowd a keyboard already spending 0-9 on tools, and a
-		// toggle is set once rather than reached for mid-drag. What mid-drag needs is the Alt
-		// hold, which is not a registry action - see FToolContext::bSuspendGuides.
-		Out.Add(Make(TEXT("snap.extending"), EActionSection::Snap, LOCTEXT("SnapExtending", "Extending"),
-			EKeys::Invalid, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideRelation(SnapGuide::ERelation::Extending); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideRelationOn(SnapGuide::ERelation::Extending); },
-			Always));
-		Out.Add(Make(TEXT("snap.levelwith"), EActionSection::Snap, LOCTEXT("SnapLevelWith", "Level with"),
-			EKeys::Invalid, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideRelation(SnapGuide::ERelation::LevelWith); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideRelationOn(SnapGuide::ERelation::LevelWith); },
-			Always));
-		// "DIRECTION", NOT "PARALLEL", although the relation behind it is ERelation::Parallel -
-		// renamed 2026-09-20 after a player switched on Angled from and World, got nothing, and
-		// pointed out that the row does three things and the button claimed one of them. It
-		// offers a direction AND its perpendicular ("square to the taxiway" is not parallel to
-		// anything), and for the World column an absolute compass axis, which is parallel to no
-		// thing at all. The design doc's own grid already called the row "Parallel / square";
-		// the button had taken the first word and dropped the rest.
-		//
-		// The enum keeps its name - see SnapGuide::ERelation::Parallel, which records this.
-		Out.Add(Make(TEXT("snap.direction"), EActionSection::Snap, LOCTEXT("SnapDirection", "Direction"),
-			EKeys::Invalid, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideRelation(SnapGuide::ERelation::Parallel); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideRelationOn(SnapGuide::ERelation::Parallel); },
-			Always));
-		Out.Add(Make(TEXT("snap.collinear"), EActionSection::Snap, LOCTEXT("SnapCollinear", "Collinear"),
-			EKeys::Invalid, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideRelation(SnapGuide::ERelation::Collinear); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideRelationOn(SnapGuide::ERelation::Collinear); },
-			Always));
-		Out.Add(Make(TEXT("snap.angledfrom"), EActionSection::Snap, LOCTEXT("SnapAngledFrom", "Angled from"),
-			EKeys::Invalid, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideRelation(SnapGuide::ERelation::AngledFrom); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideRelationOn(SnapGuide::ERelation::AngledFrom); },
-			Always));
-		Out.Add(Make(TEXT("snap.matchinggap"), EActionSection::Snap, LOCTEXT("SnapMatchingGap", "Matching gap"),
-			EKeys::Invalid, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideRelation(SnapGuide::ERelation::MatchingGap); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideRelationOn(SnapGuide::ERelation::MatchingGap); },
-			Always));
-
-		// THE WORLD GRID: one button that CYCLES, not three - the design's ruling (2026-09-27),
-		// and why it needs a caption that follows state. Lit while any step is on. In the Snap
-		// section because it is a way of aligning, not a thing to align against. No key, by the
-		// rule above.
+		// ENABLED ALWAYS, as the hand-typed rows were: a toggle with no airport is inert, not
+		// illegal - ApplySnapToggle says so in the log. LIT AND CAPTIONED FROM THE TARGET'S OWN
+		// SETTINGS (Ctx.Target), the one copy (FSnapGuideSettings' header on why a per-driver
+		// copy is the failure). NO AIRPORT READS THE FIXED NAME, not a caption: "Grid: world" over
+		// a level with no airport claimed a state nothing held (#440 changed this; it used to).
+		// ENFORCED BY: AirportMgr.Actions.SnapRowsComeFromTheRegistry
+		for (int32 Index = 0; Index < SnapToggleRegistry().Num(); ++Index)
 		{
-			FBuildAction Grid = Make(TEXT("snap.grid"), EActionSection::Snap, LOCTEXT("SnapGrid", "Grid"),
-				EKeys::Invalid, false,
-				[](FBuildActionContext& Ctx) { Ctx.Controller.CycleGridStep(); },
-				[](const FBuildActionContext& Ctx) { return Ctx.Controller.GetGridStepUu() > 0.0; },
+			const FSnapToggleRegistration& Toggle = SnapToggleRegistry()[Index];
+			FBuildAction Row = Make(*Toggle.Id.ToString(),
+				Toggle.Group == ESnapToggleGroup::SnapTo ? EActionSection::SnapTo : EActionSection::Snap,
+				Toggle.Name, Toggle.Key, false,
+				[Index](FBuildActionContext& Ctx) { Ctx.Controller.ApplySnapToggle(SnapToggleRegistry()[Index]); },
+				[Index](const FBuildActionContext& Ctx)
+				{
+					return Ctx.Target != nullptr && SnapToggleRegistry()[Index].IsActive(Ctx.Target->GuideSources);
+				},
 				Always);
-			Grid.DynamicLabel = [](const FBuildActionContext& Ctx)
+			if (Toggle.DynamicLabel)
 			{
-				const double Step = Ctx.Controller.GetGridStepUu();
-				return Step > 0.0
-					? FText::Format(LOCTEXT("SnapGridOn", "Grid: {0} m"), FText::AsNumber(FMath::RoundToInt(Step / 100.0)))
-					: LOCTEXT("SnapGridOff", "Grid: off");
-			};
-			Out.Add(MoveTemp(Grid));
+				Row.DynamicLabel = [Index](const FBuildActionContext& Ctx)
+				{
+					const FSnapToggleRegistration& Entry = SnapToggleRegistry()[Index];
+					return Ctx.Target != nullptr ? Entry.DynamicLabel(Ctx.Target->GuideSources) : Entry.Name;
+				};
+			}
+			Out.Add(MoveTemp(Row));
 		}
-
-		// WHICH WAY THE GRID LIES: Follow turns it to what is snapped to, World keeps it square
-		// to the map (grid-follows-snap design, 2026-09-28). Lit while following.
-		//
-		// THE ONE SNAP TOGGLE WITH A KEY - H, a dated exception to the NO KEYS rule above. That
-		// rule's own reason is that a toggle "is set once rather than reached for mid-drag"; this
-		// one is reached for mid-drag (lay a stand square to the map beside a diagonal taxiway),
-		// and the player asked for a key. H was unbound in both drivers on 2026-09-28.
-		// ENFORCED BY: AirportMgr.Actions.GridOrientButtonIsOnH, and the one-list check's
-		// duplicate-chord assertion for a clash.
-		{
-			FBuildAction Orient = Make(TEXT("snap.gridorient"), EActionSection::Snap, LOCTEXT("SnapGridOrient", "Grid follows"),
-				EKeys::H, false,
-				[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGridOrientation(); },
-				[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGridFollowing(); },
-				Always);
-			Orient.DynamicLabel = [](const FBuildActionContext& Ctx)
-			{
-				return Ctx.Controller.IsGridFollowing()
-					? LOCTEXT("SnapGridFollow", "Grid: follow")
-					: LOCTEXT("SnapGridWorld", "Grid: world");
-			};
-			Out.Add(MoveTemp(Orient));
-		}
-
-		// THE SECOND AXIS. Before 2026-09-20 these sat in the same list as the rows above, which
-		// is why "Runway" read as a source you could switch off for every relation and was not -
-		// see SnapGuide::EReference.
-		// TWO BUTTONS WHERE "Road" WAS ONE, since 2026-09-20. Everywhere else in this codebase
-		// these are different tools under different keys, different cross-sections and
-		// different traversal classes, and the guide LABEL already said which - "parallel to
-		// the service road" appearing under a button marked Road was the whole complaint. See
-		// SnapGuide::EReference.
-		Out.Add(Make(TEXT("snapto.taxiway"), EActionSection::SnapTo, LOCTEXT("SnapToTaxiway", "Taxiway"),
-			EKeys::Invalid, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideReference(SnapGuide::EReference::Taxiway); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideReferenceOn(SnapGuide::EReference::Taxiway); },
-			Always));
-		Out.Add(Make(TEXT("snapto.serviceroad"), EActionSection::SnapTo, LOCTEXT("SnapToServiceRoad", "Service road"),
-			EKeys::Invalid, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideReference(SnapGuide::EReference::ServiceRoad); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideReferenceOn(SnapGuide::EReference::ServiceRoad); },
-			Always));
-		Out.Add(Make(TEXT("snapto.runway"), EActionSection::SnapTo, LOCTEXT("SnapToRunway", "Runway"),
-			EKeys::Invalid, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideReference(SnapGuide::EReference::Runway); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideReferenceOn(SnapGuide::EReference::Runway); },
-			Always));
-		Out.Add(Make(TEXT("snapto.apron"), EActionSection::SnapTo, LOCTEXT("SnapToApron", "Apron"),
-			EKeys::Invalid, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideReference(SnapGuide::EReference::Apron); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideReferenceOn(SnapGuide::EReference::Apron); },
-			Always));
-		Out.Add(Make(TEXT("snapto.stand"), EActionSection::SnapTo, LOCTEXT("SnapToStand", "Stand"),
-			EKeys::Invalid, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideReference(SnapGuide::EReference::Stand); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideReferenceOn(SnapGuide::EReference::Stand); },
-			Always));
-		Out.Add(Make(TEXT("snapto.world"), EActionSection::SnapTo, LOCTEXT("SnapToWorld", "World"),
-			EKeys::Invalid, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideReference(SnapGuide::EReference::World); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideReferenceOn(SnapGuide::EReference::World); },
-			Always));
 		return Out;
 	}
 }

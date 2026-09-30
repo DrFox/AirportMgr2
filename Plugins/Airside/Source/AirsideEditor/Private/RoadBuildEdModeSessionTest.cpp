@@ -9,7 +9,11 @@
 #include "Testing/AirsideTestWorld.h"
 #include "Tool/BuildSession.h"
 #include "Tool/RoadDrawTool.h"
+#include "Tool/ModeAxis.h"
 #include "Tool/RunwayTool.h"
+#include "Tool/SnapGuideSettings.h"
+#include "Tool/SnapToggleRegistry.h"
+#include "Widgets/SWidget.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -611,6 +615,241 @@ bool FRoadBuildEditorToolDeactivateOnUndoTest::RunTest(const FString& Parameters
 	TestTrue(TEXT("undo deactivated the tool, dropping the node it was chaining from - the "
 		"exact bug report this closes"), Draw->GetPendingNode() == INDEX_NONE);
 
+	return true;
+}
+
+namespace
+{
+	/** The tool built for ToolRegistry()'s entry on Key, through the real builder - the harness
+	 *  UndoDeactivatesTheActiveBuildTool established: Setup() puts the mode's session on that tool,
+	 *  THEN SetTargetForTest (Setup's ResolveTarget finds nothing through a bare tool manager). */
+	URoadBuildEditorTool* BuildEditorToolOnKey(URoadBuildEdMode& Mode, FKey Key, ARoadNetworkActor* Target)
+	{
+		int32 Index = INDEX_NONE;
+		for (int32 Each = 0; Each < ToolRegistry().Num(); ++Each)
+		{
+			Index = ToolRegistry()[Each].Key == Key ? Each : Index;
+		}
+		if (Index == INDEX_NONE)
+		{
+			return nullptr;
+		}
+		URoadBuildEditorToolBuilder* Builder = NewObject<URoadBuildEditorToolBuilder>(&Mode);
+		Builder->ToolIndex = Index;
+		FToolBuilderState State;
+		State.ToolManager = NewObject<UInteractiveToolManager>(&Mode);
+		URoadBuildEditorTool* Tool = Cast<URoadBuildEditorTool>(Builder->BuildTool(State));
+		if (Tool != nullptr)
+		{
+			Tool->Setup();
+			Tool->SetTargetForTest(Target);
+		}
+		return Tool;
+	}
+
+	int32 AxisIndexById(const TArray<FToolVariantAxis>& Axes, FName Id)
+	{
+		return Axes.IndexOfByPredicate([Id](const FToolVariantAxis& Axis) { return Axis.Id == Id; });
+	}
+
+	int32 OptionIndexById(const FToolVariantAxis& Axis, FName Id)
+	{
+		return Axis.Options.IndexOfByPredicate([Id](const FToolVariant& Option) { return Option.Id == Id; });
+	}
+
+	bool ContainsWidgetOfType(const TSharedRef<SWidget>& Widget, FName Type)
+	{
+		if (Widget->GetType() == Type)
+		{
+			return true;
+		}
+		FChildren* Children = Widget->GetChildren();
+		for (int32 Index = 0; Children != nullptr && Index < Children->Num(); ++Index)
+		{
+			if (ContainsWidgetOfType(Children->GetChildAt(Index), Type))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+}
+
+/**
+ * THE EDITOR REACHES THE VARIANT ROWS (issue #440): taxiway Upgrade, and a stand's pavement.
+ *
+ * Before #440 FBuildSession::SelectActiveVariant had one production caller, PIE's controller - so
+ * in the editor Upgrade (strip stage 6: re-width or re-surface placed pavement) was unreachable,
+ * because FRoadDrawTool::SelectVariant is the only writer of its Mode and OnReselect never steps
+ * it, and a stand's pavement was whatever PIE last wrote to the preferences ini.
+ *
+ * THROUGH BOTH EDITOR DOORS: the rows are read by URoadBuildEdMode::GetActiveVariantAxes (what the
+ * mode panel's variant section polls, target FOUND through the mode's own world), and the pick
+ * goes through URoadBuildEditorTool::SelectVariant (what URoadBuildEdMode::SelectActiveVariant
+ * forwards the panel's click to - that one-line cast needs a live tool manager this harness does
+ * not have, the gate this file's other tests name too). So a door left unwired fails here: an
+ * unwired read shows no Mode row, an unwired pick leaves Build lit.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadBuildEdModeVariantPickTest,
+	"Airside.Editor.VariantPickReachesTheSession",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadBuildEdModeVariantPickTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world with an airport"), TestWorld.Actor))
+	{
+		return false;
+	}
+	URoadBuildEdMode* Mode = NewObject<URoadBuildEdMode>(GetTransientPackage());
+	Mode->WorldOverrideForTest = TestWorld.World;
+
+	// TAXIWAY: Build -> Upgrade.
+	{
+		URoadBuildEditorTool* Tool = BuildEditorToolOnKey(*Mode, EKeys::One, TestWorld.Actor);
+		if (!TestNotNull(TEXT("the taxiway tool on 1"), Tool))
+		{
+			return false;
+		}
+		TArray<FToolVariantAxis> Axes;
+		Mode->GetActiveVariantAxes(Axes);
+		const int32 ModeRow = AxisIndexById(Axes, ModeAxis::AxisId());
+		if (!TestTrue(TEXT("the mode's read finds the taxiway's Mode row - the target is found through the mode's world"),
+			ModeRow != INDEX_NONE))
+		{
+			return false;
+		}
+		const int32 Upgrade = OptionIndexById(Axes[ModeRow], ModeAxis::OptionId(EToolMode::Upgrade));
+		if (!TestTrue(TEXT("the Mode row offers Upgrade"), Upgrade != INDEX_NONE))
+		{
+			return false;
+		}
+		TestTrue(TEXT("control: Upgrade is not lit before the pick"), Axes[ModeRow].Current != Upgrade);
+
+		TestTrue(TEXT("the editor tool's pick is taken"), Tool->SelectVariant(ModeRow, Upgrade));
+
+		Mode->GetActiveVariantAxes(Axes);
+		const int32 ModeRowAfter = AxisIndexById(Axes, ModeAxis::AxisId());
+		TestTrue(TEXT("Upgrade is lit afterwards - the editor can now re-width placed pavement"),
+			ModeRowAfter != INDEX_NONE && Axes[ModeRowAfter].Current == Upgrade);
+
+		TestFalse(TEXT("a row that does not exist is refused, not taken"), Tool->SelectVariant(99, 0));
+	}
+
+	// STAND: a pavement other than the lit one is pickable, and is lit afterwards.
+	{
+		URoadBuildEditorTool* Tool = BuildEditorToolOnKey(*Mode, EKeys::Three, TestWorld.Actor);
+		if (!TestNotNull(TEXT("the stand tool on 3"), Tool))
+		{
+			return false;
+		}
+		TArray<FToolVariantAxis> Axes;
+		Mode->GetActiveVariantAxes(Axes);
+		const int32 Surface = AxisIndexById(Axes, FName(TEXT("Surface")));
+		if (!TestTrue(TEXT("the stand shows its Surface row in the editor"), Surface != INDEX_NONE)
+			|| !TestTrue(TEXT("with more than one pavement to choose"), Axes[Surface].Options.Num() > 1))
+		{
+			return false;
+		}
+		const int32 Other = Axes[Surface].Current == 0 ? 1 : 0;
+		TestTrue(TEXT("the stand's pavement pick is taken"), Tool->SelectVariant(Surface, Other));
+		Mode->GetActiveVariantAxes(Axes);
+		TestEqual(TEXT("and it is the lit pavement afterwards"), Axes[Surface].Current, Other);
+	}
+	return true;
+}
+
+/**
+ * THE VARIANT ROWS ARE IN THE MODE PANEL (issue #440): FModeToolkit::GetInlineContent is what the
+ * mode panel puts under the palettes (RebuildModeToolPalette hands it to InlineContentHolder), so
+ * the panel is asserted in WHAT THAT CONSUMER READS - the toolkit's own GetInlineContent - not in a
+ * list this module keeps. The stock GetInlineContent would dereference details views Init never
+ * built here; this also pins that the override does not.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadBuildEdModeVariantPanelTest,
+	"Airside.Editor.VariantRowsAreInTheModePanel",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadBuildEdModeVariantPanelTest::RunTest(const FString& Parameters)
+{
+	URoadBuildEdMode* Mode = NewObject<URoadBuildEdMode>(GetTransientPackage());
+	TestFalse(TEXT("control: no toolkit, no inline content"), Mode->InlineContentForTest().IsValid());
+	Mode->CreateToolkit();
+	const TSharedPtr<SWidget> Content = Mode->InlineContentForTest();
+	if (!TestTrue(TEXT("the toolkit gives the mode panel inline content"), Content.IsValid()))
+	{
+		return false;
+	}
+	TestTrue(TEXT("and the variant panel is in it"),
+		ContainsWidgetOfType(Content.ToSharedRef(), FName(TEXT("SRoadBuildVariantPanel"))));
+	return true;
+}
+
+/**
+ * THE SNAP PALETTES REACH THE AIRPORT (issue #440): every SnapToggleRegistry() entry, executed
+ * through the TOOLKIT'S OWN COMMAND LIST - the list a palette click and a key press both reach -
+ * changes this level's FSnapGuideSettings exactly as the registry's Apply does, and the palette
+ * button's check follows the registry's IsActive. Before #440 the editor reached these settings
+ * only through the Details panel; PIE had fourteen game-module rows the editor could not read.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadBuildEdModeSnapCommandsTest,
+	"Airside.Editor.SnapCommandsReachTheAirport",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadBuildEdModeSnapCommandsTest::RunTest(const FString& Parameters)
+{
+	if (!TestTrue(TEXT("the command set is registered"), FRoadBuildEdModeCommands::IsRegistered()))
+	{
+		return false;
+	}
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world with an airport"), TestWorld.Actor))
+	{
+		return false;
+	}
+	URoadBuildEdMode* Mode = NewObject<URoadBuildEdMode>(GetTransientPackage());
+	Mode->WorldOverrideForTest = TestWorld.World;
+	Mode->CreateToolkit();
+	Mode->BindCommands();
+	const TSharedPtr<FUICommandList> CommandList = Mode->ToolkitCommandsForTest();
+	if (!TestTrue(TEXT("CreateToolkit made a real command list"), CommandList.IsValid()))
+	{
+		return false;
+	}
+
+	const TArray<TSharedPtr<FUICommandInfo>> SnapCommands = FRoadBuildEdModeCommands::Get().SnapCommandsInOrder();
+	const TConstArrayView<FSnapToggleRegistration> Registry = SnapToggleRegistry();
+	if (!TestEqual(TEXT("one editor command per registry toggle"), SnapCommands.Num(), Registry.Num()))
+	{
+		return false;
+	}
+
+	UScriptStruct* SettingsStruct = FSnapGuideSettings::StaticStruct();
+	for (int32 Index = 0; Index < Registry.Num(); ++Index)
+	{
+		const FSnapToggleRegistration& Toggle = Registry[Index];
+		const FString Id = Toggle.Id.ToString();
+		TestEqual(*FString::Printf(TEXT("%s: the command's name IS the registry id PIE's bar row carries"), *Id),
+			SnapCommands[Index]->GetCommandName(), Toggle.Id);
+		TestEqual(*FString::Printf(TEXT("%s: on the registry's key in both drivers"), *Id),
+			SnapCommands[Index]->GetDefaultChord(EMultipleKeyBindingIndex::Primary).Key.GetFName(), Toggle.Key.GetFName());
+
+		FSnapGuideSettings Expected = TestWorld.Actor->GuideSources;
+		Toggle.Apply(Expected);
+		TestFalse(*FString::Printf(TEXT("control: %s changes the settings at all"), *Id),
+			SettingsStruct->CompareScriptStruct(&Expected, &TestWorld.Actor->GuideSources, PPF_None));
+
+		TestTrue(*FString::Printf(TEXT("%s runs through the toolkit's command list"), *Id),
+			CommandList->ExecuteAction(SnapCommands[Index].ToSharedRef()));
+		TestTrue(*FString::Printf(TEXT("%s changed the level's airport exactly as the registry's Apply does"), *Id),
+			SettingsStruct->CompareScriptStruct(&Expected, &TestWorld.Actor->GuideSources, PPF_None));
+		TestTrue(*FString::Printf(TEXT("%s: the palette button's check follows the airport"), *Id),
+			CommandList->GetCheckState(SnapCommands[Index].ToSharedRef())
+				== (Toggle.IsActive(TestWorld.Actor->GuideSources) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked));
+	}
 	return true;
 }
 

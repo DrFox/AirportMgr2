@@ -203,6 +203,15 @@ public:
 	void ApplyVerb(const FBuildVerbRegistration& Verb);
 
 	/**
+	 * Picks Option on the active tool's Axis through FBuildSession::SelectActiveVariant - the
+	 * editor's door onto the variant rows (issue #440), ApplyVerb's shape: one transaction round
+	 * the pick, because a Mode switch ends a part-drawn chain and that can drop a node. Logs
+	 * "Variant: <tool> row <n> -> option <m> (taken|refused)" - the wording ARoadBuildController::
+	 * SelectActiveVariant logs too (2026-09-30), so one grep answers for either driver. True when taken.
+	 */
+	bool SelectVariant(int32 Axis, int32 Option);
+
+	/**
 	 * Draws the graph that already exists - nodes by degree, stands by heading.
 	 *
 	 * The runtime HUD has always done this; the editor never did, which is why existing

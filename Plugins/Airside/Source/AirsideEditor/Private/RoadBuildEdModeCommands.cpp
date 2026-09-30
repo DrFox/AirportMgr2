@@ -2,6 +2,7 @@
 
 #include "Styling/AppStyle.h"
 #include "Tool/BuildSession.h"
+#include "Tool/SnapToggleRegistry.h"
 
 #define LOCTEXT_NAMESPACE "RoadBuildEdModeCommands"
 
@@ -81,13 +82,67 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 			FInputChord(Verb.Key));
 		VerbCommands.Add(Command);
 	}
+
+	// ONE PER SnapToggleRegistry() ENTRY (issue #440), the same loop a third time. TOGGLEBUTTON for
+	// the verbs' reason: a guide switch is state the palette shows lit. The Grid button CYCLES
+	// rather than flips, and is lit while any step is on - the PIE bar's own reading of it; its
+	// caption cannot follow the step here (a palette button's label is the command's, fixed at
+	// registration), so the step it moved to is in the log line URoadBuildEdMode::ApplySnapToggle
+	// writes. The registry's Key comes along, so H is the grid's orientation in both drivers.
+	for (const FSnapToggleRegistration& Toggle : SnapToggleRegistry())
+	{
+		TSharedPtr<FUICommandInfo> Command;
+		FUICommandInfo::MakeCommandInfo(
+			AsShared(),
+			Command,
+			Toggle.Id,
+			Toggle.Name,
+			Toggle.Tooltip,
+			FSlateIcon(),
+			EUserInterfaceActionType::ToggleButton,
+			FInputChord(Toggle.Key));
+		SnapCommands.Add(Command);
+	}
+}
+
+TArray<FRoadBuildPalette> FRoadBuildEdModeCommands::Palettes()
+{
+	const FRoadBuildEdModeCommands& Commands = FRoadBuildEdModeCommands::Get();
+	TArray<FRoadBuildPalette> Out;
+	// "Build" STAYS THE TOOLS PALETTE'S NAME: it is the one this mode has shipped with since PR #9.
+	Out.Add({ FName(TEXT("Build")), LOCTEXT("ToolsPalette", "Tools"), Commands.ToolCommandsInOrder() });
+
+	// EDIT: the sticky verbs, then the two one-shots, in the PIE bar's Edit order (Build before the
+	// modes there too). Cancel has no bar button in PIE only because right-click is its gesture
+	// there; the editor viewport's right-click is the context menu's, so here it is a button.
+	TArray<TSharedPtr<FUICommandInfo>> Edit;
+	Edit.Add(Commands.Build);
+	Edit.Append(Commands.VerbCommandsInOrder());
+	Edit.Add(Commands.CancelGesture);
+	Out.Add({ FName(TEXT("Edit")), LOCTEXT("EditPalette", "Edit"), MoveTemp(Edit) });
+
+	// SNAP and SNAP TO: the registry's two groups, as the PIE bar's two sections.
+	TArray<TSharedPtr<FUICommandInfo>> Snap;
+	TArray<TSharedPtr<FUICommandInfo>> SnapTo;
+	const TArray<TSharedPtr<FUICommandInfo>> SnapCommands = Commands.SnapCommandsInOrder();
+	const TConstArrayView<FSnapToggleRegistration> Toggles = SnapToggleRegistry();
+	for (int32 Index = 0; Index < SnapCommands.Num() && Index < Toggles.Num(); ++Index)
+	{
+		(Toggles[Index].Group == ESnapToggleGroup::SnapTo ? SnapTo : Snap).Add(SnapCommands[Index]);
+	}
+	Out.Add({ FName(TEXT("Snap")), LOCTEXT("SnapPalette", "Snap"), MoveTemp(Snap) });
+	Out.Add({ FName(TEXT("SnapTo")), LOCTEXT("SnapToPalette", "Snap to"), MoveTemp(SnapTo) });
+	return Out;
 }
 
 TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> FRoadBuildEdModeCommands::GetCommands()
 {
-	TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> Palettes;
-	Palettes.Add(FName(TEXT("Build")), FRoadBuildEdModeCommands::Get().ToolCommandsInOrder());
-	return Palettes;
+	TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> Keyed;
+	for (FRoadBuildPalette& Palette : Palettes())
+	{
+		Keyed.Add(Palette.Name, MoveTemp(Palette.Commands));
+	}
+	return Keyed;
 }
 
 #undef LOCTEXT_NAMESPACE

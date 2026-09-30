@@ -688,6 +688,39 @@ void URoadBuildEditorTool::ApplyVerb(const FBuildVerbRegistration& Verb)
 	Sess().InvalidateFrameContextCache();
 }
 
+bool URoadBuildEditorTool::SelectVariant(int32 Axis, int32 Option)
+{
+	if (Target == nullptr)
+	{
+		UE_LOG(LogAirsideEditor, Warning, TEXT("Variant row %d -> option %d ignored: the tool has no target"), Axis, Option);
+		return false;
+	}
+
+	// A TRANSACTION, ApplyVerb's reason: FRoadDrawTool::SelectVariant's Mode switch cancels a
+	// part-drawn chain (State->OnCancel), which can remove the node it stranded - an edit the
+	// editor's undo must be able to reach, like every other path into OnCancel here.
+	FScopedRoadBuildTransaction Transaction(LOCTEXT("RoadBuildVariant", "Road Build"), Target);
+
+	// THE SESSION'S DOOR, the one PIE's ARoadBuildController::SelectActiveVariant calls - so a
+	// pick is remembered for the next launch (FBuildSession::RememberSurfaces) in both drivers
+	// the same way, which is how a stand's pavement stops being whatever PIE last wrote (#440).
+	const bool bTook = Sess().SelectActiveVariant(MakeHoverContext(), Axis, Option);
+	const IBuildTool* Active = Sess().GetActiveTool();
+	UE_LOG(LogAirsideEditor, Log, TEXT("Variant: %s row %d -> option %d (%s)"),
+		Active != nullptr ? *Active->GetDisplayName().ToString() : TEXT("no tool"),
+		Axis, Option, bTook ? TEXT("taken") : TEXT("refused"));
+	if (!bTook)
+	{
+		// A refusal changed nothing (SelectVariant's contract), so it leaves no undo step behind.
+		Transaction.Cancel();
+	}
+
+	// A pick changes what the next click lays - the width, the surface, Build against Upgrade -
+	// without moving any input the frame-context key holds.
+	Sess().InvalidateFrameContextCache();
+	return bTook;
+}
+
 void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 {
 	IBuildTool* Tool = Sess().GetActiveTool();

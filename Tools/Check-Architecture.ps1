@@ -581,8 +581,10 @@ $AllowedCallers = @(
         # write to the network that skips CommitAndNotify's commit-and-notify pairing AND rule 40, and would
         # pass both unseen. Pattern is a DECLARATION (a type, a name, then an open paren or brace), so a
         # reference parameter or the ctor's own definition does not match. RoadEditHistory.* is where it is defined.
+        # The open paren or brace is a LOOKAHEAD, the same token as rule 40's, so the two cannot disagree about
+        # what a declaration is (rule 40's consumed the brace - see its own comment).
         Name        = 'FRoadEditScope (declared outside the facade)'
-        Pattern     = '\bFRoadEditScope\s+\w+\s*[({]'
+        Pattern     = '\bFRoadEditScope\s+\w+\s*(?=[({])'
         ProdAllowed = @('Private\Present\RoadEditFacade.cpp', 'Private\Present\RoadEditFacadeSurfaces.cpp', 'Private\Present\RoadEditHistory.cpp', 'Public\Present\RoadEditHistory.h')
         TestExempt  = $true
         ProdReason  = 'edit through a URoadEditFacade mutator (CommitAndNotify / CommitPurchase / CommitDisposal), so the edit is committed, notified and - on a refusal - rolled back; extend this row and rule 40 if a new file must open a scope'
@@ -2040,7 +2042,10 @@ foreach ($file in Get-Sources (Join-Path $plugin 'Private\Present') @('.cpp')) {
     for ($i = 0; $i -lt $lines.Count; $i++) {
         $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
         # TOKENS IN SOURCE ORDER, so `{ Edit.Rollback(); return false; }` on one line reads as it runs.
-        foreach ($token in [regex]::Matches($code, '\{|\}|\bFRoadEditScope\s+(\w+)\s*[({]|\b(\w+)\.Rollback\s*\(|\breturn\s+(?:false|INDEX_NONE)\s*;')) {
+        # THE SCOPE'S OPEN PAREN OR BRACE IS A LOOKAHEAD, never part of its token (#460's review): brace-init,
+        # `FRoadEditScope Edit{H, N, L};`, used to consume the `{` while its `}` still popped a block, so the stack
+        # ran one short, the scope was dropped as closed, and every later return in that function went unchecked.
+        foreach ($token in [regex]::Matches($code, '\{|\}|\bFRoadEditScope\s+(\w+)\s*(?=[({])|\b(\w+)\.Rollback\s*\(|\breturn\s+(?:false|INDEX_NONE)\s*;')) {
             $text = $token.Value
             if ($text -eq '{') { [void]$blocks.Add(@{}) }
             elseif ($text -eq '}') {
@@ -2380,6 +2385,126 @@ if ((Test-Path $replannableFile) -and (Test-Path $replannableRebuildFile)) {
     }
 }
 $ranRules.Add('replannable-predicate')
+
+# --- 46. EVERY SESSION MUTATOR PIE REACHES, THE EDITOR MODE REACHES ---------------------------
+# Issue #440, the fifth instance of one shape (#33, #185, #304, then the variant rows and the sticky verbs): the two
+# drivers, ARoadBuildController (PIE) and URoadBuildEdMode (editor), are meant to reach every tool control, and a
+# control added to one reached the other only if someone remembered. Rules 26 and 27 pinned it ONE FEATURE AT A TIME,
+# so each new driver-facing surface was a fresh chance to miss the editor - FBuildSession::SelectActiveVariant had one
+# production caller, the controller, for the whole life of the variant rows. This is the per-SEAM form: every
+# NON-CONST FBuildSession method the controller calls as `Session.X(` must be called as `Session.X(` or `Sess().X(`
+# in a production file under AirsideEditor\Private. A CALL, not a mention: `URoadBuildEdMode::CancelActiveGesture` is
+# a method NAMED like the session's and calls something else, so "named" would have passed it by coincidence.
+# Const methods are reads (a driver may legitimately read less), and the class is parsed from BuildSession.h at brace
+# depth 0, so a call inside an inline body is not mistaken for a declaration.
+# THE DEVIATIONS ARE ROWS, each naming what the editor calls INSTEAD and why, and each checked in both directions:
+# the replacement must appear, and a row whose mutator the controller no longer calls is stale and fails.
+# Rules 26 and 27 STAY (2026-09-30): 26 asserts GridOverlay::Describe, which is not a session call at all, in
+# RoadBuildHUD.cpp, which is not the controller; 27 asserts the ARGUMENT (an FConfigToolPreferences store), which a
+# call-name check cannot see - an editor session handed a different store would pass this rule and fail 27.
+$sessionHeader = Join-Path $plugin 'Public\Tool\BuildSession.h'
+$sessionController = Join-Path $Root 'Source\AirportMgr\RoadBuildController.cpp'
+$editorSessionDoors = @(
+    @{
+        Mutator = 'ToggleGestureMode'
+        Instead = '\bBuildVerbRegistry\s*\('
+        Reason  = "the controller's own Session.ToggleGestureMode is its test door (ClickModifierTest); both drivers' production path is a BuildVerbRegistry() entry's Apply, which the editor reaches through URoadBuildEdMode::ApplyVerb"
+    },
+    @{
+        Mutator = 'CancelActiveGesture'
+        Instead = '->\s*OnCancel\s*\('
+        Reason  = "deliberate: each editor tool instance is pinned to one palette entry, so the editor's Escape ends the gesture (IBuildTool::OnCancel) and never returns to Select - see URoadBuildEditorTool::CancelGesture"
+    }
+)
+if (-not (Test-Path $sessionHeader) -or -not (Test-Path $sessionController)) {
+    $failures.Add("session-api-both-drivers: $sessionHeader or $sessionController is missing - rule 46 names files that moved; update it, do not let it check nothing")
+} else {
+    # FBuildSession's body at brace depth 0 - declarations only; inline bodies and nested structs blanked.
+    $inBlock = $false
+    $headerLines = Get-Content -LiteralPath $sessionHeader
+    $headerParts = New-Object System.Collections.Generic.List[string]
+    for ($i = 0; $i -lt $headerLines.Count; $i++) { $headerParts.Add((Strip-ArchCode $headerLines[$i] ([ref]$inBlock))) }
+    $headerCode = $headerParts -join "`n"
+    $classOpen = [regex]::Match($headerCode, '\bclass\s+AIRSIDE_API\s+FBuildSession\b[^;{]*\{')
+    $sessionDecls = ''
+    if ($classOpen.Success) {
+        $depth0 = New-Object System.Text.StringBuilder
+        $depth = 1
+        for ($p = $classOpen.Index + $classOpen.Length; $p -lt $headerCode.Length -and $depth -gt 0; $p++) {
+            $ch = $headerCode[$p]
+            if ($ch -eq '{') { $depth++; [void]$depth0.Append(' ') }
+            elseif ($ch -eq '}') { $depth--; [void]$depth0.Append(' ') }
+            elseif ($depth -eq 1) { [void]$depth0.Append($ch) }
+            else { [void]$depth0.Append(' ') }
+        }
+        $sessionDecls = $depth0.ToString()
+    }
+    if ($sessionDecls -eq '') {
+        $failures.Add("session-api-both-drivers: found no 'class AIRSIDE_API FBuildSession {' in $sessionHeader - it moved; update rule 46")
+    }
+
+    $controllerLines = Get-Content -LiteralPath $sessionController
+    $controllerCalls = [ordered]@{}
+    $inBlock = $false
+    for ($i = 0; $i -lt $controllerLines.Count; $i++) {
+        $code = Strip-ArchCode $controllerLines[$i] ([ref]$inBlock)
+        foreach ($m in [regex]::Matches($code, '\bSession\s*\.\s*(\w+)\s*\(')) {
+            if (-not $controllerCalls.Contains($m.Groups[1].Value)) { $controllerCalls[$m.Groups[1].Value] = $i + 1 }
+        }
+    }
+
+    $sessionMutators = [ordered]@{}
+    foreach ($name in $controllerCalls.Keys) {
+        $decls = [regex]::Matches($sessionDecls, "\b$name\s*\(")
+        if ($decls.Count -eq 0) {
+            if ($sessionDecls -ne '') {
+                $failures.Add("session-api-both-drivers: RoadBuildController.cpp:$($controllerCalls[$name]) calls Session.$name but FBuildSession declares no $name at class scope - rule 46 cannot classify it; update the rule")
+            }
+            continue
+        }
+        foreach ($decl in $decls) {
+            # To the matching ')', then: is the next token `const`? Any non-const overload makes it a mutator.
+            $parens = 0
+            $p = $decl.Index + $decl.Length - 1
+            for (; $p -lt $sessionDecls.Length; $p++) {
+                if ($sessionDecls[$p] -eq '(') { $parens++ }
+                elseif ($sessionDecls[$p] -eq ')') { $parens--; if ($parens -eq 0) { break } }
+            }
+            $after = $sessionDecls.Substring([Math]::Min($p + 1, $sessionDecls.Length))
+            if ($after -notmatch '^\s*const\b') { $sessionMutators[$name] = $controllerCalls[$name] }
+        }
+    }
+    if ($sessionMutators.Count -eq 0) {
+        $failures.Add("session-api-both-drivers: found no non-const FBuildSession call in $sessionController - the controller's session moved or the parse broke; rule 46 must not check nothing")
+    }
+
+    $editorCode = New-Object System.Text.StringBuilder
+    foreach ($file in Get-Sources (Join-Path $editor 'Private') @('.cpp')) {
+        if ($file.Name -like '*Test.cpp') { continue }
+        $inBlock = $false
+        foreach ($line in (Get-Content -LiteralPath $file.FullName)) { [void]$editorCode.AppendLine((Strip-ArchCode $line ([ref]$inBlock))) }
+    }
+    $editorText = $editorCode.ToString()
+
+    foreach ($name in $sessionMutators.Keys) {
+        $door = $editorSessionDoors | Where-Object { $_.Mutator -eq $name } | Select-Object -First 1
+        if ($null -ne $door) {
+            if ($editorText -notmatch $door.Instead) {
+                $failures.Add("session-api-both-drivers: rule 46's row for $name says the editor reaches it through /$($door.Instead)/ instead ($($door.Reason)), and nothing under AirsideEditor\Private matches that any more")
+            }
+            continue
+        }
+        if ($editorText -notmatch "(?:\bSession|\bSess\(\))\s*\.\s*$name\s*\(") {
+            $failures.Add("session-api-both-drivers: RoadBuildController.cpp:$($sessionMutators[$name]) calls Session.$name, and no production file under AirsideEditor\Private calls Session.$name or Sess().$name - PIE can reach this control and the editor mode cannot (#440). Give the editor its door, or add a row to rule 46 saying what it calls instead and why")
+        }
+    }
+    foreach ($door in $editorSessionDoors) {
+        if (-not $sessionMutators.Contains($door.Mutator)) {
+            $failures.Add("session-api-both-drivers: rule 46 has a row for $($door.Mutator), which RoadBuildController.cpp no longer calls on its session - delete the row, do not let the table rot")
+        }
+    }
+}
+$ranRules.Add('session-api-both-drivers')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was

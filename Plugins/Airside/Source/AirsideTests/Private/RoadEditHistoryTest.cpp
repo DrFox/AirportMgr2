@@ -301,6 +301,22 @@ bool FEditScopeRollbackEdgesTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("the second has no edit left to roll back"), Edit.Rollback());
 	}
 	{
+		// THE HISTORY LOST ITS PENDING SNAPSHOT while the scope was still open (a Clear mid-edit, #460's review):
+		// the scope still thinks its edit began, so this is the "failed", not the "refused", branch - and the
+		// caller's write stays, because there is nothing left to restore it from.
+		URoadNetwork* Net = MakeRollbackSubject();
+		URoadEditHistory* History = NewObject<URoadEditHistory>(GetTransientPackage());
+		const int32 NodesBefore = Net->GetNodes().Num();
+		FRoadEditScope Edit(History, Net, TEXT("cleared"));
+		Net->AddNode(FVector2D(3.0, 4.0));
+		History->Clear();
+		TestFalse(TEXT("control: Clear ended the history's edit"), History->IsEditing());
+		AddExpectedError(TEXT("Rollback of 'cleared' failed: the history has no pending snapshot"),
+			EAutomationExpectedErrorFlags::Contains, 1);
+		TestFalse(TEXT("a scope whose history dropped its snapshot cannot roll back, and says so"), Edit.Rollback());
+		TestEqual(TEXT("so the write stays - the log line is the only record of it"), Net->GetNodes().Num(), NodesBefore + 1);
+	}
+	{
 		// A COMMITTED scope keeps its write: Rollback is the failure path, not a default.
 		URoadNetwork* Net = MakeRollbackSubject();
 		URoadEditHistory* History = NewObject<URoadEditHistory>(GetTransientPackage());
