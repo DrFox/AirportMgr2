@@ -39,6 +39,7 @@ namespace
 		Placement.Heading = UE_DOUBLE_HALF_PI;
 		Placement.PoseRole = EServiceRole::Fuel;
 		Placement.Outline = FenceTestOutline();
+		Placement.FrontageEdge = 0;   // the frontage is edge 0, Position its midpoint - see FEntityInstance::FrontageEdge
 		Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
 		Road->Network->PlaceEntity(Placement);
 	}

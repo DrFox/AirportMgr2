@@ -8,19 +8,10 @@ struct FFuelVehicleSpec;
 class UJobBoard;
 class URoadNetwork;
 
-/**
- * How a vehicle came to be in a fleet: the two ways IN of FServiceFleet::Add. Plain enums, like EFleetChange (this
- * header has no .generated.h, and nothing reflected holds either).
- */
-enum class EFleetOrigin : uint8
-{
-	/** The player paid for it (UFacilityPurchases::BuyVehicle): charged the type's price. */
-	Bought,
-	/** The starter fleet a placed depot begins with (Trucks > 0, SeedStarterFleets): free. */
-	Seeded
-};
+// EFleetOrigin, the two ways IN of FServiceFleet::Add, lives in ServiceVehicle.h since #487: a vehicle now CARRIES how it
+// came (FServiceVehicle::Origin), and a USTRUCT field needs a UENUM, which a header with no .generated.h cannot declare.
 
-/** Why a vehicle is leaving: the two ways OUT of FServiceFleet::Withdraw. */
+/** Why a vehicle is leaving: the two ways OUT of FServiceFleet::Withdraw. Plain enum, like EFleetChange. */
 enum class EFleetReason : uint8
 {
 	/** The player sold it (UFacilityPurchases::SellVehicle): only an idle vehicle may go, and it is credited its resale. */
@@ -78,8 +69,10 @@ public:
 	 * VehicleId leaves the fleet. False, nothing changed, when there is no such vehicle - or, for Sold, when it may not go
 	 * (UJobBoard::CanRemoveVehicle: R5, idle at home with nothing promised). DepotRemoved has no such precondition: the
 	 * caller (SyncFleet) has already released its jobs and retired its agent, and a vehicle mid-refill whose depot is
-	 * gone must still go. Credits the resale value to Fleet (a zero value posts no line), publishes FleetChanged{Sold or
-	 * Withdrawn}. Leaves SeededDepots alone, so a sold starter fleet stays sold.
+	 * gone must still go. Credits RefundOf the vehicle to Fleet (a zero value posts no line - and a SEEDED vehicle's is zero,
+	 * #487), publishes FleetChanged{Sold or Withdrawn}. A Sold vehicle leaves SeededDepots alone, so a sold starter fleet
+	 * stays sold; a DepotRemoved one forgets its depot (#487), so an undo then redo of the placement, which restores the
+	 * depot's exact {Index, Generation}, seeds the starter fleet again instead of finding the id already seen.
 	 * [[nodiscard]]: false means nothing left the fleet, and a caller that assumed otherwise would credit or forget a vehicle.
 	 * ENFORCED BY: AirportOps.Model.Fleet.OnlyAnIdleVehicleLeaves, AirportOps.Model.Facility.DepotRemovalCreditsItsVehicles,
 	 * AirportOps.Model.Fleet.DepotRemovalPublishesFleetChanged
@@ -93,8 +86,16 @@ public:
 	double PriceOf(FName TypeCode) const;
 
 	/** What selling TypeCode, or losing it with its depot, credits: its row's ResaleValue - the card's "Sell" label and a
-	 *  bulldozer's credit cannot drift apart. */
+	 *  bulldozer's credit cannot drift apart. NOT WHAT A VEHICLE FETCHES: that is RefundOf, which is this for a bought one. */
 	double ResaleOf(FName TypeCode) const;
+
+	/**
+	 * What THIS vehicle is worth on its way out: its row's resale if the player bought it, nothing if it was seeded (#487).
+	 * THE ONE READ of "does it pay" - Withdraw credits it, and the depot card's "Sell" label and UFacilityPurchases::SellVehicle's
+	 * result quote it, so a label cannot promise money the ledger never gets.
+	 * ENFORCED BY: AirportOps.Model.Fleet.SeededVehicleFetchesNothing
+	 */
+	double RefundOf(const FServiceVehicle& Vehicle) const;
 
 	/** The name a ledger line, a card label, a toast, the depot card's fleet rows, the vehicle card and the stranded alert
 	 *  use for TypeCode: the catalogue row's DisplayName, else the code. THE ONE RESOLVER of that rule (it was typed three
@@ -162,10 +163,10 @@ private:
 	 */
 	FServiceVehicle& AddForTest(FName TypeCode, FEntityInstanceId Home, EServiceVehicleState State, double Cargo);
 
-	/** The vehicle as Add and AddForTest both make it, with the next id; moves both counters. Good until the next
-	 *  add or removal. THE ONE CREATION SITE (the seeded and the bought vehicle were two hand copies, and the test adder
-	 *  a third). */
-	FServiceVehicle& Create(FName TypeCode, EServiceRole Role, FEntityInstanceId Home, double Cargo);
+	/** The vehicle as Add and AddForTest both make it, with the next id and the Origin it came by; moves both counters. Good
+	 *  until the next add or removal. THE ONE CREATION SITE (the seeded and the bought vehicle were two hand copies, and the
+	 *  test adder a third). */
+	FServiceVehicle& Create(FName TypeCode, EServiceRole Role, FEntityInstanceId Home, double Cargo, EFleetOrigin Origin);
 
 	UJobBoard& Board;
 };

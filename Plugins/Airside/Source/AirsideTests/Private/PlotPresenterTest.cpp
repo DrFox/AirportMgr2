@@ -51,6 +51,7 @@ namespace
 		Placement.Heading = UE_DOUBLE_HALF_PI;
 		Placement.PoseRole = EServiceRole::Fuel;
 		Placement.Outline = ThreeBayPlotAt(X);
+		Placement.FrontageEdge = 0;   // the frontage is edge 0, Position its midpoint - see FEntityInstance::FrontageEdge
 		Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
 		return Actor->Network->PlaceEntity(Placement);
 	}
@@ -93,6 +94,7 @@ namespace
 		Placement.Heading = UE_DOUBLE_HALF_PI;
 		Placement.PoseRole = EServiceRole::Fuel;
 		Placement.Outline = DeepPlotAt(X);
+		Placement.FrontageEdge = 0;   // the frontage is edge 0, Position its midpoint - see FEntityInstance::FrontageEdge
 		Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
 		return Actor->Network->PlaceEntity(Placement);
 	}
@@ -426,6 +428,7 @@ bool FPlotPresenterGhostsUnboughtSlotsTest::RunTest(const FString& Parameters)
 	Placement.Heading = UE_DOUBLE_HALF_PI;
 	Placement.PoseRole = EServiceRole::Fuel;
 	Placement.Outline = SpareRoomPlotAt(0.0);
+	Placement.FrontageEdge = 0;   // the frontage is edge 0, Position its midpoint - see FEntityInstance::FrontageEdge
 	Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
 	Actor->Network->PlaceEntity(Placement);
 	Actor->RebuildMesh();
@@ -525,6 +528,7 @@ bool FPlotPresenterCountsDropsTest::RunTest(const FString& Parameters)
 	Placement.Heading = UE_DOUBLE_HALF_PI;
 	Placement.PoseRole = EServiceRole::Fuel;
 	Placement.Outline = DeepPlotAt(0.0);
+	Placement.FrontageEdge = 0;   // the frontage is edge 0, Position its midpoint - see FEntityInstance::FrontageEdge
 	Placement.Modules = Modules;
 	Actor->Network->PlaceEntity(Placement);
 	FPlotDropWarningSpy Spy;
@@ -662,6 +666,7 @@ namespace
 		Placement.Heading = UE_DOUBLE_HALF_PI;
 		Placement.PoseRole = EServiceRole::Fuel;
 		Placement.Outline = DeepPlotAt(0.0);
+		Placement.FrontageEdge = 0;   // the frontage is edge 0, Position its midpoint - see FEntityInstance::FrontageEdge
 		Placement.Modules = Modules;
 		Actor->Network->PlaceEntity(Placement);
 	}
@@ -1047,6 +1052,7 @@ bool FPlotPresenterRevealTest::RunTest(const FString& Parameters)
 		Placement.Heading = UE_DOUBLE_HALF_PI;
 		Placement.PoseRole = EServiceRole::Fuel;
 		Placement.Outline = SpareRoomPlotAt(X);
+		Placement.FrontageEdge = 0;   // the frontage is edge 0, Position its midpoint - see FEntityInstance::FrontageEdge
 		Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
 		return Actor->Network->PlaceEntity(Placement);
 	};
@@ -1109,6 +1115,7 @@ bool FPlotPresenterDrawsTheSeatedModulesTest::RunTest(const FString& Parameters)
 	Placement.Heading = UE_DOUBLE_HALF_PI;
 	Placement.PoseRole = EServiceRole::Fuel;
 	Placement.Outline = DeepPlotAt(0.0);
+	Placement.FrontageEdge = 0;   // the frontage is edge 0, Position its midpoint - see FEntityInstance::FrontageEdge
 	Placement.Modules = Modules;
 	const FEntityInstanceId Id = Actor->Network->PlaceEntity(Placement);
 	Actor->RebuildMesh();

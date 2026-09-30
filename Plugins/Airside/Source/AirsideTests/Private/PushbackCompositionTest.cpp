@@ -107,7 +107,7 @@ bool FAgentPushbackCompositionTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	const AActor* View = Actor->GetNewestAgent();
+	const AActor* View = Actor->GetTraffic()->GetNewestAgent();
 	if (!TestNotNull(TEXT("the aeroplane has a view"), View))
 	{
 		return false;
@@ -136,7 +136,7 @@ bool FAgentPushbackCompositionTest::RunTest(const FString& Parameters)
 		Actor->Tick(0.1f);
 		++ManoeuvringTicks;
 
-		if (const AActor* Now = Actor->GetNewestAgent())
+		if (const AActor* Now = Actor->GetTraffic()->GetNewestAgent())
 		{
 			const FVector At = Now->GetActorLocation();
 			bEverAtOrigin = bEverAtOrigin || At.SizeSquared() < 1.0;

@@ -324,9 +324,13 @@ void AAirsideBuildingsActor::Rebuild(const URoadNetwork& Network)
 	// road network exists. Null leaves the cube's default, which reads as a built bay - wrong,
 	// but visible, which is the failure mode to prefer. Moved from
 	// ARoadNetworkActor::RebuildMeshForChange with the components it colours.
+	//
+	// THROUGH THE ROAD ACTOR'S CACHE, NOT ResolveGhostMaterial() (#450): this runs on every Topology and Facts change, and the
+	// resolver is a GetContent() plus a LoadSynchronous - the cost #190's cache exists to pay once per dirty mark, which the
+	// ghost path already reads it for (#298). Two homes for one resolution, the neighbour's cache bypassed by this one.
 	if (ModuleGhosts != nullptr)
 	{
-		ModuleGhosts->SetMaterial(0, Road->ResolveGhostMaterial());
+		ModuleGhosts->SetMaterial(0, Road->GetResolvedGhostMaterial());
 	}
 
 	// THROUGH THE ROAD NETWORK'S ONE RESOLVER (issue #181) - see UPlotPresenter::RebuildFrom.

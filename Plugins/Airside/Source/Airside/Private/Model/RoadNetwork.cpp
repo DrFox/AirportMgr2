@@ -1552,6 +1552,7 @@ void URoadNetwork::PostLoad()
 	Super::PostLoad();
 	EnsureStandOutlines();
 	EnsureStandNumbers();
+	EnsureDepotFrontages();
 }
 
 void URoadNetwork::Serialize(FArchive& Ar)
@@ -1684,6 +1685,43 @@ int32 URoadNetwork::EnsureStandOutlines()
 	return Changed;
 }
 
+int32 URoadNetwork::EnsureDepotFrontages()
+{
+	// A MIGRATION, NOT A READER (#450) - see the declaration. The nearest-midpoint search survives HERE because it is the
+	// one fact a depot placed before FEntityInstance::FrontageEdge kept: PlaceEntityInPlot stored Position at the midpoint of the
+	// frontage, so this recovers exactly the edge it was given. A depot the facade places now stores its own edge and is skipped.
+	int32 Changed = 0;
+	for (FEntityInstance& Instance : Entities)
+	{
+		if (!Instance.bAlive || !Instance.IsDepot() || !Instance.IsPlotted() || Instance.FrontageEdge != INDEX_NONE)
+		{
+			continue;
+		}
+
+		double BestDistance = TNumericLimits<double>::Max();
+		int32 BestEdge = INDEX_NONE;
+		for (int32 Corner = 0; Corner < Instance.Outline.Num(); ++Corner)
+		{
+			const FVector2D Mid = (Instance.Outline[Corner] + Instance.Outline[(Corner + 1) % Instance.Outline.Num()]) * 0.5;
+			const double Distance = FVector2D::Distance(Mid, Instance.Position);
+			if (Distance < BestDistance)
+			{
+				BestDistance = Distance;
+				BestEdge = Corner;
+			}
+		}
+		Instance.FrontageEdge = BestEdge;
+		++Changed;
+	}
+
+	if (Changed > 0)
+	{
+		UE_LOG(LogAirside, Log,
+			TEXT("EnsureDepotFrontages: %d legacy plotted depot(s) given a stored frontage edge"), Changed);
+	}
+	return Changed;
+}
+
 int32 URoadNetwork::EnsureStandNumbers()
 {
 	// PAST EVERY NUMBER ALREADY HELD, not merely the counter: a counter that somehow sits
@@ -1758,6 +1796,10 @@ FEntityInstanceId URoadNetwork::PlaceEntity(const FEntityPlacement& Placement, c
 	Instance.PoseRole = Placement.PoseRole;
 
 	Instance.Outline = Placement.Outline;
+
+	// THE FRONTAGE RIDES WITH THE OUTLINE it indexes, copied in the same breath so a placement path cannot
+	// store one without the other - see FEntityInstance::FrontageEdge.
+	Instance.FrontageEdge = Placement.FrontageEdge;
 	Instance.Modules = Placement.Modules;
 
 	// ISSUED HERE, THE ONE FUNCTION EVERY PLACEMENT PATH ENDS IN (the facade's point and plot

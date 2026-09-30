@@ -300,6 +300,48 @@ bool FFleetPlacedDepotSeededByAnnouncementTest::RunTest(const FString& Parameter
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFleetUndoRedoSeedsAgainTest, "AirportOps.Present.Fleet.UndoThenRedoOfAStarterDepotSeedsItAgain",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFleetUndoRedoSeedsAgainTest::RunTest(const FString& Parameters)
+{
+	// AN UNDO RESTORES THE DEPOT'S EXACT {Index, Generation} (#487): Entities and EntityFreeList ride in the undo Memento, so place ->
+	// undo -> redo hands the undone depot's id back. UJobBoard::SeededDepots still held that id from the first seeding, so the depot
+	// came back with NO starter fleet for the rest of the session. (Bulldozing then placing was fine: RoadSlot::Remove bumps the
+	// generation.) Withdrawing a removed depot's vehicles now forgets the depot, so the redo is seeded like any placement.
+	// Through the actor's live placement and its undo history, the path the player's keys take.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("the actor"), Actor)) { return false; }
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	Actor->PlaceNode(FVector2D(0.0, 40000.0));
+	if (!TestNotNull(TEXT("a network"), Actor->Network.Get())) { return false; }
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	Runtime->Tick(1.0 / 30.0);
+
+	const int32 Index = Actor->PlaceEntity(FVector2D(12000.0, 0.0), 0.0, EPlaceableEntity::FuelDepot);
+	if (!TestTrue(TEXT("the depot is placed"), Index != INDEX_NONE)) { return false; }
+	const FEntityInstanceId Depot = Actor->Network->EntityIdAt(Index);
+	Runtime->Tick(1.0 / 30.0);
+	const int32 Seeded = Runtime->GetJobBoard()->VehiclesAt(Depot);
+	if (!TestTrue(TEXT("setup: the placement seeded the starter fleet"), Seeded > 0)) { return false; }
+
+	if (!TestTrue(TEXT("setup: the placement is undoable"), Actor->Undo())) { return false; }
+	Runtime->Tick(1.0 / 30.0);
+	TestNull(TEXT("the undone depot is gone"), Actor->Network->GetEntity(Depot));
+	TestEqual(TEXT("and its vehicles went with it"), Runtime->GetJobBoard()->VehiclesAt(Depot), 0);
+
+	if (!TestTrue(TEXT("setup: and the undo is redoable"), Actor->Redo())) { return false; }
+	TestTrue(TEXT("the premise: the redo hands back the SAME {Index, Generation} - else this measures an ordinary placement"),
+		Actor->Network->GetEntity(Depot) != nullptr);
+	Runtime->Tick(1.0 / 30.0);
+	TestEqual(TEXT("the redone depot has its starter fleet again, not the empty yard an id already seen produced"),
+		Runtime->GetJobBoard()->VehiclesAt(Depot), Seeded);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFleetLoadDoesNotReseedTest, "AirportOps.Present.Fleet.LoadDoesNotReseedADepotThatHasVehicles",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 

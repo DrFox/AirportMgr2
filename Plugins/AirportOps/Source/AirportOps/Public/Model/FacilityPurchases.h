@@ -9,6 +9,7 @@
 #include "FacilityPurchases.generated.h"
 
 class FOpsEventBus;
+struct FServiceVehicle;
 class UJobBoard;
 class ULedger;
 class UPricing;
@@ -247,6 +248,6 @@ private:
 	double NowOrZero() const;
 	FText Money(double Amount) const;
 	FText VehicleName(FName TypeCode) const;
-	double RefundOf(FName TypeCode) const;
+	double RefundOf(const FServiceVehicle& Vehicle) const;
 	void LogRefused(int32 Depot, const FString& What, EPurchaseRefusal Why) const;
 };

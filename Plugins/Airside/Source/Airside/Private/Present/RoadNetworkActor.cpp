@@ -499,6 +499,15 @@ UMaterialInterface* ARoadNetworkActor::ResolveGhostMaterial() const
 	return ResolveOverrideOr(GhostMaterial, &UAirsideContent::GhostMaterial);
 }
 
+UMaterialInterface* ARoadNetworkActor::GetResolvedGhostMaterial()
+{
+	// THE CACHE UpdateGhost AND MakeGhostSurfaceSettings READ - see them. Refreshed only when something dirtied it
+	// (PostEditChangeProperty), so a buildings actor that rebuilds on every Topology change pays nothing for a material
+	// that has not moved.
+	RefreshResolvedContentCacheIfDirty();
+	return ResolvedGhostMaterialCache;
+}
+
 URoadMaterialSet* ARoadNetworkActor::ResolveMaterialSet() const
 {
 	// NO DEFAULT, and this one is different from the others on purpose.
@@ -591,6 +600,9 @@ int32 ARoadNetworkActor::RepairLoadedNetwork(ELoadedFrom From)
 	// is Serialize alone (final review C2) - and a no-op the second time for a level.
 	const int32 Outlined = Network->EnsureStandOutlines();
 	const int32 Numbered = Network->EnsureStandNumbers();
+	// AND THE DEPOTS' FRONTAGES (#450): a save game's load is Serialize alone, like the pair above, so a save written before the
+	// frontage was stored needs the same migration the level's PostLoad runs.
+	const int32 Fronted = Network->EnsureDepotFrontages();
 
 	// THE DEFINITIONS NEXT, before anything below reads one: a D/E/F stand's definition is
 	// never saved (see LetterStandDefinitions), so a loaded or duplicated level arrives
@@ -625,12 +637,12 @@ int32 ARoadNetworkActor::RepairLoadedNetwork(ELoadedFrom From)
 	// ONE LINE WHEN A LOAD REPAIRED ANYTHING, so "did it" is one grep - the questions the
 	// comments above answer by reasoning, answered by measurement. Silent when nothing needed
 	// it: PostRegisterAllComponents re-runs on every editor re-registration of this actor.
-	const int32 Total = DefaultsResolved + Outlined + Numbered + Rebound + RefreshedAnchors + Forgotten;
+	const int32 Total = DefaultsResolved + Outlined + Numbered + Fronted + Rebound + RefreshedAnchors + Forgotten;
 	if (Total > 0)
 	{
 		UE_LOG(LogRoadMesh, Log,
-			TEXT("Load repairs on %s: %d default re-resolved, %d outline(s), %d number(s), %d definition(s), %d anchor(s), %d transient profile ref(s)"),
-			*GetName(), DefaultsResolved, Outlined, Numbered, Rebound, RefreshedAnchors, Forgotten);
+			TEXT("Load repairs on %s: %d default re-resolved, %d outline(s), %d number(s), %d depot frontage(s), %d definition(s), %d anchor(s), %d transient profile ref(s)"),
+			*GetName(), DefaultsResolved, Outlined, Numbered, Fronted, Rebound, RefreshedAnchors, Forgotten);
 	}
 	return Total;
 }
@@ -859,11 +871,6 @@ void ARoadNetworkActor::RebuildForKind(EChangeKind Kind)
 }
 AIRSIDE_EXHAUSTIVE_SWITCH_END
 
-double ARoadNetworkActor::GetApronSurfaceZ() const
-{
-	return Presenter->GetApronSurfaceZ(SurfaceZ, ApronZOffset);
-}
-
 void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& SnapResult, bool bValid,
 	ERoadKind Kind, int32 WidthIndex)
 {
@@ -989,11 +996,6 @@ void ARoadNetworkActor::ClearAgents()
 int32 ARoadNetworkActor::GetAgentCount() const
 {
 	return Traffic->GetAgentCount();
-}
-
-ARoadAgentActor* ARoadNetworkActor::GetNewestAgent() const
-{
-	return Traffic->GetNewestAgent();
 }
 
 const UGroundTraffic* ARoadNetworkActor::GetGroundTraffic() const
@@ -1158,11 +1160,6 @@ bool ARoadNetworkActor::DeleteSegment(int32 SegmentIndex)
 TArray<int32> ARoadNetworkActor::SegmentsIncidentTo(int32 NodeIndex) const
 {
 	return Facade->SegmentsIncidentTo(NodeIndex);
-}
-
-bool ARoadNetworkActor::GetSegmentEnds(int32 SegmentIndex, FVector2D& OutA, FVector2D& OutB) const
-{
-	return Facade->GetSegmentEnds(SegmentIndex, OutA, OutB);
 }
 
 bool ARoadNetworkActor::MoveNode(int32 NodeIndex, FVector2D To)

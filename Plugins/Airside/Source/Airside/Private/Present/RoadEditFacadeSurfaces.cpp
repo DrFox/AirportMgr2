@@ -389,21 +389,12 @@ PlotYard::FReservation URoadEditFacade::ReserveForPlot(TArrayView<const FVector2
 	// cannot resolve falls back to the scatter layout, which is what an unauthored plot type
 	// would have drawn anyway - see that function's own comment on why a second source of
 	// truth for the layout shipped once already (DA_FuelDepot vs. the tool's own Kind map).
-	const UEntityDefinition* Definition = GetEntityDefinition(Kind);
-	const EPlotLayout Layout = Definition != nullptr ? Definition->Layout : EPlotLayout::Scatter;
-	const TArray<PlotYard::FKitSpec> Specs = ResolveDepotKits();
-
-	// THE GATE IS THE FRONTAGE MIDPOINT, which is also what PlaceEntityInPlot stores as the
-	// entity's own Position below - DepotYardSeed keys off exactly that pose, so this solve
-	// and the one the presenter re-derives from the built entity roll the same yard.
-	FPlotSite Site;
-	Site.Outline = Outline;
-	Site.FrontageA = FrontageA;
-	Site.FrontageB = FrontageB;
-	Site.Gate = (FrontageA + FrontageB) * 0.5;
-	Site.Seed = DepotYardSeed(Site.Gate);
-
-	return PlotLayoutFor(Layout)->Solve(Site, Specs);
+	// Now ONE function answers it: DepotKit::LayoutOf, inside DepotKit::SolveYard.
+	//
+	// THE SOLVE IS DepotKit::SolveYard's, not assembled here (#450): the gate is the frontage midpoint, which is also what
+	// PlaceEntityInPlot stores as the entity's own Position below, and DepotYardSeed keys off exactly that pose - so this
+	// solve, the tool's preview and the one the presenter re-derives from the built entity roll the same yard.
+	return DepotKit::SolveYard(Outline, FrontageA, FrontageB, GetEntityDefinition(Kind), ResolveDepotKits());
 }
 
 int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
@@ -455,6 +446,30 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 		// alone across a reversal, it would lay every module across the road instead of into
 		// the plot.
 		Swap(FrontageA, FrontageB);
+	}
+
+	// THE FRONTAGE EDGE, AS AN INDEX INTO THE OUTLINE ABOUT TO BE STORED (#450): the edge Wound[i] -> Wound[i + 1] whose
+	// ends are exactly the two points the caller handed in (after the swap above, in Wound's own direction). It is STORED
+	// on the entity so DepotKit::ReservationOf reads what the tool previewed and this commit judged, instead of
+	// re-deriving it by a heuristic of its own. Looked up by EXACT equality and not by nearest midpoint: these are the
+	// same floats, copied, and a frontage that is not an edge of its own outline is a caller that has not understood the
+	// contract ("given, not searched for") - refused, where a nearest-edge guess would have built a yard facing the wrong
+	// side and said nothing.
+	int32 FrontageEdge = INDEX_NONE;
+	for (int32 Corner = 0; Corner < Wound.Num(); ++Corner)
+	{
+		if (Wound[Corner] == FrontageA && Wound[(Corner + 1) % Wound.Num()] == FrontageB)
+		{
+			FrontageEdge = Corner;
+			break;
+		}
+	}
+	if (FrontageEdge == INDEX_NONE)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceEntityInPlot refused: the frontage (%.0f, %.0f)-(%.0f, %.0f) is not an edge of the outline."),
+			FrontageA.X, FrontageA.Y, FrontageB.X, FrontageB.Y);
+		return INDEX_NONE;
 	}
 
 	// THE FRONTAGE IS GIVEN, NOT SEARCHED FOR. A road-snapped rectangle knows which of its
@@ -543,6 +558,7 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 	Placement.Heading = RoadGeom::Bearing(Inward);
 	Placement.PoseRole = Definition->PoseRole;
 	Placement.Outline = Wound;
+	Placement.FrontageEdge = FrontageEdge;
 
 	// THE TRUCKS' HOME, SET BACK INTO THE YARD far enough that the link onto the road can turn
 	// at a radius the largest service vehicle can steer - FAnchorLink::PoseSetbackFor. On the

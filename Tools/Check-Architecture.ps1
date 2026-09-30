@@ -471,15 +471,50 @@ $AllowedCallers = @(
         ProdReason  = 'go through ARoadNetworkActor::ResolveDepotKits (issue #181) - PlotPlaceTool.cpp and PlotPresenter.cpp both deliberately stopped calling this themselves'
     },
     @{
-        # ONE SOLVE PER PLACED PLOT (facility-upgrades spec, 2026-09-29): the presenter's lit/ghosted bays
-        # and the purchase rules' free slot read DepotKit::ReservationOf. A new production caller of
-        # PlotLayoutFor is a second solve that can disagree - the Buy shed that lights nothing.
-        # The tool and the facade solve an UNPLACED outline (the ghost, the commit), not a placed plot.
+        # ONE SOLVE PER DEPOT YARD (facility-upgrades spec, 2026-09-29; narrowed by #450): the presenter's lit/ghosted bays,
+        # the purchase rules' free slot, the tool's preview and the facade's commit all read DepotKit::SolveYard, through
+        # ReservationOf for a placed plot. A new production caller of PlotLayoutFor is a second solve that can disagree - the
+        # Buy shed that lights nothing. The tool and the facade were allow-listed here until #450, each typing its own
+        # FPlotSite and its own layout fallback beside the third copy in DepotKit.cpp; they no longer reach this at all.
         Name        = 'PlotLayoutFor'
         Pattern     = '\bPlotLayoutFor\s*\('
-        ProdAllowed = @('Public\Build\PlotLayoutStrategy.h', 'Private\Build\PlotLayoutStrategy.cpp', 'Private\Build\DepotKit.cpp', 'Private\Present\RoadEditFacadeSurfaces.cpp', 'Private\Tool\PlotPlaceTool.cpp')
+        ProdAllowed = @('Public\Build\PlotLayoutStrategy.h', 'Private\Build\PlotLayoutStrategy.cpp', 'Private\Build\DepotKit.cpp')
         TestExempt  = $true
-        ProdReason  = 'a placed plot is solved by DepotKit::ReservationOf; an unplaced outline by URoadEditFacade::ReserveForPlot or FPlotPlaceTool'
+        ProdReason  = 'solve a depot yard through DepotKit::SolveYard (a placed plot: DepotKit::ReservationOf) - the tool, the facade and the presenter must read one answer (#450)'
+    },
+    @{
+        # THE ONE FPlotSite OF A DEPOT YARD (#450). "Layout = definition's or Scatter; gate = frontage midpoint; seed =
+        # DepotYardSeed(gate)" was typed by hand at the tool's preview, the facade's commit and the built yard, and agreed only by
+        # comment; the layout fallback drifted once already (a banded ghost, a scattered depot). DepotKit.cpp builds the site once, in
+        # SolveYard. The strategies read one (PlotLayoutStrategy.h/.cpp); everyone else asks SolveYard. A site built by hand anywhere
+        # else is a fourth copy. Pinned from the value side by Airside.Tool.PlotPlace.ToolFacadeAndBuiltDepotSolveOneYard.
+        Name        = 'FPlotSite'
+        Pattern     = '\bFPlotSite\b'
+        ProdAllowed = @('Public\Build\PlotLayoutStrategy.h', 'Private\Build\PlotLayoutStrategy.cpp', 'Private\Build\DepotKit.cpp')
+        TestExempt  = $true
+        ProdReason  = 'ask DepotKit::SolveYard, which builds the yard''s FPlotSite once (#450) - a hand-built site is a second source of truth for layout, gate and seed'
+    },
+    @{
+        # THE FRONTAGE IS STORED, NOT RECOVERED (#450). DepotKit::RecoverFrontage guessed it from the edge whose midpoint was nearest
+        # Position; FEntityInstance::FrontageEdge holds the edge the facade was GIVEN. Nothing may bring the guess back under its old
+        # name, tests included - a fixture says which edge it means (Placement.FrontageEdge) rather than leaving the solve to search.
+        # (The stand readers - StandDefinitionCache's rearmost midpoint, StandMarkingBuilder's rearmost corner - still search; #450
+        # left them, and this row does not cover their names.)
+        Name        = 'RecoverFrontage'
+        Pattern     = '\bRecoverFrontage\s*\('
+        ProdAllowed = @()
+        TestExempt  = $false
+        ProdReason  = 'read FEntityInstance::GetFrontage, the edge the facade stored; a recovered frontage is a second opinion on where the plot faces (#450)'
+    },
+    @{
+        # THE GHOST MATERIAL HAS ONE HOME (#450). ARoadNetworkActor::ResolveGhostMaterial is GetContent() plus a LoadSynchronous; the
+        # actor reads it once per dirty mark into its resolved-content cache (#190, #298), and AAirsideBuildingsActor::Rebuild - which
+        # runs on every Topology and Facts change - called it fresh around that cache. Everything else reads GetResolvedGhostMaterial.
+        Name        = 'ARoadNetworkActor::ResolveGhostMaterial'
+        Pattern     = '\bResolveGhostMaterial\s*\('
+        ProdAllowed = @('Public\Present\RoadNetworkActor.h', 'Private\Present\RoadNetworkActor.cpp')
+        TestExempt  = $true
+        ProdReason  = 'read ARoadNetworkActor::GetResolvedGhostMaterial, the resolved-content cache - a fresh resolve is a GetContent plus a LoadSynchronous per call (#450)'
     },
     @{
         Name        = 'RoadHeal::PlanNodeDeletion'
@@ -4179,6 +4214,103 @@ if (-not (Test-Path $runwayRowsCpp)) {
     }
 }
 $ranRules.Add('foldable-panels-gate')
+
+# --- 62. A PUBLIC NON-UFUNCTION MEMBER OF ARoadNetworkActor HAS A PRODUCTION CALLER ---------------------------------------------
+# Issue #450, the half of rule 20 that issue named. Rule 20 matches `*ForTest(` only, so a member that is test-only under an ORDINARY
+# name escaped it: GetSegmentEnds had zero callers, and GetNewestAgent, GetApronSurfaceZ and GetStandDefinitions were called by tests
+# alone - a partial regrowth of the #80/#298 shape, one plainly-named forwarder at a time. This reads the actor header's PUBLIC
+# section, takes every single-line member declaration that is not a UFUNCTION, an override, a *ForTest (rule 20's own) or a
+# destructor, and requires its NAME to be called from some PRODUCTION file besides its own declaration and its own definition
+# (`ARoadNetworkActor::Name(`). Production = everything under the plugin and game source trees except the two test modules and any
+# *Test.cpp.
+# WHAT A REGEX CANNOT SEE, stated rather than claimed around: it matches the NAME and never the receiver, so a member sharing its name
+# with another class's (UAirsideTraffic::GetNewestAgent hid the actor's own forwarder of it) counts as called; and a declaration
+# split over several lines is not seen at all. It catches the plainly dead, uniquely named member - which is the shape that shipped.
+# The fix is a test that goes through GetTraffic()/GetPresenter()/GetEditFacade(), or a deletion; the allow-list below is for a member
+# that is DELIBERATELY test-only, dated and reasoned, and is meant to shrink (rule 20's list is, too).
+$actorPublicAllowList = @{
+    # A read-back of SetSimTimeScale, used by 14 sites in AirportOpsTests (OpsRuntimeTest, PerFrameGateTest) and SimTimeScaleTest to
+    # observe that the ops runtime's ApplySpeed reached the actor. Not a forwarder - it returns the actor's own field - but it has no
+    # production reader either. Found by this rule's first run, 2026-09-30; retiring it means a test-side read of the member.
+    'GetSimTimeScale' = 'a read-back the ops-runtime tests use to observe ApplySpeed (2026-09-30)'
+}
+$actorHeaderFile = Join-Path $plugin 'Public\Present\RoadNetworkActor.h'
+if (-not (Test-Path $actorHeaderFile)) {
+    $failures.Add("actor-public-members-called: $actorHeaderFile is named by rule 62 but does not exist - update the rule, do not let it check nothing")
+}
+else {
+    $actorHeaderLines = Get-Content -LiteralPath $actorHeaderFile
+    $actorClassStart = -1
+    for ($i = 0; $i -lt $actorHeaderLines.Count; $i++) {
+        if ($actorHeaderLines[$i] -match '^class AIRSIDE_API ARoadNetworkActor\b') { $actorClassStart = $i; break }
+    }
+    if ($actorClassStart -lt 0) {
+        $failures.Add("actor-public-members-called: class ARoadNetworkActor not found in $actorHeaderFile - update rule 62, do not let it check nothing")
+    }
+    else {
+        # ONE TAB OF INDENT = a class member (two or more is a body); a return type, a name, a parameter list and a `;` or an inline body.
+        $memberDeclaration = '^\t(?!\t)(?:virtual\s+|static\s+|FORCEINLINE\s+|inline\s+)*[\w:<>,\*&\s]+?[\s\*&](\w+)\s*\([^;{]*\)\s*(?:const)?\s*(?:override)?\s*(?:;|\{.*\})\s*$'
+        $publicMembers = New-Object System.Collections.Generic.List[object]
+        $actorInBlock = $false
+        $actorAccess = 'private'
+        $actorPrevCode = ''
+        for ($i = $actorClassStart; $i -lt $actorHeaderLines.Count; $i++) {
+            $code = Strip-ArchCode $actorHeaderLines[$i] ([ref]$actorInBlock)
+            if ($code.Trim() -eq '') { continue }
+            if ($code -match '^(public|protected|private):') { $actorAccess = $Matches[1]; $actorPrevCode = ''; continue }
+            if ($actorAccess -eq 'public' -and $code -match $memberDeclaration) {
+                $memberName = $Matches[1]
+                $skip = ($actorPrevCode -match 'UFUNCTION') -or ($code -match '^\s*UFUNCTION') -or ($code -match '\boverride\b') `
+                    -or ($memberName -like '*ForTest') -or $memberName.StartsWith('~')
+                if (-not $skip) { $publicMembers.Add(@{ Name = $memberName; Line = $i + 1 }) }
+            }
+            $actorPrevCode = $code
+        }
+        if ($publicMembers.Count -lt 10) {
+            $failures.Add("actor-public-members-called: only $($publicMembers.Count) public member declarations parsed from $actorHeaderFile - the parse went wrong (expected dozens); update rule 62, do not let it check nothing")
+        }
+        else {
+            $memberNames = @($publicMembers | ForEach-Object { $_.Name } | Sort-Object -Unique)
+            $callPattern = [regex]('(?<![\w:])(' + ($memberNames -join '|') + ')\s*\(')
+            $called = @{}
+            foreach ($tree in $trees) {
+                foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
+                    if ($file.FullName -match '\\(AirsideTests|AirportOpsTests)\\') { continue }
+                    if ($file.Name -like '*Test.cpp' -or $file.Name -like '*Tests.cpp') { continue }
+                    $isActorHeader = ($file.FullName -eq $actorHeaderFile)
+                    $fileLines = [System.IO.File]::ReadAllLines($file.FullName)
+                    for ($n = 0; $n -lt $fileLines.Length; $n++) {
+                        $text = $fileLines[$n]
+                        if ($text.IndexOf('(') -lt 0) { continue }
+                        $trimmed = $text.TrimStart()
+                        if ($trimmed.StartsWith('//') -or $trimmed.StartsWith('*') -or $trimmed.StartsWith('/*')) { continue }
+                        foreach ($m in $callPattern.Matches($text)) {
+                            $callee = $m.Groups[1].Value
+                            # ITS OWN DECLARATION (the header's own line) and ITS OWN DEFINITION are not callers.
+                            if ($isActorHeader -and ($publicMembers | Where-Object { $_.Name -eq $callee -and $_.Line -eq ($n + 1) })) { continue }
+                            if ($text -match ('ARoadNetworkActor::' + [regex]::Escape($callee) + '\s*\(')) { continue }
+                            $called[$callee] = $true
+                        }
+                    }
+                }
+            }
+            foreach ($member in $publicMembers) {
+                if ($called.ContainsKey($member.Name)) { continue }
+                if ($actorPublicAllowList.ContainsKey($member.Name)) { continue }
+                $failures.Add("actor-public-members-called: $($actorHeaderFile):$($member.Line) $($member.Name)( is a public member of ARoadNetworkActor that no production file calls - a test wants GetTraffic()/GetPresenter()/GetEditFacade()->..., or the member is dead and goes (issue #450, the #80/#298 shape under an ordinary name)")
+            }
+            foreach ($allowed in $actorPublicAllowList.Keys) {
+                if (-not ($memberNames -contains $allowed)) {
+                    $failures.Add("actor-public-members-called: '$allowed' is in rule 62's allow-list but is no longer a public member of ARoadNetworkActor - delete the entry, the list is meant to shrink")
+                }
+                elseif ($called.ContainsKey($allowed)) {
+                    $failures.Add("actor-public-members-called: '$allowed' is in rule 62's allow-list but now has a production caller - delete the entry, the list is meant to shrink")
+                }
+            }
+        }
+    }
+}
+$ranRules.Add('actor-public-members-called')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was

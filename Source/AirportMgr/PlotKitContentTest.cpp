@@ -314,6 +314,7 @@ bool FDepotDrawsItsShippedMeshesTest::RunTest(const FString& Parameters)
 	Placement.PoseRole = EServiceRole::Fuel;
 	Placement.Outline = { FVector2D(0.0, 0.0), FVector2D(3000.0, 0.0),
 	                      FVector2D(3000.0, 3000.0), FVector2D(0.0, 3000.0) };
+	Placement.FrontageEdge = 0;   // the frontage is edge 0, Position its midpoint - see FEntityInstance::FrontageEdge
 	Placement.Modules = { EDepotModule::Shed };
 	Actor->ClearNetwork();
 	Actor->Network->PlaceEntity(Placement);

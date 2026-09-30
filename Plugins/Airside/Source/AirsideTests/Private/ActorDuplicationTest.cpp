@@ -51,8 +51,15 @@ bool FActorDuplicationTest::RunTest(const FString& Parameters)
 	// StandDefinitions (issue #298): the same Transient-plain-pointer PIE-duplication bug this
 	// whole test exists to pin - see UStandDefinitionCache's own header - so a NEW subobject
 	// gets the SAME assertion the three original ones do, not just a build that compiles.
+	//
+	// READ BY REFLECTION, off the member itself: the accessor this used (ARoadNetworkActor::GetStandDefinitions) had no production
+	// caller, so it went in #450 rather than stay on the actor for one assertion - and the member is the thing whose pointer the bug
+	// left aimed at the CDO's subobject, so reading it directly measures exactly that.
+	const FObjectProperty* StandCacheProperty = FindFProperty<FObjectProperty>(ARoadNetworkActor::StaticClass(), TEXT("StandDefinitions"));
+	if (!TestNotNull(TEXT("the actor still declares its stand definition cache (rename it and this reflection read finds nothing)"), StandCacheProperty)) { return false; }
+	const UObject* DupStandCache = StandCacheProperty->GetObjectPropertyValue_InContainer(Dup);
 	TestEqual(TEXT("the duplicate's stand definition cache belongs to the duplicate"),
-		Dup->GetStandDefinitions() ? Dup->GetStandDefinitions()->GetOuter() : nullptr, static_cast<UObject*>(Dup));
+		DupStandCache ? DupStandCache->GetOuter() : nullptr, static_cast<UObject*>(Dup));
 
 	if (!TestNotNull(TEXT("the duplicate has its own network"), Dup->Network.Get())) { return false; }
 	TestNotEqual(TEXT("which is a different object from the source's"), Dup->Network.Get(), Source->Network.Get());

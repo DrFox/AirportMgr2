@@ -396,9 +396,6 @@ public:
 	/** Slot indices of the segments that deleting NodeIndex would take with it. */
 	TArray<int32> SegmentsIncidentTo(int32 NodeIndex) const;
 
-	/** Both endpoints of a live segment, on the road plane. False if it is not live. */
-	bool GetSegmentEnds(int32 SegmentIndex, FVector2D& OutA, FVector2D& OutB) const;
-
 	/** Index of the nearest live node within Radius of Where, or INDEX_NONE. */
 	int32 FindNodeNear(FVector2D Where, double Radius) const;
 
@@ -801,12 +798,18 @@ private:
 	bool DeleteSlot(bool bDoomed, const TCHAR* Label, TFunctionRef<bool(URoadNetwork&)> Remove,
 		const FBuildQuote& Quote = FBuildQuote());
 
+public:
 	/**
 	 * THE ONE EVALUATOR PlaceEntityInPlot judges a plot against - issue #182. Runs
-	 * PlotLayoutFor(Layout)->Solve(Site, Specs), the IDENTICAL call
+	 * DepotKit::SolveYard, the IDENTICAL call (#450: it was PlotLayoutFor(Layout)->Solve(Site, Specs)
+	 * typed by hand here and in the tool)
 	 * FPlotPlaceTool::ReservationFor makes for the ghost and the readout, so a commit cannot
 	 * disagree with the preview that led to it the way PlotFit::FitBays - a 4 m x 12 m bay
 	 * grid with its own point-in-polygon test - used to.
+	 *
+	 * PUBLIC since #450, in this private tail, so Airside.Tool.PlotPlace.ToolFacadeAndBuiltDepotSolveOneYard can ask the commit's own
+	 * judgement and compare it AS A VALUE with the tool's preview and the built depot's. A const query with no side effect but its
+	 * evaluator count; nothing outside this class and that test calls it.
 	 *
 	 * TAKES Outline/FrontageA/FrontageB AS GIVEN, not corrected for winding: PlotYard's own
 	 * functions read the interior side off the outline's signed area (PlotYard::InwardOf), so
@@ -822,6 +825,7 @@ private:
 	PlotYard::FReservation ReserveForPlot(TArrayView<const FVector2D> Outline,
 		FVector2D FrontageA, FVector2D FrontageB, EPlaceableEntity Kind) const;
 
+private:
 	IBuildPurse* Purse = nullptr;
 
 	/** What the pavement was worth when the current interactive drag began. See EndInteractiveEdit. */

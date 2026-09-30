@@ -6,6 +6,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Solve/RoadGeom.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -202,6 +203,68 @@ bool FPlotOutlineIsAlwaysCounterClockwiseTest::RunTest(const FString& Parameters
 	TestTrue(TEXT("and the pose sits on the frontage, not across the road"),
 		Entities[0].Position.Y > -1.0 && Entities[0].Position.Y < 1.0);
 
+	return true;
+}
+
+/**
+ * THE FACADE STORES THE FRONTAGE EDGE IT WAS GIVEN (#450).
+ *
+ * The frontage used to be forgotten at placement and recovered later by three different heuristics; PlaceEntityInPlot now finds the edge
+ * of the outline it is about to STORE whose ends are the two points it was handed - after the winding reversal, which swaps them - and
+ * writes its index on the entity. Three cases: the far edge of a counter-clockwise plot (so nothing can pass by reading edge 0), a
+ * clockwise plot (whose stored outline is reversed, so the stored ends are the given ones swapped), and a frontage that is no edge of
+ * its outline (refused: a nearest-edge guess would have built a yard facing the wrong side and said nothing).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPlacementStoresFrontageEdgeTest,
+	"Airside.Entities.PlotPlacementStoresTheFrontageEdgeItWasGiven",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPlacementStoresFrontageEdgeTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+
+	const auto StoredFrontage = [Actor](int32 Index, FVector2D& OutA, FVector2D& OutB)
+	{
+		const FEntityInstance* Placed = Actor->Network->GetEntity(Actor->Network->EntityIdAt(Index));
+		return Placed != nullptr && Placed->GetFrontage(OutA, OutB);
+	};
+
+	// COUNTER-CLOCKWISE, FRONTAGE ON THE FAR EDGE (corners 2 -> 3).
+	const FVector2D Origin(20000.0, 20000.0);
+	const TArray<FVector2D> Ccw = { Origin, Origin + FVector2D(4000.0, 0.0), Origin + FVector2D(4000.0, 3000.0), Origin + FVector2D(0.0, 3000.0) };
+	const int32 CcwIndex = Actor->PlaceEntityInPlot(Ccw, Ccw[2], Ccw[3], TArray<EDepotModule>(), EPlaceableEntity::FuelDepot);
+	if (!TestTrue(TEXT("a counter-clockwise plot is placed"), CcwIndex != INDEX_NONE)) { return false; }
+	FVector2D A, B;
+	if (!TestTrue(TEXT("it stores a frontage"), StoredFrontage(CcwIndex, A, B))) { return false; }
+	TestEqual(TEXT("whose stored edge is the one it was given, the far edge, not corners 0 -> 1: start"), A, Ccw[2]);
+	TestEqual(TEXT("and end"), B, Ccw[3]);
+	TestEqual(TEXT("as the index of that edge"), Actor->Network->GetEntity(Actor->Network->EntityIdAt(CcwIndex))->FrontageEdge, 2);
+	TestEqual(TEXT("with Position still the gate, the midpoint of that edge"),
+		Actor->Network->GetEntity(Actor->Network->EntityIdAt(CcwIndex))->Position, (Ccw[2] + Ccw[3]) * 0.5);
+
+	// CLOCKWISE: stored reversed, its frontage swapped with it - PlotYard::InwardOf reads the interior side off that direction.
+	const FVector2D Away(40000.0, 20000.0);
+	const TArray<FVector2D> Cw = { Away, Away + FVector2D(0.0, 3000.0), Away + FVector2D(4000.0, 3000.0), Away + FVector2D(4000.0, 0.0) };
+	if (!TestTrue(TEXT("the premise: this outline is clockwise"), RoadGeom::PolygonArea(Cw) < 0.0)) { return false; }
+	const int32 CwIndex = Actor->PlaceEntityInPlot(Cw, Cw[0], Cw[1], TArray<EDepotModule>(), EPlaceableEntity::FuelDepot);
+	if (!TestTrue(TEXT("a clockwise plot is placed"), CwIndex != INDEX_NONE)) { return false; }
+	if (!TestTrue(TEXT("it stores a frontage too"), StoredFrontage(CwIndex, A, B))) { return false; }
+	TestEqual(TEXT("whose start is the given END, the plot being stored reversed"), A, Cw[1]);
+	TestEqual(TEXT("and whose end is the given START"), B, Cw[0]);
+
+	// A FRONTAGE THAT IS NO EDGE: the diagonal. Refused, nothing placed.
+	const int32 LiveBefore = Actor->Network->GetEntities().Num();
+	const FVector2D Further(60000.0, 20000.0);
+	const TArray<FVector2D> Rect = { Further, Further + FVector2D(4000.0, 0.0), Further + FVector2D(4000.0, 3000.0), Further + FVector2D(0.0, 3000.0) };
+	TestEqual(TEXT("a frontage that is no edge of the outline is refused"),
+		Actor->PlaceEntityInPlot(Rect, Rect[0], Rect[2], TArray<EDepotModule>(), EPlaceableEntity::FuelDepot), static_cast<int32>(INDEX_NONE));
+	TestEqual(TEXT("and places nothing"), Actor->Network->GetEntities().Num(), LiveBefore);
 	return true;
 }
 

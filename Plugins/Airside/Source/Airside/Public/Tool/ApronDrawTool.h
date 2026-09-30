@@ -24,10 +24,10 @@ struct AIRSIDE_API FApronOutlineTarget final : public IOutlineTarget
  * apron has no profile, no bands, no solve, and its input is a closing polygon rather than
  * a chain. Selected with 2; roads are 1.
  *
- * The polygon GESTURE is now shared with FPlotDrawTool through FOutlineDrawTool. That is
- * not a reversal of the paragraph above: what is shared is the input, which was always the
- * one thing an apron and a plot have in common, and what stays separate is everything the
- * outline then becomes.
+ * The polygon GESTURE lives in FOutlineDrawTool, which this tool is the ONLY client of (#450): it was shared with
+ * FPlotDrawTool until that tool was deleted - a plot is now a four-corner rectangle, drawn by FPlotPlaceTool through
+ * FStagedPlotTool. That is not a reversal of the paragraph above: what was shared is the input, which was the one thing
+ * an apron and a plot had in common, and what stays separate is everything the outline then becomes.
  */
 class AIRSIDE_API FApronDrawTool : public FOutlineDrawTool
 {

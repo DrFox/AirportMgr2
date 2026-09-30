@@ -223,9 +223,9 @@ namespace
 			FVector(Where.X, Where.Y, BaseZ));
 	}
 
-	// RecoverFrontage MOVED to DepotKit (facility-upgrades spec, 2026-09-29), WHY comment with it:
-	// the purchase rules need the frontage this presenter draws with, through one solve -
-	// DepotKit::ReservationOf.
+	// RecoverFrontage MOVED to DepotKit (facility-upgrades spec, 2026-09-29) and was then DELETED (#450): the frontage
+	// is stored on the entity (FEntityInstance::FrontageEdge), not recovered, and the purchase rules need the frontage
+	// this presenter draws with, through one solve - DepotKit::ReservationOf.
 }
 
 void UPlotPresenter::Initialise(UInstancedStaticMeshComponent* InBoxes,

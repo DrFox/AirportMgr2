@@ -350,6 +350,16 @@ bool FDepotKitCensusSeatsTest::RunTest(const FString& Parameters)
 		Placement.Position = Frontage;
 		Placement.PoseRole = Depot->PoseRole;
 		Placement.Outline = Outline;
+		// THE FRONTAGE IS THE EDGE WHOSE MIDPOINT IS THE POSE this helper is handed, EXACTLY: the facade stores the edge it is given
+		// (FEntityInstance::FrontageEdge), so a fixture says which edge it means rather than leaving the solve to guess. A Frontage that
+		// is no edge's midpoint leaves INDEX_NONE and the depot unsolvable, which is what a wrong fixture should look like.
+		for (int32 Corner = 0; Corner < Outline.Num(); ++Corner)
+		{
+			if ((Outline[Corner] + Outline[(Corner + 1) % Outline.Num()]) * 0.5 == Frontage)
+			{
+				Placement.FrontageEdge = Corner;
+			}
+		}
 		Placement.Modules = Modules;
 		Net->PlaceEntity(Placement);
 		FWarningLogSpy Spy;
