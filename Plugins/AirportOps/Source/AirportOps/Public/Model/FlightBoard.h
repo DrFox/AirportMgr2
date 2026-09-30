@@ -82,9 +82,6 @@ public:
 	 * MOVED HERE FROM OpsSave::Restore so that Restore could become a plain loop over every
 	 * persistent object rather than naming this class as a parameter and calling it in one
 	 * particular position - see IOpsPersistent::OnAfterRestore.
-	 *
-	 * AND, EVERY LOAD, the flights whose aeroplanes were not saved (#404): Landing/TaxiIn go round again as
-	 * Inbound at the back of the queue; Turnaround..Departing retire as Departed, unscored. Dated by RestoreClock.
 	 */
 	virtual void OnAfterRestore(int32 SnapshotVersion) override;
 
@@ -170,20 +167,6 @@ public:
 	 * publish checks. Raw: the runtime owns both this board and the bus.
 	 */
 	FOpsEventBus* Bus = nullptr;
-
-	/**
-	 * The clock OnAfterRestore dates a load by - the one method here that is handed no clock (IOpsPersistent's
-	 * signature), and #404's re-queue and retirement both need the loaded Now. Every other method takes the clock
-	 * as a parameter, as before; NAMED APART from those parameters, which a member called Clock would shadow.
-	 *
-	 * READS THE LOADED TIME because UOpsRuntime::Persistents() restores the clock before this board.
-	 * ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightRequeuesOrRetires (the clock is moved on between the save
-	 * and the load, so a clock restored after the board, or none, dates the flight wrong).
-	 *
-	 * Set by UOpsRuntime::Attach, beside ULedger::Clock. TRANSIENT: wiring, never saved - a saved path to another
-	 * session's clock is the last thing a load wants. Null in a bare NewObject: the load then dates to 0, and says so.
-	 */
-	UPROPERTY(Transient) TObjectPtr<USimClock> RestoreClock = nullptr;
 
 	/**
 	 * Bank the landing fee this flight was OFFERED at. Idempotent - a flight lands once.
@@ -376,8 +359,26 @@ public:
 	void OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwork& Network,
 		const USimClock& Clock, int32 AgentId, EAgentPhase From, EAgentPhase To);
 
-	/** Re-make every accepted flight's stand hold. See UStandAllocator::Reapply. */
-	void OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& Network);
+	/**
+	 * Re-make every Accepted and Inbound flight's stand hold (UStandAllocator::Reapply), HoldLast's after all the
+	 * others; then an Inbound flight left with no stand reserves one. HoldLast is the load's re-queued flights
+	 * (DemoteRestoredMidFlight) - empty for an ordinary rebuild.
+	 */
+	void OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& Network, const TArray<UFlight*>& HoldLast = TArray<UFlight*>());
+
+	/**
+	 * #404: a load's flights whose aeroplanes were not saved. Landing/TaxiIn go round again - Inbound, HoldingSince
+	 * Now, at the back of the queue; Turnaround..Departing retire as Departed, unscored. AgentId cleared either way.
+	 * Returns the re-queued flights. Called by UOpsRuntime::LoadFromSlot straight after OpsSave::Restore, beside the
+	 * ClearAgents that makes them stale - not from OnAfterRestore (review ruling M5).
+	 */
+	TArray<UFlight*> DemoteRestoredMidFlight(double Now);
+
+	/**
+	 * Review ruling I2: the re-queued flights of a load at an airport that is not open can never land - Cancelled,
+	 * to History, UNSCORED (nothing published). Acts on those still Inbound. Returns how many.
+	 */
+	int32 CancelRequeued(const TArray<UFlight*>& Requeued, double Now);
 
 	/**
 	 * Re-arm the clock for every Accepted flight's arrival.

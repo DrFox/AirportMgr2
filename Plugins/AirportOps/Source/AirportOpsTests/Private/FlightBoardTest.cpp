@@ -171,7 +171,9 @@ bool FFlightBoardFollowsTheAgentTest::RunTest(const FString& Parameters)
 
 	// THE REAL SEQUENCE NOW GOES THROUGH THE MANOEUVRE. An aeroplane is pushed off its stand
 	// before it taxis out, so the board has to show that rather than jumping from Turnaround
-	// to TaxiOut - and this step is also what makes the NEXT assertion mean something.
+	// to TaxiOut - and this step is also what makes the NEXT assertion mean something: with the
+	// Parked above moving nothing (#405), it is Manoeuvring, not Turnaround, that the taxi reads
+	// as OUT.
 	Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Parked, EAgentPhase::Manoeuvring);
 	TestEqual(TEXT("coming off the stand is the manoeuvre"),
 		Flight->Phase, EFlightPhase::Manoeuvring);

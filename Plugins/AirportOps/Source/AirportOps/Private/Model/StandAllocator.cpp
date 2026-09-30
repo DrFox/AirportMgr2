@@ -101,13 +101,30 @@ void UStandAllocator::Reapply(UGroundTraffic& Traffic, const URoadNetwork& Netwo
 			// The stand was deleted under an accepted flight. Finding it another one belongs
 			// to the sequencer's divert path, which does not exist yet - but the silence is
 			// what must not happen: an aeroplane is coming for a stand nobody is holding.
+			// KEPT, NOT CLEARED (a deviation from review ruling I1, which said clear it): the dead
+			// Stand IS the HeldStandLost alert's evidence (UOpsAlerts reads HeldStandIsGone), and
+			// every stand deletion reaches here through a rebuild - clearing it would silence that
+			// alert in play. UFlightBoard::OnGraphRebuilt reserves an Inbound flight a live one
+			// instead, which overwrites it and clears the alert by the same test.
+			// ENFORCED BY: AirportOps.Model.Alerts.HeldStandLostRaisesAndClears, AirportOps.Model.FlightSave.RequeueOffADeadStandReserves
 			UE_LOG(LogAirportOps, Warning,
 				TEXT("Flight %d held stand %d, which is gone from the graph"),
 				Flight->Id, Flight->Stand.Index);
 			continue;
 		}
 
-		Traffic.HoldStand(Flight->HolderId(), Network.GetEntity(Flight->Stand)->PoseNode);
+		// HONOURED, not dropped (review I1): a refusal means another holder has the stand - a
+		// flight a load re-queued (#404) names the stand it was accepted onto, which another
+		// flight may have been accepted onto since. Its Stand is then a promise it does not
+		// hold, so it is given up, and said.
+		// ENFORCED BY: AirportOps.Model.FlightSave.RequeueDoesNotTakeAnAcceptedStand
+		if (!Traffic.HoldStand(Flight->HolderId(), Network.GetEntity(Flight->Stand)->PoseNode))
+		{
+			UE_LOG(LogAirportOps, Warning,
+				TEXT("Flight %d could not hold stand %d again - another holder has it; given up"),
+				Flight->Id, Flight->Stand.Index);
+			Flight->Stand = FEntityInstanceId();
+		}
 	}
 }
 

@@ -672,10 +672,6 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	JobBoard->Bus = &Bus;
 	Ledger->Pricing = Pricing;
 	Ledger->Clock = Clock;
-	// AND THE BOARD'S, for the one hook handed none: a load re-queues or retires the flights whose aeroplanes were
-	// not saved (#404), dated by the loaded Now - see UFlightBoard::RestoreClock.
-	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightRequeuesOrRetires
-	FlightBoard->RestoreClock = Clock;
 
 	// THE LEDGER IS THE PURSE the build tools spend from. Handed to the facade here and
 	// nowhere else, so design-time building - which has no runtime and therefore no purse -
@@ -977,13 +973,11 @@ void UOpsRuntime::PostDailyUpkeep()
 
 TArray<IOpsPersistent*> UOpsRuntime::Persistents() const
 {
-	// ORDER IS THE SAME ON BOTH SIDES, and every blob is keyed by its own SaveBlobName.
-	//
-	// ONE ORDERING IS LOAD-BEARING: THE CLOCK FIRST. OpsSave::Restore runs each object's RestoreBlob and then its
-	// OnAfterRestore before moving to the next (the comment this replaced said OnBeforeRestore ran for all of them
-	// first; OpsSave.cpp's loop does not), and UFlightBoard::OnAfterRestore dates #404's re-queued and retired flights
-	// by UFlightBoard::RestoreClock - which reads the LOADED time only if the clock was restored before the board.
-	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightRequeuesOrRetires
+	// ORDER IS THE SAME ON BOTH SIDES and that is all it has to be: every blob is keyed by its
+	// own SaveBlobName, and no object's restore reads a neighbour's. OpsSave::Restore runs each
+	// object's OnBeforeRestore, blob and OnAfterRestore in turn (not every OnBeforeRestore first,
+	// as this comment used to say); anything that needs two restored systems at once - the
+	// loaded clock's Now for #404's re-queue - runs in LoadFromSlot, after Restore, instead.
 	TArray<IOpsPersistent*> Out;
 	Out.Add(Clock);
 	Out.Add(JobBoard);
@@ -1145,6 +1139,12 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	{
 		return false;
 	}
+	// #404, BESIDE ITS CAUSE (review ruling M5): the ClearAgents above threw away every aeroplane, so a flight saved
+	// landing or taxiing in goes round again and one on the ground retires as departed - dated by the LOADED clock,
+	// restored just now. Before OnGraphRebuilt below, which holds the re-queued flights' stands (after the genuine
+	// holds), and before RearmSchedules, which touches Accepted flights only and so leaves the re-queue alone.
+	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightRequeuesOrRetires
+	const TArray<UFlight*> Requeued = FlightBoard->DemoteRestoredMidFlight(Clock->Now());
 	// A SNAPSHOT FROM BEFORE THE "Airlines" BLOB restores no rows (OnBeforeRestore cleared them);
 	// every catalog airline comes back at the tuning's start.
 	SeedAirlines();
@@ -1169,10 +1169,21 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	Target->RebuildMesh();
 
 	// THE STATUS RE-DERIVED FROM THE LOADED INTENT AND NETWORK, WITH NO EVENT (spec 2026-09-29-ops-batch3 §3): a
-	// published change would reach the flight board's handler and re-run the cancellation, and there is nothing to
-	// cancel that was not cancelled when this was saved. The generator and the alerts read the result.
+	// published change would reach the flight board's handler and re-run the closure's cancellation - scored, and
+	// over every unarrived flight - when everything the closure cancelled was cancelled when this was saved. The
+	// generator and the alerts read the result.
 	// ENFORCED BY: AirportOps.Present.Airport.LoadRederivesWithoutCancelling
 	Airport->Reseat(*Target->Network);
+
+	// THE ONE THING A LOAD DOES HAVE TO CANCEL (review ruling I2): the flights the demotion above put back in the
+	// queue were on the ground when the closure happened, so the closure left them - and at an airport that is not
+	// open they can never land again. Cancelled HERE, silently and UNSCORED (CancelRequeued publishes nothing), not
+	// by the event above: the airline did not lose them to the closure but to the save.
+	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport
+	if (Airport->Status() != EAirportStatus::Open)
+	{
+		FlightBoard->CancelRequeued(Requeued, Clock->Now());
+	}
 
 	// IN THIS ORDER, and both are needed. RebuildMesh regenerates the guideline graph, which
 	// takes every node claim with it (FTrafficOccupancy::ReleaseGuidelineClaims), so the
@@ -1180,7 +1191,7 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// can allocate. Then the arrivals go back on the clock, whose queue was never saved.
 	if (UGroundTraffic* Model = Target->GetTraffic() != nullptr ? Target->GetTraffic()->GetModel() : nullptr)
 	{
-		FlightBoard->OnGraphRebuilt(*Model, *Target->Network);
+		FlightBoard->OnGraphRebuilt(*Model, *Target->Network, Requeued);
 		FlightBoard->RearmSchedules(*Model, *Target->Network, *Clock);
 	}
 	// THE REPEATERS TOO, from the loaded Now - see RearmRepeatingSchedules (review I1).

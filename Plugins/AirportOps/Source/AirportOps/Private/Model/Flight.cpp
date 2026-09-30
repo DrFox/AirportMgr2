@@ -1,6 +1,13 @@
 #include "Model/Flight.h"
 
 #include "Model/RoadAgent.h"
+#include "Model/RoadNetwork.h"
+
+FEntityInstanceId StandAtGoal(const URoadNetwork& Network, const FRoadAgent& Agent)
+{
+	const int32 Index = Network.FindEntityIndexByPoseNode(Agent.GoalNode);
+	return Index != INDEX_NONE && Network.GetEntities()[Index].IsStand() ? Network.EntityIdAt(Index) : FEntityInstanceId();
+}
 
 EFlightPhase FlightPhaseFromAgent(EAgentPhase To, EFlightPhase Current)
 {

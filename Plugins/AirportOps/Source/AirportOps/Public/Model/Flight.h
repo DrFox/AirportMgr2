@@ -9,6 +9,8 @@
 #include "Flight.generated.h"
 
 enum class EAgentPhase : uint8;
+class URoadNetwork;
+struct FRoadAgent;
 
 /**
  * Where one flight has got to.
@@ -231,7 +233,10 @@ public:
 	 * THE TWO CAN DIFFER, and that is by design: the hold guarantees A stand exists for this
 	 * flight, and ArrivalPlanner then picks the nearest free one when it lands, which may be
 	 * a different stand if a nearer one freed meanwhile. UFlightBoard overwrites this at
-	 * Parked from the agent's own GoalNode, so what is saved is always the stand it is on.
+	 * Parked AT A STAND (StandAtGoal) from the agent's own GoalNode, so once it has parked what is
+	 * saved is the stand it is on. Before that - landing, taxiing in, or parked on the fallback
+	 * junction (#405) - it is still the stand it was accepted onto, which a load's re-queue (#404)
+	 * re-holds, or gives up if another flight holds it now (UStandAllocator::Reapply).
 	 */
 	UPROPERTY() FEntityInstanceId Stand;
 
@@ -241,10 +246,12 @@ public:
 	/**
 	 * USimClock::Now at which it parked, or 0 if it never did.
 	 *
-	 * THE START OF THE PARKING CLOCK. Zero means "never parked" and is CHECKED rather than
-	 * trusted: a flight restored from a save mid-flight, or one put on the field by the debug
-	 * land key, can reach TaxiOut without ever having parked, and billing it from the epoch
-	 * would hand the player a fee larger than the airport.
+	 * THE START OF THE PARKING CLOCK, taken when it parks AT A STAND. Zero means "never parked"
+	 * and is CHECKED rather than trusted: an aeroplane departed from the fallback junction it
+	 * waited on (#405), or one put on the field by the debug land key, can reach TaxiOut without
+	 * ever having parked at a stand, and billing it from the epoch would hand the player a fee
+	 * larger than the airport. (A flight restored mid-flight no longer can: a load re-queues or
+	 * retires it - UFlightBoard::DemoteRestoredMidFlight, #404.)
 	 */
 	UPROPERTY() double ParkedAt = 0.0;
 
@@ -294,5 +301,16 @@ public:
  * TAKES THE CURRENT PHASE because EAgentPhase::Taxiing happens twice - once to the stand and
  * once away from it - and the agent cannot tell the two apart. Everything else is a plain
  * map, and the asymmetry is the whole reason this is a function rather than a table.
+ *
+ * NOT THE WHOLE RULE since #405: Parked maps to Turnaround here, but UFlightBoard::OnAgentPhase
+ * asks the live agent first - a flight enters Turnaround only parked AT A STAND (StandAtGoal),
+ * and one that never reached a stand leaving armed for a departure reads TaxiOut.
  */
 AIRPORTOPS_API EFlightPhase FlightPhaseFromAgent(EAgentPhase To, EFlightPhase Current);
+
+/**
+ * The stand whose pose is this agent's goal, or unset: a live IsStand() entity. The ONE "is it at (or bound for)
+ * a stand" question both boards ask - UFlightBoard (does a Parked flight enter Turnaround) and UJobBoard (does a
+ * Parked aircraft open a turnaround) - so the two cannot disagree about the fallback junction (review M8).
+ */
+AIRPORTOPS_API FEntityInstanceId StandAtGoal(const URoadNetwork& Network, const FRoadAgent& Agent);

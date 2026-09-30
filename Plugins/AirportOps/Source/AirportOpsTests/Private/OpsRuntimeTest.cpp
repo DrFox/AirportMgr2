@@ -611,10 +611,10 @@ bool FOpsRuntimeWiresLitresTest::RunTest(const FString& Parameters)
 
 /**
  * #404 THROUGH LoadFromSlot ITSELF (spec 2026-09-29-ops-batch3 §4). AirportOps.Model.FlightSave.MidFlightGoesRoundOrRetires
- * runs the load by hand; this is the one that fails if the runtime's own sequence breaks it: the board's clock
- * unwired or restored after the board (the clock is moved on between save and load, so either dates the flight
- * wrong), or the demotion landing after OnGraphRebuilt (the stand hold, released before the save as a dispatch
- * releases it, then comes back only through the Reapply of an Inbound flight).
+ * runs the load by hand; this is the one that fails if the runtime's own sequence breaks it: the demotion unwired
+ * or dated by anything but the LOADED clock (the clock is moved on between save and load), or landing after
+ * OnGraphRebuilt (the stand hold, released before the save as a dispatch releases it, then comes back only through
+ * the Reapply of an Inbound flight - under the flight's own holder id).
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FOpsRuntimeMidFlightLoadTest,
@@ -633,6 +633,8 @@ bool FOpsRuntimeMidFlightLoadTest::RunTest(const FString& Parameters)
 	Actor->PlaceRunway(FVector2D(0.0, -50000.0), FVector2D(6000.0, -50000.0), TestProfiles::Runway());
 	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
 	Actor->Network->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 90000.0), 0.0, 3600.0, StandDef->PoseRole, StandDef->Trucks);
+	// A SECOND STAND, for the one the re-queued flight must move to (review I1).
+	Actor->Network->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 120000.0), 0.0, 3600.0, StandDef->PoseRole, StandDef->Trucks);
 
 	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 	Runtime->Attach(Actor);
@@ -660,6 +662,20 @@ bool FOpsRuntimeMidFlightLoadTest::RunTest(const FString& Parameters)
 	Taxiing->bLandingFeePaid = true;
 	const int32 TaxiingId = Taxiing->Id;
 
+	// ACCEPTED SINCE onto the very stand the taxiing flight gave up at its dispatch (review I1). Later in Flights, so
+	// a re-hold that followed the list would give the stand to the re-queued flight; LoadFromSlot must hold it LAST.
+	UFlight* Promised = NewObject<UFlight>(GetTransientPackage());
+	Promised->Airframe.Wingspan = 3400.0;
+	Promised->AirlineId = Airline;
+	Promised->OfferWindowSeconds = 1.0e6;
+	Promised->OfferSecondsLeft = 1.0e6;
+	Promised->LeadTimeSeconds = 1.0e7;
+	Board->AddOffer(*Runtime->GetClock(), Promised);
+	if (!TestTrue(TEXT("a second flight is accepted"), Board->Accept(*Model, *Actor->Network, *Runtime->GetClock(), *Promised))) { return false; }
+	Taxiing->Stand = Promised->Stand;
+	const int32 PromisedId = Promised->Id;
+	const FEntityInstanceId PromisedStand = Promised->Stand;
+
 	// ON ITS STAND.
 	UFlight* OnStand = NewObject<UFlight>(GetTransientPackage());
 	OnStand->Airframe.Wingspan = 3400.0;
@@ -684,10 +700,17 @@ bool FOpsRuntimeMidFlightLoadTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("the taxiing flight came back"), Again) || !TestNotNull(TEXT("and the one on its stand"), Retired)) { return false; }
 	TestEqual(TEXT("taxiing in when saved: Inbound after the load"), Again->Phase, EFlightPhase::Inbound);
 	TestEqual(TEXT("with no agent"), Again->AgentId, static_cast<int32>(INDEX_NONE));
-	TestEqual(TEXT("joining the queue at the LOADED time - the clock restored before the board"), Again->HoldingSince, SavedAt, 1e-9);
+	TestEqual(TEXT("joining the queue at the LOADED time"), Again->HoldingSince, SavedAt, 1e-9);
 	const FEntityInstance* Stand = Actor->Network->GetEntity(Again->Stand);
 	TestTrue(TEXT("its stand held again - Inbound before the load's OnGraphRebuilt re-applied the holds"),
 		Stand != nullptr && Model->IsStandHeld(Stand->PoseNode, 0));
+	TestFalse(TEXT("and held by it - no other holder"), Stand == nullptr || Model->IsStandHeld(Stand->PoseNode, Again->HolderId()));
+	const UFlight* Kept = Board->FindByIdForTest(PromisedId);
+	const FEntityInstance* KeptStand = Kept != nullptr ? Actor->Network->GetEntity(Kept->Stand) : nullptr;
+	TestTrue(TEXT("the flight accepted onto its old stand keeps it - the load holds the re-queued flight last"),
+		Kept != nullptr && Kept->Stand == PromisedStand && KeptStand != nullptr
+		&& Model->IsStandHeld(KeptStand->PoseNode, 0) && !Model->IsStandHeld(KeptStand->PoseNode, Kept->HolderId()));
+	TestTrue(TEXT("so the re-queued flight holds the other"), Again->Stand != PromisedStand);
 	TestEqual(TEXT("on its stand when saved: Departed"), Retired->Phase, EFlightPhase::Departed);
 	TestFalse(TEXT("and retired out of the live list"), Board->Live().Contains(Retired));
 	TestEqual(TEXT("dated the load"), Retired->TerminatedAt, SavedAt, 1e-9);
@@ -696,6 +719,90 @@ bool FOpsRuntimeMidFlightLoadTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("still owed an arrival after the load's re-arm and three frames"),
 		Again->Phase == EFlightPhase::Inbound || Again->Phase == EFlightPhase::Landing);
 	TestEqual(TEXT("its airline heard nothing it would score"), Runtime->GetAirlines()->Find(Airline)->Recent.Num(), RecentBefore);
+	return true;
+}
+
+/**
+ * REVIEW RULING I2: a flight a load re-queued, at an airport that is not open, can never land - a closed airport
+ * admits no arrivals. It is CANCELLED, unscored: its airline hears nothing. Once closed by the player, once with no
+ * runway. The flight is taxiing in at the closure, so the closure itself (which cancels only the unarrived) leaves it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeMidFlightClosedTest,
+	"AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeMidFlightClosedTest::RunTest(const FString& Parameters)
+{
+	for (const bool bByPlayer : { true, false })
+	{
+		const FString Case = bByPlayer ? TEXT("closed by the player") : TEXT("no runway");
+		const EAirportStatus Closed = bByPlayer ? EAirportStatus::ClosedByPlayer : EAirportStatus::NoRunway;
+		FAirsideTestWorld TestWorld;
+		ARoadNetworkActor* Actor = TestWorld.Actor;
+		if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+		const int32 RoadA = Actor->PlaceNode(FVector2D(0.0, 30000.0));
+		const int32 RoadB = Actor->PlaceNode(FVector2D(20000.0, 30000.0));
+		Actor->ConnectNodes(RoadA, RoadB);
+		Actor->MinimumRunwayLength = 100.0;
+		Actor->PlaceRunway(FVector2D(0.0, -50000.0), FVector2D(6000.0, -50000.0), TestProfiles::Runway());
+		UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+		Actor->Network->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 90000.0), 0.0, 3600.0, StandDef->PoseRole, StandDef->Trucks);
+
+		UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+		Runtime->Attach(Actor);
+		for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
+		UFlightBoard* Board = Runtime->GetFlightBoard();
+		UGroundTraffic* Model = Actor->GetTraffic()->GetModel();
+		const TArray<FAirlineStanding>& Rows = Runtime->GetAirlines()->GetStandings();
+		if (!TestNotNull(TEXT("a traffic model"), Model) || !TestTrue(TEXT("an airline to score"), Rows.Num() > 0)) { return false; }
+		const FName Airline = Rows[0].AirlineId;
+
+		UFlight* Taxiing = NewObject<UFlight>(GetTransientPackage());
+		Taxiing->Airframe.Wingspan = 3400.0;
+		Taxiing->AirlineId = Airline;
+		Taxiing->OfferWindowSeconds = 1.0e6;
+		Taxiing->OfferSecondsLeft = 1.0e6;
+		Taxiing->LeadTimeSeconds = 1.0e7;
+		Board->AddOffer(*Runtime->GetClock(), Taxiing);
+		if (!TestTrue(*(Case + TEXT(": accepted onto the stand while open")), Board->Accept(*Model, *Actor->Network, *Runtime->GetClock(), *Taxiing))) { return false; }
+		Board->Allocator->Release(*Model, *Taxiing);
+		Taxiing->Phase = EFlightPhase::TaxiIn;
+		Taxiing->AgentId = 4201;
+		const int32 TaxiingId = Taxiing->Id;
+		const FEntityInstanceId Stand = Taxiing->Stand;
+
+		if (bByPlayer)
+		{
+			Runtime->SetAirportClosed(true);
+		}
+		else
+		{
+			for (int32 Index = Actor->Network->GetSegments().Num() - 1; Index >= 0 && UAirport::HasRunway(*Actor->Network); --Index)
+			{
+				Actor->DeleteSegment(Index);
+			}
+		}
+		for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
+		if (!TestEqual(*(Case + TEXT(": the airport is not open")), Runtime->GetAirport()->Status(), Closed)) { return false; }
+		if (!TestEqual(*(Case + TEXT(": the closure left the flight on the ground alone")), Taxiing->Phase, EFlightPhase::TaxiIn)) { return false; }
+		const int32 RecentBefore = Runtime->GetAirlines()->Find(Airline)->Recent.Num();
+		const double SatisfactionBefore = Runtime->GetAirlines()->Find(Airline)->Satisfaction;
+
+		const FString Slot = TEXT("AirportOpsTest_MidFlightClosed");
+		if (!TestTrue(*(Case + TEXT(": save writes")), Runtime->SaveToSlot(Slot))) { return false; }
+		if (!TestTrue(*(Case + TEXT(": load reads")), Runtime->LoadFromSlot(Slot))) { return false; }
+		for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
+
+		UFlight* Again = Board->FindByIdForTest(TaxiingId);
+		if (!TestNotNull(*(Case + TEXT(": the flight came back")), Again)) { return false; }
+		TestEqual(*(Case + TEXT(": re-queued at an airport that is not open, it is cancelled")), Again->Phase, EFlightPhase::Cancelled);
+		TestFalse(*(Case + TEXT(": out of the live list")), Board->Live().Contains(Again));
+		const FEntityInstance* Entity = Actor->Network->GetEntity(Stand);
+		TestFalse(*(Case + TEXT(": holding no stand")), Entity != nullptr && Model->IsStandHeld(Entity->PoseNode, 0));
+		TestEqual(*(Case + TEXT(": unscored - its airline heard nothing")), Runtime->GetAirlines()->Find(Airline)->Recent.Num(), RecentBefore);
+		TestEqual(*(Case + TEXT(": and its satisfaction did not move")), Runtime->GetAirlines()->Find(Airline)->Satisfaction, SatisfactionBefore, 1e-12);
+	}
 	return true;
 }
 

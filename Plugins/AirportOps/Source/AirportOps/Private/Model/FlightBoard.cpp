@@ -15,6 +15,15 @@
 #include "Model/StandAllocator.h"
 #include "Algo/StableSort.h"
 
+namespace FlightBoardText
+{
+	/** "TaxiIn", not "EFlightPhase::TaxiIn": a log line a grep for "restored mid-TaxiIn" finds (review M9). */
+	FString PhaseName(EFlightPhase Phase)
+	{
+		return StaticEnum<EFlightPhase>()->GetNameStringByValue(static_cast<int64>(Phase));
+	}
+}
+
 bool UFlightBoard::DefaultApproachFocus(const URoadNetwork& Network, FVector2D& OutFocus)
 {
 	const FAirsideCapability Airport = AirsideCapability::Summarise(Network);
@@ -553,21 +562,6 @@ void UFlightBoard::OnAfterRestore(int32 SnapshotVersion)
 	// growing a second version check to remember here.
 	//
 	// SNAPSHOT FIRST: MoveToHistory mutates Flights, and this loop is walking it.
-	//
-	// THE LOADED NOW, for #404 below - see RestoreClock. Zero without one (a bare board in a test): said, once and
-	// only when a flight needs dating, since a re-queued flight dated 0 jumps the queue and a retired one is rolled
-	// up on the next day's beat.
-	const double Now = RestoreClock != nullptr ? RestoreClock->Now() : 0.0;
-	bool bSaidUndated = false;
-	const auto DatedNow = [this, Now, &bSaidUndated]()
-	{
-		if (RestoreClock == nullptr && !bSaidUndated)
-		{
-			bSaidUndated = true;
-			UE_LOG(LogAirportOps, Warning, TEXT("Restore: the flight board has no clock; flights restored mid-flight are dated 0"));
-		}
-		return Now;
-	};
 	const TArray<TObjectPtr<UFlight>> Loaded = Flights;
 	for (const TObjectPtr<UFlight>& Each : Loaded)
 	{
@@ -575,39 +569,6 @@ void UFlightBoard::OnAfterRestore(int32 SnapshotVersion)
 		{
 			continue;
 		}
-
-		// #404: AGENTS ARE NOT SAVED - UOpsRuntime::LoadFromSlot clears every one before OpsSave::Restore - so a
-		// flight saved past Inbound comes back naming an aeroplane that does not exist, and nothing would ever move
-		// it again. Ruled (spec 2026-09-29-ops-batch3 §0, §4): the arrivals side GOES ROUND AGAIN, the ground side
-		// RETIRES AS DEPARTED. Before the Reapply: LoadFromSlot's OnGraphRebuilt re-holds Accepted and Inbound stands.
-		// ENFORCED BY: AirportOps.Model.FlightSave.MidFlightGoesRoundOrRetires, AirportOps.Present.RuntimeLoad.MidFlightRequeuesOrRetires
-		if (Each->Phase == EFlightPhase::Landing || Each->Phase == EFlightPhase::TaxiIn)
-		{
-			// INBOUND, at the BACK of the queue (HoldingSince = now, not its old ETA: the flights that were already
-			// holding when the game was saved were waiting first). Its Stand is still the one it was accepted onto,
-			// so the Reapply holds it again. bLandingFeePaid IS LEFT AS SAVED rather than forced true: it is saved
-			// and set with the ledger post (PostLandingFee), so a flight that was charged stays charged and its second
-			// landing posts nothing - and one saved before its landing was heard is charged once, when it lands.
-			UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) restored mid-%s: re-queued (its aircraft, agent %d, was not saved)"),
-				Each->Id, *Each->Callsign, *UEnum::GetValueAsString(Each->Phase), Each->AgentId);
-			Each->Phase = EFlightPhase::Inbound;
-			Each->HoldingSince = DatedNow();
-			Each->AgentId = INDEX_NONE;
-			continue;
-		}
-		if (Each->Phase >= EFlightPhase::Turnaround && Each->Phase <= EFlightPhase::Departing)
-		{
-			// DEPARTED, UNSCORED: the save system is not the player's fault, so nothing the airline roster scores is
-			// published (no FlightAirborne, no TurnaroundEnded) and no parking fee is posted. The range reads
-			// EFlightPhase's load-bearing declaration order: Turnaround, Manoeuvring, TaxiOut, Departing.
-			UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) restored mid-%s: retired as departed (its aircraft, agent %d, was not saved)"),
-				Each->Id, *Each->Callsign, *UEnum::GetValueAsString(Each->Phase), Each->AgentId);
-			Each->Phase = EFlightPhase::Departed;
-			Each->AgentId = INDEX_NONE;
-			MoveToHistory(*Each, DatedNow());
-			continue;
-		}
-
 		if (Each->Phase == EFlightPhase::Declined || Each->Phase == EFlightPhase::Expired
 			|| Each->Phase == EFlightPhase::Departed || Each->Phase == EFlightPhase::Cancelled
 			|| Each->Phase == EFlightPhase::Withdrawn)
@@ -623,6 +584,89 @@ void UFlightBoard::OnAfterRestore(int32 SnapshotVersion)
 	}
 
 	RebuildIndices();
+}
+
+TArray<UFlight*> UFlightBoard::DemoteRestoredMidFlight(double Now)
+{
+	// #404: AGENTS ARE NOT SAVED - UOpsRuntime::LoadFromSlot clears every one before OpsSave::Restore - so a flight
+	// saved past Inbound comes back naming an aeroplane that does not exist, and nothing would ever move it again.
+	// Ruled (spec 2026-09-29-ops-batch3 §0, §4): the arrivals side GOES ROUND AGAIN, the ground side RETIRES AS
+	// DEPARTED. CALLED BY LoadFromSlot, beside the ClearAgents that causes it (review ruling M5) - not from
+	// OnAfterRestore, which is handed no clock and runs for every restore, agents cleared or not.
+	// ENFORCED BY: AirportOps.Model.FlightSave.MidFlightGoesRoundOrRetires, AirportOps.Present.RuntimeLoad.MidFlightRequeuesOrRetires
+	TArray<UFlight*> Requeued;
+	int32 Retired = 0;
+	// SNAPSHOT: MoveToHistory mutates Flights, and this loop is walking it.
+	const TArray<TObjectPtr<UFlight>> Loaded = Flights;
+	for (const TObjectPtr<UFlight>& Each : Loaded)
+	{
+		if (Each == nullptr)
+		{
+			continue;
+		}
+		if (Each->Phase == EFlightPhase::Landing || Each->Phase == EFlightPhase::TaxiIn)
+		{
+			// INBOUND, at the BACK of the queue (HoldingSince = now, not its old ETA: the flights that were already
+			// holding when the game was saved were waiting first). Its Stand is still the one it was accepted onto;
+			// OnGraphRebuilt holds it again AFTER every genuine holder, and finds it another if that one was taken.
+			// bLandingFeePaid IS LEFT AS SAVED rather than forced true: it is saved and set with the ledger post
+			// (PostLandingFee), so a flight that was charged stays charged and its second landing posts nothing - and
+			// one saved before its landing was heard is charged once, when it lands.
+			// ENFORCED BY: AirportOps.Model.FlightSave.UnchargedLandingIsChargedOnce
+			UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) restored mid-%s: re-queued (its aircraft, agent %d, was not saved)"),
+				Each->Id, *Each->Callsign, *FlightBoardText::PhaseName(Each->Phase), Each->AgentId);
+			ByAgent.Remove(Each->AgentId);
+			Each->AgentId = INDEX_NONE;
+			Each->Phase = EFlightPhase::Inbound;
+			Each->HoldingSince = Now;
+			Requeued.Add(Each);
+		}
+		else if (Each->Phase >= EFlightPhase::Turnaround && Each->Phase <= EFlightPhase::Departing)
+		{
+			// DEPARTED, UNSCORED: the save system is not the player's fault, so nothing the airline roster scores is
+			// published (no FlightAirborne, no TurnaroundEnded) and no parking fee is posted. The range reads
+			// EFlightPhase's load-bearing declaration order: Turnaround, Manoeuvring, TaxiOut, Departing.
+			UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) restored mid-%s: retired as departed (its aircraft, agent %d, was not saved)"),
+				Each->Id, *Each->Callsign, *FlightBoardText::PhaseName(Each->Phase), Each->AgentId);
+			ByAgent.Remove(Each->AgentId);
+			Each->AgentId = INDEX_NONE;
+			Each->Phase = EFlightPhase::Departed;
+			MoveToHistory(*Each, Now);
+			++Retired;
+		}
+	}
+	if (Requeued.Num() + Retired > 0)
+	{
+		++RevisionCount;
+	}
+	return Requeued;
+}
+
+int32 UFlightBoard::CancelRequeued(const TArray<UFlight*>& Requeued, double Now)
+{
+	// REVIEW RULING I2: a flight a load put back in the queue, at an airport that is not open, can never land - and a
+	// closed airport admits no arrivals (PR B ruling I1). CANCELLED, UNSCORED: NOTHING IS PUBLISHED, so the roster
+	// charges neither ClosureCancelPenalty nor anything else; what closed the airport happened before the save, and
+	// its own cancellations were scored then. Only a flight still Inbound: this is handed LoadFromSlot's list.
+	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport
+	int32 Count = 0;
+	for (UFlight* Each : Requeued)
+	{
+		if (Each == nullptr || Each->Phase != EFlightPhase::Inbound)
+		{
+			continue;
+		}
+		UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) restored mid-flight at an airport that is not open: cancelled, unscored"),
+			Each->Id, *Each->Callsign);
+		Each->Phase = EFlightPhase::Cancelled;
+		MoveToHistory(*Each, Now);
+		++Count;
+	}
+	if (Count > 0)
+	{
+		++RevisionCount;
+	}
+	return Count;
 }
 
 void UFlightBoard::RebuildIndices()
@@ -737,19 +781,11 @@ void UFlightBoard::OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwor
 	const EFlightPhase WasPhase = Flight->Phase;
 
 	// WHERE THE AEROPLANE IS NOW, read live off the agent - the event is a fact about the past (the bus delivers
-	// it a step late), exactly as UJobBoard::OnAgentPhase reads it. A STAND is the pose of an IsStand() entity;
-	// the fallback junction a stand-less arrival waits on (UGroundTraffic::ReResolvePlan) is no entity's pose.
+	// it a step late), exactly as UJobBoard::OnAgentPhase reads it, and through the same StandAtGoal (review M8).
+	// The fallback junction a stand-less arrival waits on (UGroundTraffic::ReResolvePlan) is no stand's pose.
 	const FRoadAgent* Agent = Traffic.FindAgent(AgentId);
 	const bool bStillParked = Agent != nullptr && Agent->Phase == EAgentPhase::Parked;
-	FEntityInstanceId GoalStand;
-	if (Agent != nullptr)
-	{
-		const int32 Index = Network.FindEntityIndexByPoseNode(Agent->GoalNode);
-		if (Index != INDEX_NONE && Network.GetEntities()[Index].IsStand())
-		{
-			GoalStand = Network.EntityIdAt(Index);
-		}
-	}
+	const FEntityInstanceId GoalStand = Agent != nullptr ? StandAtGoal(Network, *Agent) : FEntityInstanceId();
 
 	EFlightPhase Next = FlightPhaseFromAgent(To, WasPhase);
 	if (WasPhase < EFlightPhase::Turnaround)
@@ -759,19 +795,21 @@ void UFlightBoard::OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwor
 			// #405: A TURNAROUND IS TIME ON A STAND. Parked on the fallback junction - or a Parked the agent has
 			// already left (ReofferStands redirected it in the same frame) - the flight is still taxiing in, so the
 			// re-offer's Parked -> Taxiing reads TaxiIn below rather than TaxiOut. No parking clock, no turnaround:
-			// UJobBoard::OnAgentPhase opens none there either, by the same stand lookup.
-			// ENFORCED BY: AirportOps.Model.Bus.FallbackParkStaysTaxiIn
+			// UJobBoard::OnAgentPhase opens none there either, by the same StandAtGoal.
+			// ENFORCED BY: AirportOps.Model.Bus.FallbackParkStaysTaxiIn, AirportOps.Model.Bus.SameFrameRedirectStaysTaxiIn
 			Next = WasPhase;
 			UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s): its aircraft (agent %d) stopped short of a stand; still %s"),
-				Flight->Id, *Flight->Callsign, AgentId, *UEnum::GetValueAsString(WasPhase));
+				Flight->Id, *Flight->Callsign, AgentId, *FlightBoardText::PhaseName(WasPhase));
 		}
-		else if (To == EAgentPhase::Taxiing && From == EAgentPhase::Parked && !GoalStand.IsSet())
+		else if (To == EAgentPhase::Taxiing && From == EAgentPhase::Parked && Agent != nullptr && Agent->bDepartureArmed)
 		{
-			// THE MIRROR: leaving the junction for somewhere that is NOT a stand is a departure - the inspector's
-			// Depart driving straight out (UGroundTraffic::DepartAgent's RedirectAgent branch). FlightPhaseFromAgent
-			// reads "never reached Turnaround" as the taxi in; without this, that departure would read TaxiIn. A
-			// redirect to a stand keeps TaxiIn; a pushback enters Manoeuvring, which maps absolutely.
-			// ENFORCED BY: AirportOps.Model.Bus.DepartFromFallbackReadsTaxiOut
+			// THE MIRROR: leaving the junction ARMED FOR A DEPARTURE is the taxi out - the inspector's Depart driving
+			// straight out (UGroundTraffic::DepartAgent's RedirectAgent branch, whose TakeGoal arms the route that ends
+			// on a runway). FlightPhaseFromAgent reads "never reached Turnaround" as the taxi in; without this, that
+			// departure would read TaxiIn. THE POSITIVE FACT, not "its goal is no stand" (review M1): a redirect whose
+			// new stand is deleted before the event is heard has no stand goal either, and is still taxiing in. A
+			// pushback enters Manoeuvring, which maps absolutely.
+			// ENFORCED BY: AirportOps.Model.Bus.DepartFromFallbackReadsTaxiOut, AirportOps.Model.Bus.RedirectStaysTaxiInWhenItsStandGoes
 			Next = EFlightPhase::TaxiOut;
 		}
 	}
@@ -856,7 +894,7 @@ void UFlightBoard::OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwor
 	++RevisionCount;
 }
 
-void UFlightBoard::OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& Network)
+void UFlightBoard::OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& Network, const TArray<UFlight*>& HoldLast)
 {
 	if (Allocator == nullptr)
 	{
@@ -864,15 +902,35 @@ void UFlightBoard::OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& N
 	}
 
 	TArray<UFlight*> Holding;
+	TArray<UFlight*> Last;
 	for (const TObjectPtr<UFlight>& Each : Flights)
 	{
 		// INBOUND TOO: a holding flight keeps its stand, and a graph rebuild takes every claim.
 		if (Each != nullptr && (Each->Phase == EFlightPhase::Accepted || Each->Phase == EFlightPhase::Inbound))
 		{
-			Holding.Add(Each);
+			// THE GENUINE HOLDS FIRST (review I1): a flight a load re-queued (#404) names the stand it was ACCEPTED
+			// onto, which it gave up at its dispatch - and which another flight may have been accepted onto since.
+			// That flight's promise stands; the re-queued one is re-held after it, and refused if it was taken.
+			(HoldLast.Contains(Each.Get()) ? Last : Holding).Add(Each);
 		}
 	}
+	Holding.Append(Last);
 	Allocator->Reapply(Traffic, Network, Holding);
+
+	// A HOLDING FLIGHT WITHOUT A STAND TAKES ONE NOW (review I1) - one Reapply just refused, or one whose stand is
+	// gone (Reapply keeps a dead Stand for the HeldStandLost alert; a Reserve overwrites it) - rather than on the
+	// first frame's TickQueue, whose same pass this is: a load must not hand the next
+	// accept a stand the queue was owed. After every Reapply, so no genuine hold is beaten to its own stand.
+	// ENFORCED BY: AirportOps.Model.FlightSave.RequeueDoesNotTakeAnAcceptedStand, AirportOps.Model.FlightSave.RequeueOffADeadStandReserves
+	for (UFlight* Each : Holding)
+	{
+		if (Each->Phase == EFlightPhase::Inbound && (!Each->Stand.IsSet() || UStandAllocator::HeldStandIsGone(*Each, Network))
+			&& Allocator->Reserve(Traffic, Network, *Each))
+		{
+			UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) holding: stand %d held again"),
+				Each->Id, *Each->Callsign, Each->Stand.Index);
+		}
+	}
 }
 
 void UFlightBoard::RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& Network,

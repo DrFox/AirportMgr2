@@ -30,9 +30,12 @@ public:
 	virtual FName SaveBlobName() const = 0;
 
 	/**
-	 * Called on EVERY registered persistent object before ANY blob is deserialised into any
-	 * of them - even one with no blob in this snapshot at all (an old save, or one from
-	 * before this object existed). UJobBoard::OnBeforeRestore clears Demands and GoingHome
+	 * Called on EVERY registered persistent object immediately before ITS OWN blob is
+	 * deserialised - even one with no blob in this snapshot at all (an old save, or one from
+	 * before this object existed). NOT before every blob: OpsSave::Restore runs each object's
+	 * OnBeforeRestore, blob and OnAfterRestore in turn, so an earlier object in the list is
+	 * already restored when a later one's runs (review M4; this said otherwise until
+	 * 2026-09-30). UJobBoard::OnBeforeRestore clears Demands and GoingHome
 	 * for exactly that reason: UOpsRuntime::LoadFromSlot always clears agents before calling
 	 * OpsSave::Restore, so every TruckId/AircraftId either map holds is about to go stale
 	 * regardless of what this snapshot contains - the leak this issue traced was GoingHome
