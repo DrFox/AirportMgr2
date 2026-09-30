@@ -17,7 +17,6 @@ class UUiButton;
 enum class EUiButtonKind : uint8;
 class UUiButton;
 enum class EUiButtonKind : uint8;
-class UListView;
 class UProgressBar;
 class USizeBox;
 class UBorder;
@@ -74,18 +73,19 @@ public:
  * The code builds a plain panel when no asset supplies one, so a missing Blueprint degrades
  * the look rather than breaking the feature.
  *
- * TWO LIST PATHS, ONE VIEWMODEL. If a Widget Blueprint supplies a UListView, the rows are
- * its entry widgets, handed their UOfferViewModel through UMG's own IUserObjectListEntry -
- * not ModelViewViewModel (issue #191 dropped that dependency: no such Blueprint exists in
- * Content/UI, and the viewmodel is a plain UObject now, see OfferViewModels.h). Without a
- * UListView, the code builds a vertical box of rows itself. A UListView cannot be built
- * usefully in code here because its entry widget class is a Blueprint asset, and
- * virtualisation only earns its keep at hundreds of rows - the inbox has a handful.
+ * ONE LIST PATH: the code builds a vertical box of rows itself, each with its own Accept and Decline. THERE IS NO UListView PATH, and
+ * none can be built usefully here (removed 2026-09-30, #447; ULedgerPanelWidget and ULedgerPanelViewModel point here for the reasoning):
+ *  - it was BROKEN, not merely unused: it handed each entry widget a UOfferViewModel through UMG's IUserObjectListEntry and returned,
+ *    but nothing on that view model or on this widget is a UFUNCTION a Blueprint entry could call to Accept or Decline (AcceptRow and
+ *    DeclineRow are plain C++ bound to the code-built rows' buttons), so a Blueprint that used it showed offers the player could not
+ *    answer - and it skipped the demand strip. It had no asset, no test and no caller.
+ *  - a UListView's entry widget class is a Blueprint asset, so a list cannot be made usefully in code, and virtualisation only earns its
+ *    keep at hundreds of rows - the inbox has a handful.
+ * The view model stays a plain UObject, not ModelViewViewModel (issue #191: no such Blueprint exists in Content/UI, see OfferViewModels.h).
  *
- * TO RESTYLE IN THE DESIGNER: make a Widget Blueprint with this class as parent, name the
- * widgets to match the BindWidgetOptional members below, and set the list's entry widget
- * class. A RENAMED VIEWMODEL FIELD NEEDS THE BLUEPRINT RECOMPILED AND RESAVED, or the old
- * getter calls run against the new class - the stale-Blueprint trap, in a new place.
+ * TO RESTYLE IN THE DESIGNER (the Blueprint-optional path UAirportMgrPanelWidget rules intended): make a Widget Blueprint with this class
+ * as parent and name the widgets to match the BindWidgetOptional members below. A RENAMED VIEWMODEL FIELD NEEDS THE BLUEPRINT RECOMPILED
+ * AND RESAVED, or the old getter calls run against the new class - the stale-Blueprint trap, in a new place.
  */
 UCLASS()
 class AIRPORTMGR_API UOfferInboxWidget : public UAirportMgrPanelWidget
@@ -93,7 +93,6 @@ class AIRPORTMGR_API UOfferInboxWidget : public UAirportMgrPanelWidget
 	GENERATED_BODY()
 
 public:
-	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UListView> OfferList;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UVerticalBox> OfferColumn;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TitleText;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> BadgeText;

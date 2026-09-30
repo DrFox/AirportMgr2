@@ -16,6 +16,7 @@
 #include "Components/VerticalBoxSlot.h"
 #include "Components/WrapBox.h"
 #include "Components/WrapBoxSlot.h"
+#include "Model/GameTimeText.h"
 #include "Model/OpsEvents.h"
 #include "Model/SimClock.h"
 #include "Model/Ledger.h"
@@ -549,11 +550,9 @@ void UBuildBarWidget::RefreshClock()
 	else
 	{
 		const USimClock* Clock = Runtime->GetClock();
-		const int32 Hour = static_cast<int32>(Clock->TimeOfDay() / 3600.0);
-		const int32 Minute = static_cast<int32>(FMath::Fmod(Clock->TimeOfDay(), 3600.0) / 60.0);
-		Text = FString::Printf(TEXT("Day %d  %02d:%02d  x%.0f%s"),
-			Clock->Day() + 1, Hour, Minute, USimClock::Multiplier(Clock->GetSpeed()),
-			Clock->GetSpeed() == ESimSpeed::Paused ? TEXT("  PAUSED") : TEXT(""));
+		// THE STAMP IS GameTimeText's, the one the ledger's When column prints too (#447); the bar adds the speed beside it.
+		Text = GameTimeText::Stamp(Clock->Now()) + FString::Printf(TEXT("  x%.0f%s"),
+			USimClock::Multiplier(Clock->GetSpeed()), Clock->GetSpeed() == ESimSpeed::Paused ? TEXT("  PAUSED") : TEXT(""));
 	}
 
 	// THE GATE. See LastClockText's own comment for why the composed sentence, not a minute
@@ -624,7 +623,7 @@ void UBuildBarWidget::RefreshBalance()
 	if (PanelStyle != nullptr)
 	{
 		BalanceText->SetColorAndOpacity(FSlateColor(
-			Ledger->Balance() < 0.0 ? PanelStyle->Warning : PanelStyle->Ink));
+			Ledger->IsOverdrawn() ? PanelStyle->Warning : PanelStyle->Ink));
 	}
 }
 

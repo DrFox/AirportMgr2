@@ -1,5 +1,6 @@
 #include "LedgerViewModels.h"
 
+#include "Model/GameTimeText.h"
 #include "Model/Ledger.h"
 #include "Model/Pricing.h"
 #include "Model/SimClock.h"
@@ -38,15 +39,10 @@ void ULedgerRowViewModel::Refresh(const FLedgerEntry& Entry, const USimClock& Cl
 {
 	// DERIVED FROM THE ENTRY'S OWN TIME, not from the clock's current one: a row describes when
 	// something happened, and reading "now" here would relabel the whole panel every tick.
-	const double Seconds = Entry.At;
-	const int32 Day = static_cast<int32>(Seconds / USimClock::SecondsPerDay) + 1;
-	const double TimeOfDay = FMath::Fmod(Seconds, USimClock::SecondsPerDay);
-	const int32 Hour = static_cast<int32>(TimeOfDay / 3600.0);
-	const int32 Minute = static_cast<int32>(FMath::Fmod(TimeOfDay, 3600.0) / 60.0);
-
 	// PLAIN ASSIGNMENT (issue #191 dropped UE_MVVM_SET_PROPERTY_VALUE here and on the fields
 	// below): nothing ever bound a field on this viewmodel - see OfferViewModels.h.
-	When = FText::FromString(FString::Printf(TEXT("Day %d  %02d:%02d"), Day, Hour, Minute));
+	// THE STAMP IS GameTimeText's (#447), which reads the day off the seconds the way USimClock::Day does - this used to re-derive it.
+	When = FText::FromString(GameTimeText::Stamp(Entry.At));
 	Category = WordFor(Entry.Category);
 	What = Entry.What;
 	Amount = Pricing.Format(Entry.Amount);
@@ -60,7 +56,7 @@ bool ULedgerPanelViewModel::Refresh(const ULedger& Ledger, const USimClock& Cloc
 	// exists to avoid rebuilding forty row objects - not to avoid setting a label. Plain
 	// assignment (issue #191): see ULedgerRowViewModel::Refresh's comment above.
 	Balance = Pricing.Format(Ledger.Balance());
-	bOverdrawn = Ledger.Balance() < 0.0;
+	bOverdrawn = Ledger.IsOverdrawn();
 
 	if (Ledger.Revision() == BuiltAtRevision)
 	{

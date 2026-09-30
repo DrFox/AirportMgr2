@@ -108,38 +108,28 @@ void UAlertsPanelWidget::OnAlertsReset()
 	bRowsDirty = true;
 }
 
-void UAlertsPanelWidget::Toggle()
-{
-	bShowing = !bShowing;
-	SetShown(bShowing);
-	if (bShowing)
-	{
-		// PAINTED ON OPEN, not a frame later - the ledger panel's reason.
-		PaintRows();
-	}
-}
-
 bool UAlertsPanelWidget::WantsWindow(FUiWindowSpec& Out) const
 {
 	Out.Id = TEXT("alerts");
 	Out.Title = LOCTEXT("AlertsWindow", "Alerts");
 	Out.Anchor = EUiWindowAnchor::TopLeft;
 	Out.Offset = FVector2D(12.0, 12.0);
+	Out.bToggled = true;   // the bar's Alerts button and its close are one toggle - the host's
 	return true;
 }
 
-void UAlertsPanelWidget::OnWindowClosedByPlayer()
+void UAlertsPanelWidget::OnShownChanged(bool bShown)
 {
-	// THE CLOSE BUTTON IS THE TOGGLE - bShowing must agree, or the bar lights a window nobody can see.
-	if (bShowing)
+	if (bShown)
 	{
-		Toggle();
+		// PAINTED ON OPEN, not a frame later - the ledger panel's reason.
+		PaintRows();
 	}
 }
 
 void UAlertsPanelWidget::TickPanel(float DeltaTime)
 {
-	if (bShowing && bRowsDirty)
+	if (IsShown() && bRowsDirty)
 	{
 		PaintRows();
 	}

@@ -176,8 +176,11 @@ private:
 	 * no base class to inherit that fix from. The ResolveStyle() fallback at the one call site
 	 * below only covers a HUD asked to draw before BeginPlay has run, which a test constructing
 	 * one directly and calling DrawPlotPanel without BeginPlay could still do.
+	 *
+	 * A UPROPERTY, as every panel's is (#447): this was a raw pointer into a LoadSynchronous'd asset, alive only because the widgets
+	 * hold the same asset - a collected style would have left it dangling.
 	 */
-	const UUIStyle* CachedStyle = nullptr;
+	UPROPERTY() TObjectPtr<const UUIStyle> CachedStyle;
 
 	/** The controller this HUD belongs to, if it is the road build controller. */
 	ARoadBuildController* GetBuildController() const;

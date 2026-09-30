@@ -936,14 +936,8 @@ bool FInspectorFacilityCardTest::RunTest(const FString& Parameters)
 	Panel->FacilityRows->Show(FFacilityQuote());
 	TestFalse(TEXT("a card that is no facility shows no purchase rows"), Panel->FacilityRows->AreFacilityRowsShownForTest());
 
-	FFacilityQuote Empty = Quote;
-	Empty.Vehicles = 0;
-	TestEqual(TEXT("an empty depot on a road says what to do"),
-		FDepotCard::StatusWith(Empty, /*bReachable=*/true, TEXT("No jobs")), FString(TEXT("No vehicles \u2014 buy one")));
-	TestEqual(TEXT("off the road, the road is the fix it names"),
-		FDepotCard::StatusWith(Empty, /*bReachable=*/false, TEXT("Cannot dispatch")), FString(TEXT("Cannot dispatch")));
-	TestEqual(TEXT("with a vehicle, the backlog stands"),
-		FDepotCard::StatusWith(Quote, /*bReachable=*/true, TEXT("No jobs")), FString(TEXT("No jobs")));
+	// "NO VEHICLES - BUY ONE" IS THE BOARD'S STATUS now (#447): UJobBoard::DescribeDepot's Summary, pinned by AirportOps.Fuel.Describe.DepotBacklog;
+	// the card no longer words it over the top.
 	return true;
 }
 

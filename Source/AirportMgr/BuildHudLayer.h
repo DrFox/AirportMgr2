@@ -18,7 +18,8 @@ class APlayerController;
 /**
  * The floating windows a bar button or a key opens and closes (#448) - ONE enum and ONE toggle on the HUD layer, where each was
  * a Toggle/IsShowing pair on ARoadBuildController (four pairs, plus the alert count) that forwarded to a panel's own. A fifth
- * window adds a case here and a name in the table, not two more controller methods.
+ * window adds a case here and a name in the table, not two more controller methods. Whether a window is open is the WINDOW HOST'S
+ * (UUiWindowHost, through UAirportMgrPanelWidget::IsShown) - the panels kept a bShowing each until #447.
  *
  * Settings is one of them, but its OPENING has a driver-side effect the others lack (it drops a drag in flight), which is why
  * ARoadBuildController::ToggleSettings still exists and calls this.

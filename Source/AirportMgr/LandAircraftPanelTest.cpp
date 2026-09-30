@@ -218,9 +218,9 @@ bool FLandPanelRowLandsItsTypeTest::RunTest(const FString& Parameters)
 		CreateWidget<ULandAircraftPanelWidget>(TestWorld.World, ULandAircraftPanelWidget::StaticClass());
 	if (!TestNotNull(TEXT("the panel builds with no asset"), Panel)) { return false; }
 
-	TestFalse(TEXT("hidden until asked for"), Panel->IsShowing());
+	TestFalse(TEXT("hidden until asked for"), Panel->IsShown());
 	Panel->Toggle();
-	TestTrue(TEXT("open after one toggle"), Panel->IsShowing());
+	TestTrue(TEXT("open after one toggle"), Panel->IsShown());
 	TestEqual(TEXT("one row widget per meshed type"), Panel->RowWidgetCountForTest(),
 		LandChoices::EveryMeshedType().Num());
 
@@ -236,7 +236,7 @@ bool FLandPanelRowLandsItsTypeTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("the click asked the controller to land the A380 (asked: %s)"),
 		Asked != nullptr ? *Asked->GetName() : TEXT("nothing")),
 		Asked != nullptr && Asked->GetName() == TEXT("DA_Aircraft_Plane8"));
-	TestTrue(TEXT("and the panel stays open, so several can be queued"), Panel->IsShowing());
+	TestTrue(TEXT("and the panel stays open, so several can be queued"), Panel->IsShown());
 	return true;
 }
 

@@ -336,11 +336,14 @@ bool FInspectorCacheDepotBoardTest::RunTest(const FString&)
 	if (!TestTrue(TEXT("the rig, with a depot"), Rig.Ok() && Rig.Depot.IsSet())) { return false; }
 	const FSelection Sel = Rig.Select(ESelectionKind::Stand, Rig.Depot.Index);
 	Rig.Panel->RefreshWith(Rig.Runtime, Rig.Actor, Sel);
-	TestEqual(TEXT("no jobs to start"), Rig.Panel->StatusForTest(), FString(TEXT("No jobs")));
+	// THE STATUS IS THE BOARD'S (#447), through the card: a depot on a road with no vehicle says what to do - the sentence UJobBoard::DescribeDepot
+	// gives, which the card used to lay over the summary in a wording of its own - and the moment a vehicle joins it says its backlog instead.
+	TestEqual(TEXT("an empty depot on a road says to buy a vehicle"), Rig.Panel->StatusForTest(), FString(TEXT("No vehicles — buy one")));
 	FServiceVehicle& Bowser = Rig.Runtime->GetJobBoard()->AddVehicleForTest(TEXT("FUEL"), Rig.Depot, EServiceVehicleState::Idle, 9700.0);
 	Rig.Panel->RefreshWith(Rig.Runtime, Rig.Actor, Sel);
 	TestTrue(FString::Printf(TEXT("the vehicle is listed at once ('%s')"), *Rig.Panel->FactsForTest()),
 		Rig.Panel->FactsForTest().Contains(FString::Printf(TEXT("#%d"), Bowser.Id)));
+	TestEqual(TEXT("and with a vehicle and nothing to do, the status is its backlog's"), Rig.Panel->StatusForTest(), FString(TEXT("No jobs")));
 	return true;
 }
 

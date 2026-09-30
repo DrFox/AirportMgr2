@@ -937,6 +937,75 @@ $AllowedCallers = @(
         ProdAllowed = @('Private\Model\RoadAgent.cpp')
         TestExempt  = $true
         ProdReason  = 'take the seed whole from FRoadAgent::LiveTowSeed / LiveTowSeedAtRest / LiveTowSeedJoining - a field written into it afterwards is a second opinion on where and how fast the tow is (#429)'
+    },
+    @{
+        # THE UI PRESENTS THE MODEL'S ANSWER; IT DOES NOT RE-DECIDE IT (#447). "Overdrawn" was `Balance() < 0.0` in the bar, the ledger panel's view model
+        # and the alert: the lock on paid placements and the red on the balance could have parted. ULedger::IsOverdrawn is the one definition.
+        Name        = 'overdrawn is the ledger''s'
+        Pattern     = '\bBalance\s*\(\s*\)\s*<\s*0'
+        ProdAllowed = @('Public\Model\Ledger.h')
+        TestExempt  = $true
+        ProdReason  = 'ask ULedger::IsOverdrawn - a second `Balance() < 0` is a second definition of overdrawn, which a change to the lock would leave behind (#447)'
+    },
+    @{
+        # The contract's left/late was `AirborneBy() - Now` in the arrivals row, the aircraft card's turnaround line and its gate, and #398 changes what
+        # "late" means. UFlight::ContractSecondsLeft / IsLate is the one subtraction. (FlightBoard scores a flight at its AirborneAt - `AirborneAt -
+        # AirborneBy()` - a different instant, not matched here.)
+        Name        = 'contract left is the flight''s'
+        Pattern     = '\bAirborneBy\s*\(\s*\)\s*-'
+        ProdAllowed = @('Public\Model\Flight.h')
+        TestExempt  = $true
+        ProdReason  = 'ask UFlight::ContractSecondsLeft(Now) or IsLate(Now) - a second `AirborneBy() -` is a second rule for what late means (#447, #398)'
+    },
+    @{
+        # MOVEMENT SECONDS -> GAME SECONDS is USimClock::GameSecondsOfMovement (#447): a public static on a widget and the job board's bid each wrote
+        # `x GameSecondsPerRealSecond(TimeOfDay())`. The band's rate itself is the clock's own business, so the clock's files only.
+        Name        = 'movement seconds convert on the clock'
+        Pattern     = '\bGameSecondsPerRealSecond\s*\('
+        ProdAllowed = @('Public\Model\SimClock.h', 'Private\Model\SimClock.cpp')
+        TestExempt  = $true
+        ProdReason  = 'convert movement seconds with USimClock::GameSecondsOfMovement - the conversion between the two time bases lives on the clock (#447)'
+    },
+    @{
+        # GAME TIME IS FORMATTED IN ONE FILE (#447): "Day %d  %02d:%02d" was the bar's, the ledger's and a log line's, each deriving the day itself, and a
+        # duration was "+95 min" on the depot card beside "1 h 35 min" on the aircraft card.
+        Name        = 'game-clock text'
+        Pattern     = '%02d:%02d'
+        ProdAllowed = @('Private\Model\GameTimeText.cpp')
+        TestExempt  = $true
+        ProdReason  = 'format a game time through GameTimeText::TimeOfDay / Stamp (and a span through Duration) - the clock face is written in GameTimeText.cpp alone (#447)'
+    },
+    @{
+        # A VIEW DOES NOT RECOVER A FACT BY COMPARING ITS OWN LOCALISED TEXT (#447): the arrivals panel found "holding" by `GetStatus().EqualTo(NSLOCTEXT(
+        # ..."HOLDING"))` - a reworded status or a translation silently un-tinted it. The row says IsHolding(). ULedgerRowViewModel::bOutgoing is the
+        # same idea done right.
+        Name        = 'text compared to a literal'
+        Pattern     = '\.EqualTo\s*\(\s*NSLOCTEXT\s*\('
+        ProdAllowed = @()
+        TestExempt  = $true
+        ProdReason  = 'ask the view model for the fact (UArrivalRowViewModel::IsHolding, ULedgerRowViewModel::IsOutgoing) - do not compare what it prints (#447)'
+    },
+    @{
+        # WHETHER A WINDOW IS OPEN IS THE HOST'S (#447): four panels kept a bShowing each, a Toggle, an IsShowing and an OnWindowClosedByPlayer resync beside
+        # the host's bWanted/bUserClosed and the base's bShownRequested. UUiWindowHost::Toggle and UAirportMgrPanelWidget::IsShown are the one state and the
+        # one answer; FUiWindowSpec::bToggled makes the close the toggle; OnShownChanged is what a panel did on its own Toggle. Rule 66 is the list that must agree.
+        Name        = 'panel shown-state is the host''s'
+        Pattern     = '\bbool\s+bShowing\s*[=;]'
+        ProdAllowed = @()
+        TestExempt  = $true
+        ProdReason  = 'ask IsShown() and let the host own the state (UUiWindowHost::Toggle, FUiWindowSpec::bToggled, OnShownChanged) - a panel keeping its own flag is the copy that parts from the window (#447)'
+    },
+    @{
+        # A STAND IS NAMED BY ITS NUMBER, ONE WAY (#447): the stand card and the painted sign say StandNumber; the depot card's backlog and the JobUnserviceable
+        # alert printed the entity INDEX ("No fuel for stand 0" beside a sign reading 4). OpsNames::StandLabel is the ops layer's one naming. THE SHAPES
+        # THAT SHIPPED: an index in a Printf format or in FText::AsNumber. OpsEventBus.cpp's event Describe strings are LOG text (beside the flight and
+        # agent ids, where the index is what a developer reads) and UE_LOG lines are not Printf calls, so neither is named player-facing text.
+        # DOES NOT SEE: an index carried in a local first (`const int32 S = Job.Stand.Index;`) and printed from that - AirportOps.Model.StandLabel.* is the behaviour half.
+        Name        = 'a stand is named by OpsNames::StandLabel'
+        Pattern     = '(FString::Printf|FText::AsNumber)\b[^;]*\bStand\.Index\b'
+        ProdAllowed = @('Private\Model\OpsEventBus.cpp')
+        TestExempt  = $true
+        ProdReason  = 'name a stand to the player with OpsNames::StandLabel (the number on its sign), not its entity index, which a delete recycles (#447)'
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -3807,6 +3876,73 @@ if ($phaseSwitchesSeen -eq 0) {
     $failures.Add("flight-phase-groupings: found no switch on EFlightPhase in the production trees - UFlightBoard::TransitionTo is one; rule 58's switch check no longer sees its shape; update it, do not let it check nothing")
 }
 $ranRules.Add('flight-phase-groupings')
+
+# --- 66. THE WINDOWS A KEY OPENS ARE TOGGLED WINDOWS (#447) ----------------------------------------------------
+# Whether a window is open is the HOST'S (UUiWindowHost::Toggle/IsShown), and what its close button means is FUiWindowSpec::bToggled: a toggled window's
+# close IS the toggle, an untoggled one's sticks. UBuildHudLayer::PanelFor is the list of windows a key or a bar button toggles, and every panel on it must
+# say `bToggled = true` in its WantsWindow - a LIST THAT MUST AGREE (CLAUDE.md): a panel added to PanelFor and not marked would have its close stick, and the
+# next key press "open" it hidden, which is the bug four panels' bShowing resyncs existed to stop. (`bool bShowing` itself is a rule-4 row.)
+# DOES NOT SEE: a window toggled by a path other than PanelFor. AirportMgr.UI.WindowHost.ToggleIsTheHostsAndCloseIsToggle is the behaviour half.
+$hudLayerCpp = Join-Path $Root 'Source\AirportMgr\BuildHudLayer.cpp'
+$hudLayerH   = Join-Path $Root 'Source\AirportMgr\BuildHudLayer.h'
+if (-not (Test-Path $hudLayerCpp) -or -not (Test-Path $hudLayerH)) {
+    $failures.Add("toggled-windows-agree: BuildHudLayer.cpp/.h are named by rule 66 but one does not exist - update the rule, do not let it check nothing")
+} else {
+    $hudCppText = Get-Content -LiteralPath $hudLayerCpp -Raw
+    $hudHText   = Get-Content -LiteralPath $hudLayerH -Raw
+    $panelMembers = @([regex]::Matches($hudCppText, 'case\s+EHudWindow::\w+\s*:\s*return\s+Layer\.(\w+)\s*;') | ForEach-Object { $_.Groups[1].Value })
+    if ($panelMembers.Count -lt 1) {
+        $failures.Add("toggled-windows-agree: no 'case EHudWindow::X: return Layer.<Panel>;' rows found in BuildHudLayer.cpp's PanelFor - it moved, or rule 66 is stale (#447)")
+    }
+    foreach ($member in $panelMembers) {
+        $decl = [regex]::Match($hudHText, 'TObjectPtr<(\w+)>\s+' + [regex]::Escape($member) + '\s*;')
+        if (-not $decl.Success) {
+            $failures.Add("toggled-windows-agree: PanelFor returns Layer.$member but BuildHudLayer.h declares no TObjectPtr<...> $member - update rule 66 or the declaration (#447)")
+            continue
+        }
+        $cls = $decl.Groups[1].Value
+        $panelCpp = Join-Path $Root ('Source\AirportMgr\' + $cls.Substring(1) + '.cpp')
+        if (-not (Test-Path $panelCpp)) {
+            $failures.Add("toggled-windows-agree: $cls (Layer.$member) has no $($cls.Substring(1)).cpp beside BuildHudLayer - update rule 66")
+            continue
+        }
+        $panelText = Get-Content -LiteralPath $panelCpp -Raw
+        if ($panelText -notmatch '\bbToggled\s*=\s*true\b') {
+            $failures.Add("toggled-windows-agree: $($cls.Substring(1)).cpp is on UBuildHudLayer's PanelFor (a key or a bar button toggles it) but its WantsWindow does not set bToggled = true - its close would stick and the next key press open it hidden (#447)")
+        }
+    }
+}
+$ranRules.Add('toggled-windows-agree')
+
+# --- 67. NIGHT IS DEFINED ONCE: THE SKY FOLLOWS THE CLOCK (#447) -------------------------------------------------------
+# FSunPath hard-coded 06:00-12:00-18:00 while the clock's daylight is the scenario's DawnHour..DuskHour (6..20): for two game hours a day the field was lit as
+# night while the time compression, the demand curve and the inbox's shading said day. FSunPath takes the hours; ASunDriver::MakePath hands it the clock's.
+# THE TWO HALVES, each a way it silently un-wires: SunPath.cpp reads DawnHour and DuskHour (and keeps no quarter-day constant of its own), and SunDriver.cpp's
+# MakePath sets BOTH from the clock's resolver. DOES NOT SEE: MakePath setting them from the wrong thing (AirportMgr.Sky.SunDriver.DuskIsTheClocks reads what it sets).
+$sunPathCpp = Join-Path $Root 'Source\AirportMgr\SunPath.cpp'
+$sunDriverCpp = Join-Path $Root 'Source\AirportMgr\SunDriver.cpp'
+if (-not (Test-Path $sunPathCpp) -or -not (Test-Path $sunDriverCpp)) {
+    $failures.Add("night-defined-once: SunPath.cpp/SunDriver.cpp are named by rule 67 but one does not exist - update the rule, do not let it check nothing")
+} else {
+    $sunPathCode = @()
+    $inBlock = $false
+    foreach ($line in (Get-Content -LiteralPath $sunPathCpp)) { $sunPathCode += (Strip-ArchCode $line ([ref]$inBlock)) }
+    $sunPathText = $sunPathCode -join "`n"
+    if ($sunPathText -notmatch '\bDawnHour\b' -or $sunPathText -notmatch '\bDuskHour\b') {
+        $failures.Add("night-defined-once: SunPath.cpp no longer reads DawnHour and DuskHour - the sky has a day of its own again (#447)")
+    }
+    if ($sunPathText -match '\bQuarterDay\b') {
+        $failures.Add("night-defined-once: SunPath.cpp has a QuarterDay constant - the hard-coded 06:00-18:00 day that parted from the clock's (#447)")
+    }
+    $sunDriverText = Get-Content -LiteralPath $sunDriverCpp -Raw
+    $makePath = [regex]::Match($sunDriverText, 'FSunPath\s+ASunDriver::MakePath\s*\([^)]*\)\s*const\s*\{(?<body>.*?)\n\}', 'Singleline')
+    if (-not $makePath.Success) {
+        $failures.Add("night-defined-once: ASunDriver::MakePath not found in SunDriver.cpp - it moved, or rule 67 is stale (#447)")
+    } elseif ($makePath.Groups['body'].Value -notmatch 'ResolveDaylightHours\s*\(\s*Clock\s*,\s*Path\.DawnHour\s*,\s*Path\.DuskHour\s*\)') {
+        $failures.Add("night-defined-once: ASunDriver::MakePath does not hand the clock's dawn and dusk to the path (ResolveDaylightHours(Clock, Path.DawnHour, Path.DuskHour)) - the sky would follow a day the clock does not (#447)")
+    }
+}
+$ranRules.Add('night-defined-once')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was

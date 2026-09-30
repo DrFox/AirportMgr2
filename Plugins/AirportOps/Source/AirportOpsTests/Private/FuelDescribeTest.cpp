@@ -178,9 +178,43 @@ bool FFuelDescribeDepotBacklogTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the counts behind the text"), Backlog.Jobs, 2);
 	TestEqual(TEXT("one late"), Backlog.LateJobs, 1);
 
+	// A DEPOT WITH A VEHICLE AND NOTHING TO DO says so; one with NO VEHICLE says what to do about it (#447: the card used to lay that over the
+	// summary in its own wording, beside RefusalText's - the board owns both sentences now).
+	FEntityInstanceId Idle;
+	Idle.Index = 8;
+	Service->AddVehicleForTest(TEXT("UTILITY"), Idle, EServiceVehicleState::Idle, 1000.0);
+	TestEqual(TEXT("a depot with a vehicle and nothing to do says so"), Service->DescribeDepot(Idle, Now).Summary, FString(TEXT("No jobs")));
 	FEntityInstanceId Empty;
 	Empty.Index = 9;
-	TestEqual(TEXT("a depot with nothing to do says so"), Service->DescribeDepot(Empty, Now).Summary, FString(TEXT("No jobs")));
+	TestEqual(TEXT("a depot with no vehicle says to buy one"), Service->DescribeDepot(Empty, Now).Summary, FString(TEXT("No vehicles \u2014 buy one")));
+	TestEqual(TEXT("and lists nothing under it"), Service->DescribeDepot(Empty, Now).Detail, FString());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelDescribeDepotSpansTest, "AirportOps.Fuel.Describe.DepotSpansUseTheClocksWords",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelDescribeDepotSpansTest::RunTest(const FString& Parameters)
+{
+	// ONE WORDING OF A SPAN (#447): the depot card said "+95 min" beside the aircraft card's "1 h 35 min" for the same span. Both go through
+	// GameTimeText::Duration now, so a backlog longer than an hour reads as the clock does.
+	UJobBoard* Service = NewObject<UJobBoard>();
+	UOpsRuntime::ResolveVehicleCatalogue(*Service, *GetDefault<UScenario>());
+	FEntityInstanceId Depot;
+	Depot.Index = 1;
+	const double Now = 1000.0;
+	FServiceJob& Job = Service->AddJobForTest(1, EServiceJobState::Underway, EServiceRefusal::None, 0);
+	Job.Stand.Index = 3;
+	Job.QuantityOwed = 300.0;
+	Job.PromisedFinish = Now + 95.0 * 60.0;
+	const int32 JobId = Job.Id;
+	Service->AddTurnaroundForTest(1, Now + 60.0 * 60.0, JobId);   // the aircraft leaves at +60 min: 35 min late
+	FServiceVehicle& Bowser = Service->AddVehicleForTest(TEXT("FUEL"), Depot, EServiceVehicleState::ToJob, 9700.0);
+	Bowser.CurrentJob = JobId;
+
+	const FDepotBacklog Backlog = Service->DescribeDepot(Depot, Now);
+	TestTrue(*FString::Printf(TEXT("the job's promise in the clock's words: '%s'"), *Backlog.Detail), Backlog.Detail.Contains(TEXT("+1 h 35 min")));
+	TestTrue(TEXT("and its lateness"), Backlog.Detail.Contains(TEXT("late 35 min")));
+	TestEqual(TEXT("and the summary's"), Backlog.Summary, FString(TEXT("1 job \u00B7 clears in 1 h 35 min \u00B7 1 late")));
 	return true;
 }
 

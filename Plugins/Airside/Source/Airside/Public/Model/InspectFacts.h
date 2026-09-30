@@ -42,7 +42,7 @@ struct FAgentHold
 	 * FRoadAgent::GetStalledSeconds - how long it has stood waiting, in MOVEMENT seconds: real
 	 * time x the speed multiplier, what agents run on (USimClock's header). NOT game time - the
 	 * clock also compresses the day (~72x at the default daylight rate), and a reader showing
-	 * this beside game-time figures must convert it (UInspectorWidget::GameSecondsOfStall).
+	 * this beside game-time figures must convert it (USimClock::GameSecondsOfMovement).
 	 */
 	double StalledSeconds = 0.0;
 

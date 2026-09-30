@@ -1,5 +1,6 @@
 #include "Model/SimClock.h"
 #include "AirportOpsLog.h"
+#include "Model/GameTimeText.h"
 
 int32 USimClock::Day() const
 {
@@ -86,9 +87,7 @@ void USimClock::StartAtHour(double Hour)
 	// Now() + Interval, so moving the clock afterwards would leave every repeating entry
 	// due at a time that no longer means what it did when it was booked.
 	GameSeconds = FMath::Fmod(FMath::Max(0.0, Hour), 24.0) * 3600.0;
-	UE_LOG(LogAirportOps, Log, TEXT("Clock starts at day %d, %02d:%02d"),
-		Day() + 1, static_cast<int32>(TimeOfDay() / 3600.0),
-		static_cast<int32>(FMath::Fmod(TimeOfDay() / 60.0, 60.0)));
+	UE_LOG(LogAirportOps, Log, TEXT("Clock starts at day %d, %s"), Day() + 1, *GameTimeText::TimeOfDay(TimeOfDay()));
 }
 
 void USimClock::SetUniformDay(double RealSecondsPerDay)
@@ -113,6 +112,11 @@ double USimClock::GameSecondsPerRealSecond(double TimeOfDaySeconds) const
 	// Guarded rather than asserted: a zero from a mis-authored scenario should give a
 	// frozen clock and a log line, not a division by zero in Tick.
 	return Real > 0.0 ? Hours * 3600.0 / Real : 0.0;
+}
+
+double USimClock::GameSecondsOfMovement(double MovementSeconds) const
+{
+	return MovementSeconds * GameSecondsPerRealSecond(TimeOfDay());
 }
 
 double USimClock::TimeScale() const

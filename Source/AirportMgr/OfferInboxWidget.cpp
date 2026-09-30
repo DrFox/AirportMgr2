@@ -8,7 +8,6 @@
 #include "Components/CanvasPanelSlot.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
-#include "Components/ListView.h"
 #include "Components/ProgressBar.h"
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
@@ -316,15 +315,9 @@ void UOfferInboxWidget::PaintRows()
 		SetWindowBadge(Badge);
 	}
 
-	// The Blueprint path: UListView::SetListItems (core UMG, not ModelViewViewModel - issue
-	// #191 dropped that dependency, since nothing used it) hands each entry widget its own
-	// UOfferViewModel through IUserObjectListEntry; the entry widget's Blueprint graph reads
-	// its getters the same way PaintRows does below for the code-built path.
-	if (OfferList != nullptr)
-	{
-		OfferList->SetListItems(Rows);
-		return;
-	}
+	// NO UListView PATH (removed #447): it handed each entry widget its UOfferViewModel and returned, skipping the demand strip - and the
+	// entry could read the row but never answer it (see the class comment), so a Blueprint that used it showed offers the player could not
+	// accept. A Blueprint restyles the code-built rows through the slots below, which do answer.
 
 	if (OfferColumn == nullptr)
 	{

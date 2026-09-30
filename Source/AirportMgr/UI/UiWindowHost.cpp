@@ -279,6 +279,12 @@ void UUiWindowHost::Apply(FUiWindowEntry& E)
 		{
 			UpdateScrim(E);
 		}
+		// THE PANEL HEARS EVERY CHANGE, from whichever door made it - the key, the bar, its own SetShown, the player's close (#447). What a
+		// panel did on Toggle() (paint on open) it does here, so a close-button hide and a key hide cannot differ.
+		if (E.Panel != nullptr)
+		{
+			E.Panel->OnShownChanged(Wanted != ESlateVisibility::Collapsed);
+		}
 	}
 }
 
@@ -301,6 +307,16 @@ bool UUiWindowHost::IsShown(FName Id) const
 	return E != nullptr && E->bWanted && !E->bUserClosed;
 }
 
+bool UUiWindowHost::Toggle(FName Id)
+{
+	if (Find(Id) == nullptr)
+	{
+		return false;
+	}
+	SetShown(Id, !IsShown(Id));
+	return IsShown(Id);
+}
+
 void UUiWindowHost::ForgetDismissal(FName Id)
 {
 	if (FUiWindowEntry* E = Find(Id))
@@ -314,13 +330,25 @@ void UUiWindowHost::CloseByPlayer(FName Id)
 {
 	if (FUiWindowEntry* E = Find(Id))
 	{
-		E->bUserClosed = true;
-		Apply(*E);
-		UE_LOG(LogRoadBuild, Log, TEXT("Window %s: closed by the player"), *Id.ToString());
+		// THE PANEL FIRST, while it still shows: a panel that must unwind an open session asks IsShown to know it has one (Settings' Cancel
+		// reverts what the player dragged) and would find the window already hidden. It used to hear it AFTER the hide, which suited panels that
+		// only kept a bShowing in step.
 		if (E->Panel != nullptr)
 		{
 			E->Panel->OnWindowClosedByPlayer();
 		}
+		if (E->Spec.bToggled)
+		{
+			// THE CLOSE BUTTON IS THE TOGGLE: hidden plainly, so the next key press opens it (#447).
+			E->bWanted = false;
+			E->bUserClosed = false;
+		}
+		else
+		{
+			E->bUserClosed = true;
+		}
+		Apply(*E);
+		UE_LOG(LogRoadBuild, Log, TEXT("Window %s: closed by the player"), *Id.ToString());
 	}
 }
 

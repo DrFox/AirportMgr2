@@ -17,6 +17,14 @@ class UWidget;
  * Shared base for the code-built HUD panels: the bar, the inspector, the offer inbox, the
  * toast stack.
  *
+ * C++ BASE, BLUEPRINT-OPTIONAL IS THE INTENDED DESIGN - KEPT 2026-09-30 (#447; ruled in the review fix run while the owner was away, on his
+ * stated UI design of 2026-09-06): "UMG, a C++ base owns the logic, a Blueprint widget supplies layout and style, so restyling needs no build". Every panel therefore has BindWidgetOptional
+ * slots and the code builds what no asset supplied, and UBuildHudLayer has *Class hooks. No Widget Blueprint exists yet (2026-09-30: no asset in
+ * Content references a panel class, no ini sets a *Class), which is why the review read the path as dead; it is the path waiting for its first user,
+ * and deleting it would make the first restyle a build. Only what cannot work was removed: the inbox's UListView branch, which could show offers
+ * and never answer one (see UOfferInboxWidget). OPEN OWNER QUESTION: commit to code-built panels (drop the slots and the hooks), or author a
+ * first Widget Blueprint so the path is exercised and tested?
+ *
  * A TEMPLATE METHOD, not four copies of the same guard. Every one of the four used to repeat,
  * byte-for-byte: `Super::Initialize(); if (!bOk||bBuilt||RF_ClassDefaultObject||WidgetTree==
  * nullptr) return bOk; bBuilt=true; EnsureSlots();` (issue #90). Initialize() is sealed here
@@ -69,10 +77,29 @@ public:
 	 */
 	void RunPanelTick(float DeltaTime);
 
-	/** The player pressed this panel's window's close. Default: nothing; a toggled panel un-toggles. */
+	/**
+	 * The player pressed this panel's window's close - called BEFORE the host hides it (see UUiWindowHost::CloseByPlayer), so a panel with a
+	 * session to unwind can still ask IsShown. Default: nothing - the host hides a bToggled window itself, which is what four panels used to do
+	 * here to keep a private bShowing in step (#447). Settings overrides it to cancel its edit.
+	 */
 	virtual void OnWindowClosedByPlayer();
 
-	/** Whether the window shows: the host's answer when hosted, the last SetShown otherwise. */
+	/**
+	 * The window showed or hid, from any door: the key, the bar, this panel's own SetShown, the player's close. Default: nothing. The host
+	 * calls it when it changes a hosted window's visibility; SetShown calls it itself when there is no host (a headless test, the bar). A panel
+	 * does here what it used to do on its own Toggle - paint on open, so it never appears empty for a frame - and so every door does it alike.
+	 * It may fire from the host's AddWindow, before AttachToHost, with bShown false: a handler acts on true and is inert on false.
+	 * ENFORCED BY: AirportMgr.UI.WindowHost.ToggleIsTheHostsAndCloseIsToggle (hosted), AirportMgr.Panels.OnShownChangedFiresWithoutAHost (unhosted)
+	 */
+	virtual void OnShownChanged(bool bShown);
+
+	/**
+	 * Open the window, or close it if open. THE HOST'S toggle when hosted (UUiWindowHost::Toggle - the state is its bWanted/bUserClosed), a flip of
+	 * the last request when not. Virtual for Settings, whose open begins an edit and whose close cancels it. Nothing overrides it to keep a flag.
+	 */
+	virtual void Toggle();
+
+	/** Whether the window shows: the host's answer when hosted, the last SetShown otherwise. THE ONE ANSWER - no panel keeps its own. */
 	bool IsShown() const;
 
 	/** Runs NativeTick with a throwaway geometry, so a headless test can drive a tick without a

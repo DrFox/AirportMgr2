@@ -39,7 +39,7 @@ enum class EAgentPhase : uint8;
  */
 struct FDepotBacklog
 {
-	/** "3 jobs · clears in 38 min · 1 late", or "No jobs". */
+	/** "3 jobs · clears in 38 min · 1 late", "No jobs", or - a depot with no vehicle at all - "No vehicles — buy one". */
 	FString Summary;
 
 	/** One line per vehicle, then its jobs in the order it will do them. Empty with no vehicles. */
@@ -499,8 +499,11 @@ public:
 	 * A STRING BUILT HERE rather than an enum the panel switches on: it is presentation of two
 	 * orthogonal model facts (the state, and for Unserviceable the reason), and nothing branches on
 	 * it - the same argument InspectFacts::StatusOf makes for its own line.
+	 *
+	 * NETWORK NAMES THE STANDS (#447): a vehicle's line says "to stand 4" by the number painted at the stand (OpsNames::StandLabel), which
+	 * only the network's entity holds. Null - a world-free test of the board - names them by index, as before.
 	 */
-	FString DescribeAgent(int32 AgentId, double Now) const;
+	FString DescribeAgent(int32 AgentId, double Now, const URoadNetwork* Network = nullptr) const;
 
 	/**
 	 * DescribeAgent, and whether its answer MOVES WITH THE CLOCK: true only while the fuel line counts litres down
@@ -508,8 +511,9 @@ public:
 	 * board, so a caller may keep it until Revision moves - the inspector does (ops batch 3 PR E).
 	 * ENFORCED BY: AirportOps.Fuel.LineSaysWhenItMovesWithTheClock (live only while serving);
 	 * AirportMgr.Inspector.Cache.FuelLineLiveWhilePumping (the card follows it while live)
+	 * Network: see the overload above.
 	 */
-	FString DescribeAgent(int32 AgentId, double Now, bool& bOutMovesWithClock) const;
+	FString DescribeAgent(int32 AgentId, double Now, bool& bOutMovesWithClock, const URoadNetwork* Network = nullptr) const;
 
 	/**
 	 * The player's Unstick for a VEHICLE (spec 2026-09-29-unstick-agent): every job it holds - the
@@ -536,8 +540,14 @@ public:
 	 * whole - but rounded from Now, so they move at half-minute offsets of it, not at the game minute. The
 	 * inspector therefore passes the START of the game minute as Now (ops batch 3 PR E), which makes its
 	 * card a function of the minute it keys on, and redraws it at most once a game minute.
+	 *
+	 * THE STATUS IS THE BOARD'S (#447): a depot with no vehicle says "No vehicles - buy one" in Summary, where the card laid that over
+	 * the summary in its own wording beside RefusalText's. Network names the stands as the card does (OpsNames::StandLabel); null names
+	 * them by index, for a test of the board with no graph.
+	 * ENFORCED BY: AirportOps.Fuel.Describe.DepotBacklog (the no-vehicle and no-job cases),
+	 * AirportOps.Model.StandLabel.AlertBacklogAndCardSayTheSameNumber
 	 */
-	FDepotBacklog DescribeDepot(FEntityInstanceId Depot, double Now) const;
+	FDepotBacklog DescribeDepot(FEntityInstanceId Depot, double Now, const URoadNetwork* Network = nullptr) const;
 
 	/**
 	 * THE FLEET'S MEMBERSHIP DOOR (#443): every vehicle that joins or leaves goes through FServiceFleet::Add and
@@ -559,7 +569,7 @@ public:
 
 	/** "Bowser #7 · at depot 1 · 10,000 L" - the one line the depot card's backlog and its fleet rows share. The kind's
 	 *  NAME, through FServiceFleet::NameOf (#430): the card listed "FUEL #7" beside the "Bowser" it sold. */
-	FString VehicleLine(const FServiceVehicle& Vehicle) const;
+	FString VehicleLine(const FServiceVehicle& Vehicle, const URoadNetwork* Network = nullptr) const;
 
 	/** A turnaround with a deadline and one job, bypassing OnAgentPhase - for the backlog's lateness. */
 	void AddTurnaroundForTest(int32 AircraftId, double TurnaroundEndsAt, int32 JobId);
@@ -807,11 +817,11 @@ private:
 
 	/** The vehicle card's line - its kind's NAME (FServiceFleet::NameOf, #430), what it is doing, what it carries, what
 	 *  is queued. */
-	FString DescribeVehicle(const FServiceVehicle& Vehicle) const;
+	FString DescribeVehicle(const FServiceVehicle& Vehicle, const URoadNetwork* Network = nullptr) const;
 
 	/** "to stand 3", "at depot 1" - the one phrase the vehicle card and the depot card share, so the
-	 *  two cannot describe the same vehicle two ways. */
-	FString VehicleDoing(const FServiceVehicle& Vehicle) const;
+	 *  two cannot describe the same vehicle two ways. The stand is named by its number when Network is given (OpsNames::StandLabel). */
+	FString VehicleDoing(const FServiceVehicle& Vehicle, const URoadNetwork* Network = nullptr) const;
 
 	/** A job the vehicle can no longer do goes back to the board, remainder and all. */
 	void Reopen(FServiceJob& Job);

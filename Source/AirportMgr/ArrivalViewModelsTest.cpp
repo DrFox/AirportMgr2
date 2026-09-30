@@ -127,4 +127,33 @@ bool FArrivalsTurnaroundLineTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalsHoldingIsAFactTest, "AirportMgr.UI.Arrivals.HoldingIsAFactNotAWord",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalsHoldingIsAFactTest::RunTest(const FString& Parameters)
+{
+	// THE PANEL TINTS "HOLDING" (the one state the player can act on) and used to find it by comparing the status's LOCALISED TEXT against a copy of
+	// the word - a reworded status or a translation would have un-tinted it silently (#447). The row says so itself now, set by the same Refresh that
+	// words the status, through the same phase test.
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = NewObject<UFlightBoard>();
+	UFlight* Holding = Flight(TEXT("CU 1"), EFlightPhase::Inbound);
+	Holding->HoldingSince = 5.0;
+	UFlight* Landing = Flight(TEXT("CU 2"), EFlightPhase::Landing);
+	UFlight* OnStand = Flight(TEXT("G-ABCD"), EFlightPhase::Turnaround);
+	for (UFlight* Each : { Holding, Landing, OnStand }) { Board->AddOffer(*Clock, Each); }
+
+	UArrivalsViewModel* Arrivals = NewObject<UArrivalsViewModel>();
+	Arrivals->Refresh(*Board, *Clock);
+	int32 HoldingRows = 0;
+	for (const UArrivalRowViewModel* Row : Arrivals->GetRows())
+	{
+		const bool bSaysHolding = Row->GetTitle().ToString().Contains(TEXT("CU 1"));
+		TestEqual(*FString::Printf(TEXT("'%s': the row is holding exactly when its flight is the holding one"), *Row->GetTitle().ToString()),
+			Row->IsHolding(), bSaysHolding);
+		HoldingRows += Row->IsHolding() ? 1 : 0;
+	}
+	TestEqual(TEXT("one holding row of three"), HoldingRows, 1);
+	return true;
+}
+
 #endif

@@ -11,19 +11,26 @@ FSunLighting FSunPath::At(double DayFraction) const
 		Fraction += 1.0;
 	}
 
-	// T is -1 at 06:00, 0 at noon, +1 at 18:00. Cosine of a quarter turn gives 1 at noon
+	// T is -1 at DawnHour, 0 at noon, +1 at DuskHour. Cosine of a quarter turn gives 1 at noon
 	// falling to 0 at each end, so the elevation reaches MaxElevationDegrees exactly once
 	// and MEETS the floor smoothly rather than stepping onto it - a step would read as the
 	// sun snapping at dawn and dusk, twice every game day.
+	//
+	// NOON IS FIXED AT 12:00 and each side has its own length (#447): the morning rises over Noon - Dawn, the afternoon sets over
+	// Dusk - Noon, so the clock's 06:00-20:00 day is a 6 h rise and an 8 h fall and the peak is where the art direction judged it.
+	// A side with no length (a Dawn at or after noon, a Dusk at or before it) has no arc and sits at the floor rather than dividing by zero.
 	constexpr double Noon = 0.5;
-	constexpr double QuarterDay = 0.25;
-	const double T = (Fraction - Noon) / QuarterDay;
+	const double HalfArc = Fraction < Noon ? Noon - DawnHour / 24.0 : DuskHour / 24.0 - Noon;
 
 	double Elevation = MinElevationDegrees;
-	if (FMath::Abs(T) < 1.0)
+	if (HalfArc > 0.0)
 	{
-		const double Shape = FMath::Cos(T * UE_DOUBLE_HALF_PI);
-		Elevation = FMath::Lerp(MinElevationDegrees, MaxElevationDegrees, Shape);
+		const double T = (Fraction - Noon) / HalfArc;
+		if (FMath::Abs(T) < 1.0)
+		{
+			const double Shape = FMath::Cos(T * UE_DOUBLE_HALF_PI);
+			Elevation = FMath::Lerp(MinElevationDegrees, MaxElevationDegrees, Shape);
+		}
 	}
 
 	// Alpha is 0 at the floor and 1 at noon, and drives colour and brightness TOGETHER so

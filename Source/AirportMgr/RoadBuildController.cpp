@@ -987,7 +987,7 @@ void ARoadBuildController::DropGestureForModal()
 
 bool ARoadBuildController::IsSettingsShowing() const
 {
-	return Hud != nullptr && Hud->SettingsPanel != nullptr && Hud->SettingsPanel->IsShowing();
+	return Hud != nullptr && Hud->SettingsPanel != nullptr && Hud->SettingsPanel->IsShown();
 }
 
 bool ARoadBuildController::IsModalOpen() const

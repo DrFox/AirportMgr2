@@ -71,14 +71,11 @@ public:
 
 	/**
 	 * "lands in 15 min - airborne within 1 h 10 min", from the flight's lead time and contract.
-	 * GAME time, in the clock's own words: the player reads the clock, not a seconds count.
+	 * GAME time, in the clock's own words (GameTimeText::Duration, which the arrivals rows, the cards and the depot's backlog
+	 * share - DescribeDuration lived here until #447): the player reads the clock, not a seconds count.
 	 * Static so a test can ask it of numbers.
 	 */
 	static FText DescribeContract(double LeadTimeSeconds, double ContractSeconds);
-
-	/** "15 min", "1 h", "1 h 10 min" - game time as the clock reads, never seconds. Shared with
-	 *  the arrivals rows so the two sections word a duration one way. */
-	static FText DescribeDuration(double Seconds);
 
 private:
 	UPROPERTY(Transient) FText Callsign;
@@ -157,7 +154,7 @@ public:
 		const USimClock& Clock, const UAirlineRoster* Airlines = nullptr);
 
 	/**
-	 * The rows, as the raw pointers SetListItems and Blueprint want. Built ON DEMAND from
+	 * The rows, as the raw pointers Blueprint wants (and the inbox's UListView path, removed in #447, did). Built ON DEMAND from
 	 * Rows (below) every call rather than kept as a second stored array (issue #191): Rows
 	 * and a hand-mirrored Offers used to have to agree at every place either changed, which
 	 * is CLAUDE.md's "lists that must agree are one list" - a caller that touched one and

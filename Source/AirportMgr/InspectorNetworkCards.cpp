@@ -209,16 +209,6 @@ bool FStandCard::Compose(const FInspectorCardInput& In, FInspectorCardView& Out)
 
 // --- Depot ----------------------------------------------------------------------------------------------------------
 
-FString FDepotCard::StatusWith(const FFacilityQuote& Quote, bool bReachable, const FString& Current)
-{
-	// OFF THE ROAD, THE ROAD IS THE FIX, and a depot with a vehicle keeps its backlog line.
-	if (!bReachable || !Quote.IsFacility() || Quote.Vehicles > 0)
-	{
-		return Current;
-	}
-	return NSLOCTEXT("AirportMgr", "InspectorDepotNoVehicles", "No vehicles — buy one").ToString();
-}
-
 FInspectorCardKey FDepotCard::KeyFor(const FInspectorCardInput& In) const
 {
 	FInspectorCardKey Key = InspectorNetworkKey(In);
@@ -269,15 +259,17 @@ bool FDepotCard::Compose(const FInspectorCardInput& In, FInspectorCardView& Out)
 	// THE ONE selection->depot WALK (ruling C4) - the controller's verbs ask the same function.
 	const FEntityInstanceId DepotId = ARoadBuildController::DepotForSelection(In.Target, In.Selection);
 	const UOpsRuntime* Runtime = In.Runtime;
-	if (Runtime != nullptr && S.bReachable)
+	// THE STATUS IS THE BOARD'S, "No vehicles - buy one" INCLUDED (#447): this card laid that sentence over the summary in a wording of its
+	// own beside RefusalText's. OFF THE ROAD, THE ROAD IS THE FIX, so an unreachable depot keeps "Cannot dispatch" and asks the board nothing.
+	if (Runtime != nullptr && S.bReachable && DepotId.IsSet())
 	{
 		if (const UJobBoard* Board = Runtime->GetJobBoard())
 		{
 			// AT THE MINUTE, not at Now: the card's key holds the game minute (FInspectorCardKey), so what it
 			// shows must be a function of the minute - DescribeDepot's own rounding from Now would move a
-			// figure mid-minute that the key could not see.
+			// figure mid-minute that the key could not see. THE NETWORK names the stands by the number on their signs.
 			++BacklogCalls;
-			const FDepotBacklog Backlog = Board->DescribeDepot(DepotId, InspectorMinuteStart(*Runtime));
+			const FDepotBacklog Backlog = Board->DescribeDepot(DepotId, InspectorMinuteStart(*Runtime), Network);
 			Out.Status = Backlog.Summary;
 			if (!Backlog.Detail.IsEmpty())
 			{
@@ -285,17 +277,15 @@ bool FDepotCard::Compose(const FInspectorCardInput& In, FInspectorCardView& Out)
 			}
 		}
 	}
-	// THE PURCHASE ROWS AND "NO VEHICLES", from the one quote (facility-upgrades spec §4). It WAS asked EVERY TICK, outside the
+	// THE PURCHASE ROWS, from the one quote (facility-upgrades spec §4). It WAS asked EVERY TICK, outside the
 	// card's key, because the quote reads the balance and the key held none of it - although ULedger::Revision exists (#441), and
 	// is in the key now. The quote reads the balance (a Buy greys when it is unaffordable), the fleet, the sheds and the bays:
-	// the ledger, the job board and the network, each keyed. The Status the backlog gave is the one "No vehicles" is laid over,
-	// from this same quote, so the two cannot disagree.
+	// the ledger, the job board and the network, each keyed.
 	if (Runtime != nullptr && DepotId.IsSet())
 	{
 		++QuoteCalls;
 		Out.Quote = Runtime->QuoteFacility(DepotId);
 	}
-	Out.Status = StatusWith(Out.Quote, S.bReachable, Out.Status);
 	return true;
 }
 

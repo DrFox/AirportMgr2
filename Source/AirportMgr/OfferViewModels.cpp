@@ -4,31 +4,17 @@
 #include "Model/ArrivalPlanner.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
+#include "Model/GameTimeText.h"
 #include "Model/GroundTraffic.h"
 #include "Model/OfferGenerator.h"
 #include "Model/Pricing.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 
-FText UOfferViewModel::DescribeDuration(double Seconds)
-{
-	const int32 Minutes = FMath::Max(0, FMath::RoundToInt(Seconds / 60.0));
-	if (Minutes < 60)
-	{
-		return FText::Format(NSLOCTEXT("AirportMgr", "DurationMin", "{0} min"), FText::AsNumber(Minutes));
-	}
-	const int32 Hours = Minutes / 60;
-	const int32 Rest = Minutes % 60;
-	return Rest == 0
-		? FText::Format(NSLOCTEXT("AirportMgr", "DurationH", "{0} h"), FText::AsNumber(Hours))
-		: FText::Format(NSLOCTEXT("AirportMgr", "DurationHMin", "{0} h {1} min"),
-			FText::AsNumber(Hours), FText::AsNumber(Rest));
-}
-
 FText UOfferViewModel::DescribeContract(double LeadTimeSeconds, double ContractSeconds)
 {
 	return FText::Format(NSLOCTEXT("AirportMgr", "OfferContract", "lands in {0} \u00B7 airborne within {1}"),
-		DescribeDuration(LeadTimeSeconds), DescribeDuration(ContractSeconds));
+		GameTimeText::Duration(LeadTimeSeconds), GameTimeText::Duration(ContractSeconds));
 }
 
 FText UOfferViewModel::DescribeSatisfaction(const FAirlineStanding* Standing)

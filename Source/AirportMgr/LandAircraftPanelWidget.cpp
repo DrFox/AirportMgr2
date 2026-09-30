@@ -64,27 +64,15 @@ bool ULandAircraftPanelWidget::WantsWindow(FUiWindowSpec& Out) const
 	Out.Title = LOCTEXT("LandWindow", "Land an aircraft");
 	Out.Anchor = EUiWindowAnchor::TopLeft;
 	Out.Offset = FVector2D(12.0, TopOffset);
+	Out.bToggled = true;   // key 7 and the close button are one toggle - the host's (#447)
 	return true;
 }
 
-void ULandAircraftPanelWidget::OnWindowClosedByPlayer()
+void ULandAircraftPanelWidget::OnShownChanged(bool bShown)
 {
-	// THE CLOSE BUTTON IS THE TOGGLE - the ledger's reasoning: bShowing must agree, or the next 7
-	// "opens" it hidden and the bar lights a panel nobody can see.
-	if (bShowing)
-	{
-		Toggle();
-	}
-}
-
-void ULandAircraftPanelWidget::Toggle()
-{
-	bShowing = !bShowing;
-	SetShown(bShowing);
-
 	// JUDGED ON OPEN, not left to the next tick - a panel that appeared empty for a frame and
 	// then filled reads as a bug, the ledger's reasoning.
-	if (bShowing)
+	if (bShown)
 	{
 		Refresh();
 	}
@@ -259,7 +247,7 @@ void ULandAircraftPanelWidget::TickPanel(float InDeltaTime)
 {
 
 	// ONLY WHILE OPEN - a closed panel asks nothing.
-	if (bShowing)
+	if (IsShown())
 	{
 		Refresh();
 	}

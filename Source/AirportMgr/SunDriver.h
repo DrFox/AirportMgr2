@@ -68,13 +68,24 @@ public:
 	 */
 	static double ResolveDayFraction(const USimClock* Clock);
 
+	/**
+	 * Where daylight begins and ends, in hours: the game clock's (the scenario's, applied by UOpsRuntime::ApplyScenarioFigures) - the
+	 * hours the day's time compression, the demand curve and the inbox's night shading already follow, so there is ONE definition of night
+	 * (#447). With no clock (the editor viewport, the first PIE frame) the scenario's own defaults, not a third set of figures here.
+	 */
+	static void ResolveDaylightHours(const USimClock* Clock, double& OutDawnHour, double& OutDuskHour);
+
+	/**
+	 * The path this driver evaluates: its tunables, and the clock's daylight. Public so a test can ask the path a driver WOULD use - the
+	 * wiring between the clock's dusk and the sky, which a test of FSunPath alone cannot see.
+	 * ENFORCED BY: AirportMgr.Sky.SunDriver.DuskIsTheClocks, Check-Architecture rule 67 (MakePath hands both hours on)
+	 */
+	FSunPath MakePath(const USimClock* Clock) const;
+
 	virtual void Tick(float DeltaSeconds) override;
 
 protected:
 	virtual void BeginPlay() override;
-
-	/** Copy the tunables above onto a path, so details-panel edits take effect live. */
-	FSunPath MakePath() const;
 
 	/** Read the clock, evaluate the path, set the light. */
 	void ApplyToSun();

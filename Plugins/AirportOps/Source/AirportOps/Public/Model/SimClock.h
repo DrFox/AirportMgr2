@@ -94,6 +94,20 @@ public:
 	/** Game seconds per real second at x1, in the band TimeOfDaySeconds falls in. */
 	double GameSecondsPerRealSecond(double TimeOfDaySeconds) const;
 
+	/**
+	 * MOVEMENT seconds - real time x the speed multiplier, what agents run on (FAgentHold::StalledSeconds counts in it, and so does a
+	 * drive's length in a bid) - as GAME seconds: x the day's compression at this clock's time of day NOW. The ONE conversion between
+	 * the two time bases (#447): a widget's public static and the job board's bid each wrote it, and a widget is no place for a rule two
+	 * layers depend on.
+	 *
+	 * NOT TimeScale(): that is Multiplier x day rate, and movement seconds already carry the multiplier (agents run on it). Only the day's
+	 * compression is missing. THE RATE NOW, not integrated over the span: a span that straddles dawn or dusk reads at the current band's
+	 * rate, an error of one band change against a figure shown to the minute. A caller converting a long FUTURE span should Advance.
+	 * ENFORCED BY: Check-Architecture rule 4's 'movement seconds convert on the clock' row (no caller outside SimClock re-derives it),
+	 * AirportOps.Model.SimClock.MovementSecondsConvertAtTheBandsRate
+	 */
+	double GameSecondsOfMovement(double MovementSeconds) const;
+
 	double Now() const { return GameSeconds; }
 	int32 Day() const;
 	double TimeOfDay() const;

@@ -102,7 +102,7 @@ bool FSettingsOpenTest::RunTest(const FString& Parameters)
 	SettingsPanelTest::FFixture F;
 	if (!TestTrue(TEXT("a hosted panel"), F.Ok())) { return false; }
 	F.Panel->Open();
-	TestTrue(TEXT("open"), F.Panel->IsShowing());
+	TestTrue(TEXT("open"), F.Panel->IsShown());
 	TestTrue(TEXT("as a modal"), F.Host->IsModalOpen());
 	UUiSlider* Ui = F.Find<UUiSlider>(TEXT("UiScale"));
 	UUiSlider* Pan = F.Find<UUiSlider>(TEXT("PanSpeed"));
@@ -173,7 +173,7 @@ bool FSettingsCancelTest::RunTest(const FString& Parameters)
 	F.ClickButton(TEXT("Cancel"));
 	TestTrue(TEXT("every value is back"), F.Sink->Values == SettingsPanelTest::Seeded());
 	TestTrue(TEXT("and what was saved is what was there before"), F.Sink->Saved == SettingsPanelTest::Seeded());
-	TestFalse(TEXT("closed"), F.Panel->IsShowing());
+	TestFalse(TEXT("closed"), F.Panel->IsShown());
 	TestFalse(TEXT("and no modal is left"), F.Host->IsModalOpen());
 	return true;
 }
@@ -192,7 +192,7 @@ bool FSettingsSaveTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("saved once"), F.Sink->Saves, 1);
 	TestEqual(TEXT("the change was saved"), F.Sink->Saved.PanSpeedScale, 1.8f, 1e-4f);
 	TestEqual(TEXT("and is still in force"), F.Sink->Values.PanSpeedScale, 1.8f, 1e-4f);
-	TestFalse(TEXT("closed"), F.Panel->IsShowing());
+	TestFalse(TEXT("closed"), F.Panel->IsShown());
 	return true;
 }
 
@@ -209,7 +209,7 @@ bool FSettingsCloseTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("control: the drag was in force before the close"), F.Sink->Values.PanSpeedScale, 1.8f, 1e-4f);
 	F.Host->CloseByPlayer(TEXT("settings"));
 	TestTrue(TEXT("every value is back"), F.Sink->Values == SettingsPanelTest::Seeded());
-	TestFalse(TEXT("closed"), F.Panel->IsShowing());
+	TestFalse(TEXT("closed"), F.Panel->IsShown());
 	F.Panel->Toggle();
 	TestTrue(TEXT("and the next toggle opens it again"), F.Host->IsShown(TEXT("settings")));
 	return true;
@@ -267,7 +267,7 @@ bool FSettingsResetLayoutTest::RunTest(const FString& Parameters)
 	F.Panel->Open();
 	F.ClickButton(TEXT("ResetLayout"));
 	TestFalse(TEXT("the saved placement is gone"), Store->Read(TEXT("ledger")).IsSet());
-	TestTrue(TEXT("and the dialog stays open - resetting is not closing"), F.Panel->IsShowing());
+	TestTrue(TEXT("and the dialog stays open - resetting is not closing"), F.Panel->IsShown());
 	return true;
 }
 

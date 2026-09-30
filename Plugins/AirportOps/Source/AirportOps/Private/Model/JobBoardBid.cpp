@@ -309,7 +309,7 @@ ServiceBid::FResult UJobBoard::BidFor(const FServiceVehicle& Vehicle, const FSer
 	// which runs at the speed multiplier while game time runs at the multiplier times the day
 	// compression - so movement seconds times game-per-real at the hour is the drive in game seconds.
 	// Taken once per bid; the hour a bid spans barely moves it.
-	const double GamePerMovement = FMath::Max(Clock.GameSecondsPerRealSecond(Clock.TimeOfDay()), 0.0);
+	const double GamePerMovement = Clock.GameSecondsOfMovement(1.0);   // game seconds one movement second is worth at this hour
 
 	// NODES AS SMALL INTS for the pure simulation, which knows nothing of the graph.
 	TArray<FGuidelineNodeId> Nodes;

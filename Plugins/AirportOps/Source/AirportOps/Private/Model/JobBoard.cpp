@@ -1,8 +1,10 @@
 #include "Model/JobBoard.h"
 
 #include "Model/Flight.h"
+#include "Model/GameTimeText.h"
 #include "Model/Ledger.h"
 #include "Model/OpsEventBus.h"
+#include "Model/OpsNames.h"
 #include "Model/Pricing.h"
 
 #include "AirportOpsLog.h"
@@ -332,11 +334,11 @@ int32 UJobBoard::VehiclesAt(FEntityInstanceId Depot) const
 	return Count;
 }
 
-FString UJobBoard::VehicleLine(const FServiceVehicle& Vehicle) const
+FString UJobBoard::VehicleLine(const FServiceVehicle& Vehicle, const URoadNetwork* Network) const
 {
 	const FString Dot = TEXT(" · ");
 	// THE KIND'S NAME, the one the shop sold it under (#430) - not its code: the card listed "FUEL #7" beside a "Bowser".
-	return FString::Printf(TEXT("%s #%d"), *FServiceFleet::NameOf(*this, Vehicle.TypeCode).ToString(), Vehicle.Id) + Dot + VehicleDoing(Vehicle)
+	return FString::Printf(TEXT("%s #%d"), *FServiceFleet::NameOf(*this, Vehicle.TypeCode).ToString(), Vehicle.Id) + Dot + VehicleDoing(Vehicle, Network)
 		+ Dot + FText::AsNumber(FMath::RoundToInt(Vehicle.Cargo)).ToString() + TEXT(" L");
 }
 
@@ -1379,14 +1381,16 @@ void UJobBoard::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Netw
 	}
 }
 
-FString UJobBoard::VehicleDoing(const FServiceVehicle& Vehicle) const
+FString UJobBoard::VehicleDoing(const FServiceVehicle& Vehicle, const URoadNetwork* Network) const
 {
 	const FServiceJob* Job = FindJob(Vehicle.CurrentJob);
-	const int32 Stand = Job != nullptr ? Job->Stand.Index : INDEX_NONE;
+	// THE STAND BY ITS NUMBER, as the stand card and the sign painted at its turn-off say it (OpsNames::StandLabel) - not the entity index,
+	// which a delete recycles and which starts at 0 (#447). No job, no stand: INDEX_NONE, as before.
+	const FString Stand = Job != nullptr ? OpsNames::StandLabel(Network, Job->Stand) : FString::FromInt(INDEX_NONE);
 	switch (Vehicle.State)
 	{
-	case EServiceVehicleState::ToJob:      return FString::Printf(TEXT("to stand %d"), Stand);
-	case EServiceVehicleState::Serving:    return FString::Printf(TEXT("fuelling at stand %d"), Stand);
+	case EServiceVehicleState::ToJob:      return FString::Printf(TEXT("to stand %s"), *Stand);
+	case EServiceVehicleState::Serving:    return FString::Printf(TEXT("fuelling at stand %s"), *Stand);
 	case EServiceVehicleState::ToFacility: return FString::Printf(TEXT("to depot %d"), Vehicle.Home.Index);
 	case EServiceVehicleState::AtFacility: return FString::Printf(TEXT("refilling at depot %d"), Vehicle.Home.Index);
 	case EServiceVehicleState::Deciding:   return FString(TEXT("deciding where next"));
@@ -1394,21 +1398,22 @@ FString UJobBoard::VehicleDoing(const FServiceVehicle& Vehicle) const
 	}
 }
 
-FString UJobBoard::DescribeVehicle(const FServiceVehicle& Vehicle) const
+FString UJobBoard::DescribeVehicle(const FServiceVehicle& Vehicle, const URoadNetwork* Network) const
 {
 	const FString Dot = TEXT(" · ");
 	const FString Cargo = FText::AsNumber(FMath::RoundToInt(Vehicle.Cargo)).ToString() + TEXT(" L");
 	const FString Queued = Vehicle.Queue.Num() > 0 ? Dot + FString::Printf(TEXT("%d queued"), Vehicle.Queue.Num()) : FString();
-	return FServiceFleet::NameOf(*this, Vehicle.TypeCode).ToString() + Dot + VehicleDoing(Vehicle) + Dot + Cargo + Queued;
+	return FServiceFleet::NameOf(*this, Vehicle.TypeCode).ToString() + Dot + VehicleDoing(Vehicle, Network) + Dot + Cargo + Queued;
 }
 
-FDepotBacklog UJobBoard::DescribeDepot(FEntityInstanceId Depot, double Now) const
+FDepotBacklog UJobBoard::DescribeDepot(FEntityInstanceId Depot, double Now, const URoadNetwork* Network) const
 {
 	const FString Dot = TEXT(" · ");
 	auto Litres = [](double L) { return FText::AsNumber(FMath::RoundToInt(L)).ToString() + TEXT(" L"); };
-	// WHOLE MINUTES, rounded: with the inspector passing the minute's start as Now (see the header), its card
+	// A SPAN IN THE CLOCK'S OWN WORDS (GameTimeText::Duration, #447): "+1 h 35 min", as the aircraft card says it, where this printed "+95 min"
+	// beside it. Still WHOLE MINUTES, rounded: with the inspector passing the minute's start as Now (see the header), its card
 	// redraws at most once a game minute.
-	auto Minutes = [](double Seconds) { return FMath::RoundToInt(FMath::Max(Seconds, 0.0) / 60.0); };
+	auto Span = [](double Seconds) { return GameTimeText::Duration(Seconds).ToString(); };
 
 	FDepotBacklog Out;
 	TArray<FString> Lines;
@@ -1418,7 +1423,7 @@ FDepotBacklog UJobBoard::DescribeDepot(FEntityInstanceId Depot, double Now) cons
 		{
 			continue;
 		}
-		Lines.Add(VehicleLine(Vehicle));
+		Lines.Add(VehicleLine(Vehicle, Network));
 
 		// ITS JOBS IN THE ORDER IT WILL DO THEM: the one it is on, then its queue.
 		TArray<int32> Order;
@@ -1436,8 +1441,8 @@ FDepotBacklog UJobBoard::DescribeDepot(FEntityInstanceId Depot, double Now) cons
 			}
 			++Out.Jobs;
 			Out.ClearsAt = FMath::Max(Out.ClearsAt, Job->PromisedFinish);
-			FString Line = FString::Printf(TEXT("  stand %d"), Job->Stand.Index) + Dot + Litres(Job->QuantityOwed)
-				+ Dot + FString::Printf(TEXT("+%d min"), Minutes(Job->PromisedFinish - Now));
+			FString Line = FString::Printf(TEXT("  stand %s"), *OpsNames::StandLabel(Network, Job->Stand)) + Dot + Litres(Job->QuantityOwed)
+				+ Dot + TEXT("+") + Span(Job->PromisedFinish - Now);
 
 			// LATE is the promise landing after the aircraft's turnaround: the one number that says the
 			// backlog is costing the airport, not merely keeping the depot busy.
@@ -1445,7 +1450,7 @@ FDepotBacklog UJobBoard::DescribeDepot(FEntityInstanceId Depot, double Now) cons
 			if (Turnaround != nullptr && Job->PromisedFinish > Turnaround->TurnaroundEndsAt)
 			{
 				++Out.LateJobs;
-				Line += Dot + FString::Printf(TEXT("late %d min"), Minutes(Job->PromisedFinish - Turnaround->TurnaroundEndsAt));
+				Line += Dot + TEXT("late ") + Span(Job->PromisedFinish - Turnaround->TurnaroundEndsAt);
 			}
 			Lines.Add(Line);
 		}
@@ -1454,27 +1459,30 @@ FDepotBacklog UJobBoard::DescribeDepot(FEntityInstanceId Depot, double Now) cons
 
 	if (Out.Jobs == 0)
 	{
-		Out.Summary = TEXT("No jobs");
+		// NO VEHICLE AT ALL IS THE FIX THE CARD NAMES (facility-upgrades spec section 4): every job sits on a vehicle, so a depot with
+		// none has no jobs, and "No jobs" would read as a healthy idle depot. The widget used to lay this over the summary in its own
+		// wording (#447); the board owns both sentences now - RefusalText's "depot has no vehicles - buy one" is the same fact as a clause.
+		Out.Summary = VehiclesAt(Depot) == 0 ? FString(TEXT("No vehicles \u2014 buy one")) : FString(TEXT("No jobs"));
 		return Out;
 	}
 	Out.Summary = FString::Printf(TEXT("%d job%s"), Out.Jobs, Out.Jobs == 1 ? TEXT("") : TEXT("s"))
-		+ Dot + FString::Printf(TEXT("clears in %d min"), Minutes(Out.ClearsAt - Now))
+		+ Dot + TEXT("clears in ") + Span(Out.ClearsAt - Now)
 		+ (Out.LateJobs > 0 ? Dot + FString::Printf(TEXT("%d late"), Out.LateJobs) : FString());
 	return Out;
 }
 
-FString UJobBoard::DescribeAgent(int32 AgentId, double Now) const
+FString UJobBoard::DescribeAgent(int32 AgentId, double Now, const URoadNetwork* Network) const
 {
 	bool bMovesWithClock = false;
-	return DescribeAgent(AgentId, Now, bMovesWithClock);
+	return DescribeAgent(AgentId, Now, bMovesWithClock, Network);
 }
 
-FString UJobBoard::DescribeAgent(int32 AgentId, double Now, bool& bOutMovesWithClock) const
+FString UJobBoard::DescribeAgent(int32 AgentId, double Now, bool& bOutMovesWithClock, const URoadNetwork* Network) const
 {
 	bOutMovesWithClock = false;
 	if (const FServiceVehicle* Vehicle = VehicleForAgent(AgentId))
 	{
-		return DescribeVehicle(*Vehicle);
+		return DescribeVehicle(*Vehicle, Network);
 	}
 	const FServiceJob* Job = JobForAircraft(AgentId, EServiceRole::Fuel);
 	const FString Dot = TEXT(" · ");

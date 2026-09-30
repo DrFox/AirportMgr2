@@ -2,6 +2,8 @@
 
 #include "Components/DirectionalLightComponent.h"
 #include "Engine/DirectionalLight.h"
+#include "Model/GameTimeText.h"
+#include "Model/OpsDefinition.h"
 #include "Model/SimClock.h"
 #include "Present/OpsRuntime.h"
 #include "OpsRuntimeResolver.h"
@@ -26,9 +28,26 @@ double ASunDriver::ResolveDayFraction(const USimClock* Clock)
 	return Clock->TimeOfDay() / USimClock::SecondsPerDay;
 }
 
-FSunPath ASunDriver::MakePath() const
+void ASunDriver::ResolveDaylightHours(const USimClock* Clock, double& OutDawnHour, double& OutDuskHour)
+{
+	if (Clock != nullptr)
+	{
+		OutDawnHour = Clock->DawnHour;
+		OutDuskHour = Clock->DuskHour;
+		return;
+	}
+	// THE SCENARIO'S DEFAULTS, the very figures a new game's clock is given (UScenario::DawnHour/DuskHour) - not a literal 6 and 20 of the
+	// sky's own, which is how night came to be defined twice.
+	const UScenario* Defaults = GetDefault<UScenario>();
+	OutDawnHour = Defaults->DawnHour;
+	OutDuskHour = Defaults->DuskHour;
+}
+
+// Copy the tunables above onto a path, so details-panel edits take effect live - and the clock's daylight, so night starts when the clock says.
+FSunPath ASunDriver::MakePath(const USimClock* Clock) const
 {
 	FSunPath Path;
+	ResolveDaylightHours(Clock, Path.DawnHour, Path.DuskHour);
 	Path.MaxElevationDegrees = MaxElevationDegrees;
 	Path.MinElevationDegrees = MinElevationDegrees;
 	Path.NoonAzimuthDegrees = NoonAzimuthDegrees;
@@ -67,7 +86,7 @@ void ASunDriver::ApplyToSun()
 	const USimClock* Clock = Runtime != nullptr ? Runtime->GetClock() : nullptr;
 
 	const double DayFraction = ResolveDayFraction(Clock);
-	const FSunLighting Lighting = MakePath().At(DayFraction);
+	const FSunLighting Lighting = MakePath(Clock).At(DayFraction);
 	Sun->SetActorRotation(Lighting.Rotation);
 	Component->SetTemperature(Lighting.TemperatureKelvin);
 	Component->SetIntensity(Lighting.Intensity);
@@ -83,11 +102,9 @@ void ASunDriver::ApplyToSun()
 	{
 		LastLoggedElevation = Elevation;
 		UE_LOG(LogSunDriver, Log,
-			TEXT("Sun at day fraction %.4f (%02d:%02d): elevation %.1f, azimuth %.1f, "
+			TEXT("Sun at day fraction %.4f (%s): elevation %.1f, azimuth %.1f, "
 			     "intensity %.2f, %.0fK%s"),
-			DayFraction,
-			static_cast<int32>(DayFraction * 24.0),
-			static_cast<int32>(FMath::Fmod(DayFraction * 1440.0, 60.0)),
+			DayFraction, *GameTimeText::TimeOfDay(DayFraction * USimClock::SecondsPerDay),
 			Elevation, Lighting.Rotation.Yaw, Lighting.Intensity, Lighting.TemperatureKelvin,
 			Clock == nullptr ? TEXT(" (NO CLOCK - parked at noon)") : TEXT(""));
 	}

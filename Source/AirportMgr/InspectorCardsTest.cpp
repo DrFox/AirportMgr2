@@ -264,11 +264,9 @@ bool FInspectorAircraftCardTest::RunTest(const FString&)
 	TestEqual(TEXT("the blocker by registration"), View->WaitingForCaption.ToString(), FString(TEXT("Show G-HDVK")));
 	TestTrue(TEXT("and the hold line says so"), View->Status.Contains(TEXT("G-HDVK")));
 
-	// THE STALL'S CONVERSION has two names since #441 moved it - the widget's old one forwards - and they are one figure.
+	// THE STALL'S CONVERSION is the clock's (#447: it was a public static on the widget, then on the card, and the job board's bid wrote it again).
 	Clock->SetUniformDay(1200.0);   // 72 game seconds a real second, the day HoldAndDeadlockLines reads 80 s as 1 h 36 min in
-	const double Stall = FAircraftCard::GameSecondsOfStall(80.0, *Clock);
-	TestEqual(TEXT("80 movement seconds at a 1200 s day are 96 game minutes"), Stall, 5760.0);
-	TestEqual(TEXT("and the widget's old name reads the same"), UInspectorWidget::GameSecondsOfStall(80.0, *Clock), Stall);
+	TestEqual(TEXT("80 movement seconds at a 1200 s day are 96 game minutes"), Clock->GameSecondsOfMovement(80.0), 5760.0);
 
 	// A GONE AGENT has no card: nothing precomputed, and none in the model.
 	In.PrecomputedAgentFacts = nullptr;
@@ -833,8 +831,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorTurnaroundKeyMatchesTest, "AirportMgr
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FInspectorTurnaroundKeyMatchesTest::RunTest(const FString&)
 {
-	// THE TURNAROUND'S KEY IS A COUPLING ACROSS TWO FILES: it recomputes RoundToInt(Abs(Left) / 60) because DescribeDuration
-	// (OfferViewModels.cpp) rounds that way. Walk Now across a whole contract and past it into lateness, a few seconds at a time
+	// THE TURNAROUND'S KEY IS A COUPLING ACROSS TWO FILES: it recomputes RoundToInt(Abs(Left) / 60) because GameTimeText::Duration
+	// (GameTimeText.cpp) rounds that way. Walk Now across a whole contract and past it into lateness, a few seconds at a time
 	// and on every half minute (where two roundings part), and the kept line must be the sentence a fresh DescribeTurnaround gives
 	// - so a rounding changed on either side goes red here, and not stale on the card.
 	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
