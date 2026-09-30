@@ -129,10 +129,10 @@ namespace PushGroundFreedPassTest
 
 			UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
 			Stand = Net->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 0.0), 0.0, 3600.0, StandDef->PoseRole, StandDef->Trucks);
-			FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 			// THE HAND-LAID LINES ARE THE GRAPH - UnfuelledDepartureLowersAirline's reason: the runway segments would
 			// otherwise read as a road the graph is behind, and DepartAgent refuses GraphBeingEdited for ever.
-			Net->MarkGuidelinesDerived();
+			// THE DERIVATION'S TAIL (#438) links the stand and stamps the graph; was FAnchorLink::Build + MarkGuidelinesDerived.
+			TestGraph::Link(*Net);
 
 			Runtime = NewObject<UOpsRuntime>();
 			Runtime->Attach(Actor);

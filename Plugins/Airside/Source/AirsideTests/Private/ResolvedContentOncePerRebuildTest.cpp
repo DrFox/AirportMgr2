@@ -18,8 +18,8 @@
  * three separate inner loops - per arm in FRoadNetworkSolver's BuildNodeInput, per ordered
  * arm pair in FRoadGuidelineBuilder::Build, twice per link in FAnchorLink::Join - all of it
  * paid again on every Geometry rebuild a drag frame produces, not just a Topology one.
- * URoadSurfacePresenter::RebuildInternal now resolves it exactly once and hands the same
- * answer to all three; this test measures that with the free-standing call counter rather
+ * ARoadNetworkActor::MakeSurfaceSettings now resolves it exactly once and AirsideDerivation::Derive
+ * (#438) hands the same answer to all three; this test measures that with the free-standing call counter rather
  * than trusting the refactor description.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(

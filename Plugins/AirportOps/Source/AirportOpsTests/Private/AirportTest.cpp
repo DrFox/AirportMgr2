@@ -609,8 +609,9 @@ bool FAirportDrainsTest::RunTest(const FString&)
 	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
 	const FEntityInstanceId Stand = Net.PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 0.0), 0.0,
 		3600.0, StandDef->PoseRole, StandDef->Trucks);
-	FAnchorLink::Build(Net, UAirsideSettings::ResolveLargestServiceVehicle());
-	Net.MarkGuidelinesDerived();
+	// THE DERIVATION'S TAIL over the hand-laid lines (#438): links and the Derived stamp - UnfuelledDepartureLowersAirline's
+	// reason for the stamp. Was FAnchorLink::Build + MarkGuidelinesDerived typed here.
+	TestGraph::Link(Net);
 
 	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 	Runtime->Attach(Actor);

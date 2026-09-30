@@ -776,7 +776,7 @@ void ARoadNetworkActor::RebuildMeshForChange(EChangeKind Kind)
 		// existing guideline node: it creates nothing, destroys nothing, and moves nothing,
 		// so the solve, the road mesh, the guideline graph and everything derived from it
 		// are exactly what they were. This is deliberately NOT the Topology path with steps
-		// skipped: URoadSurfacePresenter::RebuildInternal's Topology branch calls
+		// skipped: a Topology rebuild derives through AirsideDerivation::Derive, which calls
 		// FRoadGuidelineBuilder::Build unconditionally, which reallocates every guideline
 		// node - so routing this flag through Topology invalidated the very node whose flag
 		// had just been set, and every other live FGuidelineNodeId in the level besides

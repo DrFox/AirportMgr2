@@ -2352,9 +2352,9 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		}
 	}
 
-	// LAST, after every mutation above: the graph now matches the road as of this revision, and
-	// the planners may search it again - see URoadNetwork::AreGuidelinesBehindRoad.
-	Network.MarkGuidelinesDerived();
+	// NO DERIVED STAMP HERE ANY MORE (#438): this is one pass of the derivation, and the stamp
+	// says the whole derivation ran - the anchor links after this included. AirsideDerivation::Derive
+	// stamps last, after every pass its scope runs; see URoadNetwork::AreGuidelinesBehindRoad.
 }
 
 bool FRoadGuidelineBuilder::IntermediateHoldMovesOffEnd(const URoadNetwork& Network, FGuidelineNodeId End)

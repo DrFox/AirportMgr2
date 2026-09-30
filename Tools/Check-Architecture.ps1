@@ -687,6 +687,56 @@ $AllowedCallers = @(
         ProdAllowed = @('Private\Model\FlightBoard.cpp')
         TestExempt  = $true
         ProdReason  = 'accept through UFlightBoard::TryAccept, which holds the stand its plan taxis to (UStandAllocator::Hold) - Reserve is reach-blind (#471)'
+    },
+    # ONE DERIVATION (#438). The routing graph's passes - the solve, the restriction, the guideline builder, the anchor
+    # links - and the Derived stamp are called from AirsideDerivation::Derive and nowhere else in production, so a pass
+    # added there reaches every door at once: the presenter, TestGraph, the upgrade tool's what-if, the ops tests. Before
+    # these rows URoadSurfacePresenter::RebuildInternal owned the sequence (behind its render-component check) and three
+    # other sites re-typed it, each drifting - closed #101 and #311 were both a test-side copy production never ran.
+    # Private\Testing\AirsideTestGraph.cpp is deliberately NOT listed, unlike the GetContent row: TestGraph goes through
+    # Derive too - that is the point. Tests are exempt: a unit test of one pass (the linker's own reach, the builder's
+    # own output) calls that pass alone on purpose. Each definition's own file is listed for its definition line.
+    @{
+        Name        = 'FRoadGuidelineBuilder::Build (outside the derivation)'
+        Pattern     = 'FRoadGuidelineBuilder::Build\s*\('
+        ProdAllowed = @('Private\Build\RoadGuidelineBuilder.cpp', 'Private\Build\AirsideDerivation.cpp')
+        TestExempt  = $true
+        ProdReason  = 'derive through AirsideDerivation::Derive (#438) - a second production sequence is how tests came to pass on a graph production never built'
+    },
+    @{
+        Name        = 'FAnchorLink::Build (outside the derivation)'
+        Pattern     = 'FAnchorLink::Build\s*\('
+        ProdAllowed = @('Private\Build\AnchorLink.cpp', 'Private\Build\AirsideDerivation.cpp')
+        TestExempt  = $true
+        ProdReason  = 'link through AirsideDerivation::Derive (#438; its Links scope over a graph as it stands) - a second production sequence is how tests came to pass on a graph production never built'
+    },
+    @{
+        # The upgrade hover's what-if used to call this by name on its ghost network; it asks the Facts scope now.
+        Name        = 'TaxiwayRestriction::Apply (outside the derivation)'
+        Pattern     = 'TaxiwayRestriction::Apply\s*\('
+        ProdAllowed = @('Private\Model\TaxiwayRestriction.cpp', 'Private\Build\AirsideDerivation.cpp')
+        TestExempt  = $true
+        ProdReason  = 'restrict through AirsideDerivation::Derive (#438; the Facts scope for a what-if on a copy) - a second production sequence is how tests came to pass on a graph production never built'
+    },
+    @{
+        # THE STAMP SAYS THE WHOLE DERIVATION RAN (#438): it moved from the end of FRoadGuidelineBuilder::Build, one pass,
+        # to the end of Derive. A second production writer could stamp a graph whose links never ran as current.
+        Name        = 'URoadNetwork::MarkGuidelinesDerived (outside the derivation)'
+        Pattern     = '\bMarkGuidelinesDerived\s*\('
+        ProdAllowed = @('Public\Model\RoadNetwork.h', 'Private\Build\AirsideDerivation.cpp')
+        TestExempt  = $true
+        ProdReason  = 'stamp through AirsideDerivation::Derive (#438) - the stamp says every pass of the derivation ran, and URoadNetwork::AreGuidelinesBehindRoad gates the planners on it'
+    },
+    @{
+        # THE SOLVE THE MESH DRAWS IS THE SOLVE THE GRAPH WAS DERIVED FROM (#438): the presenter meshes from Derive's
+        # returned result, so a second production SolveAll beside it would be a second evaluator of the same road.
+        # RoadJunctionGallery (Private\Debug) solves a SCRATCH network of its own that it meshes and never routes on -
+        # no graph to derive, which is why it is listed rather than routed through Derive.
+        Name        = 'FRoadNetworkSolver::SolveAll (outside the derivation)'
+        Pattern     = 'FRoadNetworkSolver::SolveAll\s*\('
+        ProdAllowed = @('Private\Build\RoadNetworkSolver.cpp', 'Private\Build\AirsideDerivation.cpp', 'Private\Debug\RoadJunctionGallery.cpp')
+        TestExempt  = $true
+        ProdReason  = 'solve through AirsideDerivation::Derive (#438) and mesh from the result it returns, as URoadSurfacePresenter does'
     }
 )
 foreach ($row in $AllowedCallers) {

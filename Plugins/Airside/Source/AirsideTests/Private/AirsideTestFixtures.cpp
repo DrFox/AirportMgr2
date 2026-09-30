@@ -160,7 +160,8 @@ FExitArcAirport ExitArcBuildAirport(UObject* Outer, bool bWithStand, double XDis
 		// own line, so where it meets the taxiway is unchanged.
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 		Out.Net->PlaceEntity(Stand, Stand->Anchors, Out.XAt + FVector2D(27000.0, -14000.0), 0.0);
-		FAnchorLink::Build(*Out.Net, UAirsideSettings::ResolveLargestServiceVehicle());
+		// THE DERIVATION'S TAIL (#438), not FAnchorLink::Build typed here: what production runs after the graph.
+		TestGraph::Link(*Out.Net);
 	}
 	return Out;
 }

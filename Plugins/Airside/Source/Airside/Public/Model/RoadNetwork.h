@@ -143,8 +143,8 @@ public:
 	uint32 GetEditRevision() const { return EditRevision; }
 
 	/**
-	 * The DERIVED guideline graph is behind the road: FRoadGuidelineBuilder::Build ran at least
-	 * once and a node or segment has changed since. True for a drag's duration - a drag
+	 * The DERIVED guideline graph is behind the road: the derivation (AirsideDerivation::Derive) ran
+	 * at least once and a node or segment has changed since. True for a drag's duration - a drag
 	 * rebuilds geometry only (#165) - and the planners refuse while it holds, so no route is
 	 * searched over lines the player has already moved (2026-09-27; Airside.Model.
 	 * NoPlanOnAGraphMidEdit). FALSE for a graph never derived: a hand-authored test graph has
@@ -156,8 +156,19 @@ public:
 		return GuidelinesDerivedAt != MAX_uint32 && GuidelinesDerivedAt != EditRevision;
 	}
 
+	/**
+	 * The guideline graph was derived from this road at least once this session - stamped, not only
+	 * hand-laid. What AirsideDerivation::Derive's Links scope asks before it stamps: that scope
+	 * derives no graph, so it moves a derived graph's stamp forward and leaves a never-derived
+	 * (hand-laid) one never-derived - RestoreFrom's rule below, for its reason: stamping a hand-laid
+	 * graph would make the planners refuse it after its next edit.
+	 * ENFORCED BY: Airside.Build.Derivation.LinksKeepsAHandLaidGraphUnderived
+	 */
+	bool WereGuidelinesEverDerived() const { return GuidelinesDerivedAt != MAX_uint32; }
+
 	/** Stamps the current EditRevision as the one the guideline graph was derived from.
-	 *  FRoadGuidelineBuilder::Build's last act - see AreGuidelinesBehindRoad. */
+	 *  AirsideDerivation::Derive's last act, after every pass its scope ran (#438; the builder's
+	 *  own last act until then) - see AreGuidelinesBehindRoad. */
 	void MarkGuidelinesDerived() { GuidelinesDerivedAt = EditRevision; }
 
 	/** Which side of a two-lane road traffic keeps to. See EDriveSide. */

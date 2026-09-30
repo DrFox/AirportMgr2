@@ -2,14 +2,12 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-#include "Build/AnchorLink.h"
-#include "Build/RoadGuidelineBuilder.h"
+#include "Build/AirsideDerivation.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/LandingRun.h"
-#include "Model/TaxiwayRestriction.h"
 #include "Model/TrafficOccupancy.h"
 #include "Profiles/RoadProfile.h"
 
@@ -62,11 +60,11 @@ FGuidelineNodeId TestGraph::NodeFor(const URoadNetwork& Net, FRoadSegmentId Segm
 	return Best;
 }
 
-FRoadSolveResult TestGraph::Derive(URoadNetwork& Net, const FRoadDesignVehicles* DesignVehicles, EWideningTrace Widening)
+FRoadSolveResult TestGraph::Derive(URoadNetwork& Net, const FRoadDesignVehicles* DesignVehicles)
 {
-	// RESOLVE ONCE if the caller has not already: URoadSurfacePresenter::Rebuild resolves its
-	// own FRoadDesignVehicles and passes THE SAME instance to SolveAll and to
-	// FRoadGuidelineBuilder::Build (#190) - so a fixture that means the production sequence
+	// RESOLVE ONCE if the caller has not already: ARoadNetworkActor::MakeSurfaceSettings resolves
+	// one FRoadDesignVehicles and AirsideDerivation::Derive passes THE SAME instance to SolveAll and
+	// to FRoadGuidelineBuilder::Build (#190, #438) - so a fixture that means the production sequence
 	// does the same, rather than SolveAll(nullptr) (each profile resolving its own) followed
 	// by a second, independent ResolveRoadDesignVehicles() for Build. The two happen to answer
 	// with the same figures today (URoadProfile::ResolvedDesignBody and
@@ -75,23 +73,41 @@ FRoadSolveResult TestGraph::Derive(URoadNetwork& Net, const FRoadDesignVehicles*
 	// ResolvedContentOncePerRebuildTest does - passes its own nullptr through to SolveAll
 	// directly instead of coming through here.
 	const FRoadDesignVehicles Resolved = DesignVehicles != nullptr ? *DesignVehicles : UAirsideSettings::ResolveRoadDesignVehicles();
-	FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Net, 12, &Resolved, Widening);
-	// The production sequence's restriction pass too (URoadSurfacePresenter::RebuildInternal):
-	// the builder reads what it writes.
-	TaxiwayRestriction::Apply(Net);
-	FRoadGuidelineBuilder::Build(Net, Solved, Resolved);
-	return Solved;
+	// THE PRODUCTION SEQUENCE ITSELF (#438), not a copy of it: this body used to re-type the
+	// solve, "the production sequence's restriction pass too" and the builder, and a pass the
+	// presenter gained had to be remembered here. The Graph scope is the derivation up to and
+	// including the guideline graph and its stamp - no links, which Rebuild adds. NO DefaultProfile:
+	// a bare network has no actor to resolve one, and a null one keeps the network's own.
+	AirsideDerivation::FDeriveInputs Inputs;
+	Inputs.Scope = AirsideDerivation::EDeriveScope::Graph;
+	Inputs.DesignVehicles = &Resolved;
+	return AirsideDerivation::Derive(Net, Inputs);
 }
 
 void TestGraph::Rebuild(URoadNetwork& Net)
 {
-	// SOLVED, PASSED DOWN (issue #324) - matches URoadSurfacePresenter::RebuildInternal's own
-	// production sequence: without it, a fixture built through this facade could never
-	// reproduce a split turn path getting re-measured, only one built by hand around Derive
-	// and FAnchorLink::Build directly could.
-	const FRoadSolveResult Solved = Derive(Net);
-	FAnchorLink::Build(Net, UAirsideSettings::ResolveLargestServiceVehicle(),
-		FAnchorLink::DefaultMaxLeadIn, FAnchorLink::DefaultServiceLinkRadius, &Solved);
+	// THE FULL SCOPE, THE ONE ARoadNetworkActor::RebuildMesh RUNS (#438): SOLVED, PASSED DOWN (issue
+	// #324) to the anchor links along with the rest - without it, a fixture built through this facade
+	// could never reproduce a split turn path getting re-measured, only one built by hand around
+	// Derive and FAnchorLink::Build directly could. The anchor linker takes the same resolved
+	// vehicles' Default (UAirsideSettings::ResolveLargestServiceVehicle's chassis, via
+	// ResolveLargestServiceBody) the actor's MakeSurfaceSettings hands it.
+	// ENFORCED BY: Airside.Build.Derivation.TestGraphMatchesTheActor
+	const FRoadDesignVehicles Resolved = UAirsideSettings::ResolveRoadDesignVehicles();
+	AirsideDerivation::FDeriveInputs Inputs;
+	Inputs.Scope = AirsideDerivation::EDeriveScope::Full;
+	Inputs.DesignVehicles = &Resolved;
+	AirsideDerivation::Derive(Net, Inputs);
+}
+
+void TestGraph::Link(URoadNetwork& Net)
+{
+	// See the header: the derivation's tail over a hand-laid graph, with the vehicles Rebuild uses.
+	const FRoadDesignVehicles Resolved = UAirsideSettings::ResolveRoadDesignVehicles();
+	AirsideDerivation::FDeriveInputs Inputs;
+	Inputs.Scope = AirsideDerivation::EDeriveScope::Links;
+	Inputs.DesignVehicles = &Resolved;
+	AirsideDerivation::Derive(Net, Inputs);
 }
 
 TestGraph::FCornerFixture TestGraph::Corner(URoadProfile* Profile, URoadProfile* SecondProfile,
@@ -188,7 +204,8 @@ FTestAirport FTestAirport::Build(const FAirframe& Airframe, const FTestAirportOp
 
 	if (Options.bDerived && Options.StandCount > 0)
 	{
-		FAnchorLink::Build(*Out.Net, UAirsideSettings::ResolveLargestServiceVehicle());
+		// THE DERIVATION'S TAIL (#438) over the graph Derive laid above, now the stands stand beside it.
+		TestGraph::Link(*Out.Net);
 	}
 
 	return Out;
@@ -255,7 +272,8 @@ FTestTwoRunways FTestTwoRunways::Build(const FAirframe& Airframe, URoadNetwork* 
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 		Out.Stands.Add(Out.Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(ExitX + 9000.0, Y), 0.0));
 	}
-	FAnchorLink::Build(*Out.Net, UAirsideSettings::ResolveLargestServiceVehicle());
+	// THE DERIVATION'S TAIL (#438) - FTestAirport::Build's reason.
+	TestGraph::Link(*Out.Net);
 	return Out;
 }
 
@@ -403,7 +421,8 @@ FTestAirport FTestAirport::BuildScale(const FAirframe& Airframe, int32 Seed, boo
 
 	if (bDerived)
 	{
-		FAnchorLink::Build(*Out.Net, UAirsideSettings::ResolveLargestServiceVehicle());
+		// THE DERIVATION'S TAIL (#438) - FTestAirport::Build's reason.
+		TestGraph::Link(*Out.Net);
 	}
 
 	return Out;

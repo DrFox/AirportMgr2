@@ -211,14 +211,35 @@ namespace TestGraph
 	 * ResolveRoadDesignVehicles() call for Build, which is what every one of the ~45 inline
 	 * copies this replaces did instead (issue #311, regression of #101). Returns the solve
 	 * result for a caller that still reads it (BendOuters, NodeResults, FailedNodes, ...);
-	 * a caller that does not just discards it. Does NOT link stands - see Rebuild below,
-	 * built on this, for the fixture-wide facade sequence.
+	 * a caller that does not just discards it. Does NOT link stands - see Rebuild below for
+	 * the whole derivation.
+	 *
+	 * THROUGH AirsideDerivation::Derive's Graph scope since #438, not a copy of its passes: this
+	 * facade used to re-type the presenter's sequence and drift from it (no census, no default
+	 * profile - closed #101 and #311 were both a test-side copy). The WIDENING PARAMETER WENT with
+	 * the copy: no caller passed anything but Trace, which is what the Graph scope does.
 	 */
-	AIRSIDE_API FRoadSolveResult Derive(URoadNetwork& Net, const FRoadDesignVehicles* DesignVehicles = nullptr,
-		EWideningTrace Widening = EWideningTrace::Trace);
+	AIRSIDE_API FRoadSolveResult Derive(URoadNetwork& Net, const FRoadDesignVehicles* DesignVehicles = nullptr);
 
-	/** Solve, derive guidelines and re-link every entity: what the facade's RebuildMesh does. */
+	/**
+	 * The WHOLE derivation - AirsideDerivation::Derive's Full scope, the one ARoadNetworkActor::
+	 * RebuildMesh runs through its presenter: solve, restriction, guidelines, anchor links, census,
+	 * stamp. The content set's design vehicles, the default service-link radius and no depot kit
+	 * table - an actor's are per-level, and a bare network has none. No DefaultProfile either: the
+	 * network's own stands (FDeriveInputs::DefaultProfile - null keeps it), with no actor to resolve one.
+	 * ENFORCED BY: Airside.Build.Derivation.TestGraphMatchesTheActor (bit for bit, one fixture)
+	 */
 	AIRSIDE_API void Rebuild(URoadNetwork& Net);
+
+	/**
+	 * The derivation's Links scope - anchor links, census and the Derived stamp - over the guideline
+	 * graph as it stands, for a fixture that HAND-LAYS that graph (the ops tests' taxi lines) and so
+	 * must not run the builder, which would sweep it. Was FAnchorLink::Build + MarkGuidelinesDerived
+	 * typed at each such fixture (#438); a pass added to the derivation's tail now reaches them.
+	 * STAMPS ONLY A GRAPH SOMETHING DERIVED (the ops fixtures' PlaceNode rebuild did): a graph laid
+	 * wholly by hand stays never-derived, so its next edit does not make the planners refuse it.
+	 */
+	AIRSIDE_API void Link(URoadNetwork& Net);
 
 	/** A Corner() fixture's own network, solve result and the three handles a caller needs -
 	 *  the node between the two arms, and each arm's segment. */

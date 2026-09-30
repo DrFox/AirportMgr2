@@ -226,7 +226,8 @@ bool FOpsRuntimeBusStaleParkedTest::RunTest(const FString&)
 	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
 	const FEntityInstanceId Stand = Net.PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 0.0), 0.0, 3600.0,
 		StandDef->PoseRole, StandDef->Trucks);
-	FAnchorLink::Build(Net, UAirsideSettings::ResolveLargestServiceVehicle());
+	// THE DERIVATION'S TAIL over the hand-laid line (#438), not FAnchorLink::Build typed here.
+	TestGraph::Link(Net);
 
 	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 	Runtime->Attach(Actor);
@@ -639,11 +640,11 @@ bool FOpsRuntimeUnfuelledDepartureTest::RunTest(const FString&)
 	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
 	const FEntityInstanceId Stand = Net.PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 0.0), 0.0,
 		3600.0, StandDef->PoseRole, StandDef->Trucks);
-	FAnchorLink::Build(Net, UAirsideSettings::ResolveLargestServiceVehicle());
 	// THE HAND-LAID LINES ARE THIS FIELD'S GUIDELINE GRAPH: PlaceNode above derived one, and the runway segments
 	// added since would otherwise read as a road the graph is behind - DepartAgent then refuses
 	// GraphBeingEdited for ever (URoadNetwork::AreGuidelinesBehindRoad), which is a drag, not this test.
-	Net.MarkGuidelinesDerived();
+	// THE DERIVATION'S TAIL (#438) links the stand and stamps the graph; was FAnchorLink::Build + MarkGuidelinesDerived.
+	TestGraph::Link(Net);
 
 	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 	Runtime->Attach(Actor);

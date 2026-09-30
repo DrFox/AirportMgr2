@@ -125,7 +125,7 @@ public:
 		 * What each road's turns are sized for: the biggest RIGID thing that may drive a service
 		 * road (UAirsideSettings::ResolveLargestServiceVehicle) as the Default, with each width
 		 * tier's own design vehicle beside it - the rig on Wide (ResolveTierDesignVehicles,
-		 * 2026-09-25). The anchor linker takes Default only: see URoadSurfacePresenter::Rebuild.
+		 * 2026-09-25). The anchor linker takes Default only: see AirsideDerivation::Derive's links pass.
 		 *
 		 * RESOLVED ONCE HERE, not by the solver, the guideline builder or the anchor
 		 * linker (issue #190). Each of those used to build a fresh FAirframe by calling
@@ -382,7 +382,8 @@ private:
 	/**
 	 * Rebuild and RebuildSurfaceOnly are one body (issue #165): both solve and build the road
 	 * mesh identically, and differ only in whether the derived-graph passes run, which is a
-	 * single `if (Kind == EChangeKind::Topology)` rather than two near-duplicate functions
+	 * single choice of AirsideDerivation scope (Full for Topology, Surface for Geometry - #438;
+	 * ENFORCED BY: Airside.Present.Derivation.DragFrameIsSurfaceScope) rather than two near-duplicate functions
 	 * that could drift the way RebuildAprons/RebuildMarkings/RebuildRunwayMarkings did before
 	 * RebuildLayer folded THEM into one shape (issue #81). RebuildMarkingsOnly is NOT a third
 	 * near-duplicate for the same reason: EChangeKind::Markings (issue #179) shares nothing
