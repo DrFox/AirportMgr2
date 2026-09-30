@@ -1,4 +1,6 @@
 #include "BuildActions.h"
+#include "Model/Airport.h"
+#include "Model/FlightBoard.h"
 #include "Model/Pricing.h"
 #include "Present/OpsRuntime.h"
 #include "Present/RoadNetworkActor.h"
@@ -140,7 +142,14 @@ namespace
 			// what land now, each its own type - see ULandAircraftPanelWidget.
 			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleLandPanel(); },
 			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsLandPanelShowing(); },
-			[](const FBuildActionContext& Ctx) { return Ctx.Controller.HasRunway(); }));
+			// AND OPEN: a closed airport admits no arrivals, the debug one included (ruling I1, 2026-09-30). No runtime
+			// (the editor mode) is not a closure.
+			// ENFORCED BY: AirportMgr.Actions.LandGreyedWhileClosed
+			[](const FBuildActionContext& Ctx)
+			{
+				return Ctx.Controller.HasRunway()
+					&& (Ctx.Runtime == nullptr || Ctx.Runtime->GetAirport()->Status() == EAirportStatus::Open);
+			}));
 		Out.Add(Make(TEXT("aircraft.guidelines"), EActionSection::Aircraft, LOCTEXT("Guidelines", "Guidelines"), EKeys::G, false,
 			[](FBuildActionContext& Ctx) { Ctx.Controller.OnToggleGuidelines(); },
 			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuidelineOverlayOn(); }, Always));
@@ -329,6 +338,81 @@ namespace
 			Out.Add(MoveTemp(Alerts));
 		}
 
+		// THE AIRPORT'S STATUS (spec 2026-09-29-ops-batch3 §3): close it, reopen it, and read why it is not open. A MENU
+		// VERB, because closing cancels every flight not yet arrived - a destructive gesture, so it confirms at the
+		// cursor with the inspector Unstick's popup (UUiMenuButton + bConfirm) rather than on one click. Reopening loses
+		// nothing and is a plain line. NO KEY, Depart's reason. Bound to Ctx.Runtime, the fee lever's reason.
+		{
+			FBuildAction Airport = Make(TEXT("game.airport"), EActionSection::Game, LOCTEXT("CloseAirport", "Close airport"),
+				EKeys::Invalid, false,
+				// EXECUTE ONLY REOPENS: it is the door with no confirm (a key, were one ever bound), and a close must
+				// never be reachable without one.
+				// ENFORCED BY: AirportMgr.Actions.AirportExecuteNeverCloses
+				[](FBuildActionContext& Ctx)
+				{
+					if (Ctx.Runtime != nullptr && Ctx.Runtime->GetAirport()->IsClosedByPlayer())
+					{
+						Ctx.Runtime->SetAirportClosed(false);
+					}
+				},
+				// LIT WHILE NOT OPEN: the one glance that says the airport is taking no traffic.
+				[](const FBuildActionContext& Ctx) { return Ctx.Runtime != nullptr && Ctx.Runtime->GetAirport()->Status() != EAirportStatus::Open; },
+				HasRuntime);
+			Airport.MenuItems = [](const FBuildActionContext& Ctx)
+			{
+				TArray<FUiMenuItem> Out;
+				if (Ctx.Runtime == nullptr)
+				{
+					return Out;
+				}
+				// TWO FIXED LINES, each enabled only when it applies (review M9): line 0 always closes and line 1 always
+				// opens, so Choose acts on the line the player saw rather than toggling whatever the state is by then.
+				const bool bClosed = Ctx.Runtime->GetAirport()->IsClosedByPlayer();
+				FUiMenuItem& Close = Out.AddDefaulted_GetRef();
+				// THE COST, ASKED AS THE POPUP OPENS: what a close would cancel now (UFlightBoard::UnarrivedCount).
+				Close.Label = LOCTEXT("CloseAirport", "Close airport");
+				Close.bEnabled = !bClosed;
+				Close.Why = LOCTEXT("CloseAirportWhy", "The airport is already closed");
+				Close.bConfirm = true;
+				Close.ConfirmLabel = FText::Format(LOCTEXT("CloseAirportConfirm", "Close? {0} {0}|plural(one=flight,other=flights) will be cancelled"),
+					FText::AsNumber(Ctx.Runtime->GetFlightBoard()->UnarrivedCount()));
+				FUiMenuItem& Open = Out.AddDefaulted_GetRef();
+				Open.Label = LOCTEXT("OpenAirport", "Open airport");
+				Open.bEnabled = bClosed;
+				Open.Why = LOCTEXT("OpenAirportWhy", "The airport is not closed");
+				return Out;
+			};
+			// THE LINE SHOWN, not a toggle: 0 closes, 1 opens - a no-op when already so (SetAirportClosed re-derives to
+			// no change).
+			// ENFORCED BY: AirportMgr.Actions.AirportChooseActsOnTheLine
+			Airport.Choose = [](FBuildActionContext& Ctx, int32 Line)
+			{
+				if (Ctx.Runtime != nullptr && (Line == 0 || Line == 1))
+				{
+					Ctx.Runtime->SetAirportClosed(Line == 0);
+				}
+			};
+			// THE CAPTION IS THE STATUS whenever it is not simply open - "Closed (draining: 3)" counts the aircraft a
+			// closed airport is still seeing off (UFlightBoard::OnGroundCount); draining is a readout, not a state.
+			Airport.DynamicLabel = [](const FBuildActionContext& Ctx)
+			{
+				const EAirportStatus Status = Ctx.Runtime != nullptr ? Ctx.Runtime->GetAirport()->Status() : EAirportStatus::Open;
+				if (Status == EAirportStatus::NoRunway)
+				{
+					return LOCTEXT("AirportNoRunway", "No runway");
+				}
+				if (Status == EAirportStatus::ClosedByPlayer)
+				{
+					const int32 Draining = Ctx.Runtime->GetFlightBoard()->OnGroundCount();
+					return Draining > 0
+						? FText::Format(LOCTEXT("AirportDraining", "Closed (draining: {0})"), FText::AsNumber(Draining))
+						: LOCTEXT("AirportClosed", "Closed");
+				}
+				return LOCTEXT("CloseAirport", "Close airport");
+			};
+			Out.Add(MoveTemp(Airport));
+		}
+
 		// TWO LISTS, ONE PER AXIS, and AirportMgr.Actions.GuideGridIsInTheRegistry walks BOTH
 		// enums against them rather than counting: a row or column added without a button is a
 		// guide the player cannot switch, and nothing else would say so.
@@ -479,6 +563,25 @@ bool FBuildAction::TryRun(ARoadBuildController& C, const TCHAR* Via) const
 	}
 	UE_LOG(LogRoadBuild, Log, TEXT("%s: %s"), Via, *Id.ToString());
 	Execute(Context);
+	return true;
+}
+
+bool FBuildAction::TryChoose(ARoadBuildController& C, int32 Line, const TCHAR* Via) const
+{
+	FBuildActionContext Context(C);
+	return TryChoose(Context, Line, Via);
+}
+
+bool FBuildAction::TryChoose(FBuildActionContext& Context, int32 Line, const TCHAR* Via) const
+{
+	// TryRun's shape exactly - one context, the enabled gate, one log line - so a menu verb's line leaves the same
+	// trace a button or a key does.
+	if (!Choose || !IsEnabled(Context))
+	{
+		return false;
+	}
+	UE_LOG(LogRoadBuild, Log, TEXT("%s: %s line %d"), Via, *Id.ToString(), Line);
+	Choose(Context, Line);
 	return true;
 }
 

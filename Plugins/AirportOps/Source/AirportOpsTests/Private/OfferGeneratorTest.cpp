@@ -4,6 +4,7 @@
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/AirlineDefinition.h"
+#include "Model/Airport.h"
 #include "Model/Flight.h"
 #include "Model/LandingRun.h"
 #include "Model/OfferGenerator.h"
@@ -548,6 +549,47 @@ bool FOfferZeroRateSkipsTest::RunTest(const FString& Parameters)
 	RunMinutes(*Generator, *Field, Airlines, *ClockAt(21.0), 180);
 	TestEqual(TEXT("an airline with nothing to offer this minute costs no route search"),
 		Generator->AdmissionChecksForTest(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferNothingUnlessOpenTest, "AirportOps.Model.Offers.Generate.NothingUnlessOpen",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferNothingUnlessOpenTest::RunTest(const FString& Parameters)
+{
+	// SPEC 2026-09-29-ops-batch3 §3: offers only while Open, and while not, NO airline is judged - so a runway-less
+	// field raises no AirlineCannotCome alert and no toast per airline. Each case a fresh generator on the same field.
+	URoadNetwork* Field = FieldWith(4500.0, Needing(0.0, 3000.0));
+	const TArray<FAirlineOffers> Airlines = { Offering(MakeAirline(6.0), { Candidate(3000.0) }) };
+
+	auto Run = [&](UAirport* Airport, int32& OutChecks, bool& OutJudged)
+	{
+		UOfferGenerator* Generator = SeededGenerator();
+		Generator->MaxPendingOffers = 100000;
+		Generator->Airport = Airport;
+		const int32 Made = RunMinutes(*Generator, *Field, Airlines, *ClockAt(9.0), 120).Num();
+		OutChecks = Generator->AdmissionChecksForTest();
+		OutJudged = Generator->States.Num() > 0;
+		return Made;
+	};
+
+	int32 Checks = 0;
+	bool bJudged = false;
+	UAirport* Open = NewObject<UAirport>(GetTransientPackage());
+	Open->Reseat(*Field);
+	TestTrue(TEXT("CONTROL: open, two hours at six an hour makes offers"), Run(Open, Checks, bJudged) > 0);
+	TestTrue(TEXT("CONTROL: and judges the airline"), Checks > 0 && bJudged);
+
+	UAirport* Closed = NewObject<UAirport>(GetTransientPackage());
+	Closed->SetClosedByPlayer(true, *Field);
+	TestEqual(TEXT("closed by the player: no offers"), Run(Closed, Checks, bJudged), 0);
+	TestEqual(TEXT("and no route search"), Checks, 0);
+	TestFalse(TEXT("and no airline's state touched"), bJudged);
+
+	UAirport* Runwayless = NewObject<UAirport>(GetTransientPackage());
+	Runwayless->Reseat(*NewObject<URoadNetwork>(GetTransientPackage()));
+	TestEqual(TEXT("no runway: no offers"), Run(Runwayless, Checks, bJudged), 0);
+	TestEqual(TEXT("and no route search"), Checks, 0);
+	TestFalse(TEXT("and no airline's state touched"), bJudged);
 	return true;
 }
 

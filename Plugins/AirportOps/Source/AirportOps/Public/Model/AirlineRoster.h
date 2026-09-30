@@ -10,6 +10,7 @@ class FOpsEventBus;
 class UFlightBoard;
 struct FDayEndedEvent;
 struct FFlightAirborneEvent;
+struct FFlightCancelledEvent;
 struct FOfferDeclinedEvent;
 struct FOfferExpiredEvent;
 struct FTurnaroundEndedEvent;
@@ -134,6 +135,13 @@ public:
 	 * ENFORCED BY: AirportOps.Model.Airlines.TurnaroundOfNoFlightIsSkipped
 	 */
 	void OnTurnaroundEnded(const FTurnaroundEndedEvent& Event, const UFlightBoard* Flights);
+
+	/**
+	 * A flight was cancelled: -Tuning.ClosureCancelPenalty when the player's closure did it ("cancelled: airport
+	 * closed"), nothing for NoRunway or Unstuck (spec 2026-09-29-ops-batch3 §3) - heard for the log either way.
+	 * ENFORCED BY: AirportOps.Model.Airlines.ClosureCancelScoresOnlyAirportClosed
+	 */
+	void OnFlightCancelled(const FFlightCancelledEvent& Event);
 
 	/** Every airline forgives a little each day: Tuning.DailyDriftFraction of the way back to Start. */
 	void OnDayEnded(const FDayEndedEvent& Event);

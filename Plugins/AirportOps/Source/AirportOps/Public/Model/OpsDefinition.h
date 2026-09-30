@@ -136,6 +136,14 @@ struct AIRPORTOPS_API FAirlineSatisfactionTuning
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0")) double ShortfallPenalty = 0.06;
 
+	/**
+	 * Each flight the player's closure of the airport cancelled (spec 2026-09-29-ops-batch3 §0). ONLY a closure:
+	 * a flight cancelled because the last runway went, or by the player despawning a stuck aeroplane, costs
+	 * nothing - the user accepted the runway loophole. UNJUDGED (2026-09-29): a first guess, a little under the
+	 * shortfall because the airline was told before it flew.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0")) double ClosureCancelPenalty = 0.05;
+
 	/** Each day, this fraction of the way back to Start. */
 	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0", ClampMax = "1.0")) double DailyDriftFraction = 0.2;
 

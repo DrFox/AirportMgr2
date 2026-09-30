@@ -3,6 +3,7 @@
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/Flight.h"
+#include "Model/Airport.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
 #include "Model/JobBoard.h"
@@ -39,6 +40,8 @@ namespace
 		FOpsEventBus Bus;
 		TArray<FOpsAlert> Raised;
 		TArray<FOpsAlertKey> Cleared;
+		/** The airport status the recompute reads; null reads as open, as in a runtime before attach. */
+		const UAirport* Status = nullptr;
 		UFlight* Flight = nullptr;
 		int32 Plane = 0;
 
@@ -100,6 +103,7 @@ namespace
 			Sources.Network = Airport.Net;
 			Sources.Offers = Offers;
 			Sources.Ledger = Ledger;
+			Sources.Airport = Status;
 			Alerts->Recompute(Sources, Clock->Now());
 			Bus.Drain();
 		}
@@ -236,6 +240,42 @@ bool FOpsAlertsAirlineTest::RunTest(const FString&)
 	F.Offers->States.FindOrAdd(TEXT("CumbriaAir")).bCouldCome = true;
 	F.Recompute();
 	TestEqual(TEXT("once it can come again, cleared"), F.ClearedOf(EAlertKind::AirlineCannotCome), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsAlertsNoRunwayTest, "AirportOps.Model.Alerts.NoRunwayRaised",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsAlertsNoRunwayTest::RunTest(const FString&)
+{
+	// SPEC 2026-09-29-ops-batch3 §3: an airport with no runway gets no offers, and the player is told why - derived
+	// from the status like every other alert. A deliberate closure raises nothing: the player knows.
+	FAlertsField F;
+	if (!TestTrue(TEXT("a field"), F.Build())) { return false; }
+	UAirport* Airport = NewObject<UAirport>(GetTransientPackage());
+	F.Status = Airport;
+	// AN AIRLINE ALREADY JUDGED UNABLE TO COME, from before: while the airport is not open the generator asks no
+	// airline anything, so a verdict left standing would be a stale alert.
+	F.Offers->States.FindOrAdd(TEXT("CumbriaAir")).bCouldCome = false;
+
+	Airport->Reseat(*NewObject<URoadNetwork>(GetTransientPackage()));
+	if (!TestEqual(TEXT("an empty network: the airport has no runway"), Airport->Status(), EAirportStatus::NoRunway)) { return false; }
+	F.Recompute();
+	if (!TestEqual(TEXT("no runway raises its alert"), F.RaisedOf(EAlertKind::NoRunway), 1)) { return false; }
+	const FOpsAlert* Alert = F.Alerts->GetAlerts().FindByPredicate([](const FOpsAlert& A) { return A.Key.Kind == EAlertKind::NoRunway; });
+	if (!TestNotNull(TEXT("and holds it"), Alert)) { return false; }
+	TestEqual(TEXT("worded to say what to build"), Alert->Text.ToString(), FString(TEXT("No runway - build one to receive offers")));
+	TestEqual(TEXT("with nowhere in the world to look"), Alert->Focus.Kind, EAlertFocusKind::None);
+	TestEqual(TEXT("and no airline alert while nothing is asked of the airlines"), F.RaisedOf(EAlertKind::AirlineCannotCome), 0);
+
+	Airport->SetClosedByPlayer(true, *F.Airport.Net);
+	F.Recompute();
+	TestEqual(TEXT("closed by the player: the runway alert clears"), F.ClearedOf(EAlertKind::NoRunway), 1);
+	TestEqual(TEXT("and a deliberate closure raises nothing"), F.Alerts->GetAlerts().Num(), 0);
+
+	Airport->SetClosedByPlayer(false, *F.Airport.Net);
+	F.Recompute();
+	TestEqual(TEXT("open with a runway: the airline's verdict is an alert again"), F.RaisedOf(EAlertKind::AirlineCannotCome), 1);
+	TestEqual(TEXT("and no runway alert"), F.RaisedOf(EAlertKind::NoRunway), 1);
 	return true;
 }
 

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "UI/UiButton.h"
 #include "UI/UiRadioGroup.h"
 #include "UiMenuButton.generated.h"
 
@@ -69,7 +70,10 @@ class AIRPORTMGR_API UUiMenuButton : public UUserWidget
 	GENERATED_BODY()
 
 public:
-	void Build(const UUIStyle& Style, const FText& Label);
+	/** Layout, padding and icon are the button's own (UUiButton::Build, SetIcon) - defaulted to the inspector's inline
+	 *  verb; the bar passes its stacked, icon-topped look so a menu verb there looks like every other button. */
+	void Build(const UUIStyle& Style, const FText& Label, EUiButtonLayout Layout = EUiButtonLayout::Inline,
+		bool bStylePadding = true, UTexture2D* Icon = nullptr, float IconSize = 0.0f);
 
 	/** The lines, asked for as the popup opens. */
 	TFunction<TArray<FUiMenuItem>()> Items;

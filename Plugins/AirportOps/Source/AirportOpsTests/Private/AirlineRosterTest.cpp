@@ -41,6 +41,7 @@ namespace
 			Bus.Subscribe<FOfferDeclinedEvent>(EOpsTier::Reaction, TEXT("Airlines"), [this](const FOfferDeclinedEvent& E) { Roster->OnOfferDeclined(E); });
 			Bus.Subscribe<FDayEndedEvent>(EOpsTier::Reaction, TEXT("Airlines"), [this](const FDayEndedEvent& E) { Roster->OnDayEnded(E); });
 			Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Reaction, TEXT("Airlines"), [this](const FTurnaroundEndedEvent& E) { Roster->OnTurnaroundEnded(E, Flights); });
+			Bus.Subscribe<FFlightCancelledEvent>(EOpsTier::Reaction, TEXT("Airlines"), [this](const FFlightCancelledEvent& E) { Roster->OnFlightCancelled(E); });
 			Bus.Subscribe<FAirlineSatisfactionEvent>(EOpsTier::Presentation, TEXT("test"), [this](const FAirlineSatisfactionEvent& E) { Changes.Add(E); });
 			Bus.EndWiring();
 		}
@@ -321,6 +322,32 @@ bool FAirlinesTurnaroundNoFlightTest::RunTest(const FString&)
 	// AND THE RESOLUTION IS BY AGENT, not "whichever airline": the same event for agent 7 does score.
 	F.TurnaroundEnded(EFuelOutcome::Unfuelled, 0.0, 2500.0, /*Agent=*/7);
 	TestEqual(TEXT("the flight agent 7 flies is found, and its airline charged"), F.Sat(), 0.44, 1e-9);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlinesClosureCancelTest, "AirportOps.Model.Airlines.ClosureCancelScoresOnlyAirportClosed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirlinesClosureCancelTest::RunTest(const FString&)
+{
+	FRosterFixture F;
+	// ONLY THE PLAYER'S CLOSURE COSTS (spec 2026-09-29-ops-batch3 §0): the runway loophole was accepted, and a
+	// despawn is a rescue, not an insult.
+	F.Bus.Publish(FFlightCancelledEvent{ 1, TEXT("A"), ECancelReason::NoRunway });
+	F.Bus.Publish(FFlightCancelledEvent{ 2, TEXT("A"), ECancelReason::Unstuck });
+	F.Bus.Drain();
+	TestEqual(TEXT("a flight lost to a missing runway, or to Unstick, costs nothing"), F.Sat(), 0.5, 1e-9);
+	TestEqual(TEXT("and is not announced"), F.Changes.Num(), 0);
+
+	if (!TestTrue(TEXT("the penalty is a real cost"), F.Roster->Tuning.ClosureCancelPenalty > 0.0)) { return false; }
+	F.Bus.Publish(FFlightCancelledEvent{ 3, TEXT("A"), ECancelReason::AirportClosed });
+	F.Bus.Drain();
+	TestEqual(TEXT("a flight the player's closure cancelled costs the closure penalty"), F.Sat(), 0.5 - F.Roster->Tuning.ClosureCancelPenalty, 1e-9);
+	if (!TestEqual(TEXT("announced once"), F.Changes.Num(), 1)) { return false; }
+	TestEqual(TEXT("with the cause the inbox row shows"), F.Changes[0].Cause, FString(TEXT("cancelled: airport closed")));
+
+	F.Bus.Publish(FFlightCancelledEvent{ 4, TEXT("NoSuchAirline"), ECancelReason::AirportClosed });
+	F.Bus.Drain();
+	TestEqual(TEXT("an airline the roster was never seeded with grows no row"), F.Roster->Find(TEXT("NoSuchAirline")) == nullptr, true);
 	return true;
 }
 

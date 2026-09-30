@@ -121,6 +121,26 @@ void UAirlineRoster::OnTurnaroundEnded(const FTurnaroundEndedEvent& Event, const
 		Event.Outcome == EFuelOutcome::PartFuelled ? TEXT("left part-fuelled") : TEXT("left unfuelled"));
 }
 
+void UAirlineRoster::OnFlightCancelled(const FFlightCancelledEvent& Event)
+{
+	// ONLY THE PLAYER'S CLOSURE COSTS (user ruling 2026-09-29): losing the last runway is a loophole the user
+	// accepted, and a despawn is the player rescuing a stuck aeroplane, not letting an airline down.
+	if (Event.Reason != ECancelReason::AirportClosed)
+	{
+		UE_LOG(LogAirportOps, Verbose, TEXT("Airline '%s': flight %d cancelled (%s) - no effect on satisfaction"),
+			*Event.AirlineId.ToString(), Event.FlightId, *UEnum::GetValueAsString(Event.Reason));
+		return;
+	}
+	FAirlineStanding* Row = FindMutable(Event.AirlineId);
+	if (Row == nullptr)
+	{
+		UE_LOG(LogAirportOps, Verbose, TEXT("Airline '%s' (flight %d) has no standing - debug flight or removed airline"),
+			*Event.AirlineId.ToString(), Event.FlightId);
+		return;
+	}
+	Apply(*Row, -Tuning.ClosureCancelPenalty, TEXT("cancelled: airport closed"));
+}
+
 void UAirlineRoster::OnDayEnded(const FDayEndedEvent& Event)
 {
 	for (FAirlineStanding& Row : Standings)

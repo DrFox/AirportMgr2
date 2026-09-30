@@ -2,6 +2,7 @@
 
 #include "AirportOpsLog.h"
 #include "Model/AirlineDefinition.h"
+#include "Model/Airport.h"
 #include "Model/AirsideCapability.h"
 #include "Model/Flight.h"
 #include "Model/Pricing.h"
@@ -97,6 +98,14 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 	TFunctionRef<int32()> NextId)
 {
 	TArray<UFlight*> Made;
+	// NOT OPEN, NOTHING ASKED (spec 2026-09-29-ops-batch3 §3): before any airline's threshold, rate or admission,
+	// so a runway-less field runs no route search and judges no airline unable to come - no AirlineCannotCome
+	// alert, no "cannot use this airport" line per airline, for a condition the NoRunway alert already names.
+	// ENFORCED BY: AirportOps.Model.Offers.Generate.NothingUnlessOpen
+	if (Airport != nullptr && Airport->Status() != EAirportStatus::Open)
+	{
+		return Made;
+	}
 	const double Now = Clock.Now();
 	const double TimeOfDay = Clock.TimeOfDay();
 	const bool bDaylight = Clock.IsDaylight();
@@ -276,6 +285,15 @@ FString UOfferGenerator::MakeCallsign(const FString& Prefix, FRandomStream& Stre
 		return Out;
 	}
 	return FString::Printf(TEXT("%s %d"), *Prefix, 100 + Stream.RandHelper(900));
+}
+
+void UOfferGenerator::ForgetAirlineVerdicts()
+{
+	for (TPair<FName, FAirlineOfferState>& Each : States)
+	{
+		Each.Value.bCouldCome = true;
+	}
+	UE_LOG(LogAirportOps, Log, TEXT("Offers: %d airline verdict(s) forgotten - judged again next minute"), States.Num());
 }
 
 FString UOfferGenerator::DescribeWhyNot(FName AirlineId) const

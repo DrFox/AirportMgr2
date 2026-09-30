@@ -7,8 +7,10 @@
 #include "OfferInboxWidget.generated.h"
 
 struct FAirlineOffers;
+enum class EAirportStatus : uint8;
 class UOfferGenerator;
 class USimClock;
+class UOpsRuntime;
 class ARoadNetworkActor;
 class UButton;
 class UUiButton;
@@ -121,6 +123,9 @@ public:
 	 */
 	void Refresh(ARoadNetworkActor* Target);
 
+	/** Refresh's body past the subsystem lookup - the runtime handed in. */
+	void RefreshWith(UOpsRuntime& Runtime, ARoadNetworkActor& Target);
+
 	/** Called by a row's entry object. Public because UOfferRowEntry is a separate UObject. */
 	void AcceptRow(int32 RowIndex);
 	void DeclineRow(int32 RowIndex);
@@ -144,6 +149,16 @@ public:
 	bool RefreshDemand(TArrayView<const FAirlineOffers> Airlines, const USimClock& Clock, const UOfferGenerator* Generator);
 
 	int32 DemandSampleCountForTest() const { return DemandSampleCount; }
+
+	/**
+	 * The strip reads "Closed" in place of the curve while the airport is not open (spec 2026-09-29-ops-batch3 §3): the
+	 * generator makes nothing then, and a curve would promise offers that will not come. Called from Refresh with
+	 * UAirport::Status, every tick - a no-op when the status has not changed.
+	 */
+	void ShowAirportStatus(EAirportStatus Status);
+	bool IsDemandStripShownForTest() const;
+	/** The status line's text, or empty while it is hidden. */
+	FString DemandStatusForTest() const;
 	/** Row N's Accept button, or null - see AirportMgr.UI.OfferInbox's Primary-kind assertion. */
 	const UUiButton* AcceptButtonForTest(int32 Row) const;
 
@@ -191,6 +206,12 @@ private:
 	 */
 	UPROPERTY() TArray<TObjectPtr<USizeBox>> DemandBars;
 	UPROPERTY() TArray<TObjectPtr<UBorder>> DemandFills;
+
+	/** The strip's box, collapsed while the airport is not open, and the "Closed" line shown in its place. */
+	UPROPERTY() TObjectPtr<USizeBox> DemandStripBox;
+	UPROPERTY() TObjectPtr<UTextBlock> DemandStatusText;
+	/** ShowAirportStatus's last answer, so a still tick sets nothing (SetText and SetVisibility have no early-out). */
+	bool bShowingClosed = false;
 
 	/** Samples for the strip, set by Refresh from the runtime's airlines. Empty = no strip. */
 	TArray<double> DemandSamples;

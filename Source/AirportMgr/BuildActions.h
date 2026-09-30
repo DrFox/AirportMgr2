@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Solve/GuideArbiter.h"
 #include "InputCoreTypes.h"
+#include "UI/UiMenuButton.h"
 
 class ARoadBuildController;
 class ARoadNetworkActor;
@@ -122,6 +123,20 @@ struct FBuildAction
 	bool bInspectorOnly = false;
 
 	/**
+	 * A MENU VERB: set, and the bar builds this action as a UUiMenuButton whose popup lists these lines, asked for as it
+	 * opens - the inspector Unstick's shape, and its CONFIRM (FUiMenuItem::bConfirm): a destructive line is armed by the
+	 * first click and chosen by the second, at the button the player just clicked, and closing the popup disarms it.
+	 * Choose runs the chosen line, through TryChoose. Execute stays the keyless, non-destructive door (TryRun).
+	 *
+	 * THE OTHER MENU-VERB SHAPE is selection.unstick's: its popup lives in the INSPECTOR beside the card it acts on, so
+	 * the bar row's Execute only asks for it (ARoadBuildController::RequestUnstickMenu) and sets no MenuItems. Use
+	 * MenuItems when the popup belongs at the bar button; the request shape when it belongs to another panel.
+	 * ENFORCED BY: AirportMgr.Actions.BarBuildsMenuActionsAsMenus, AirportMgr.Actions.AirportCloseConfirms
+	 */
+	TFunction<TArray<FUiMenuItem>(const FBuildActionContext&)> MenuItems;
+	TFunction<void(FBuildActionContext&, int32)> Choose;
+
+	/**
 	 * The ONE door: checks IsEnabled, logs "<Via>: <Id>" on LogRoadBuild, then Execute - so
 	 * the bar, the inspector and every key press leave the same one line when they actually
 	 * fire, and none of them can fire a disabled action by forgetting the check. Returns
@@ -133,6 +148,12 @@ struct FBuildAction
 	 * this method already did inline before issue #191 gave that lookup a name.
 	 */
 	bool TryRun(ARoadBuildController& C, const TCHAR* Via) const;
+
+	/** TryRun's door for a menu verb's chosen Line: the same IsEnabled gate and the same one log line
+	 *  ("<Via>: <Id> line <n>"), then Choose. False when disabled or not a menu verb. */
+	bool TryChoose(ARoadBuildController& C, int32 Line, const TCHAR* Via) const;
+	/** The same, given a context already built - the bar's (and a test's, with a runtime handed in). */
+	bool TryChoose(FBuildActionContext& Context, int32 Line, const TCHAR* Via) const;
 };
 
 /** Linear scan: BuildActions() is a few dozen entries, not a hot loop. */

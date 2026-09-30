@@ -11,6 +11,7 @@
 #include "Entities/AircraftType.h"
 #include "Model/AirlineDefinition.h"
 #include "Model/AirlineRoster.h"
+#include "Model/Airport.h"
 #include "Model/OpsAlerts.h"
 #include "Model/ArrivalSequencer.h"
 #include "Model/Flight.h"
@@ -53,6 +54,20 @@ UOpsRuntime::UOpsRuntime()
 	// The standing alerts - derived from the boards, owned here like them (spec 2026-09-29-ops-alerts).
 	Alerts = CreateDefaultSubobject<UOpsAlerts>(TEXT("Alerts"));
 
+	// THE AIRPORT'S STATUS (spec 2026-09-29-ops-batch3 §3), the same forwarding shape - and read, not subscribed
+	// to, by the generator, which is handed it here once for the runtime's life.
+	Airport = CreateDefaultSubobject<UAirport>(TEXT("Airport"));
+	OfferGenerator->Airport = Airport;
+	// AND BY THE BOARD'S Accept, the one door every accept comes through - a closed airport admits nothing (ruling
+	// I1). Weak, for the dispatcher's reason in Attach.
+	// ENFORCED BY: AirportOps.Present.Airport.AcceptRefusedWhileClosed, AirportOps.Present.Airport.LandRefusedWhileClosed
+	TWeakObjectPtr<const UAirport> WeakAirport = Airport;
+	FlightBoard->AdmitsArrivals = [WeakAirport]()
+	{
+		const UAirport* Live = WeakAirport.Get();
+		return Live == nullptr || Live->Status() == EAirportStatus::Open;
+	};
+
 	// The Unstick menu, the same shape again: a pointer, and the two boards it composes.
 	AgentRescue = CreateDefaultSubobject<UAgentRescue>(TEXT("AgentRescue"));
 	AgentRescue->JobBoard = JobBoard;
@@ -77,6 +92,21 @@ void UOpsRuntime::SeedAirlines()
 			Airlines->Ensure(Each.Airline->GetFName());
 		}
 	}
+}
+
+bool UOpsRuntime::SetAirportClosed(bool bClosed)
+{
+	if (Target == nullptr || Target->Network == nullptr)
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Airport %s refused: no network attached"), bClosed ? TEXT("close") : TEXT("open"));
+		return false;
+	}
+	UE_LOG(LogAirportOps, Log, TEXT("Airport: the player %s it (%d flight(s) not yet arrived, %d on the ground)"),
+		bClosed ? TEXT("closes") : TEXT("reopens"), FlightBoard->UnarrivedCount(), FlightBoard->OnGroundCount());
+	// RE-DERIVED NOW, published by the airport on a change; the cancellation is that event's Sim handler (WireBus),
+	// so a close from the bar and a runway deleted under an open airport take the one path.
+	Airport->SetClosedByPlayer(bClosed, *Target->Network);
+	return true;
 }
 
 FUnstickVerdict UOpsRuntime::CanUnstick(int32 AgentId, EUnstickAction Action) const
@@ -311,6 +341,50 @@ void UOpsRuntime::WireBus()
 		}
 	});
 
+	// A REOPEN FORGETS EVERY AIRLINE'S VERDICT (review M1): while closed no airline was judged, so a verdict from
+	// before the closure is stale - the player may have built what it wanted. Sim, so the alerts pass this change
+	// dirties reads the forgotten state; the next offer minute judges afresh.
+	// ENFORCED BY: AirportOps.Present.Airport.ReopenForgetsAirlineVerdicts
+	Bus.Subscribe<FAirportStatusChangedEvent>(EOpsTier::Sim, TEXT("Offers"), [this](const FAirportStatusChangedEvent& E)
+	{
+		if (E.New == EAirportStatus::Open)
+		{
+			OfferGenerator->ForgetAirlineVerdicts();
+		}
+	});
+
+	// THE AIRPORT'S STATUS, re-derived when the network changes - a runway built or deleted (spec 2026-09-29-ops-
+	// batch3 §3). Sim: the status is state the flight board's handler below acts on in the next round.
+	// ENFORCED BY: AirportOps.Present.Airport.RunwayComesAndGoes
+	Bus.Subscribe<FNetworkChangedEvent>(EOpsTier::Sim, TEXT("Airport"), [this](const FNetworkChangedEvent&)
+	{
+		if (Target != nullptr && Target->Network != nullptr)
+		{
+			Airport->Refresh(*Target->Network);
+		}
+	});
+	// ENTERING A CLOSED STATUS CANCELS WHAT HAS NOT ARRIVED - whichever closed it, the player or the last runway.
+	// Every non-Open New, not only a change from Open: NoRunway -> ClosedByPlayer finds nothing left, and costs
+	// one scan. Mapped here so the board never learns the airport.
+	// ENFORCED BY: AirportOps.Present.Airport.CloseCancelsThroughTheBus
+	Bus.Subscribe<FAirportStatusChangedEvent>(EOpsTier::Sim, TEXT("FlightBoard"), [this](const FAirportStatusChangedEvent& E)
+	{
+		UGroundTraffic* Model = LiveModel();
+		if (E.New == EAirportStatus::Open)
+		{
+			return;
+		}
+		if (Model == nullptr)
+		{
+			// SAID, not skipped (review M4): an accepted flight nothing cancels would keep coming to a closed airport.
+			// ENFORCED BY: AirportOps.Present.Airport.ClosureWithNoTrafficWarns
+			UE_LOG(LogAirportOps, Warning, TEXT("Airport %s cancels nothing: no traffic model attached"), *UEnum::GetValueAsString(E.New));
+			return;
+		}
+		FlightBoard->CancelUnarrived(*Model, *Clock,
+			E.New == EAirportStatus::NoRunway ? ECancelReason::NoRunway : ECancelReason::AirportClosed);
+	});
+
 	// REACTION: the airlines, reading what the boards have already settled.
 	Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Reaction, TEXT("Airlines"),
 		[this](const FFlightAirborneEvent& E) { Airlines->OnFlightAirborne(E); });
@@ -328,6 +402,10 @@ void UOpsRuntime::WireBus()
 	// ENFORCED BY: AirportOps.Present.Bus.TurnaroundShortfallReachesAirline, AirportOps.Present.Bus.UnfuelledDepartureLowersAirline
 	Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Reaction, TEXT("Airlines"),
 		[this](const FTurnaroundEndedEvent& E) { Airlines->OnTurnaroundEnded(E, FlightBoard); });
+	// A CANCELLED FLIGHT, from either publisher (a closure, an Unstick despawn); the roster charges only a closure.
+	// ENFORCED BY: AirportOps.Present.Airport.CloseCancelsThroughTheBus ("its airline charged the closure penalty")
+	Bus.Subscribe<FFlightCancelledEvent>(EOpsTier::Reaction, TEXT("Airlines"),
+		[this](const FFlightCancelledEvent& E) { Airlines->OnFlightCancelled(E); });
 
 	// PRESENTATION: the line the PIE check greps for (spec §4) - a satisfaction change as the bus
 	// delivered it, which is what proves the chain end to end rather than the roster's own log line.
@@ -373,6 +451,10 @@ void UOpsRuntime::WireBus()
 	// joins this event in PR D.
 	// ENFORCED BY: AirportOps.Present.Alerts.AcceptDirtiesAlerts
 	Bus.Subscribe<FOfferAcceptedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FOfferAcceptedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
+	// THE STATUS IS READ BY THE PASS (NoRunway; airlines judged only while Open), and a closure changes it with no
+	// network change of its own.
+	// ENFORCED BY: AirportOps.Present.Airport.StatusChangeDirtiesAlerts
+	Bus.Subscribe<FAirportStatusChangedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FAirportStatusChangedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 
 	// PRESENTATION: the new UOpsEvents faces.
 	Bus.Subscribe<FAlertRaisedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
@@ -417,6 +499,7 @@ void UOpsRuntime::RecomputeAlerts()
 	Sources.Network = Target != nullptr ? Target->Network.Get() : nullptr;
 	Sources.Offers = OfferGenerator;
 	Sources.Ledger = Ledger;
+	Sources.Airport = Airport;
 	Sources.Airlines = AirlineOffers;
 	Alerts->Recompute(Sources, Clock->Now());
 }
@@ -574,6 +657,16 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// A NEW AIRPORT, A NEW SET: the old actor's alerts name its flights and agents.
 	Alerts->Reset();
 	Airlines->Bus = &Bus;
+	// A NEW GAME OPENS, beside the ledger's Open and the roster's reset above; a load overwrites the intent from its
+	// "Airport" blob. RE-DERIVED SILENTLY - an attach is not a change the player made, and a runway-less new game
+	// has nothing to cancel. The first NetworkChanged then finds the status already right.
+	// ENFORCED BY: AirportOps.Present.Airport.RunwayComesAndGoes ("the attach re-derives", "publishes no status change")
+	Airport->Bus = &Bus;
+	Airport->ResetForNewGame();
+	if (Target->Network != nullptr)
+	{
+		Airport->Reseat(*Target->Network);
+	}
 	JobBoard->Ledger = Ledger;
 	JobBoard->Pricing = Pricing;
 	JobBoard->Bus = &Bus;
@@ -718,6 +811,7 @@ void UOpsRuntime::Detach()
 	Ledger->Bus = nullptr;
 	JobBoard->Bus = nullptr;
 	Airlines->Bus = nullptr;
+	Airport->Bus = nullptr;
 	// THE QUEUE IS THE OLD ACTOR'S. A new level's traffic numbers its agents from 1 again, so a
 	// stale Parked for agent k would land on the new level's agent k. Dropped, and the price is
 	// that a re-Attach to the SAME actor loses at most one step of its events.
@@ -890,6 +984,7 @@ TArray<IOpsPersistent*> UOpsRuntime::Persistents() const
 	Out.Add(Pricing);
 	Out.Add(OfferGenerator);
 	Out.Add(Airlines);
+	Out.Add(Airport);
 	return Out;
 }
 
@@ -905,6 +1000,11 @@ bool UOpsRuntime::SaveToSlot(const FString& SlotName)
 	// bound to a UOpsEvents delegate may save (an autosave on a notification), and a nested Drain
 	// would assert; that save simply misses what is still queued, and says so.
 	// ENFORCED BY: AirportOps.Present.Bus.SaveFromAHandler
+	// THE STATUS FIRST (review M5): NetworkChanged is published by Tick, so an edit in the frame of the save would
+	// otherwise snapshot an airport still open over a network with no runway - and a load re-derives silently, so its
+	// flights would never be cancelled. A change published here is handled by the drain below.
+	// ENFORCED BY: AirportOps.Present.Airport.SaveRefreshesTheStatus
+	Airport->Refresh(*Target->Network);
 	if (Bus.IsDraining())
 	{
 		UE_LOG(LogAirportOps, Warning, TEXT("Save '%s' from inside an ops event handler: %d queued event(s) are not in it"),
@@ -939,6 +1039,23 @@ EArrivalRefusal UOpsRuntime::LandNear(const FVector2D& Focus, const FAirframe* O
 		UE_LOG(LogAirportOps, Warning, TEXT("Land: no attached network to land on."));
 		Bus.Publish(FLandRefusedEvent{ EArrivalRefusal::NoRunway });
 		return EArrivalRefusal::NoRunway;
+	}
+
+	// A CLOSED AIRPORT ADMITS NO ARRIVALS, THE DEBUG ONE INCLUDED (ruling I1, 2026-09-30) - asked BEFORE AcceptImmediate,
+	// which leaves a refused flight in the inbox as an offer. NoRunway is Airside's own refusal and toasts as one; a
+	// player's closure has no Airside word, so it says "Airport closed" and returns NotAdmitted ("may not use it").
+	// ENFORCED BY: AirportOps.Present.Airport.LandRefusedWhileClosed
+	if (Airport->Status() == EAirportStatus::NoRunway)
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Land: refused - the airport has no runway"));
+		Bus.Publish(FLandRefusedEvent{ EArrivalRefusal::NoRunway });
+		return EArrivalRefusal::NoRunway;
+	}
+	if (Airport->Status() == EAirportStatus::ClosedByPlayer)
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Land: refused - the airport is closed"));
+		Bus.Publish(FNotificationEvent{ TEXT("Airport closed") });
+		return EArrivalRefusal::NotAdmitted;
 	}
 
 	// THE SAME RESOLVER EVERY DISPATCH FALLS BACK TO, for the same reason: an aircraft that
@@ -1042,6 +1159,12 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// Present rebuilds from model: the mesh and the derived guideline graph are both
 	// produced by the presenter's Rebuild, which is what RebuildMesh runs.
 	Target->RebuildMesh();
+
+	// THE STATUS RE-DERIVED FROM THE LOADED INTENT AND NETWORK, WITH NO EVENT (spec 2026-09-29-ops-batch3 §3): a
+	// published change would reach the flight board's handler and re-run the cancellation, and there is nothing to
+	// cancel that was not cancelled when this was saved. The generator and the alerts read the result.
+	// ENFORCED BY: AirportOps.Present.Airport.LoadRederivesWithoutCancelling
+	Airport->Reseat(*Target->Network);
 
 	// IN THIS ORDER, and both are needed. RebuildMesh regenerates the guideline graph, which
 	// takes every node claim with it (FTrafficOccupancy::ReleaseGuidelineClaims), so the

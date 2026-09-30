@@ -10,6 +10,9 @@ the spec and asked for unattended execution; the orchestrator (the main session)
   branch, stacked on the previous PR's branch, created IN this worktree
   (`git checkout -b feature/<name>` from the previous branch's tip). The orchestrator tells you your
   branch and base. Never touch `C:\repos\AirportMgr2` (the user's checkout) - no checkout, pull, build.
+- ABSOLUTE PATHS ONLY for every shell command (cp, touch, scripts, tests). The PowerShell and Bash
+  tools start in `C:\repos\AirportMgr2`; a relative restore in PR B overwrote a file in the user's
+  checkout (restored). Run the WORKTREE's `Tools/Run-AirsideTests.ps1` by its absolute path.
 - Stay on your branch. Never merge main locally, never rebase unless told.
 
 ## Build and test (rulings, with reasons)

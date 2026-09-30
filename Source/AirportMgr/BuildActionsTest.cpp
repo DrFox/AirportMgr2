@@ -1,4 +1,17 @@
 #include "CoreMinimal.h"
+#include "UIStyle.h"
+#include "UI/UiMenuButton.h"
+#include "Testing/AirsideTestGraph.h"
+#include "Profiles/RoadProfile.h"
+#include "Present/RoadNetworkActor.h"
+#include "Present/OpsRuntime.h"
+#include "Present/AirsideTraffic.h"
+#include "Model/RoadNetwork.h"
+#include "Model/GroundTraffic.h"
+#include "Model/FlightBoard.h"
+#include "Model/Flight.h"
+#include "Model/Airport.h"
+#include "Entities/EntityDefinition.h"
 #include "BuildActions.h"
 #include "BuildHudLayer.h"
 #include "Entities/EntityDefinition.h"
@@ -597,6 +610,250 @@ bool FDepotForSelectionTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("an aircraft id that happens to equal the depot's index names nothing"), ARoadBuildController::DepotForSelection(Actor, Sel).IsSet());
 	Sel.Kind = ESelectionKind::Stand;
 	TestFalse(TEXT("and no target names nothing"), ARoadBuildController::DepotForSelection(nullptr, Sel).IsSet());
+	return true;
+}
+
+namespace
+{
+	/** An attached runtime over a field with a runway and one stand - the airport the bar's close verb acts on. */
+	UOpsRuntime* AirportActionRuntime(FAirsideTestWorld& World)
+	{
+		ARoadNetworkActor* Actor = World.Actor;
+		const int32 A = Actor->PlaceNode(FVector2D(0.0, 30000.0));
+		const int32 B = Actor->PlaceNode(FVector2D(20000.0, 30000.0));
+		Actor->ConnectNodes(A, B);
+		Actor->MinimumRunwayLength = 100.0;
+		Actor->PlaceRunway(FVector2D(0.0, -50000.0), FVector2D(6000.0, -50000.0), TestProfiles::Runway());
+		UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+		Actor->Network->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 90000.0), 0.0, 3600.0, StandDef->PoseRole, StandDef->Trucks);
+		UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+		Runtime->Attach(Actor);
+		for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
+		return Runtime;
+	}
+
+	/** An accepted flight on Runtime's board, its lead long enough never to come due in a test. */
+	UFlight* AirportActionAccepted(UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
+	{
+		UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+		Flight->Airframe.Wingspan = 3400.0;
+		Flight->LeadTimeSeconds = 1.0e7;
+		Runtime.GetFlightBoard()->AddOffer(*Runtime.GetClock(), Flight);
+		return Runtime.GetFlightBoard()->Accept(*Actor.GetTraffic()->GetModel(), *Actor.Network, *Runtime.GetClock(), *Flight) ? Flight : nullptr;
+	}
+}
+
+/**
+ * CLOSING CONFIRMS AT THE CURSOR; DISMISSING CANCELS NOTHING (spec 2026-09-29-ops-batch3 §3). The bar's game.airport
+ * is a menu verb - UUiMenuButton, the inspector Unstick's popup at the button the player clicked - whose Close line is
+ * a bConfirm line: the first click arms it and re-captions it with what will be lost; only the second closes.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportCloseConfirmsTest, "AirportMgr.Actions.AirportCloseConfirms",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirportCloseConfirmsTest::RunTest(const FString& Parameters)
+{
+	const FBuildAction* Action = FindAction(FName(TEXT("game.airport")));
+	if (!TestNotNull(TEXT("the airport verb is registered"), Action)) { return false; }
+	TestTrue(TEXT("it is a menu verb"), static_cast<bool>(Action->MenuItems) && static_cast<bool>(Action->Choose));
+	TestFalse(TEXT("with no key: a close is a misclick away from cancelling every flight"), Action->Key.IsValid());
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = AirportActionRuntime(TestWorld);
+	UFlight* Flight = AirportActionAccepted(*Runtime, *TestWorld.Actor);
+	if (!TestNotNull(TEXT("an accepted flight"), Flight)) { return false; }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	// THE RUNTIME HANDED IN: a test world has no game instance, so the context's own lookup finds none.
+	FBuildActionContext Ctx(*C);
+	Ctx.Runtime = Runtime;
+
+	const TArray<FUiMenuItem> OpenLines = Action->MenuItems(Ctx);
+	if (!TestEqual(TEXT("two lines, always: Close then Open"), OpenLines.Num(), 2)) { return false; }
+	TestEqual(TEXT("the first closes"), OpenLines[0].Label.ToString(), FString(TEXT("Close airport")));
+	TestTrue(TEXT("and is enabled while open"), OpenLines[0].bEnabled);
+	TestFalse(TEXT("the second, Open, is greyed while open"), OpenLines[1].bEnabled);
+	TestTrue(TEXT("and must be confirmed"), OpenLines[0].bConfirm);
+	TestEqual(TEXT("the confirm says what will be lost"), OpenLines[0].ConfirmLabel.ToString(), FString(TEXT("Close? 1 flight will be cancelled")));
+
+	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
+	if (!TestNotNull(TEXT("a style"), Style)) { return false; }
+	UUiMenuButton* Menu = CreateWidget<UUiMenuButton>(TestWorld.World, UUiMenuButton::StaticClass());
+	Menu->Build(*Style, Action->Label);
+	Menu->Items = [Action, &Ctx]() { return Action->MenuItems(Ctx); };
+	// WHAT THE BAR DOES WITH A CHOICE: OnChosen is a dynamic delegate a lambda cannot bind, so the count stands in.
+	auto ChooseIfChosen = [&](int32 Before)
+	{
+		if (Menu->ChosenCountForTest() > Before) { Action->Choose(Ctx, Menu->LastChosenForTest()); }
+	};
+
+	// ARMED, THEN DISMISSED: a click away closes the popup, and nothing reaches the verb.
+	Menu->BuildMenu();
+	int32 Chosen = Menu->ChosenCountForTest();
+	Menu->Choose(0);
+	ChooseIfChosen(Chosen);
+	TestEqual(TEXT("the first click arms the line"), Menu->ArmedForTest(), 0);
+	Menu->HandleOpenChanged(false);
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("dismissed: still open"), Runtime->GetAirport()->Status(), EAirportStatus::Open);
+	TestEqual(TEXT("dismissed: the flight is still coming"), Flight->Phase, EFlightPhase::Accepted);
+
+	// ARMED, THEN CONFIRMED.
+	Menu->BuildMenu();
+	Chosen = Menu->ChosenCountForTest();
+	Menu->Choose(0);
+	Menu->Choose(0);
+	ChooseIfChosen(Chosen);
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("confirmed: closed"), Runtime->GetAirport()->Status(), EAirportStatus::ClosedByPlayer);
+	TestEqual(TEXT("confirmed: the flight is cancelled"), Flight->Phase, EFlightPhase::Cancelled);
+
+	// REOPENING IS NOT CONFIRMED: nothing is lost by it.
+	const TArray<FUiMenuItem> ClosedLines = Action->MenuItems(Ctx);
+	if (!TestEqual(TEXT("closed: the same two lines"), ClosedLines.Num(), 2)) { return false; }
+	TestFalse(TEXT("Close greyed"), ClosedLines[0].bEnabled);
+	TestEqual(TEXT("the second reopens"), ClosedLines[1].Label.ToString(), FString(TEXT("Open airport")));
+	TestTrue(TEXT("enabled"), ClosedLines[1].bEnabled);
+	TestFalse(TEXT("on one click"), ClosedLines[1].bConfirm);
+	Menu->BuildMenu();
+	Chosen = Menu->ChosenCountForTest();
+	Menu->Choose(1);
+	ChooseIfChosen(Chosen);
+	TestEqual(TEXT("reopened"), Runtime->GetAirport()->Status(), EAirportStatus::Open);
+	return true;
+}
+
+/** The caption is the status whenever it is not simply open - what the player reads on the bar. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportStatusCaptionTest, "AirportMgr.Actions.AirportStatusCaption",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirportStatusCaptionTest::RunTest(const FString& Parameters)
+{
+	const FBuildAction* Action = FindAction(FName(TEXT("game.airport")));
+	if (!TestNotNull(TEXT("the airport verb is registered"), Action)) { return false; }
+	if (!TestTrue(TEXT("with a caption that follows the status"), static_cast<bool>(Action->DynamicLabel))) { return false; }
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = AirportActionRuntime(TestWorld);
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	FBuildActionContext Ctx(*C);
+	Ctx.Runtime = Runtime;
+
+	TestEqual(TEXT("open: the verb"), Action->DynamicLabel(Ctx).ToString(), FString(TEXT("Close airport")));
+	TestFalse(TEXT("and not lit"), Action->IsActive(Ctx));
+	Runtime->SetAirportClosed(true);
+	TestEqual(TEXT("closed and empty"), Action->DynamicLabel(Ctx).ToString(), FString(TEXT("Closed")));
+	TestTrue(TEXT("lit while not open"), Action->IsActive(Ctx));
+	UFlight* Ground = NewObject<UFlight>(GetTransientPackage());
+	Ground->Phase = EFlightPhase::TaxiIn;
+	Runtime->GetFlightBoard()->AddOffer(*Runtime->GetClock(), Ground);
+	TestEqual(TEXT("closed with an aircraft still on the ground"), Action->DynamicLabel(Ctx).ToString(), FString(TEXT("Closed (draining: 1)")));
+
+	Runtime->SetAirportClosed(false);
+	for (int32 Index = TestWorld.Actor->Network->GetSegments().Num() - 1; Index >= 0 && UAirport::HasRunway(*TestWorld.Actor->Network); --Index)
+	{
+		TestWorld.Actor->DeleteSegment(Index);
+	}
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("no runway"), Action->DynamicLabel(Ctx).ToString(), FString(TEXT("No runway")));
+	return true;
+}
+
+/**
+ * CHOOSE ACTS ON THE LINE SHOWN, never a toggle (review M9): line 0 is always Close and line 1 always Open, each
+ * enabled only when it applies. A stale popup's Close chosen on an airport that is already closed must not reopen it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportChooseLineTest, "AirportMgr.Actions.AirportChooseActsOnTheLine",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirportChooseLineTest::RunTest(const FString& Parameters)
+{
+	const FBuildAction* Action = FindAction(FName(TEXT("game.airport")));
+	if (!TestNotNull(TEXT("the airport verb is registered"), Action)) { return false; }
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = AirportActionRuntime(TestWorld);
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	FBuildActionContext Ctx(*C);
+	Ctx.Runtime = Runtime;
+
+	Runtime->SetAirportClosed(true);
+	Action->Choose(Ctx, 0);
+	TestEqual(TEXT("Close on a closed airport leaves it closed"), Runtime->GetAirport()->Status(), EAirportStatus::ClosedByPlayer);
+	Action->Choose(Ctx, 1);
+	TestEqual(TEXT("Open opens it"), Runtime->GetAirport()->Status(), EAirportStatus::Open);
+	Action->Choose(Ctx, 1);
+	TestEqual(TEXT("Open on an open airport leaves it open"), Runtime->GetAirport()->Status(), EAirportStatus::Open);
+	return true;
+}
+
+/**
+ * EXECUTE NEVER CLOSES (review M7): it is the door with no confirm - TryRun, a key were one bound - so on an open
+ * airport it does nothing; only the popup's confirmed Close line closes.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportExecuteNeverClosesTest, "AirportMgr.Actions.AirportExecuteNeverCloses",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirportExecuteNeverClosesTest::RunTest(const FString& Parameters)
+{
+	const FBuildAction* Action = FindAction(FName(TEXT("game.airport")));
+	if (!TestNotNull(TEXT("the airport verb is registered"), Action)) { return false; }
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = AirportActionRuntime(TestWorld);
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	FBuildActionContext Ctx(*C);
+	Ctx.Runtime = Runtime;
+	Action->Execute(Ctx);
+	TestEqual(TEXT("Execute on an open airport leaves it open"), Runtime->GetAirport()->Status(), EAirportStatus::Open);
+	Runtime->SetAirportClosed(true);
+	Action->Execute(Ctx);
+	TestEqual(TEXT("and on a closed one reopens it"), Runtime->GetAirport()->Status(), EAirportStatus::Open);
+	return true;
+}
+
+/** TryChoose IS THE GATE for a menu verb's line, as TryRun is for Execute: a disabled action's line does not run. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTryChooseGatesTest, "AirportMgr.Actions.TryChooseGatesOnEnabled",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTryChooseGatesTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	int32 Chosen = INDEX_NONE;
+	FBuildAction Action;
+	Action.Id = FName(TEXT("test.menu"));
+	Action.Execute = [](FBuildActionContext&) {};
+	Action.IsActive = [](const FBuildActionContext&) { return false; };
+	Action.Choose = [&Chosen](FBuildActionContext&, int32 Line) { Chosen = Line; };
+	Action.IsEnabled = [](const FBuildActionContext&) { return false; };
+	TestFalse(TEXT("TryChoose refuses a disabled action"), Action.TryChoose(*C, 1, TEXT("Test")));
+	TestEqual(TEXT("and its line did not run"), Chosen, static_cast<int32>(INDEX_NONE));
+	Action.IsEnabled = [](const FBuildActionContext&) { return true; };
+	TestTrue(TEXT("TryChoose runs an enabled action's line"), Action.TryChoose(*C, 1, TEXT("Test")));
+	TestEqual(TEXT("that line"), Chosen, 1);
+	return true;
+}
+
+/** RULING I1: Land is greyed while the airport is not open - a closed airport admits no arrivals, the debug one too. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLandGreyedWhileClosedTest, "AirportMgr.Actions.LandGreyedWhileClosed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FLandGreyedWhileClosedTest::RunTest(const FString& Parameters)
+{
+	const FBuildAction* Land = FindAction(FName(TEXT("aircraft.land")));
+	if (!TestNotNull(TEXT("Land is registered"), Land)) { return false; }
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = AirportActionRuntime(TestWorld);
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(TestWorld.Actor);
+	FBuildActionContext Ctx(*C);
+	Ctx.Runtime = Runtime;
+	TestTrue(TEXT("CONTROL: open with a runway, Land is enabled"), Land->IsEnabled(Ctx));
+	Runtime->SetAirportClosed(true);
+	TestFalse(TEXT("closed: Land is greyed"), Land->IsEnabled(Ctx));
 	return true;
 }
 

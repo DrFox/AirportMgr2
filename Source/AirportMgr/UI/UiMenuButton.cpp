@@ -56,7 +56,8 @@ void UUiMenuList::SetLineLabel(int32 Index, const FText& Label)
 	}
 }
 
-void UUiMenuButton::Build(const UUIStyle& InStyle, const FText& Label)
+void UUiMenuButton::Build(const UUIStyle& InStyle, const FText& Label, EUiButtonLayout Layout, bool bStylePadding,
+	UTexture2D* Icon, float IconSize)
 {
 	Style = &InStyle;
 	Anchor = WidgetTree->ConstructWidget<UMenuAnchor>(UMenuAnchor::StaticClass(), TEXT("MenuAnchor"));
@@ -65,8 +66,12 @@ void UUiMenuButton::Build(const UUIStyle& InStyle, const FText& Label)
 	Anchor->OnMenuOpenChanged.AddDynamic(this, &UUiMenuButton::HandleOpenChanged);
 	WidgetTree->RootWidget = Anchor;
 	Button = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass(), TEXT("MenuButton"));
+	if (Icon != nullptr)
+	{
+		Button->SetIcon(Icon, IconSize);
+	}
 	Button->SetLabel(Label);
-	Button->Build(InStyle, EUiButtonKind::Secondary);
+	Button->Build(InStyle, EUiButtonKind::Secondary, Layout, bStylePadding);
 	Button->OnClicked.AddDynamic(this, &UUiMenuButton::HandleOpenClicked);
 	Anchor->SetContent(Button);
 }

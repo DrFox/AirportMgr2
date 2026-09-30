@@ -8,6 +8,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/AirlineDefinition.h"
 #include "Model/AirlineRoster.h"
+#include "Model/Airport.h"
 #include "Model/JobBoard.h"
 #include "Model/OfferGenerator.h"
 #include "Model/Ledger.h"
@@ -433,13 +434,16 @@ bool FOpsRuntimeAlertsPassTest::RunTest(const FString&)
 	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
 	Runtime->GetEvents()->OnAlertRaised.AddDynamic(Listener, &UOpsEventsTestListener::OnAlertRaised);
 	Runtime->Tick(0.0);
-	TestEqual(TEXT("a solvent airport raises nothing"), Listener->CountOf(TEXT("alert+:")), 0);
+	// THIS FIELD HAS NO RUNWAY (spec 2026-09-29-ops-batch3 §3): that one alert, and nothing else - no airline is
+	// asked whether it can come while the airport is not open, so none is reported unable to.
+	const FString NoRunway = TEXT("alert+:") + UEnum::GetValueAsString(EAlertKind::NoRunway);
+	TestEqual(TEXT("a solvent runway-less airport raises only NoRunway"), Listener->CountOf(TEXT("alert+:")), 1);
+	TestEqual(TEXT("that one"), Listener->CountOf(NoRunway), 1);
 
 	Runtime->GetLedger()->Post(0.0, ELedgerCategory::Upkeep, -(Runtime->GetLedger()->Balance() + 1.0), FText::FromString(TEXT("test")));
 	const double OneMinute = UOfferGenerator::TickSeconds / Runtime->GetClock()->TimeScale() * 1.01;
 	Runtime->Tick(OneMinute);
-	// OVERDRAWN BY NAME: this field has no runway, so the content's airlines cannot come either, and the same
-	// pass rightly raises those too.
+	// OVERDRAWN BY NAME: the NoRunway alert above stands beside it.
 	const FString Overdrawn = TEXT("alert+:") + UEnum::GetValueAsString(EAlertKind::Overdrawn);
 	auto HeldOverdrawn = [Runtime]()
 	{
@@ -476,6 +480,9 @@ bool FOpsRuntimeAcceptDirtiesAlertsTest::RunTest(const FString&)
 	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
 	URoadNetwork* Net = TestWorld.Actor->Network;
 	if (!TestNotNull(TEXT("a network"), Net)) { return false; }
+	// A RUNWAY: a closed airport - one without a runway too - accepts nothing (ruling I1, 2026-09-30).
+	TestWorld.Actor->MinimumRunwayLength = 100.0;
+	TestWorld.Actor->PlaceRunway(FVector2D(0.0, -50000.0), FVector2D(6000.0, -50000.0), TestProfiles::Runway());
 	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
 	Net->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 30000.0), 0.0, 3600.0, StandDef->PoseRole, StandDef->Trucks);
 
@@ -555,7 +562,8 @@ bool FOpsRuntimeDetachUnhooksTest::RunTest(const FString&)
 	TestNull(TEXT("the job board's"), Runtime->GetJobBoard()->Bus);
 	TestNull(TEXT("the ledger's"), Runtime->GetLedger()->Bus);
 	TestNull(TEXT("the alerts'"), Runtime->GetAlerts()->Bus);
-	TestNull(TEXT("and the airline roster's"), Runtime->GetAirlines()->Bus);
+	TestNull(TEXT("the airline roster's"), Runtime->GetAirlines()->Bus);
+	TestNull(TEXT("and the airport's"), Runtime->GetAirport()->Bus);
 	return true;
 }
 

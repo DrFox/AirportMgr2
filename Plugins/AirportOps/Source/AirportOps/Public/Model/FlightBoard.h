@@ -20,6 +20,7 @@ class FOpsEventBus;
 class UPricing;
 class USimClock;
 enum class EAgentPhase : uint8;
+enum class ECancelReason : uint8;
 
 /**
  * Whether an offer can be accepted right now, and whether the airport can serve it.
@@ -85,7 +86,7 @@ public:
 	virtual void OnAfterRestore(int32 SnapshotVersion) override;
 
 	/**
-	 * How many game days a terminal flight (Declined, Expired, Departed or Cancelled) is kept in History
+	 * How many game days a terminal flight (Declined, Expired, Departed, Cancelled, Withdrawn) is kept in History
 	 * before RollUp forgets it outright.
 	 *
 	 * DISCARDED, NOT FOLDED like ULedger::RollUp's BroughtForward entry: a flight has no
@@ -106,6 +107,15 @@ public:
 	 * Not a UPROPERTY and deliberately not saved: it is wiring, re-made on every Attach.
 	 */
 	TFunction<bool(const FVector2D& Near, const FAirframe& Airframe)> Dispatcher;
+
+	/**
+	 * Whether the airport admits arrivals now - asked by Accept, which every accept comes through (the inbox,
+	 * and key 7 via AcceptImmediate). A CLOSED AIRPORT ADMITS NOTHING (ruling I1, 2026-09-30). A predicate, not a
+	 * UAirport pointer, so the board still does not learn the airport (see CancelUnarrived). Set by UOpsRuntime's
+	 * constructor; unset in a bare NewObject, which admits.
+	 * ENFORCED BY: AirportOps.Present.Airport.AcceptRefusedWhileClosed
+	 */
+	TFunction<bool()> AdmitsArrivals;
 
 	/**
 	 * Bumped whenever anything a viewmodel displays has changed - an offer added, accepted,
@@ -257,6 +267,26 @@ public:
 	bool CancelByAgent(int32 AgentId, double Now);
 
 	/**
+	 * The airport stopped being open (spec 2026-09-29-ops-batch3 §3): everything not yet committed to the
+	 * runway is called off. Accepted - its arrival disarmed on Clock, its stand hold released - and Inbound -
+	 * out of the queue, stand released - become Cancelled, each publishing FFlightCancelledEvent with Reason.
+	 * Offered becomes Withdrawn and publishes nothing (no OfferExpired, so no Ignored penalty). Landing and
+	 * later are untouched: on the runway or on the ground, they finish. Returns how many were cancelled.
+	 *
+	 * TAKES THE REASON, NOT THE AIRPORT STATUS: the board does not learn the airport; UOpsRuntime maps one to
+	 * the other. And the traffic and the clock, because a hold and an arrival are released through them -
+	 * Accept's own signature.
+	 * ENFORCED BY: AirportOps.Model.FlightBoard.CancelUnarrivedCancelsAndWithdraws
+	 */
+	int32 CancelUnarrived(UGroundTraffic& Traffic, USimClock& Clock, ECancelReason Reason);
+
+	/** Accepted plus Inbound: what CancelUnarrived would cancel now - the close confirm's "N flights". */
+	int32 UnarrivedCount() const;
+
+	/** Landing through Departing: the aircraft a closed airport is still draining - the bar's readout. */
+	int32 OnGroundCount() const;
+
+	/**
 	 * Make a flight from an airframe, aim it at Focus, and accept it on the spot - the debug
 	 * land key's whole job, and previously done by hand at the call site (issue #96).
 	 *
@@ -402,7 +432,7 @@ public:
 private:
 	/**
 	 * Every flight not yet in a terminal phase: offered, accepted, or anywhere between landing
-	 * and departing. TERMINAL flights (Declined, Expired, Departed, Cancelled) are moved into History the
+	 * and departing. TERMINAL flights (Declined, Expired, Departed, Cancelled, Withdrawn) are moved into History the
 	 * moment they get there - see MoveToHistory - rather than staying here forever, which is
 	 * what made FindByAgent, FindById, Offers(), Live() and every save cost O(every flight
 	 * this session has ever seen) instead of O(what is actually happening) - issue #188.

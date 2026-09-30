@@ -11,6 +11,7 @@
 
 class ARoadNetworkActor;
 class UAirlineRoster;
+class UAirport;
 class UOpsAlerts;
 struct FBuildQuote;
 enum class EBuildRefusal : uint8;
@@ -117,6 +118,17 @@ public:
 
 	/** The standing problems the player must act on - see UOpsAlerts; run as the bus pass "Alerts". */
 	UOpsAlerts* GetAlerts() const { return Alerts; }
+
+	/** Open, closed by the player, or without a runway - see UAirport. */
+	UAirport* GetAirport() const { return Airport; }
+
+	/**
+	 * The player's close / open command (the bar's game.airport). A COMMAND, NOT AN EVENT: it records the intent
+	 * and re-derives the status at once; the change it publishes is what cancels the unarrived flights, on the
+	 * next drain (WireBus). False, and logged, when there is no attached network to derive against.
+	 * ENFORCED BY: AirportOps.Present.Airport.CloseCancelsThroughTheBus
+	 */
+	bool SetAirportClosed(bool bClosed);
 
 	ARoadNetworkActor* GetTarget() const { return Target; }
 
@@ -242,6 +254,7 @@ private:
 
 	UPROPERTY() TObjectPtr<UAirlineRoster> Airlines;
 	UPROPERTY() TObjectPtr<UOpsAlerts> Alerts;
+	UPROPERTY() TObjectPtr<UAirport> Airport;
 
 	/** The facade's OnRefused, bridged onto the bus as FBuildRefusedEvent - see OnBuildRefused. */
 	FDelegateHandle RefusedHandle;

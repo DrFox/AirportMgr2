@@ -130,6 +130,16 @@ FString FTurnaroundEndedEvent::Describe() const
 		*UEnum::GetValueAsString(Outcome), Delivered, Wanted);
 }
 
+FString FAirportStatusChangedEvent::Describe() const
+{
+	return FString::Printf(TEXT("%s -> %s"), *UEnum::GetValueAsString(Old), *UEnum::GetValueAsString(New));
+}
+
+FString FFlightCancelledEvent::Describe() const
+{
+	return FString::Printf(TEXT("flight %d, airline %s, %s"), FlightId, *AirlineId.ToString(), *UEnum::GetValueAsString(Reason));
+}
+
 FString FOpsEventBus::Describe(const FOpsEvent& Event)
 {
 	return Visit([](const auto& Each) { return Each.Describe(); }, Event);

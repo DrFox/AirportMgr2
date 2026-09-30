@@ -1,4 +1,8 @@
 #include "CoreMinimal.h"
+#include "UI/UiMenuButton.h"
+#include "Testing/AirsideTestGraph.h"
+#include "Present/OpsRuntime.h"
+#include "Model/Airport.h"
 #include "Blueprint/UserWidget.h"
 #include "BuildActions.h"
 #include "BuildBarWidget.h"
@@ -345,6 +349,63 @@ bool FBuildBarUsesUiButtonTest::RunTest(const FString& Parameters)
 	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
 	if (!TestNotNull(TEXT("the bar is created with no asset"), Bar)) { return false; }
 	TestTrue(TEXT("every tool button is a UUiButton with a label"), Bar->AllButtonsAreUiButtonsForTest());
+	return true;
+}
+
+/**
+ * A MENU VERB IS BUILT AS A MENU: an action with MenuItems (game.airport) gets a UUiMenuButton - the popup its confirm
+ * lives in - not a plain button whose click would run Execute. Counted against the registry, so a second menu verb
+ * needs no edit here.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBarBuildsMenusTest, "AirportMgr.Actions.BarBuildsMenuActionsAsMenus",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FBarBuildsMenusTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
+	if (!TestNotNull(TEXT("the bar"), Bar)) { return false; }
+	int32 Expected = 0;
+	for (const FBuildAction& A : BuildActions()) { Expected += A.MenuItems ? 1 : 0; }
+	TestTrue(TEXT("the registry has a menu verb (game.airport)"), Expected > 0);
+	TestEqual(TEXT("each menu verb is a menu button on the bar"), Bar->MenuButtonCountForTest(), Expected);
+	TestTrue(TEXT("and still a UUiButton with a label, like every other"), Bar->AllButtonsAreUiButtonsForTest());
+	return true;
+}
+
+/**
+ * THE BAR'S PRODUCTION DOOR, end to end (review I3): the menu verb's popup, chosen twice (arm, confirm), reaches the
+ * runtime through OnChosen -> UBuildBarEntry::HandleChosen -> ChooseAction -> TryChoose -> Choose. The test world has
+ * no game instance, so the controller and runtime the bar would look up are handed in (UseForTest).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBarMenuVerbReachesRuntimeTest, "AirportMgr.Actions.BarMenuVerbReachesTheRuntime",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FBarMenuVerbReachesRuntimeTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	// A NODE FIRST: the actor's network is made by its first edit, and the close command needs one to derive against.
+	Actor->PlaceNode(FVector2D(0.0, 30000.0));
+	Actor->MinimumRunwayLength = 100.0;
+	Actor->PlaceRunway(FVector2D(0.0, -50000.0), FVector2D(6000.0, -50000.0), TestProfiles::Runway());
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	Runtime->Tick(0.0);
+	if (!TestEqual(TEXT("an open airport"), Runtime->GetAirport()->Status(), EAirportStatus::Open)) { return false; }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+
+	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
+	if (!TestNotNull(TEXT("the bar"), Bar)) { return false; }
+	Bar->UseForTest(C, Runtime);
+	UUiMenuButton* Menu = Bar->MenuForTest(FName(TEXT("game.airport")));
+	if (!TestNotNull(TEXT("game.airport is a menu on the bar"), Menu)) { return false; }
+	Menu->BuildMenu();
+	Menu->Choose(0);
+	TestEqual(TEXT("armed: still open"), Runtime->GetAirport()->Status(), EAirportStatus::Open);
+	Menu->Choose(0);
+	TestEqual(TEXT("confirmed through the bar: closed"), Runtime->GetAirport()->Status(), EAirportStatus::ClosedByPlayer);
 	return true;
 }
 

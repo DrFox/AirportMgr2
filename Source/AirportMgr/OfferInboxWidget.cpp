@@ -16,6 +16,7 @@
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Styling/SlateBrush.h"
+#include "Model/Airport.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
 #include "Model/OfferGenerator.h"
@@ -144,6 +145,18 @@ void UOfferInboxWidget::EnsureSlots(const UUIStyle* Style)
 			DemandFills.Add(Fill);
 		}
 		Column->AddChildToVerticalBox(StripBox)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 8.0f));
+		DemandStripBox = StripBox;
+
+		// ITS STAND-IN while the airport is not open - see ShowAirportStatus. Collapsed until then, and the strip's
+		// height, so the card does not jog when one replaces the other.
+		DemandStatusText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("DemandClosed"));
+		DemandStatusText->SetText(NSLOCTEXT("AirportMgr", "InboxClosed", "Closed"));
+		Style->ApplyText(*DemandStatusText, EUITextRole::Label, Style->InkMuted);
+		DemandStatusText->SetVisibility(ESlateVisibility::Collapsed);
+		USizeBox* StatusBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+		StatusBox->SetHeightOverride(DemandStripHeight);
+		StatusBox->SetContent(DemandStatusText);
+		Column->AddChildToVerticalBox(StatusBox)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 8.0f));
 
 		OfferColumn = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("InboxRows"));
 		// WIDE AND SHORT, not narrow and tall: the window is capped at the screen's height and
@@ -191,10 +204,53 @@ void UOfferInboxWidget::Refresh(ARoadNetworkActor* Target)
 		return;
 	}
 
-	Inbox->Refresh(*Runtime->GetFlightBoard(), *Traffic, *Target->Network, *Runtime->GetClock(), Runtime->GetAirlines());
+	RefreshWith(*Runtime, *Target);
+}
 
-	RefreshDemand(Runtime->GetAirlineOffers(), *Runtime->GetClock(), Runtime->GetOfferGenerator());
+void UOfferInboxWidget::RefreshWith(UOpsRuntime& Runtime, ARoadNetworkActor& Target)
+{
+	UGroundTraffic* Traffic = Target.GetGroundTraffic();
+	if (Inbox == nullptr || Target.Network == nullptr || Traffic == nullptr)
+	{
+		return;
+	}
+	Inbox->Refresh(*Runtime.GetFlightBoard(), *Traffic, *Target.Network, *Runtime.GetClock(), Runtime.GetAirlines());
+
+	RefreshDemand(Runtime.GetAirlineOffers(), *Runtime.GetClock(), Runtime.GetOfferGenerator());
+	// ENFORCED BY: AirportMgr.UI.OfferInbox.RefreshReadsTheStatus
+	ShowAirportStatus(Runtime.GetAirport()->Status());
 	PaintRows();
+}
+
+void UOfferInboxWidget::ShowAirportStatus(EAirportStatus Status)
+{
+	// "Closed" FOR EITHER NOT-OPEN STATUS: the strip answers "will offers come?", and the NoRunway alert already says
+	// why they will not - a second wording of the reason here would be a second account of it.
+	const bool bClosed = Status != EAirportStatus::Open;
+	if (bClosed == bShowingClosed)
+	{
+		return;
+	}
+	bShowingClosed = bClosed;
+	if (DemandStripBox != nullptr)
+	{
+		DemandStripBox->SetVisibility(bClosed ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
+	}
+	if (DemandStatusText != nullptr)
+	{
+		DemandStatusText->SetVisibility(bClosed ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
+}
+
+bool UOfferInboxWidget::IsDemandStripShownForTest() const
+{
+	return DemandStripBox != nullptr && DemandStripBox->GetVisibility() != ESlateVisibility::Collapsed;
+}
+
+FString UOfferInboxWidget::DemandStatusForTest() const
+{
+	return DemandStatusText != nullptr && DemandStatusText->GetVisibility() != ESlateVisibility::Collapsed
+		? DemandStatusText->GetText().ToString() : FString();
 }
 
 bool UOfferInboxWidget::RefreshDemand(TArrayView<const FAirlineOffers> Airlines, const USimClock& Clock,

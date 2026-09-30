@@ -5,6 +5,7 @@
 #include "OpsAlerts.generated.h"
 
 class FOpsEventBus;
+class UAirport;
 class UFlightBoard;
 class UGroundTraffic;
 class UJobBoard;
@@ -23,7 +24,9 @@ enum class EAlertKind : uint8
 	HeldStandLost,
 	AirlineCannotCome,
 	Deadlock,
-	Overdrawn
+	Overdrawn,
+	/** The airport has no runway, so no offers (spec 2026-09-29-ops-batch3 §3). No focus: nothing to go to. */
+	NoRunway
 };
 
 /** What "Go" moves the camera to. None for a problem with no place in the world. */
@@ -100,6 +103,8 @@ struct FOpsAlertSources
 	const URoadNetwork* Network = nullptr;
 	const UOfferGenerator* Offers = nullptr;
 	const ULedger* Ledger = nullptr;
+	/** The status: NoRunway raises its alert, and AirlineCannotCome is judged only while Open. */
+	const UAirport* Airport = nullptr;
 	/** For an airline's display name; an airline missing here is named by its key. */
 	TArrayView<const FAirlineOffers> Airlines;
 };

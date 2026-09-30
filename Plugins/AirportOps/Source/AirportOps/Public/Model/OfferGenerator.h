@@ -11,6 +11,7 @@
 class UPricing;
 
 class UAirlineDefinition;
+class UAirport;
 class UFlight;
 class URoadNetwork;
 class USimClock;
@@ -210,6 +211,19 @@ public:
 	double AirlineFactor(const UAirlineDefinition& Airline) const;
 
 	/**
+	 * The airport whose status gates every offer - READ each minute, not subscribed to: a status is a value
+	 * asked for when it is needed (spec 2026-09-29-ops-batch3 §3), like AirlineFactorOf. Set by UOpsRuntime's
+	 * constructor; null in a bare NewObject, which reads as open. TRANSIENT, so the "Offers" blob never
+	 * carries a path to the runtime's subobject.
+	 * ENFORCED BY: AirportOps.Present.Airport.RunwayComesAndGoes
+	 */
+	UPROPERTY(Transient) TObjectPtr<const UAirport> Airport = nullptr;
+
+	/** Every airline back to "could come", unjudged - a reopen (UOpsRuntime::WireBus). The next TickMinute judges
+	 *  afresh against the admission cache, and logs the transition if an airline still cannot come. */
+	void ForgetAirlineVerdicts();
+
+	/**
 	 * One game minute of demand. Returns the offers it made (0..n), never more than the
 	 * inbox has room for: MaxPendingOffers - PendingNow.
 	 *
@@ -224,6 +238,8 @@ public:
 	 *
 	 * NextId is the board's counter: the generator does not own numbering, because the board
 	 * is what has to keep ids unique across a save.
+	 *
+	 * NOTHING AT ALL unless Airport reads Open - no offer, and no airline judged (see Airport).
 	 */
 	TArray<UFlight*> TickMinute(const URoadNetwork& Network, const FVector2D& Focus,
 		TArrayView<const FAirlineOffers> Airlines, const USimClock& Clock, int32 PendingNow,
