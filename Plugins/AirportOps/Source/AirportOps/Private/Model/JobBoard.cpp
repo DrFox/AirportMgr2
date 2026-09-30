@@ -6,6 +6,7 @@
 #include "Model/Pricing.h"
 
 #include "AirportOpsLog.h"
+#include "Model/ExhaustiveSwitch.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
@@ -872,11 +873,14 @@ void UJobBoard::DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& T
 
 namespace JobBoardPhase
 {
+	AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
 	/**
 	 * Did this transition take the agent off where it stood UNDER ITS OWN POWER - sent somewhere - as against being
 	 * removed (Retired, Cleared) or losing its road (Stranded)? THE ONE LIST, by cause (#436): OnAgentPhase typed it
 	 * twice as a phase set, {Manoeuvring, Reversing, Taxiing, Departing}, once per branch that needed it. Every cause
-	 * by name and no default, so a cause added to EAgentEvent is a compiler warning here, not a silent "no".
+	 * by name and no default, so a cause added to EAgentEvent is a BUILD ERROR here (C4062, raised around this
+	 * function - see ExhaustiveSwitch.h), not a silent "no".
+	 * ENFORCED BY: AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (checked 2026-09-30 by a stray enumerator: the build failed here)
 	 */
 	bool LeftUnderItsOwnPower(EAgentEvent Cause)
 	{
@@ -905,6 +909,7 @@ namespace JobBoardPhase
 		}
 		return false;
 	}
+	AIRSIDE_EXHAUSTIVE_SWITCH_END
 }
 
 void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Network,

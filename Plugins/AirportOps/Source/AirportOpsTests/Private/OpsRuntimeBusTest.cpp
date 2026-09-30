@@ -930,8 +930,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSameFrameRedirectTest, "AirportOps.Model.Bus.S
 bool FSameFrameRedirectTest::RunTest(const FString&)
 {
 	// REVIEW M7: the Parked event is heard a step late, and ReofferStands may have redirected the aeroplane to a
-	// freed stand before it is - so its goal IS a stand while it is taxiing. The flight must not enter Turnaround
-	// from that stale Parked: StillParked is the half of the rule FallbackParkStaysTaxiIn cannot reach.
+	// freed stand before it is - so its LIVE goal IS a stand while it is taxiing. The flight must not enter Turnaround
+	// from that stale Parked. Since #436 the boards decide on the event's GoalAtEvent - the junction it parked on -
+	// and this is the half of that rule FallbackParkStaysTaxiIn cannot reach: a board that read the live goal instead
+	// (as the removed StillParked check once had to guard) opens the turnaround this test forbids.
 	FFallbackParkRig Rig;
 	if (!TestTrue(TEXT("the flight lands"), Rig.Land())) { return false; }
 	if (!TestTrue(TEXT("and parks on the fallback junction, its Parked not yet heard"), Rig.ParkOnFallback(/*bDrain=*/false))) { return false; }
@@ -942,7 +944,7 @@ bool FSameFrameRedirectTest::RunTest(const FString&)
 	Rig.Traffic->OnGraphRebuilt(*Rig.Field.Net);
 	Rig.Traffic->Advance(0.05, Rig.Field.Net);   // the re-offer, in the frame the Parked was queued in
 	if (!TestEqual(TEXT("redirected before the Parked is heard"), Rig.Aircraft()->Phase, EAgentPhase::Taxiing)) { return false; }
-	if (!TestTrue(TEXT("its goal is the new stand - what a stale Parked would read"), StandAtGoal(*Rig.Field.Net, *Rig.Aircraft()).IsSet())) { return false; }
+	if (!TestTrue(TEXT("its goal is the new stand - what a stale Parked would read"), StandAtGoalForTest(*Rig.Field.Net, *Rig.Aircraft()).IsSet())) { return false; }
 	Rig.Drain();
 	TestEqual(TEXT("a stale Parked moves no flight into Turnaround"), Rig.Flight->Phase, EFlightPhase::TaxiIn);
 	TestFalse(TEXT("Turnaround was never shown"), Rig.Seen.Contains(EFlightPhase::Turnaround));
@@ -970,7 +972,7 @@ bool FRedirectStandGoesTest::RunTest(const FString&)
 	Rig.Field.Net->RemoveEntity(NewStand);
 	TestGraph::Rebuild(*Rig.Field.Net);
 	Rig.Traffic->OnGraphRebuilt(*Rig.Field.Net);
-	if (!TestFalse(TEXT("its goal is no stand when the event is heard, or this proves nothing"), StandAtGoal(*Rig.Field.Net, *Rig.Aircraft()).IsSet())) { return false; }
+	if (!TestFalse(TEXT("its goal is no stand when the event is heard, or this proves nothing"), StandAtGoalForTest(*Rig.Field.Net, *Rig.Aircraft()).IsSet())) { return false; }
 	TestFalse(TEXT("and it is not armed for a departure"), Rig.Aircraft()->bDepartureArmed);
 	Rig.Drain();
 	TestEqual(TEXT("a redirect whose stand went is still the taxi in"), Rig.Flight->Phase, EFlightPhase::TaxiIn);

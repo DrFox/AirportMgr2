@@ -368,9 +368,21 @@ bool FTouchdownShownOncePerLandingTest::RunTest(const FString& Parameters)
 			Traffic->Advance(Rules.MaxSubstepSeconds, 0.0, Airport.Net, Rules);
 		}
 		int32 Frames = 0;
+		bool bPausedChecked = false;
 		for (; Frames < 20000 && Traffic->LastAgentPhaseForTest() == EAgentPhase::Arriving; ++Frames)
 		{
 			Traffic->Advance(Frame, 0.0, Airport.Net, Rules);
+			// PAUSED FRAMES RIGHT AFTER THE TOUCHDOWN: the model's moments are emptied at the top of every Advance,
+			// the paused early return included - kept past it, the presenter would read this frame's touchdown again on
+			// every paused frame and puff each time.
+			if (!bPausedChecked && Traffic->TouchdownsShownForTest() == 1)
+			{
+				bPausedChecked = true;
+				Traffic->Advance(0.0, 0.0, Airport.Net, Rules);
+				Traffic->Advance(0.0, 0.0, Airport.Net, Rules);
+				TestEqual(*FString::Printf(TEXT("lead-in %d: two paused frames after it show it again"), LeadIn),
+					Traffic->TouchdownsShownForTest(), 1);
+			}
 		}
 		TestEqual(*FString::Printf(TEXT("lead-in %d: the landing rolled out and vacated"), LeadIn),
 			Traffic->LastAgentPhaseForTest(), EAgentPhase::Taxiing);

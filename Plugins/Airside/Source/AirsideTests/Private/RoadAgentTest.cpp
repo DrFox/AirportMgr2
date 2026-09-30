@@ -946,6 +946,28 @@ namespace RoadAgentEventPin
 		}
 	}
 
+	/**
+	 * The phases an event may be made FROM. PhaseAfter checks the end a handover names; this checks its start, and it is
+	 * the half that sees two handovers made in one call: the second overwrites OutEvent, so the event names the END
+	 * phase correctly and the START - the first handover's - wrongly (a vacate that fell through into a strand reports
+	 * Stranded from Arriving). Empty for None and the moments.
+	 */
+	TArray<EAgentPhase> PhasesBefore(EAgentEvent Event)
+	{
+		switch (Event)
+		{
+		case EAgentEvent::Vacated:    return { EAgentPhase::Arriving };
+		case EAgentEvent::LinedUp:    return { EAgentPhase::Taxiing };
+		case EAgentEvent::Parked:     return { EAgentPhase::Taxiing, EAgentPhase::Reversing };
+		case EAgentEvent::PushedBack: return { EAgentPhase::Manoeuvring };
+		case EAgentEvent::Gone:       return { EAgentPhase::Departing };
+		case EAgentEvent::Stranded:   return { EAgentPhase::Taxiing, EAgentPhase::Reversing };
+		case EAgentEvent::BackingIn:  return { EAgentPhase::Taxiing };
+		case EAgentEvent::BackedOut:  return { EAgentPhase::Reversing };
+		default:                      return {};
+		}
+	}
+
 	/** Advances one agent and checks every Advance; remembers each phase it saw. */
 	struct FWatch
 	{
@@ -970,8 +992,11 @@ namespace RoadAgentEventPin
 			Seen.Add(Agent.Phase);
 			if (Agent.Phase != Before)
 			{
+				// BOTH ENDS: the event must name the phase the agent is in now AND be one that can be made from where it was.
 				const TOptional<EAgentPhase> Named = PhaseAfter(Event);
-				if ((!Named.IsSet() || Named.GetValue() != Agent.Phase) && Bad++ < 3)
+				const bool bEndsRight = Named.IsSet() && Named.GetValue() == Agent.Phase;
+				const bool bStartsRight = PhasesBefore(Event).Contains(Before);
+				if (!(bEndsRight && bStartsRight) && Bad++ < 3)
 				{
 					Test.AddError(FString::Printf(TEXT("%s: %s -> %s inside one Advance reported %s"), Scenario,
 						*UEnum::GetValueAsString(Before), *UEnum::GetValueAsString(Agent.Phase),

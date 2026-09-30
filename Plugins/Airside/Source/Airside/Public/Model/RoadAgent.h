@@ -1289,7 +1289,7 @@ public:
 	 * AT MOST ONE HANDOVER PER CALL, because OutEvent names one. The vacate and the push's end fall through into the
 	 * taxi so the frame's dt is driven, and the taxi's own handovers (a reverse leg's arm, arriving) used to run in
 	 * that same call: a vacate onto a taxi-in a rebuild had killed went Arriving -> Stranded reporting Vacated. The
-	 * taxi's handovers now wait for the next call, a frame later, with the agent where the follower left it.
+	 * taxi's handovers now wait for the next call (the next substep), with the agent where the follower left it.
 	 * ENFORCED BY: Airside.Model.RoadAgent.EveryPhaseChangeNamesItsEvent
 	 *
 	 * Returns true with a motion to show; false only once Phase == Gone, which is also the

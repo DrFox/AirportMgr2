@@ -333,5 +333,3 @@ AIRPORTOPS_API EFlightPhase FlightPhaseFromTransition(const FAgentTransition& Tr
  */
 AIRPORTOPS_API FEntityInstanceId StandAtNode(const URoadNetwork& Network, FGuidelineNodeId Node);
 
-/** StandAtNode of the agent's goal NOW - for a test asking about a live agent; the boards ask of the event. */
-AIRPORTOPS_API FEntityInstanceId StandAtGoal(const URoadNetwork& Network, const FRoadAgent& Agent);

@@ -1,5 +1,6 @@
 #include "Model/Flight.h"
 
+#include "Model/ExhaustiveSwitch.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
 
@@ -9,11 +10,9 @@ FEntityInstanceId StandAtNode(const URoadNetwork& Network, FGuidelineNodeId Node
 	return Index != INDEX_NONE && Network.GetEntities()[Index].IsStand() ? Network.EntityIdAt(Index) : FEntityInstanceId();
 }
 
-FEntityInstanceId StandAtGoal(const URoadNetwork& Network, const FRoadAgent& Agent)
-{
-	return StandAtNode(Network, Agent.GoalNode);
-}
-
+// A MISSING CASE BELOW IS A BUILD ERROR - see ExhaustiveSwitch.h for why it would not be otherwise.
+// ENFORCED BY: C4062 as an error, AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (checked 2026-09-30 by a stray enumerator: the build failed here)
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
 EFlightPhase FlightPhaseFromTransition(const FAgentTransition& Transition, EFlightPhase Current, bool bParkedAtStand)
 {
 	// A TAXI THAT GOES ON goes the way it was going: Turnaround or later means the taxi OUT, anything earlier the taxi
@@ -22,8 +21,8 @@ EFlightPhase FlightPhaseFromTransition(const FAgentTransition& Transition, EFlig
 	const EFlightPhase TaxiGoesOn = Current >= EFlightPhase::Turnaround ? EFlightPhase::TaxiOut : EFlightPhase::TaxiIn;
 
 	// EVERY CAUSE BY NAME, NO default (#436): the default of FlightPhaseFromAgent's switch on To is where a new pair
-	// hid - a cause added to EAgentEvent lands here as a compiler warning on a missing case, not as a silent "moves
-	// nothing".
+	// hid - a cause added to EAgentEvent lands here as a BUILD ERROR on a missing case (C4062, raised above), not as
+	// a silent "moves nothing".
 	switch (Transition.Cause)
 	{
 	case EAgentEvent::Dispatched:
@@ -56,6 +55,10 @@ EFlightPhase FlightPhaseFromTransition(const FAgentTransition& Transition, EFlig
 		// redirect whose new stand is deleted before the event is heard has no stand goal either, and is still taxiing
 		// in - that one is ReOffered, below. (Moved here from UFlightBoard::OnAgentPhase.)
 		// ENFORCED BY: AirportOps.Model.Bus.DepartFromFallbackReadsTaxiOut, AirportOps.Model.Bus.RedirectStaysTaxiInWhenItsStandGoes
+		//
+		// AND THE PUSH IS ITS OWN PHASE: without the Manoeuvring answer the flight would read "Turnaround" while the
+		// aeroplane is visibly moving off its stand - the board and the apron disagreeing, with nothing to say which
+		// was right. (Carried from FlightPhaseFromAgent's Manoeuvring case.)
 		return Transition.To == EAgentPhase::Manoeuvring ? EFlightPhase::Manoeuvring
 			: Transition.To == EAgentPhase::Taxiing ? EFlightPhase::TaxiOut : Current;
 
@@ -106,3 +109,4 @@ EFlightPhase FlightPhaseFromTransition(const FAgentTransition& Transition, EFlig
 	}
 	return Current;
 }
+AIRSIDE_EXHAUSTIVE_SWITCH_END

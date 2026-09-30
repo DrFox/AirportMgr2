@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/Flight.h"
 #include "Model/RoadAgent.h"
 
 /**
@@ -23,4 +24,14 @@ inline FAgentTransition OpsTestTransition(int32 AgentId, EAgentPhase From, EAgen
 	Made.Cause = Cause;
 	Made.GoalAtEvent = GoalAtEvent;
 	return Made;
+}
+
+/**
+ * The stand at the agent's goal NOW - a test asking about a live agent. Kept out of production on purpose (#436): the
+ * boards ask of the EVENT's node (StandAtNode(GoalAtEvent)), and a live-goal read in ops is the stale read that issue
+ * removed.
+ */
+inline FEntityInstanceId StandAtGoalForTest(const URoadNetwork& Network, const FRoadAgent& Agent)
+{
+	return StandAtNode(Network, Agent.GoalNode);
 }

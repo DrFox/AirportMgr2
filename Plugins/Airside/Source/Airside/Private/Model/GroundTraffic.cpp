@@ -1709,6 +1709,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 	// which used to call RetireAgent synchronously from inside the broadcast, runs a drain later.
 	// The contract stays because it is this class's, not its listeners': a synchronous listener
 	// is legal, and Airside.Model.Traffic.ReofferStandsRetireReentrancy is one that retires.
+	// ENFORCED BY: Check-Architecture rule 4 ('OnAgentPhaseChanged bound') - the two production binders named above
 	// This loop tolerates that for two reasons together: it runs by DESCENDING index, so a RemoveAt at or below the
 	// current Index only ever shifts already-visited slots (Index and above), never the ones
 	// still to come; and it holds no reference across a broadcast - Agent and Index are used

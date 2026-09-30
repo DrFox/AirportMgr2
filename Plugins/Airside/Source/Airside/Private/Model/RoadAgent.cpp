@@ -843,9 +843,9 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		// ONE HANDOVER PER CALL (#436). A vacate or a push's end that fell through into this arm has already made this
 		// call's handover and named it in OutEvent; the arrival below is a SECOND, and made here it went out under the
 		// first one's name - a vacate onto a taxi-in a rebuild had killed went Arriving -> Stranded reporting Vacated,
-		// so the listener was told of a taxi that never ran. It waits for the next call instead, a frame later, with the
-		// agent where the follower left it this frame (a dead plan did not move it; a live one this short parks late
-		// by one frame, stood still).
+		// so the listener was told of a taxi that never ran. It waits for the next Advance call instead - the next
+		// SUBSTEP, not the next frame - with the agent where the follower left it on this one (a dead plan did not move
+		// it; a live one this short parks one substep late, stood still).
 		// ENFORCED BY: Airside.Model.RoadAgent.EveryPhaseChangeNamesItsEvent
 		if (OutEvent == EAgentEvent::None && Follower.HasArrived())
 		{

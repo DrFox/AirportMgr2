@@ -752,6 +752,17 @@ $AllowedCallers = @(
         ProdReason  = 'build an FAgentTransition where the change is made and hand it to UGroundTraffic::Announce, the one broadcast (#436)'
     },
     @{
+        # WHO LISTENS, IN PRODUCTION (#436 review): UAirsideTraffic (views, and the relay) and UOpsRuntime, which only
+        # PUBLISHES into the ops bus - so no production listener re-enters UGroundTraffic inside the broadcast, which is
+        # what GroundTraffic.cpp's re-entrancy comment now says. A third binder is a listener that may act mid-Advance
+        # again (UJobBoard used to); it must publish, or the comment and the contract it describes must change with it.
+        Name        = 'OnAgentPhaseChanged bound'
+        Pattern     = '\bOnAgentPhaseChanged\.Add(UObject|Lambda|Raw|SP)\s*\('
+        ProdAllowed = @('Private\Present\AirsideTraffic.cpp', 'Private\Present\OpsRuntime.cpp')
+        TestExempt  = $true
+        ProdReason  = 'bind through UOpsRuntime (it publishes into the ops bus; handlers run a drain later) - a production listener that acts inside the broadcast re-enters UGroundTraffic mid-Advance (#436, #193)'
+    },
+    @{
         # A ONE-SUBSTEP EDGE IS READ ON THE SUBSTEP (#446). FLandingRun::bTouchedDown is true for the one Advance that put
         # the wheels down; UAirsideTraffic read it once a FRAME, after up to 32 substeps, and lost the smoke of three
         # landings in four at x8. FRoadAgent::Advance reads it on the call that set it and reports EAgentEvent::TouchedDown,

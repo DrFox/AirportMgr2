@@ -1,5 +1,9 @@
 #include "Model/RoutePolicy.h"
 
+#include "Model/ExhaustiveSwitch.h"
+
+// ENFORCED BY: AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (checked 2026-09-30 by a stray enumerator: the build failed here)
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
 FRoutePolicy FRoutePolicy::For(ERouteErrand Errand)
 {
 	auto Make = [](ERunwayAvoidance Avoidance, EOccupancyUse Occupancy, bool bPenalise)
@@ -14,8 +18,8 @@ FRoutePolicy FRoutePolicy::For(ERouteErrand Errand)
 	switch (Errand)
 	{
 	// A SWITCH WITH NO DEFAULT, deliberately: adding an enumerator without a row here is a
-	// compiler warning at this switch, which is a cheaper place to find out than the table
-	// test and very much cheaper than play.
+	// BUILD ERROR at this switch (C4062, raised around this function - see ExhaustiveSwitch.h), which is a cheaper
+	// place to find out than the table test and very much cheaper than play.
 	case ERouteErrand::ArrivalTaxiIn:
 		// As shipped. The query carries no occupancy - ChooseStand reads the table
 		// separately, to skip a stand somebody is on, never to weight an edge. A stand
@@ -72,3 +76,4 @@ FRoutePolicy FRoutePolicy::For(ERouteErrand Errand)
 	// must not put an aircraft on a strip.
 	return Make(ERunwayAvoidance::All, EOccupancyUse::Never, false);
 }
+AIRSIDE_EXHAUSTIVE_SWITCH_END
