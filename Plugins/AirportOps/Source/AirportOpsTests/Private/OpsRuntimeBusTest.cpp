@@ -29,8 +29,10 @@
 #include "Model/OpsSave.h"
 #include "Model/RoadAgent.h"
 #include "OpsEventsTestListener.h"
+#include "Misc/ScopeExit.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/OpsRuntime.h"
+#include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestWorld.h"
 #include "OpsTransitionTestHelpers.h"
@@ -384,9 +386,53 @@ bool FOpsRuntimeBusQuietBoardTest::RunTest(const FString&)
 	// AND THE PLAYER DRAWING SOMETHING WAKES IT - a second depot seeds on the next step.
 	const int32 Fleet = Runtime->GetJobBoard()->GetVehicles().Num();
 	Net.PlaceEntity(DepotDef, DepotDef->Anchors, FVector2D(-12000.0, 0.0), 0.0, 0.0, DepotDef->PoseRole, DepotDef->Trucks);
+	// THE REBUILD EVERY EDIT ENDS IN (#446): FNetworkChangedEvent is the actor's announcement of a rebuild now, not a
+	// per-frame compare of the network's revision - a raw model write with no rebuild after it is no edit the game makes.
+	Actor->RebuildMesh();
 	Runtime->Tick(1.0 / 30.0);
 	TestTrue(TEXT("a depot placed on a quiet airport still gets its fleet (FNetworkChangedEvent)"),
 		Runtime->GetJobBoard()->GetVehicles().Num() > Fleet);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeBusNetworkChangedOnceTest, "AirportOps.Present.Bus.NetworkChangedPublishedOnceWithNoTick",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeBusNetworkChangedOnceTest::RunTest(const FString&)
+{
+	// #446: FNetworkChangedEvent WAS A POLL - UOpsRuntime::Tick compared the network pointer and GuidelineRevision
+	// every frame. It is the actor's announcement of a rebuild now, bridged in the rebuild itself: ONE event per
+	// committed rebuild, with NO Tick between the edit and the queue; none for a drag frame (its commit publishes); and
+	// exactly one for a save game's load (#426's RestoreInPlace -> adopt -> rebuild), whose queue the load discards first.
+	// Counted from the bus's own publish line, so an event queued and then dropped still counts as published.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	Runtime->Tick(1.0 / 30.0);
+
+	FLogLineSpy Spy(FName(TEXT("LogOpsBus")));
+	GLog->AddOutputDevice(&Spy);
+	ON_SCOPE_EXIT { GLog->RemoveOutputDevice(&Spy); };
+	auto Published = [&Spy]()
+	{
+		return Spy.CapturedLines.FilterByPredicate([](const FString& Line) { return Line.Contains(TEXT("Bus: + NetworkChanged")); }).Num();
+	};
+
+	const int32 Node = Actor->PlaceNode(FVector2D(0.0, -30000.0));
+	TestEqual(TEXT("a road edit publishes FNetworkChangedEvent once, with no Tick"), Published(), 1);
+
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	if (!TestNotNull(TEXT("the actor has a facade"), Facade)) { return false; }
+	Facade->BeginInteractiveEdit(TEXT("drag"));
+	TestTrue(TEXT("setup: a drag frame moves the node"), Actor->MoveNode(Node, FVector2D(500.0, -30000.0)));
+	TestEqual(TEXT("a drag frame publishes nothing - nothing is committed, and the passes would run every frame"), Published(), 1);
+	Facade->EndInteractiveEdit(/*bKeep*/ true);
+	TestEqual(TEXT("the drag's commit publishes once"), Published(), 2);
+
+	if (!TestTrue(TEXT("setup: the airport saves"), Runtime->SaveToSlot(TEXT("AirportOpsTest_NetworkChangedOnce")))) { return false; }
+	const int32 BeforeLoad = Published();
+	if (!TestTrue(TEXT("setup: and loads"), Runtime->LoadFromSlot(TEXT("AirportOpsTest_NetworkChangedOnce")))) { return false; }
+	TestEqual(TEXT("a load publishes FNetworkChangedEvent exactly once"), Published(), BeforeLoad + 1);
 	return true;
 }
 

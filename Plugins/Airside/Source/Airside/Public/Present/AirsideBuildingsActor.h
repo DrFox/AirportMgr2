@@ -11,6 +11,9 @@ class UHierarchicalInstancedStaticMeshComponent;
 class UInstancedStaticMeshComponent;
 class UPlotPresenter;
 class URoadNetwork;
+// OPAQUE, NOT INCLUDED: Tool/RoadEditTarget.h pulls in a dozen Model/ headers for one enum two private
+// handlers take. A scoped enum with its underlying type is complete from this line alone.
+enum class EChangeKind : uint8;
 
 /**
  * Everything that stands ON the airport rather than being part of its surface: plotted
@@ -27,8 +30,9 @@ class URoadNetwork;
  * own comment refused, with tens of plots to rebuild. Revisit when per-building selection
  * needs a click target of its own.
  *
- * LISTENS, NEVER POLLS: ARoadNetworkActor::OnTopologyRebuilt is the only thing that makes it
- * draw, plus one catch-up rebuild on binding.
+ * LISTENS, NEVER POLLS: ARoadNetworkActor::OnNetworkChanged (its Topology and Facts kinds; it was
+ * OnTopologyRebuilt until #446) is the only thing that makes it draw, plus one catch-up rebuild on
+ * binding. WHICH road network it listens to is URoadNetworkRegistry's answer, heard as it changes.
  */
 UCLASS()
 class AIRSIDE_API AAirsideBuildingsActor : public AActor
@@ -95,15 +99,27 @@ public:
 	 * The road network to draw for. EMPTY MEANS "THE ONE IN THE WORLD", which is every level
 	 * this game has; set it only in a level that holds more than one.
 	 *
-	 * A SEARCH IS ACCEPTABLE HERE where ASunDriver refuses one, because this one cannot pick
-	 * wrong silently: zero or several candidates is a Warning naming the count, and nothing is
-	 * drawn - never a guess between two.
+	 * "THE ONE IN THE WORLD" IS URoadNetworkRegistry's (#446), not a search of this actor's own:
+	 * it was a scan here that drew nothing on zero or several candidates - never a guess between
+	 * two - while ops and the driver each took the first they found. The registry holds that rule
+	 * for all of them now: a second network actor is refused there with an Error, so there is
+	 * never a second candidate to guess between.
 	 */
 	UPROPERTY(EditInstanceOnly, Category = "Airside")
 	TObjectPtr<ARoadNetworkActor> RoadNetwork;
 
 private:
-	/** OnTopologyRebuilt's handler. */
+	/** OnNetworkChanged's handler (#446): Topology and Facts redraw the plots, the other kinds move none. */
+	void OnNetworkChanged(EChangeKind Kind, const URoadNetwork& Network);
+
+	/** URoadNetworkRegistry::OnAirportChanged's handler: bind to this world's airport as it arrives or
+	 *  leaves, while RoadNetwork is unset. */
+	void OnAirportChanged(UWorld& World, ARoadNetworkActor* Airport);
+
+	/** The registry binding - see PostRegisterAllComponents. Removed on a real unregister. */
+	FDelegateHandle RegistryHandle;
+
+	/** The redraw itself - OnNetworkChanged's, and BindTo's catch-up. */
 	void Rebuild(const URoadNetwork& Network);
 
 	/** Remove the delegate binding, if any. Safe to call when unbound. */
@@ -150,6 +166,6 @@ private:
 	 */
 	TWeakObjectPtr<ARoadNetworkActor> Bound;
 
-	/** The OnTopologyRebuilt binding on Bound; invalid when unbound. */
+	/** The OnNetworkChanged binding on Bound; invalid when unbound. */
 	FDelegateHandle BoundHandle;
 };

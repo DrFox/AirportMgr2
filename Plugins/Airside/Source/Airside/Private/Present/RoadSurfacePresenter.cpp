@@ -634,6 +634,11 @@ void URoadSurfacePresenter::RebuildMarkingsOnly(URoadNetwork& Network, const FSu
 	RebuildInternal(Network, Settings, EChangeKind::Markings);
 }
 
+void URoadSurfacePresenter::RebuildFactsOnly(URoadNetwork& Network, const FSurfaceSettings& Settings)
+{
+	RebuildInternal(Network, Settings, EChangeKind::Facts);
+}
+
 void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfaceSettings& InSettings, EChangeKind Kind)
 {
 	// A LOCAL, MUTABLE COPY - not a reference to InSettings, which belongs to the caller (see
@@ -678,7 +683,9 @@ void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfac
 	// MoveNode or MoveApronCorner drag frame - moved positions and nothing else, so the graph's
 	// SHAPE is exactly what it was; re-deriving it every frame of a drag is the cost issue #165
 	// is about. See RebuildSurfaceOnly's own comment for what that leaves stale and why that is
-	// tolerated for a drag's duration.
+	// tolerated for a drag's duration. A Facts change (#446) takes the Surface scope too, and there
+	// nothing is stale at all: it moved no position, so the graph is exactly the road's - see
+	// RebuildFactsOnly. Markings returned above, so only Topology derives the graph.
 	AirsideDerivation::FDeriveInputs Derivation;
 	Derivation.Scope = Kind == EChangeKind::Topology ? AirsideDerivation::EDeriveScope::Full
 		: AirsideDerivation::EDeriveScope::Surface;

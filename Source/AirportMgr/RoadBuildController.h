@@ -825,10 +825,15 @@ private:
 	 *  binding to a facade that no longer belongs to Target. */
 	TWeakObjectPtr<URoadEditFacade> BoundRunwayCacheFacade;
 
+	/** Which actor the runway cache's OnNetworkChanged binding is on (#446) - BoundRunwayCacheFacade's
+	 *  reason, for the actor's delegate rather than the facade's. */
+	TWeakObjectPtr<ARoadNetworkActor> BoundRunwayCacheActor;
+
 	/**
-	 * Subscribes to Target's facade: OnChanged, so a runway PLACED or REMOVED invalidates
-	 * bRunwayCacheValid, and OnReplaced (#426), so a network replaced by anything - an undo from
-	 * the settings dialog, a load from a menu - puts the tool down and retires the caches here.
+	 * Subscribes to Target: its OnNetworkChanged (#446; the facade's OnChanged until then), so a
+	 * runway PLACED or REMOVED invalidates bRunwayCacheValid, and its facade's OnReplaced (#426), so
+	 * a network replaced by anything - an undo from the settings dialog, a load from a menu - puts the
+	 * tool down and retires the caches here.
 	 * Called from both BeginPlay and SetTargetForTest, the two places Target is assigned. A
 	 * no-op (beyond invalidating the cache) when Target is null or its facade is already the one
 	 * bound; the old facade's bindings are removed, so a swapped-away target cannot put this
@@ -836,12 +841,14 @@ private:
 	 */
 	void BindFacadeListeners();
 
-	/** Target's facade's OnChanged handler. GEOMETRY MOVES NOTHING RUNWAY-SHAPED - a dragged
-	 *  node cannot create, delete or reclassify a segment - so only Topology can make
-	 *  HasRunway's cached answer wrong; see EChangeKind's own comment (Tool/RoadEditTarget.h)
-	 *  for the exact split. A replaced network notifies Topology too (AdoptNetwork), which is
-	 *  how a load reaches this cache. */
-	void OnNetworkChangedInvalidateRunwayCache(EChangeKind Kind);
+	/** Target's OnNetworkChanged handler. GEOMETRY MOVES NOTHING RUNWAY-SHAPED - a dragged
+	 *  node cannot create, delete or reclassify a segment - and neither does Markings; see
+	 *  EChangeKind's own comment (Tool/RoadEditTarget.h) for the exact split. Topology can make
+	 *  HasRunway's cached answer wrong, and Facts is taken too: it is a runway's own facts, and a
+	 *  recount on a click costs nothing. A replaced network rebuilds as Topology (AdoptNetwork),
+	 *  which is how a load reaches this cache. HEARD AFTER THE REBUILD now, where the facade's
+	 *  OnChanged fired before it - a recount inside the handler reads the network as rebuilt. */
+	void OnNetworkChangedInvalidateRunwayCache(EChangeKind Kind, const URoadNetwork& Network);
 
 	/**
 	 * Target's facade's OnReplaced handler - THE ONE PLACE this driver answers a replaced network (issue #426), where

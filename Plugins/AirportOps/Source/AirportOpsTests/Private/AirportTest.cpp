@@ -787,9 +787,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportSaveRefreshesTest, "AirportOps.Present.
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FAirportSaveRefreshesTest::RunTest(const FString&)
 {
-	// A SAVE IN THE SAME FRAME AS AN EDIT (review M5): NetworkChanged is published by Tick, so without a refresh of its
+	// A SAVE IN THE SAME FRAME AS AN EDIT (review M5): NetworkChanged was published by Tick, so without a refresh of its
 	// own the save would snapshot an open airport over a runway-less network with its flights still coming - and the
-	// load re-derives silently, so nothing would ever cancel them.
+	// load re-derives silently, so nothing would ever cancel them. Since #446 the edit's own rebuild publishes the event,
+	// and SaveToSlot's refresh is gone: this now pins that the save's DRAIN handles it, with no Tick between.
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
 	UOpsRuntime* Runtime = AirportTestUsableRuntime(TestWorld);

@@ -2,96 +2,67 @@
 #include "AirportOpsLog.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
-#include "EngineUtils.h"
 #include "Present/OpsRuntime.h"
 #include "Present/RoadNetworkActor.h"
+#include "Present/RoadNetworkRegistry.h"
 
 void UOpsRuntimeSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 	Runtime = NewObject<UOpsRuntime>(this, TEXT("OpsRuntime"));
 	UE_LOG(LogAirportOps, Log, TEXT("OpsRuntimeSubsystem initialised"));
+
+	// HEARD, NOT SEARCHED FOR (#446) - see the class comment.
+	AirportHandle = URoadNetworkRegistry::OnAirportChanged().AddUObject(this, &UOpsRuntimeSubsystem::OnAirportChanged);
+
+	// THE ONE CATCH-UP READ, for an airport that registered before this subsystem existed. A level-resident
+	// actor placed before this subsystem noticed the world predates a listener that only hears arrivals FROM
+	// HERE ON - the case the catch-up scan was for. In PIE the game instance's subsystems initialise before the
+	// world's actors register (UGameInstance::InitializeForPlayInEditor), so this normally finds nothing; a game
+	// instance made over a live world would otherwise wait for an arrival that already happened. A read of the
+	// registry's slot, not a scan: the world already said which actor it is.
+	UWorld* World = GetGameInstance() != nullptr ? GetGameInstance()->GetWorld() : nullptr;
+	if (ARoadNetworkActor* Airport = URoadNetworkRegistry::Find(World))
+	{
+		Runtime->Attach(Airport);
+	}
 }
 
 void UOpsRuntimeSubsystem::Deinitialize()
 {
-	// UNSUBSCRIBE BEFORE Runtime GOES: OnActorSpawned closes over `this`, and a world outliving
-	// this subsystem (a game instance shutting down mid-level) must not call back into it.
-	if (SubscribedWorld.IsValid())
-	{
-		SubscribedWorld->RemoveOnActorSpawnedHandler(SpawnHandle);
-	}
-	SubscribedWorld.Reset();
+	// UNSUBSCRIBE BEFORE Runtime GOES: the registry's list closes over `this`, and it is static - a world
+	// outliving this subsystem (a game instance shutting down mid-level) must not call back into it.
+	URoadNetworkRegistry::OnAirportChanged().Remove(AirportHandle);
+	AirportHandle.Reset();
 	Runtime = nullptr;
 	Super::Deinitialize();
 }
 
-void UOpsRuntimeSubsystem::EnsureAttached()
+void UOpsRuntimeSubsystem::OnAirportChanged(UWorld& World, ARoadNetworkActor* Airport)
 {
-	// Re-attach when the target is gone as well as when it was never found: a PIE stop
-	// destroys the level's actor while this game-instance subsystem lives on.
-	if (Runtime->GetTarget() != nullptr && IsValid(Runtime->GetTarget()))
+	// OURS ONLY: the editor world's airport, and another PIE instance's, announce on the same list.
+	if (Runtime == nullptr || World.GetGameInstance() != GetGameInstance())
 	{
 		return;
 	}
-	UWorld* World = GetGameInstance() != nullptr ? GetGameInstance()->GetWorld() : nullptr;
-	if (World == nullptr)
+	if (Airport != nullptr)
 	{
+		// Attach detaches whatever was attached first - a level change hands the same game instance a new world.
+		Runtime->Attach(Airport);
 		return;
 	}
-
-	// ONLY ON A WORLD CHANGE (issue #190). This used to run TActorIterator's own scan of the
-	// whole level from here, every tick, for as long as the target stayed unfound - the cost
-	// this ticket measured. AttachToWorld's OnActorSpawned subscription is what notices a new
-	// ARoadNetworkActor from here on; the comparison below only re-arms it when GetWorld()
-	// itself is a DIFFERENT object than the one already subscribed, which a stale handle on
-	// the old world would never fire for again.
-	if (SubscribedWorld != World)
+	// THE AIRPORT LEFT (a PIE stop, a level unload, the actor destroyed): a real Detach, while its traffic and
+	// facade still exist to unbind from - see ARoadNetworkActor::EndPlay. Until #446 nothing unbound: a per-tick
+	// IsValid noticed the target had gone and re-attached to whatever came next.
+	if (Runtime->GetTarget() != nullptr)
 	{
-		AttachToWorld(*World);
-	}
-}
-
-void UOpsRuntimeSubsystem::AttachToWorld(UWorld& World)
-{
-	if (SubscribedWorld.IsValid())
-	{
-		SubscribedWorld->RemoveOnActorSpawnedHandler(SpawnHandle);
-	}
-	SubscribedWorld = &World;
-	SpawnHandle = World.AddOnActorSpawnedHandler(
-		FOnActorSpawned::FDelegate::CreateUObject(this, &UOpsRuntimeSubsystem::OnActorSpawned));
-
-	// THE CATCH-UP SCAN, exactly once for this world. A level-resident actor placed before
-	// this subsystem noticed the world (this class's own header) predates the handler just
-	// armed above, which only fires for spawns FROM HERE ON - so one scan finds whichever one
-	// is already there. GetActorScanCountForTest is what a test holds this "once" to.
-	++ActorScanCountForTest;
-	for (TActorIterator<ARoadNetworkActor> It(&World); It; ++It)
-	{
-		Runtime->Attach(*It);
-		break;
-	}
-}
-
-void UOpsRuntimeSubsystem::OnActorSpawned(AActor* Actor)
-{
-	// NOTHING TO DO if something is already attached and alive - a second
-	// ARoadNetworkActor spawning (there should never be one) must not steal the target from
-	// a live one, the same "first found, then stop" rule AttachToWorld's own scan follows.
-	if (Runtime->GetTarget() != nullptr && IsValid(Runtime->GetTarget()))
-	{
-		return;
-	}
-	if (ARoadNetworkActor* RoadNetworkActor = Cast<ARoadNetworkActor>(Actor))
-	{
-		Runtime->Attach(RoadNetworkActor);
+		UE_LOG(LogAirportOps, Log, TEXT("OpsRuntime detached: %s left %s"), *Runtime->GetTarget()->GetName(), *World.GetName());
+		Runtime->Detach();
 	}
 }
 
 void UOpsRuntimeSubsystem::Tick(float DeltaTime)
 {
-	EnsureAttached();
 	Runtime->Tick(DeltaTime);
 }
 

@@ -20,6 +20,9 @@ bool URoadNetwork::SetDriveSide(EDriveSide Side)
 	// NO ++EditRevision: that clock is scoped to nodes and segments (see GetEditRevision), and
 	// a flip moves neither - only the guidelines, which the rebuild re-derives and whose own
 	// clock the builder advances.
+	// BUT THE GUIDELINE CLOCK MOVES HERE TOO (#446), not only in that rebuild: the side is a fact a
+	// planner reads, and "the caller rebuilds" is the caller's promise, not this model's.
+	NoteFactChanged();
 	UE_LOG(LogAirside, Log, TEXT("Drive side -> %s"), Side == EDriveSide::Left ? TEXT("Left") : TEXT("Right"));
 	return true;
 }
@@ -577,6 +580,8 @@ bool URoadNetwork::SetSegmentSurface(FRoadSegmentId Segment, EPavement Surface)
 		return false;
 	}
 	Found->Surface = Surface;
+	// A grass road is a fact a planner reads (IsGrassRoad) - see NoteFactChanged (#446).
+	NoteFactChanged();
 	return true;
 }
 
@@ -655,6 +660,10 @@ bool URoadNetwork::SetRunwayFacts(FRoadSegmentId Seed, const FRunwayFacts& Facts
 			}
 		}
 	}
+	// THE ONE SIGNAL THE CACHES GET (#446): the facade notifies a runway flip as EChangeKind::Facts, which
+	// re-derives no graph, so without this the admission and re-bid gates keep the old runway's answer. See
+	// the header. ENFORCED BY: AirportOps.Model.Offers.Generate.RunwayFlipAsksAgain, AirportOps.Service.Rebid.RunwayFlipRebids
+	NoteFactChanged();
 	return true;
 }
 
@@ -1135,6 +1144,9 @@ bool URoadNetwork::SetIntermediateHoldingPosition(FGuidelineNodeId Node, bool bS
 	const FGuidelineEndRef At = Found->Origin;
 	SetGuidelineNodeHoldingPosition(Node,
 		bSet ? EHoldingPositionKind::Intermediate : EHoldingPositionKind::None, FRoadSegmentId());
+	// THE PLAYER'S BAR IS A FACT A PLAN READS (where a taxiing aircraft stops) - see NoteFactChanged (#446).
+	// Here, not in SetGuidelineNodeHoldingPosition, which the derivation also calls for the derived kinds.
+	NoteFactChanged();
 
 	if (!At.IsSet())
 	{
@@ -1510,12 +1522,19 @@ void URoadNetwork::RemoveReverseTurnAt(int32 Index)
 
 FApronId URoadNetwork::AddApron(FApronSurface&& Apron)
 {
+	// Every mutation moves a clock (#446): an apron is where a stand may stand - see NoteFactChanged.
+	NoteFactChanged();
 	return RoadSlot::Add<FApronId>(Aprons, ApronFreeList, MoveTemp(Apron));
 }
 
 bool URoadNetwork::RemoveApron(FApronId Apron)
 {
-	return RoadSlot::Remove<FApronId>(Aprons, ApronFreeList, Apron);
+	const bool bRemoved = RoadSlot::Remove<FApronId>(Aprons, ApronFreeList, Apron);
+	if (bRemoved)
+	{
+		NoteFactChanged();
+	}
+	return bRemoved;
 }
 
 const FApronSurface* URoadNetwork::GetApron(FApronId Apron) const
@@ -2008,6 +2027,8 @@ bool URoadNetwork::SetEntityDefinition(FEntityInstanceId Entity, UEntityDefiniti
 	}
 
 	Instance->Definition = Definition;
+	// What a stand admits is read from its definition - see NoteFactChanged (#446).
+	NoteFactChanged();
 	return true;
 }
 
@@ -2019,6 +2040,8 @@ bool URoadNetwork::SetStandDesignWingspan(FEntityInstanceId Entity, double Desig
 		return false;
 	}
 	Instance->DesignWingspan = DesignWingspan;
+	// The widest aeroplane a stand takes - admission reads it; see NoteFactChanged (#446).
+	NoteFactChanged();
 	return true;
 }
 
@@ -2102,6 +2125,9 @@ bool URoadNetwork::AddEntityModule(FEntityInstanceId Entity, EDepotModule Module
 		return false;
 	}
 	Instance->Modules.Add(Module);
+	// A purchase re-derives nothing now (the facade's Facts notify), so this is what tells the job board and the
+	// flight board's fuel verdict the depot changed - see the header and NoteFactChanged (#446).
+	NoteFactChanged();
 	return true;
 }
 
@@ -2122,6 +2148,11 @@ int32 URoadNetwork::RemoveEntityModules(FEntityInstanceId Entity, EDepotModule M
 			Instance->Modules.RemoveAt(Index);
 			++Removed;
 		}
+	}
+	// AddEntityModule's reason (#446); nothing removed, nothing changed, no stamp.
+	if (Removed > 0)
+	{
+		NoteFactChanged();
 	}
 	return Removed;
 }

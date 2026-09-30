@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/BuildPurse.h"
+#include "Model/ExhaustiveSwitch.h"
 #include "Model/RoadHandles.h"
 #include "Model/RoadTraffic.h"
 #include "Model/RoadEntity.h"
@@ -44,21 +45,53 @@ struct FAirframe; // #300: DispatchAgent takes it by reference and forwards it o
  * exactly as it stands, because nothing about this edit could have made it stale.
  *
  * TOPOLOGY: everything else (PlaceNode, ConnectNodes, SplitSegment, DeleteNode,
- * DeleteSegment, AddApron/DeleteApron, PlaceEntity/DeleteEntity, runway facts, and the one
+ * DeleteSegment, AddApron/DeleteApron, PlaceEntity/DeleteEntity, the drive side, and the one
  * notify EndInteractiveEdit fires when a drag commits), because the derived graph -
  * guidelines, anchor links, stand layouts, plots, agent routes - can only be stale or wrong
  * if one of those changed.
  *
+ * FACTS (#446): a FACT the derivation does not read changed - a runway's facts (SetRunwayFacts),
+ * a depot's modules (AddEntityModule, RemoveUnseatedModules). The road's shape and the guideline
+ * graph are exactly what they were, so NOTHING IS RE-DERIVED and no handle is reallocated: the
+ * surface is re-meshed (a runway's pavement is a mesh slot, its facts its paint) and the actor's
+ * OnNetworkChanged tells the buildings (a bought shed lights a bay) and ops. Until #446 these were
+ * Topology, so a shed purchase re-derived the whole airport and re-pointed every agent's route,
+ * and the caches that read the facts saw them change only because that re-derivation moved
+ * GuidelineRevision. The model moves that clock for a fact itself now (URoadNetwork::
+ * NoteFactChanged), which is what makes this kind SAFE: optimising an edit down to Facts cannot
+ * silently stale a cache that reads what it wrote.
+ * ENFORCED BY: AirportOps.Model.Offers.Generate.RunwayFlipAsksAgain, AirportOps.Service.Rebid.RunwayFlipRebids,
+ * Airside.Present.Facility.ModulePurchaseRelightsWithoutRederiving
+ *
  * A PLAIN enum, not a UENUM: it travels on FOnNetworkChanged, an ordinary
  * DECLARE_MULTICAST_DELEGATE - never a UPROPERTY or a UFUNCTION parameter - so nothing here
  * is reflected and UHT never needs to see it (see CLAUDE.md on plain enums and UHT).
+ * A SWITCH ON IT IS TOTAL (ChangeKindName, the actor's rebuild, every OnNetworkChanged listener):
+ * wrapped in AIRSIDE_EXHAUSTIVE_SWITCH_*, so a fifth kind is a build error at each, not a quiet
+ * fall into whichever branch an if-chain reached last.
  */
 enum class EChangeKind : uint8
 {
 	Geometry,
 	Markings,
-	Topology
+	Topology,
+	Facts
 };
+
+/** The kind's name, for a log line. */
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+inline const TCHAR* ChangeKindName(EChangeKind Kind)
+{
+	switch (Kind)
+	{
+	case EChangeKind::Geometry: return TEXT("Geometry");
+	case EChangeKind::Markings: return TEXT("Markings");
+	case EChangeKind::Topology: return TEXT("Topology");
+	case EChangeKind::Facts:    return TEXT("Facts");
+	}
+	return TEXT("?");
+}
+AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 /**
  * The one rebuild that covers two notifies - what a REBUILD BATCH (FRoadRebuildBatch, below)
@@ -70,7 +103,11 @@ enum class EChangeKind : uint8
  * saw one of each owes BOTH, and the only single rebuild that does both is Topology (which
  * repaints the surface, and re-derives the graph and re-applies holding marks before painting
  * them - FRoadGuidelineBuilder's ReapplyHoldingPositionMarks). Any pair naming Topology is
- * Topology, because Topology is a superset of the other two. Same kind twice is that kind.
+ * Topology, because Topology is a superset of the other three. Same kind twice is that kind.
+ * FACTS WITH ANYTHING ELSE IS TOPOLOGY TOO (#446), on purpose rather than by the table's default:
+ * Facts re-meshes but does not repaint the holding bars (Markings owes that), and its listeners
+ * read the guideline graph as it stands - which a Geometry notify in the same batch has left behind
+ * the road. Only Topology covers either pairing, and a batch is a bulk edit, never a drag frame.
  *
  * World-free and inline so Airside.Present.RebuildBatch can pin the table on its own, below
  * the composition it also tests.

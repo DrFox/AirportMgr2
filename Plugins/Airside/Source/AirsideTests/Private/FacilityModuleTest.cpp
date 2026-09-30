@@ -112,10 +112,61 @@ bool FFacilityModuleFacadeTest::RunTest(const FString&)
 	const int32 Built = Plots->GetModuleCount();
 	const int32 Ghosts = Plots->GetGhostCount();
 	TestTrue(TEXT("the facade takes the shed"), Facade->AddEntityModule(Depot, EDepotModule::Shed));
-	TestEqual(TEXT("one more bay is lit - the Topology rebuild reached the buildings actor"), Plots->GetModuleCount(), Built + 1);
+	TestEqual(TEXT("one more bay is lit - the Facts rebuild's announcement reached the buildings actor"), Plots->GetModuleCount(), Built + 1);
 	TestEqual(TEXT("and one fewer is ghosted"), Plots->GetGhostCount(), Ghosts - 1);
 	TestFalse(TEXT("R8: the purchase is a checkpoint - an undo would drop the shed and keep the money"), Facade->CanUndo());
 	TestFalse(TEXT("an unset id is refused at the door"), Facade->AddEntityModule(FEntityInstanceId(), EDepotModule::Shed));
+	return true;
+}
+
+/**
+ * #446: A SHED PURCHASE RE-SOLVED THE WHOLE AIRPORT. AddEntityModule notified Topology, so buying one module re-derived
+ * every guideline node and re-pointed every agent's route - for a write the derivation never reads. It notifies Facts
+ * now: the buildings actor hears OnNetworkChanged(Facts) and lights the bay, the derived-graph pass does not run, and the
+ * guideline handles the airport held before the purchase are the ones it holds after. The model's own GuidelineRevision
+ * bump is what the job board hears instead (Airside.Model.EveryFactMovesTheGuidelineRevision).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityModuleNoRederiveTest, "Airside.Present.Facility.ModulePurchaseRelightsWithoutRederiving",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilityModuleNoRederiveTest::RunTest(const FString&)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	const TArray<FVector2D> Plot = FacilityModuleWidePlot();
+	const int32 Index = Actor->PlaceEntityInPlot(Plot, Plot[0], Plot[1],
+		{ EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump }, EPlaceableEntity::FuelDepot);
+	if (!TestNotEqual(TEXT("setup: the depot is placed"), Index, int32(INDEX_NONE))) { return false; }
+	const FEntityInstanceId Depot = Actor->Network->EntityIdAt(Index);
+
+	// A ROAD FAR FROM THE PLOT, for a DERIVED guideline node: a Topology rebuild reallocates every derived node
+	// (FRoadGuidelineBuilder::Build), so a handle to one outliving the purchase is the evidence nothing re-derived. The
+	// depot's own pose node would not do - it is authored, and survives a Topology rebuild too.
+	const int32 RoadA = Actor->PlaceNode(FVector2D(-60000.0, -60000.0));
+	const int32 RoadB = Actor->PlaceNode(FVector2D(-60000.0, -40000.0));
+	if (!TestTrue(TEXT("setup: a far road is laid"), Actor->ConnectNodes(RoadA, RoadB))) { return false; }
+	FGuidelineNodeId Derived;
+	const TArray<FGuidelineNode>& Nodes = Actor->Network->GetGuidelineNodes();
+	for (int32 Node = 0; Node < Nodes.Num() && !Derived.IsSet(); ++Node)
+	{
+		if (Nodes[Node].bAlive && Nodes[Node].bDerived) { Derived = Actor->Network->GuidelineNodeIdAt(Node); }
+	}
+	if (!TestTrue(TEXT("setup: the road derived a guideline node"), Derived.IsSet())) { return false; }
+
+	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
+	const int32 Built = Plots->GetModuleCount();
+	const int32 TopologyBefore = Actor->TopologyRebuildCountForTest();
+	const uint32 RevisionBefore = Actor->Network->GetGuidelineRevision();
+
+	TestTrue(TEXT("the facade takes the shed"), Actor->GetEditFacade()->AddEntityModule(Depot, EDepotModule::Shed));
+	TestEqual(TEXT("one more bay is lit - OnNetworkChanged(Facts) reached the buildings actor"), Plots->GetModuleCount(), Built + 1);
+	TestEqual(TEXT("with no derived-graph pass: TopologyRebuildCountForTest did not move (#446)"),
+		Actor->TopologyRebuildCountForTest(), TopologyBefore);
+	TestNotNull(TEXT("so a derived handle held before the purchase is still live - the graph was not re-made"),
+		Actor->Network->GetGuidelineNode(Derived));
+	TestNotEqual(TEXT("and the caches that read modules were told by the model's own clock"),
+		Actor->Network->GetGuidelineRevision(), RevisionBefore);
 	return true;
 }
 
@@ -185,7 +236,7 @@ bool FFacilityUnseatedRemovalTest::RunTest(const FString&)
 	TestTrue(TEXT("nor did it touch the history"), Facade->CanUndo());
 
 	TestEqual(TEXT("the door removes exactly the unseated sheds"), Facade->RemoveUnseatedModules(Depot, EDepotModule::Shed, Dropped), Dropped);
-	TestEqual(TEXT("the Topology rebuild reached the presenter: nothing is dropped now"), Plots->GetDroppedCount(), 0);
+	TestEqual(TEXT("the Facts rebuild's announcement reached the presenter: nothing is dropped now"), Plots->GetDroppedCount(), 0);
 	TestFalse(TEXT("and there is nothing to undo - a repair is a checkpoint, not a step"), Facade->CanUndo());
 	TestFalse(TEXT("nor to redo"), Facade->CanRedo());
 	TestEqual(TEXT("a non-depot is refused at the door"), Facade->RemoveUnseatedModules(FEntityInstanceId(), EDepotModule::Shed, 1), 0);

@@ -843,6 +843,8 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	StandsFreedHandle = Traffic->OnStandsFreed.AddUObject(this, &UOpsRuntime::OnStandsFreed);
 	// ENFORCED BY: AirportOps.Present.Bus.PushGroundFreedIsBridged
 	PushGroundFreedHandle = Traffic->OnPushGroundFreed.AddUObject(this, &UOpsRuntime::OnPushGroundFreed);
+	// "THE NETWORK CHANGED", BRIDGED LIKE THE THREE ABOVE (#446) - it was a per-frame poll in Tick. See OnNetworkChanged.
+	NetworkChangedHandle = Target->OnNetworkChanged.AddUObject(this, &UOpsRuntime::OnNetworkChanged);
 
 	// Content is resolved ONCE, here, and applied to the clock and the ledger.
 	if (Catalog->Num() == 0)
@@ -1086,6 +1088,11 @@ void UOpsRuntime::Detach()
 		Target->GetTraffic()->OnStandsFreed.Remove(StandsFreedHandle);
 		Target->GetTraffic()->OnPushGroundFreed.Remove(PushGroundFreedHandle);
 	}
+	if (Target != nullptr)
+	{
+		Target->OnNetworkChanged.Remove(NetworkChangedHandle);
+	}
+	NetworkChangedHandle.Reset();
 	if (UpkeepHandle != INDEX_NONE)
 	{
 		Clock->Cancel(UpkeepHandle);
@@ -1103,7 +1110,7 @@ void UOpsRuntime::Detach()
 		JobBoardDeadlineHandle = INDEX_NONE;
 	}
 	CancelSafetyNet();
-	SeenNetwork.Reset();
+	// NO SeenNetwork RESET any more (#446): the poll it primed for a catch-up event is gone - see NetworkChangedHandle.
 	// THE BUS POINTERS GO WITH THE ATTACH: the bus is this runtime's, and a subobject left pointing at it
 	// after a detach is a publish into whatever comes next (stage 3 review). Every one Attach set.
 	// ENFORCED BY: AirportOps.Present.Bus.DetachUnhooksEveryPublisher
@@ -1132,24 +1139,39 @@ void UOpsRuntime::Detach()
 	Target = nullptr;
 }
 
+// A MISSING CASE BELOW IS A BUILD ERROR - see ExhaustiveSwitch.h: a fifth EChangeKind must say whether ops hears it.
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+void UOpsRuntime::OnNetworkChanged(EChangeKind Kind, const URoadNetwork& Network)
+{
+	// THE NETWORK CHANGED, SAID BY THE ACTOR THAT CHANGED IT (#446) - FNetworkChangedEvent's ONE publisher. It
+	// was THE NETWORK, COMPARED ONCE A FRAME in Tick: a different object (ClearNetwork, a load) or a new
+	// guideline revision. One pointer and one integer, which was the whole cost of the job board no longer
+	// re-scanning every depot every frame - but a frame late, which SaveToSlot had to patch over, and blind to a
+	// fact edit that re-derived no graph. Every rebuild announces itself now, a new network object's included
+	// (ClearNetwork, Undo and a load all end in a Topology rebuild of the network they adopted).
+	// Published, not handled: the bus's drain runs the passes, in this frame's Tick or SaveToSlot's own drain.
+	// ENFORCED BY: AirportOps.Present.Bus.NetworkChangedPublishedOnceWithNoTick; Check-Architecture rule 49
+	switch (Kind)
+	{
+	case EChangeKind::Geometry:
+		// A DRAG FRAME: nothing committed, and the graph a pass would plan over is behind the road until the
+		// drag's own Topology rebuild - which does publish. Hearing every frame would re-run the passes each one.
+		return;
+	case EChangeKind::Markings:
+	case EChangeKind::Facts:
+	case EChangeKind::Topology:
+		Bus.Publish(FNetworkChangedEvent{ Network.GetGuidelineRevision() });
+		return;
+	}
+}
+AIRSIDE_EXHAUSTIVE_SWITCH_END
+
 void UOpsRuntime::Tick(double RealDeltaSeconds)
 {
 	Clock->Advance(RealDeltaSeconds);
 
-	// THE NETWORK, COMPARED ONCE A FRAME: a different object (ClearNetwork, a load) or a new guideline
-	// revision is FNetworkChangedEvent. One pointer and one integer - the whole cost of the job board
-	// no longer re-scanning every depot every frame.
-	if (Target != nullptr && Target->Network != nullptr)
-	{
-		const URoadNetwork* Network = Target->Network;
-		const uint32 Revision = Network->GetGuidelineRevision();
-		if (SeenNetwork.Get() != Network || SeenGuidelineRevision != Revision)
-		{
-			SeenNetwork = Network;
-			SeenGuidelineRevision = Revision;
-			Bus.Publish(FNetworkChangedEvent{ Revision });
-		}
-	}
+	// NO NETWORK POLL HERE since #446 - see OnNetworkChanged, which the actor calls in the rebuild that made
+	// the change. ENFORCED BY: Check-Architecture rule 49 (network-change-announced)
 
 	// ONE DRAIN, after the clock: the queue holds Airside's events from the motion tick in publish
 	// order, then anything the clock just fired - so a flight that came due this frame is handled
@@ -1315,11 +1337,14 @@ bool UOpsRuntime::SaveToSlot(const FString& SlotName)
 	// bound to a UOpsEvents delegate may save (an autosave on a notification), and a nested Drain
 	// would assert; that save simply misses what is still queued, and says so.
 	// ENFORCED BY: AirportOps.Present.Bus.SaveFromAHandler
-	// THE STATUS FIRST (review M5): NetworkChanged is published by Tick, so an edit in the frame of the save would
-	// otherwise snapshot an airport still open over a network with no runway - and a load re-derives silently, so its
-	// flights would never be cancelled. A change published here is handled by the drain below.
+	// NO STATUS REFRESH OF ITS OWN any more (#446). Review M5 added one because NetworkChanged was published by Tick,
+	// a frame late: an edit in the frame of the save would snapshot an airport still open over a network with no
+	// runway - and a load re-derives silently, so its flights would never be cancelled. The rebuild that made the edit
+	// publishes the event now, so it is already queued, and the drain below runs the Airport handler's Refresh and the
+	// cancellation it publishes. PROVABLY NOTHING LOST: the status itself is never saved (only bClosedByPlayer is), so
+	// the refresh reached the snapshot only through that drain - and inside a drain, where no drain runs, it reached
+	// nothing either way.
 	// ENFORCED BY: AirportOps.Present.Airport.SaveRefreshesTheStatus
-	Airport->Refresh(*Target->Network);
 	if (Bus.IsDraining())
 	{
 		UE_LOG(LogAirportOps, Warning, TEXT("Save '%s' from inside an ops event handler: %d queued event(s) are not in it"),

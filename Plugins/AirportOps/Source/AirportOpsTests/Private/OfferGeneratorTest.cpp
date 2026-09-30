@@ -544,6 +544,36 @@ bool FOfferAdmissionCachedTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * #446's TRAP, PINNED: "optimising a runway flip to Markings silently stales admission". A runway's facts (its surface,
+ * its approach, the end in use) are what RunwayAdmission judges an airframe by, and the admission cache keys on
+ * GuidelineRevision. Until #446 URoadNetwork::SetRunwayFacts moved no clock, and the cache saw a flip only because the
+ * facade escalated it to a Topology rebuild that re-made the graph. The facade notifies Facts now - no rebuild re-makes
+ * anything - so the flip is written here STRAIGHT INTO THE MODEL, with no rebuild at all: the model's own bump
+ * (NoteFactChanged) is the whole of what the cache hears. Delete that bump and this goes red.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferRunwayFlipAsksAgainTest, "AirportOps.Model.Offers.Generate.RunwayFlipAsksAgain",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferRunwayFlipAsksAgainTest::RunTest(const FString& Parameters)
+{
+	FRoadSegmentId Runway;
+	URoadNetwork* Field = FieldWith(4500.0, Needing(0.0, 3000.0), &Runway);
+	UOfferGenerator* Generator = SeededGenerator();
+	Generator->MaxPendingOffers = 100000;
+	const TArray<FAirlineOffers> Airlines = {
+		Offering(MakeAirline(6.0), { Candidate(3000.0, TEXT("A")), Candidate(2800.0, TEXT("B")) }) };
+	RunMinutes(*Generator, *Field, Airlines, *ClockAt(9.0), 60);
+	TestEqual(TEXT("control: an hour on an unchanged airport asks each type once"), Generator->AdmissionChecksForTest(), 2);
+
+	FRunwayFacts Concrete;
+	Concrete.Surface = EPavement::Concrete;
+	if (!TestTrue(TEXT("setup: the runway is reclassified"), Field->SetRunwayFacts(Runway, Concrete))) { return false; }
+	RunMinutes(*Generator, *Field, Airlines, *ClockAt(10.0), 1);
+	TestEqual(TEXT("a runway flip - a fact, with no graph re-made - asks every type again (#446)"),
+		Generator->AdmissionChecksForTest(), 4);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferZeroRateSkipsTest, "AirportOps.Model.Offers.Generate.ZeroRateSkipsAdmission",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FOfferZeroRateSkipsTest::RunTest(const FString& Parameters)

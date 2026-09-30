@@ -179,6 +179,8 @@ public:
 	 * caller can tell a no-op from an edit and not commit an undo step that does nothing.
 	 * Guidelines are NOT re-derived here: the network is the model and the builder derives,
 	 * so the caller rebuilds exactly as it does after any other edit (URoadEditFacade does).
+	 * Moves GuidelineRevision all the same (#446, NoteFactChanged): the side is a fact the planners read, and a
+	 * caller that rebuilt later - or not at all - must not leave a cache believing the old side.
 	 */
 	bool SetDriveSide(EDriveSide Side);
 
@@ -451,6 +453,11 @@ public:
 	 * segment it clicked would leave the halves past each exit disagreeing with it.
 	 *
 	 * A MUTATOR, so it stays here rather than moving to RunwayQuery with its reads.
+	 *
+	 * MOVES GuidelineRevision (#446), though no guideline moves: admission, the held taxi-out and the Land panel
+	 * key there and read these facts - see GetGuidelineRevision. The facade notifies this as EChangeKind::Facts,
+	 * which re-derives nothing, so this bump is now the ONLY thing that tells those caches.
+	 * ENFORCED BY: AirportOps.Model.Offers.Generate.RunwayFlipAsksAgain, AirportOps.Service.Rebid.RunwayFlipRebids
 	 */
 	bool SetRunwayFacts(FRoadSegmentId Seed, const FRunwayFacts& Facts);
 
@@ -571,6 +578,23 @@ public:
 	 * this on every load (#426). Node POSITIONS are not covered because nothing
 	 * moves a guideline node in place; the builder makes fresh ones. If that changes, the
 	 * mover bumps this too.
+	 *
+	 * AND BY EVERY FACT A PLANNER READS WITH THE GRAPH (#446) - a runway's facts, the drive side, a depot's
+	 * modules, an entity or apron placed or removed, a road's pavement, a holding bar, a reverse turn: see
+	 * NoteFactChanged. This is THE ROUTING GRAPH AS A PLAN READS IT, not the guideline arrays alone. Until #446
+	 * those writes moved no clock, and the dozen caches keyed here (offer admission, the job board's re-bid and
+	 * re-offer, the flight board's verdicts, the held taxi-out, the Land panel and the inspector card) saw a
+	 * runway flip or a shed purchase only because the facade escalated it to a Topology rebuild, which re-made
+	 * the graph. A Facts edit re-makes nothing now, so the model has to say it changed.
+	 * WHY THIS CLOCK AND NOT A THIRD: every one of those caches already keys here, and reads facts with the
+	 * graph; a separate FactsRevision would be the clock the NEXT cache forgets to pair with this one - the
+	 * stale-admission trap #446 names, moved one layer down. The price is that the purely structural caches
+	 * (FNodeReachCache, the route-plan cache) redo their work once per fact edit: a click, never a frame.
+	 * NOT the drag writes (SetNodePosition moves EditRevision; SetApronCorner moves nothing - its drag commits
+	 * with a Topology rebuild, which re-derives) and NOT the derivation's own outputs (the solve's arm results,
+	 * the restriction, the measurements, the derived holding kinds, the builder's reverse-turn pruning): those
+	 * are written BY a rebuild, from state whose own write already moved a clock, and some run every drag frame.
+	 * ENFORCED BY: Airside.Model.EveryFactMovesTheGuidelineRevision
 	 */
 	uint32 GetGuidelineRevision() const { return GuidelineRevision; }
 
@@ -717,8 +741,9 @@ public:
 	// (the builder re-derives everything from the list on each rebuild), so a generation would
 	// guard nothing. Three records in the only layout that has any (the rig yard, 2026-09-26).
 
-	/** Records a reverse turn; the next guideline rebuild lays it. Returns its index. */
-	int32 AddReverseTurn(const FReverseTurn& Turn) { return ReverseTurns.Add(Turn); }
+	/** Records a reverse turn; the next guideline rebuild lays it. Returns its index. A fact a
+	 *  planner reads with the graph, so it moves GuidelineRevision (see NoteFactChanged). */
+	int32 AddReverseTurn(const FReverseTurn& Turn) { NoteFactChanged(); return ReverseTurns.Add(Turn); }
 	const TArray<FReverseTurn>& GetReverseTurns() const { return ReverseTurns; }
 	/** Drops a record - the builder's, when an arm it names has gone. */
 	void RemoveReverseTurnAt(int32 Index);
@@ -949,8 +974,10 @@ public:
 	 * Append Module to a live DEPOT's Modules - the one write a module purchase makes (facility-upgrades
 	 * spec §3). False, nothing changed, for a dead or unset handle or a non-depot. A pure data write: no
 	 * rebuild, no undo, no money - URoadEditFacade::AddEntityModule is the door that adds those. No
-	 * EditRevision bump: that clock is scoped to nodes and segments (see GetEditRevision).
-	 * ENFORCED BY: Airside.Model.EntityModules.AddAppendsToADepot
+	 * EditRevision bump: that clock is scoped to nodes and segments (see GetEditRevision). A GuidelineRevision
+	 * bump instead (#446, NoteFactChanged): the job board and the flight board's fuel verdict read what a depot
+	 * seats, and the facade's Facts notify re-derives no graph that would have moved it for them.
+	 * ENFORCED BY: Airside.Model.EntityModules.AddAppendsToADepot, Airside.Model.EveryFactMovesTheGuidelineRevision
 	 */
 	bool AddEntityModule(FEntityInstanceId Entity, EDepotModule Module);
 
@@ -1176,6 +1203,15 @@ private:
 
 	/** See GetGuidelineRevision. Plain, not a UPROPERTY - it is a session clock, not state. */
 	uint32 GuidelineRevision = 0;
+
+	/**
+	 * A FACT A PLANNER READS WITH THE GRAPH CHANGED (#446) - moves GuidelineRevision; see its getter for
+	 * which writes call this, which do not, and why one clock. Called AFTER the write succeeds: a refused
+	 * write changed nothing, and a stamp moved for nothing makes every cache keyed here redo its work.
+	 * A NAMED STEP, not a bare ++ at each site, so a reader of a mutator sees WHY the guideline clock moves
+	 * in a function that touches no guideline.
+	 */
+	void NoteFactChanged() { ++GuidelineRevision; }
 
 	/** See CappedWideningsWarned. */
 	TSet<uint32> CappedWideningsWarnedKeys;

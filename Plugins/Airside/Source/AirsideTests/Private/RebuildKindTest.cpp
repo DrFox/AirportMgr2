@@ -1,5 +1,10 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
+#include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
+#include "Model/GroundTraffic.h"
+#include "Model/RoadNetwork.h"
+#include "Present/AirsideTraffic.h"
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestWorld.h"
@@ -250,6 +255,109 @@ bool FDragNotifiesGeometryOnlyInEditorWorldTest::RunTest(const FString& Paramete
 			Actor->TopologyRebuildCountForTest(), TopologyBeforeUndo + 1);
 	}
 
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// Issue #446: "the network changed" reached its dependants four ways - the buildings heard
+// OnTopologyRebuilt, traffic a direct call made AFTER that broadcast, the controller's runway
+// cache the facade's OnChanged, and ops a per-frame poll. ARoadNetworkActor::OnNetworkChanged
+// is the one announcement now, after every rebuild of every kind, with traffic told first.
+// Both tests measure the composition (a spawned actor, its facade and its traffic), where a
+// broadcast moved above the traffic call, or a kind that skipped the announcement, would show.
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FNetworkChangedTrafficHearsFirstTest,
+	"Airside.Present.NetworkChanged.TrafficHearsFirst",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FNetworkChangedTrafficHearsFirstTest::RunTest(const FString& Parameters)
+{
+	// A LISTENER THAT READS TRAFFIC IN ITS HANDLER must find the agents already re-pointed at the
+	// nodes the rebuild made - before #446 the buildings' broadcast ran first, and a listener then
+	// read handles the builder had freed. The rebuild summary is the observable: it is written by
+	// UGroundTraffic::OnGraphRebuilt, so reading it inside the handler says which ran first.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor spawned"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	URoadNetwork& Net = *Actor->Network;
+	UGroundTraffic* Model = Actor->GetTraffic() != nullptr ? Actor->GetTraffic()->GetModel() : nullptr;
+	if (!TestNotNull(TEXT("the actor owns a traffic model"), Model)) { return false; }
+
+	// AUTHORED guidelines (bDerived false), TrafficForwarders' reason: a rebuild sweeps derived ones.
+	const FGuidelineNodeId A = Net.AddGuidelineNode(FVector2D(0.0, 0.0), false);
+	const FGuidelineNodeId B = Net.AddGuidelineNode(FVector2D(30000.0, 0.0), false);
+	TestGraph::Join(Net, A, B, { EGuidelineDir::Bidirectional, nullptr, false });
+	const FRoutePlan Plan = TestGraph::Probe(Net, A, B, ETraversalClass::GroundVehicle);
+	if (!TestTrue(TEXT("setup: a route for the van"), Plan.IsValid())) { return false; }
+	if (!TestTrue(TEXT("setup: the van is dispatched"),
+		Actor->DispatchAgent(Plan, UAirsideSettings::ResolveDefaultVehicle(), ETraversalClass::GroundVehicle))) { return false; }
+	// THE CONTROL: the last rebuild (PlaceNode's) ran with no agent, so a reading of 1+ below can only be this rebuild's.
+	TestEqual(TEXT("control: no rebuild has re-resolved the van yet"), Model->GetLastRebuildSummaryForTest().ReResolved, 0);
+
+	int32 Announcements = 0;
+	int32 ReResolvedWhenHeard = INDEX_NONE;
+	const FDelegateHandle Handle = Actor->OnNetworkChanged.AddLambda(
+		[&Announcements, &ReResolvedWhenHeard, Model](EChangeKind Kind, const URoadNetwork& Network)
+		{
+			++Announcements;
+			ReResolvedWhenHeard = Model->GetLastRebuildSummaryForTest().ReResolved;
+		});
+	Actor->RebuildMesh();
+	Actor->OnNetworkChanged.Remove(Handle);
+
+	TestEqual(TEXT("one rebuild, one announcement"), Announcements, 1);
+	TestTrue(TEXT("the listener found the van already re-resolved - traffic heard the rebuild BEFORE the broadcast (#446)"),
+		ReResolvedWhenHeard >= 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FNetworkChangedEveryRebuildOnceTest,
+	"Airside.Present.NetworkChanged.EveryRebuildAnnouncedOnce",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FNetworkChangedEveryRebuildOnceTest::RunTest(const FString& Parameters)
+{
+	// ONE ANNOUNCEMENT PER REBUILD, CARRYING THE REBUILD'S KIND - a road edit (Topology), a runway flip (Facts, #446:
+	// no derived-graph pass) and a save game's load (RestoreInPlace: exactly one, Topology, after the repairs - #426's
+	// path, which ops' FNetworkChangedEvent now rides). A kind that skipped the announcement, or a load that announced
+	// twice (once from the restore, once from its adopt), would show as a count here.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor spawned"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	Actor->MinimumRunwayLength = 100.0;
+
+	TArray<EChangeKind> Heard;
+	const FDelegateHandle Handle = Actor->OnNetworkChanged.AddLambda(
+		[&Heard](EChangeKind Kind, const URoadNetwork& Network) { Heard.Add(Kind); });
+
+	if (!TestTrue(TEXT("setup: a runway is placed"),
+		Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(6000.0, 0.0), TestProfiles::Runway()))) { return false; }
+	TestTrue(TEXT("a road edit is announced once, as Topology"), Heard.Num() == 1 && Heard[0] == EChangeKind::Topology);
+
+	Heard.Reset();
+	const int32 TopologyBefore = Actor->TopologyRebuildCountForTest();
+	const uint32 RevisionBefore = Actor->Network->GetGuidelineRevision();
+	FRunwayFacts Facts;
+	Facts.Surface = EPavement::Concrete;
+	if (!TestTrue(TEXT("setup: the runway is reclassified"), Actor->SetRunwayFacts(0, Facts))) { return false; }
+	TestTrue(TEXT("a runway flip is announced once, as Facts"), Heard.Num() == 1 && Heard[0] == EChangeKind::Facts);
+	TestEqual(TEXT("and derives no graph"), Actor->TopologyRebuildCountForTest(), TopologyBefore);
+	TestNotEqual(TEXT("yet the model moved the clock the caches read - the flip is not invisible to them"),
+		Actor->Network->GetGuidelineRevision(), RevisionBefore);
+
+	Heard.Reset();
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	if (!TestNotNull(TEXT("the actor has a facade"), Facade)) { return false; }
+	TestTrue(TEXT("setup: a load (an in-place restore that changes nothing) succeeds"),
+		Facade->RestoreInPlace([](URoadNetwork&) { return true; }));
+	TestTrue(TEXT("a load is announced exactly once, as Topology"), Heard.Num() == 1 && Heard[0] == EChangeKind::Topology);
+
+	Actor->OnNetworkChanged.Remove(Handle);
 	return true;
 }
 

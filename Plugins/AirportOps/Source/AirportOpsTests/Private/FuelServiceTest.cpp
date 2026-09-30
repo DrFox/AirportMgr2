@@ -18,6 +18,7 @@
 #include "Model/RoutePolicy.h"
 #include "Model/RoutePlanCache.h"
 #include "Model/RouteSearch.h"
+#include "Model/RunwayFacts.h"
 #include "Model/SimClock.h"
 #include "Model/Vehicle.h"
 #include "Profiles/RoadProfile.h"
@@ -2892,6 +2893,39 @@ bool FServiceRebidQuietWithoutTriggerTest::RunTest(const FString& Parameters)
 		Rig.Fixture.Advance(1.0 / 30.0);
 	}
 	TestEqual(TEXT("60 idle ticks re-bid nothing"), Rig.Fixture.Service->GetBidCallCountForTest(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FServiceRebidOnRunwayFlipTest, "AirportOps.Service.Rebid.RunwayFlipRebids",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FServiceRebidOnRunwayFlipTest::RunTest(const FString& Parameters)
+{
+	// #446's TRAP, THE RE-BID'S HALF (AirportOps.Model.Offers.Generate.RunwayFlipAsksAgain is admission's): the re-bid is
+	// gated on GuidelineRevision ("an airport edit"), and a runway flip is a Facts edit now, which re-makes no graph. So the
+	// flip is written straight into the model with no rebuild, and the model's own bump (URoadNetwork::NoteFactChanged) is
+	// all the gate can hear. Delete the bump and the queued job is never re-bid on a flip.
+	FuelServiceTest::FRebidRig Rig;
+	Rig.Fixture.bWithRunway = true;
+	if (!TestTrue(TEXT("rig built"), Rig.Build(6000.0))) { return false; }
+	FRoadSegmentId Runway;
+	for (int32 Index = 0; Index < Rig.Fixture.Net->GetSegments().Num() && !Runway.IsSet(); ++Index)
+	{
+		const FRoadSegmentId Each = Rig.Fixture.Net->SegmentIdAt(Index);
+		if (Each.IsSet() && Rig.Fixture.Net->IsRunwaySegment(Each)) { Runway = Each; }
+	}
+	if (!TestTrue(TEXT("setup: the rig has a runway"), Runway.IsSet())) { return false; }
+	Rig.Fixture.Service->ResetBidCallCountForTest();
+	Rig.Fixture.Advance(1.0 / 30.0);
+	TestEqual(TEXT("control: an idle tick re-bids nothing"), Rig.Fixture.Service->GetBidCallCountForTest(), 0);
+
+	FRunwayFacts Concrete;
+	Concrete.Surface = EPavement::Concrete;
+	if (!TestTrue(TEXT("setup: the runway is reclassified"), Rig.Fixture.Net->SetRunwayFacts(Runway, Concrete))) { return false; }
+	Rig.Fixture.Advance(1.0 / 30.0);
+	TestTrue(TEXT("a runway flip - a fact, with no graph re-made - re-bids the queued job (#446)"),
+		Rig.Fixture.Service->GetBidCallCountForTest() > 0);
 	return true;
 }
 

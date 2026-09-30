@@ -13,12 +13,13 @@
 #include "Content/AirsidePrimitives.h"
 #include "Content/AirsideSettings.h"
 #include "Engine/StaticMesh.h"
-#include "EngineUtils.h"
+#include "Engine/World.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/RoadNetwork.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadEditFacade.h"
+#include "Present/RoadNetworkRegistry.h"
 #include "Present/StandDefinitionCache.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/IcaoCode.h"
@@ -387,6 +388,13 @@ void ARoadNetworkActor::PostRegisterAllComponents()
 		RepairLoadedNetwork(ELoadedFrom::Level);
 
 		RebuildMesh();
+
+		// THE WORLD'S AIRPORT, AFTER THE REBUILD (#446) - see the header for why here and not BeginPlay.
+		// A world with no registry (an editor preview) has nobody to tell.
+		if (URoadNetworkRegistry* Registry = GetWorld() != nullptr ? GetWorld()->GetSubsystem<URoadNetworkRegistry>() : nullptr)
+		{
+			Registry->Register(*this);
+		}
 	}
 
 #if WITH_EDITOR
@@ -401,19 +409,35 @@ void ARoadNetworkActor::PostRegisterAllComponents()
 #endif
 }
 
+void ARoadNetworkActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	// THE SLOT GOES BACK BEFORE THE ACTOR DOES - see the header. Ops hears it and detaches while this
+	// actor's traffic and facade are still there to unbind from.
+	if (URoadNetworkRegistry* Registry = GetWorld() != nullptr ? GetWorld()->GetSubsystem<URoadNetworkRegistry>() : nullptr)
+	{
+		Registry->Unregister(*this);
+	}
+	Super::EndPlay(EndPlayReason);
+}
+
+void ARoadNetworkActor::UnregisterAllComponents(bool bForReregister)
+{
+	// A REREGISTER IS NOT A DEPARTURE: PostRegisterAllComponents follows it and would register again -
+	// and a listener would detach and re-attach ops, discarding its event queue, for a Details edit.
+	if (!bForReregister)
+	{
+		if (URoadNetworkRegistry* Registry = GetWorld() != nullptr ? GetWorld()->GetSubsystem<URoadNetworkRegistry>() : nullptr)
+		{
+			Registry->Unregister(*this);
+		}
+	}
+	Super::UnregisterAllComponents(bForReregister);
+}
+
 ARoadNetworkActor* ARoadNetworkActor::Find(const UWorld* World)
 {
-	if (World == nullptr)
-	{
-		return nullptr;
-	}
-
-	for (TActorIterator<ARoadNetworkActor> It(const_cast<UWorld*>(World)); It; ++It)
-	{
-		return *It;
-	}
-
-	return nullptr;
+	// THE REGISTRY'S ANSWER (#446) - see the header. No scan: the actor registered itself.
+	return URoadNetworkRegistry::Find(World);
 }
 
 ARoadNetworkActor* ARoadNetworkActor::FindOrCreate(UWorld* World)
@@ -757,21 +781,37 @@ void ARoadNetworkActor::RebuildMeshForChange(EChangeKind Kind)
 		return;
 	}
 
-	if (Kind == EChangeKind::Geometry)
+	RebuildForKind(Kind);
+
+	// THE ONE ANNOUNCEMENT (#446), after every kind's rebuild and after traffic - see OnNetworkChanged.
+	// After the surface, so a plot drawn this frame has its pad underneath it before its sheds go up.
+	// Logged for every kind but a drag frame's, so "what did a runway flip or a shed purchase rebuild
+	// as" is one grep; a drag would write one line a frame.
+	if (Kind != EChangeKind::Geometry)
 	{
+		UE_LOG(LogRoadMesh, Log, TEXT("Network changed: %s rebuild announced"), ChangeKindName(Kind));
+	}
+	OnNetworkChanged.Broadcast(Kind, *Network);
+}
+
+// A MISSING CASE BELOW IS A BUILD ERROR - see ExhaustiveSwitch.h: a fifth EChangeKind must say what it rebuilds.
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+void ARoadNetworkActor::RebuildForKind(EChangeKind Kind)
+{
+	switch (Kind)
+	{
+	case EChangeKind::Geometry:
 		// SURFACE ONLY (issue #165). A drag frame moved positions and nothing else, so the
 		// solve and the mesh it feeds are the only things that can have changed - see
 		// URoadSurfacePresenter::RebuildSurfaceOnly for exactly what that skips and why, and
 		// URoadEditFacade::MoveNode for the notify this answers. The buildings
-		// (OnTopologyRebuilt) and Traffic are skipped here too: RebuildFrom and OnGraphRebuilt both re-derive from the guideline
+		// (hearing OnNetworkChanged's Geometry, and ignoring it) and Traffic are skipped here too: RebuildFrom and OnGraphRebuilt both re-derive from the guideline
 		// graph RebuildSurfaceOnly deliberately leaves untouched, so re-running them against
 		// it would cost the same as a full rebuild for no new information.
 		Presenter->RebuildSurfaceOnly(*Network, MakeSurfaceSettings());
 		return;
-	}
 
-	if (Kind == EChangeKind::Markings)
-	{
+	case EChangeKind::Markings:
 		// PAINT ONLY (issue #179). SetIntermediateHoldingPosition flips a flag on an
 		// existing guideline node: it creates nothing, destroys nothing, and moves nothing,
 		// so the solve, the road mesh, the guideline graph and everything derived from it
@@ -785,24 +825,36 @@ void ARoadNetworkActor::RebuildMeshForChange(EChangeKind Kind)
 		// skipped for the same reason Geometry skips them above: nothing they derive from moved.
 		Presenter->RebuildMarkingsOnly(*Network, MakeSurfaceSettings());
 		return;
-	}
 
-	++TopologyRebuildCount;
-	Presenter->Rebuild(*Network, MakeSurfaceSettings());
+	case EChangeKind::Facts:
+		// RE-MESHED, NOT RE-DERIVED (#446). A runway's facts or a depot's modules changed: the
+		// road's shape and the guideline graph did not, so Traffic is skipped for Markings' reason -
+		// no handle moved, and OnGraphRebuilt re-pointing every agent's route at the same nodes was
+		// the "shed purchase re-solves the whole airport" cost. The surface is re-meshed because a
+		// runway's pavement is a mesh slot and its facts are its paint; the buildings hear the
+		// broadcast and redraw (a bought shed lights a bay). The caches that read the facts hear
+		// GuidelineRevision, which the model moved itself (URoadNetwork::NoteFactChanged).
+		Presenter->RebuildFactsOnly(*Network, MakeSurfaceSettings());
+		return;
 
-	// THE BUILDINGS, through the delegate - see OnTopologyRebuilt's own comment. After the
-	// surface, so a plot drawn this frame has its pad underneath it before its sheds go up;
-	// before Traffic, matching where the direct call stood.
-	OnTopologyRebuilt.Broadcast(*Network);
+	case EChangeKind::Topology:
+		++TopologyRebuildCount;
+		Presenter->Rebuild(*Network, MakeSurfaceSettings());
 
-	// The guideline graph was just regenerated with new handles. Every agent's route must be
-	// re-pointed at the nodes that now hold its positions, or the occupancy table would be
-	// keyed on slots the builder has already freed - see UGroundTraffic::OnGraphRebuilt.
-	if (Traffic != nullptr)
-	{
-		Traffic->OnGraphRebuilt(*Network);
+		// The guideline graph was just regenerated with new handles. Every agent's route must be
+		// re-pointed at the nodes that now hold its positions, or the occupancy table would be
+		// keyed on slots the builder has already freed - see UGroundTraffic::OnGraphRebuilt.
+		// FIRST, BEFORE THE BROADCAST (#446): until then it ran after the buildings' delegate, so a
+		// listener reading traffic in its handler saw handles the builder had already freed.
+		// ENFORCED BY: Airside.Present.NetworkChanged.TrafficHearsFirst
+		if (Traffic != nullptr)
+		{
+			Traffic->OnGraphRebuilt(*Network);
+		}
+		return;
 	}
 }
+AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 double ARoadNetworkActor::GetApronSurfaceZ() const
 {
