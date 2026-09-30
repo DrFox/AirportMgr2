@@ -119,3 +119,35 @@ verdict and rule-12 warning count. Unverified in PIE: both fixes (spec §8 lists
 - The `Persistents()` comment claimed OnBeforeRestore ran for every object before any blob was deserialised; OpsSave.cpp's
   loop does RestoreBlob + OnAfterRestore per object. Rewritten there. `IOpsPersistent::OnBeforeRestore`'s header
   (OpsSave.h) makes the same false claim; left, not in this PR's files.
+
+## Review ledger (fresh review of PR C, 2026-09-30: 0 Critical, 2 Important)
+
+The orchestrator made the rulings. Each fix got a test that failed first, unless the row says it was a pin. Red lines are pre-fix
+unless marked "mutation". Full suite after: `1522 test(s) run, 0 failed, 0 crashed` (+6). Check-Architecture PASS, rule-12 111.
+
+| # | Finding | Ruling / fix | Test (red line) |
+|---|---|---|---|
+| M5 | #404 in OnAfterRestore needed a board clock and a `Persistents()` order dependency | RULING: moved to `UOpsRuntime::LoadFromSlot`, right after Restore, beside ClearAgents: `UFlightBoard::DemoteRestoredMidFlight(Clock->Now())` returns the re-queued flights. `RestoreClock`, the order claim and the "dated 0" fallback are deleted; `Persistents()` comment made true | `AirportOps.Present.RuntimeLoad.MidFlightRequeuesOrRetires` (mutation: no call -> "Inbound" not equal; dated 0 -> "joining the queue at the LOADED time" 0, expected 32421) |
+| I2 | A re-queued flight at a closed / runway-less airport could never land | RULING: after Reseat, not Open -> `UFlightBoard::CancelRequeued`: Cancelled, History, UNSCORED. CHOSEN: publish NOTHING (no FlightCancelled at all), so the roster cannot score it. The Reseat comment rewritten ("re-run the closure's cancellation - scored..."), the new step's own comment beside it | `AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport`, both cases ("closed by the player: re-queued at an airport that is not open, it is cancelled" / "no runway: ..." not equal; "holding no stand") |
+| I1 | A re-queued flight re-held the stand it was accepted onto, which another flight may hold since | `Reapply` honours HoldStand's return: refused -> Warning, `Stand` cleared. `OnGraphRebuilt(Traffic, Network, HoldLast)` re-holds everything else first, HoldLast (LoadFromSlot passes the re-queued) last; then an Inbound flight with no stand, or a dead one, Reserves during the load | `AirportOps.Model.FlightSave.RequeueDoesNotTakeAnAcceptedStand` ("the accepted flight keeps the stand it was promised", "the re-queued flight gave it up"); `...RequeueOffADeadStandReserves` ("its dead stand is ... replaced", "the live one is reserved"); runtime test now asserts the hold is under the flight's own HolderId and that an accepted flight on its old stand keeps it (mutation: HoldLast not passed in LoadFromSlot -> red) |
+| I1 deviation | Ruling said clear `Stand` when the stand is gone too | NOT cleared: the dead Stand is `HeldStandLost`'s evidence (`HeldStandIsGone`), and every stand deletion reaches Reapply through a rebuild, so clearing it would silence that alert in play. An Inbound flight's Reserve overwrites it instead (it counts as stand-less). ENFORCED BY names `AirportOps.Model.Alerts.HeldStandLostRaisesAndClears` | `RequeueOffADeadStandReserves` covers the Reserve |
+| M1 | TaxiOut rule was negative ("goal is no stand") | Positive: `Agent->bDepartureArmed` (TakeGoal arms a route ending on a runway) | `AirportOps.Model.Bus.RedirectStaysTaxiInWhenItsStandGoes` ("a redirect whose stand went is still the taxi in" not equal; "TaxiOut was never shown") |
+| M2 | Clock block split the SWEEP/SNAPSHOT comments from their code | Gone with M5; OnAfterRestore's loop is back as it was at `e498d559` | - |
+| M3 | Comments made false | Flight.h `Stand`, `ParkedAt`, `FlightPhaseFromAgent` doc; FlightBoardEventsTest `DepartAt`; FlightBoardTest manoeuvre step; FlightFeesTest never-parked | - |
+| M4 | `IOpsPersistent::OnBeforeRestore` claimed it ran for all objects before any blob | Rewritten: immediately before its own blob; each object in turn | - |
+| M6 | `bLandingFeePaid` kept as saved, not forced true (deviation from the brief's "mark as paid") | Kept. It is saved and set with the ledger post, so a charged flight stays charged; forcing it would lose the fee of a flight saved before its Arriving was heard | `AirportOps.Model.FlightSave.UnchargedLandingIsChargedOnce` (pin, green; mutation "fee forced paid" -> expected 1, got 0) |
+| M7 | ParkedAt at the real stand unasserted; same-frame redirect unpinned | `ParkedAt > 0` in FallbackParkStaysTaxiIn; new test | `AirportOps.Model.Bus.SameFrameRedirectStaysTaxiIn` (pin, green; mutation without `bStillParked` -> "a stale Parked moves no flight into Turnaround" not equal) |
+| M8 | Two copies of "goal is a stand" | `StandAtGoal(Network, Agent)` in Flight.h, used by UFlightBoard::OnAgentPhase and UJobBoard::OnAgentPhase (JobBoardText::EntityAtPose removed, its only user) | mutation "never a stand" -> FallbackParkStaysTaxiIn and the fuel turnaround tests red |
+| M9 | Log said `mid-EFlightPhase::TaxiIn` | `FlightBoardText::PhaseName` -> `restored mid-TaxiIn` | - |
+
+Other mutations, each red and restored with cp + touch, then rebuilt green: no hold-last order -> RequeueDoesNotTakeAnAcceptedStand and
+MidFlightRequeuesOrRetires; no load-time Reserve -> both I1 model tests and the runtime test; refusal not honoured ->
+RequeueDoesNotTakeAnAcceptedStand; no TaxiOut rule -> DepartFromFallbackReadsTaxiOut; no retire branch -> both #404 tests; no I2 cancel
+-> MidFlightAtClosedAirport.
+
+UE_LOG / comment lines, `e498d559` -> now: FlightBoard.cpp 19/205 -> 24/251; FlightBoard.h 0/364 -> 0/378; OpsRuntime.cpp 24/304 ->
+24/317; Flight.cpp 0/10 -> 0/13; Flight.h 0/188 -> 0/202; JobBoard.cpp 22/185 -> 22/185; StandAllocator.cpp 2/25 -> 3/36; OpsSave.h
+0/119 -> 0/122.
+
+Follow-up, not done: `TickQueue`'s per-frame re-reserve still checks only `!Stand.IsSet()`. An Inbound flight whose dead stand the load
+could not replace (none free) is not retried when a stand frees later.
