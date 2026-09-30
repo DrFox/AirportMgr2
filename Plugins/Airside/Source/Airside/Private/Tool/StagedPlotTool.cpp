@@ -92,7 +92,10 @@ void FStagedPlotTool::OnClick(const FToolContext& Context)
 		RoadA = Anchor.RoadA;
 
 		// A FRESH GESTURE, so any refusal the LAST one earned at commit is no longer about
-		// anything on screen.
+		// anything on screen. NO OnGestureBoundary() HERE, unlike the three other places: a
+		// gesture reaches Pinned == 0 only through OnCancel, OnCommit or OnDeactivate, each of
+		// which already dropped what a tool memoised about the shape it was leaving - and no test
+		// could tell this call from those.
 		bLastCommitRefused = false;
 		Pinned = 1;
 		return;
@@ -132,6 +135,7 @@ void FStagedPlotTool::OnCancel(const FToolContext& Context)
 	// STEPPING BACK RE-OPENS THE GESTURE, so a refusal earned by the shape being left behind
 	// no longer describes anything the player can still commit.
 	bLastCommitRefused = false;
+	OnGestureBoundary();
 
 	// ONE STAGE AT A TIME, the same answer the outline tool gives a misclick: binning the
 	// whole gesture is a harsher response than the mistake deserves.
@@ -171,8 +175,10 @@ void FStagedPlotTool::OnCommit(const FToolContext& Context)
 	}
 
 	// BACK TO IDLE, ready for the next one. A tool that stayed in Confirm would let the
-	// player press Build twice and get two entities stacked on one shape.
+	// player press Build twice and get two entities stacked on one shape. The shape is spent, so
+	// what a tool memoised about it goes too.
 	Pinned = 0;
+	OnGestureBoundary();
 }
 
 void FStagedPlotTool::OnDeactivate(const FToolContext& Context)
@@ -181,6 +187,7 @@ void FStagedPlotTool::OnDeactivate(const FToolContext& Context)
 	// object, so nothing in the model has to be cleaned up.
 	Pinned = 0;
 	bLastCommitRefused = false;
+	OnGestureBoundary();
 }
 
 void FStagedPlotTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const

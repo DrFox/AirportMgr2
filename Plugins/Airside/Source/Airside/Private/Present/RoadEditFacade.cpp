@@ -189,6 +189,11 @@ bool URoadEditFacade::MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) cons
 
 void URoadEditFacade::NotifyChanged(EChangeKind Kind)
 {
+	// COUNTED BEFORE THE BATCH FOLD BELOW, so an edit inside an open batch still moves the epoch
+	// a tool reads (IRoadEditTarget::GetEditEpoch): the model HAS changed, whenever the rebuild
+	// that follows it is owed.
+	++EditEpoch;
+
 	// FOLDED, NOT BROADCAST, WHILE A BATCH IS OPEN - see the class comment's REBUILD BATCHES.
 	if (RebuildBatchDepth > 0)
 	{

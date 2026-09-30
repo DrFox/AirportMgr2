@@ -616,6 +616,21 @@ FString URoadEditFacade::WhyStandRefused(TArrayView<const FVector2D> Outline, EP
 FString URoadEditFacade::WhyStandRefusedImpl(TArrayView<const FVector2D> Outline, EPavement Pavement,
 	FBuildQuote* OutUnaffordable) const
 {
+	// THE TWO HALVES, SITE FIRST, and nothing else: this is the composition a tool that asks them
+	// one at a time (FStandPlotTool::RefusalFor, issue #439 - it remembers the first and never the
+	// second) must reproduce, and the commit's evaluator is the same two calls. A refused site is
+	// never priced - the same "refused before the quote" order the one function always had.
+	// ENFORCED BY: Airside.Present.StandPlot.WhyStandRefusedIsTheTwoHalves
+	const FString Site = WhyStandSiteRefused(Outline);
+	if (!Site.IsEmpty())
+	{
+		return Site;
+	}
+	return WhyStandUnaffordableImpl(Outline, Pavement, OutUnaffordable);
+}
+
+FString URoadEditFacade::WhyStandSiteRefused(TArrayView<const FVector2D> Outline) const
+{
 	// SELF-CROSSING FIRST, AND GUARDS THE MALFORMED CASE TOO - StandBox::WidthOf/DepthOf
 	// below do not check Outline.Num() themselves (Solve/StandBox.h's own note), and every
 	// real candidate is StandBox::BoxAt's own four corners, so fewer than four reads the
@@ -747,15 +762,47 @@ FString URoadEditFacade::WhyStandRefusedImpl(TArrayView<const FVector2D> Outline
 		}
 	}
 
-	// AFFORD, LAST - the same "priced and refused before the scope opens" ordering
+	// NO AFFORD GATE HERE, and that is the point of the split (issue #439): everything above reads
+	// the outline and the model, and this function is the half a tool may remember against
+	// IRoadEditTarget::GetEditEpoch. The purse is not part of the model - its balance moves
+	// through no NotifyChanged - so the gate that reads it is WhyStandUnaffordable's, below.
+	return FString();
+}
+
+FString URoadEditFacade::WhyStandUnaffordable(TArrayView<const FVector2D> Outline, EPavement Pavement) const
+{
+	return WhyStandUnaffordableImpl(Outline, Pavement, nullptr);
+}
+
+FString URoadEditFacade::WhyStandUnaffordableImpl(TArrayView<const FVector2D> Outline, EPavement Pavement,
+	FBuildQuote* OutUnaffordable) const
+{
+	// THE LETTER AND ITS DEFINITION, asked again rather than handed over: the site half has
+	// already refused an outline with no letter or no buildable template, so on any outline this
+	// is reached for through WhyStandRefusedImpl both are set. A caller asking this half alone of
+	// an outline the site would refuse gets "" - there is nothing to price, and the refusal is the
+	// site half's to state - and never a null dereference, which the old single function relied on
+	// its own earlier returns to prevent.
+	const TOptional<EIcaoCode> Letter = StandBox::LetterOf(Outline);
+	if (!Letter.IsSet())
+	{
+		return FString();
+	}
+	const UEntityDefinition* Definition = Actor().ResolveStandDefinitionFor(*Letter);
+	if (Definition == nullptr)
+	{
+		return FString();
+	}
+
+	// AFFORD - the same "priced and refused before the scope opens" ordering
 	// PlaceEntityInPlot uses (issue #193). QuoteStand is the ONE place the entity-plus-pad
 	// quote is built - see its own comment for why this used to be a second, drifted copy of
 	// PlaceStandInPlot's own pricing. Winding does not change the quote (BuildCost::ForApron
 	// reasons about area magnitude), so this may be asked of Outline exactly as given.
-	// THE PAVEMENT IS PRICED HERE: the gates above read the outline alone, so every pavement
+	// THE PAVEMENT IS PRICED HERE: the site gates read the outline alone, so every pavement
 	// passes or fails them alike. Turning an aircraft away from a grass pad is stand
 	// admission's job (StandAdmission, Task 9 of this plan), not the build gate's.
-	const UEntityDefinition* Definition = Actor().ResolveStandDefinitionFor(*Letter);
+	// ASKED FRESH BY EVERY CALLER, never remembered - see IRoadEditTarget::WhyStandUnaffordable.
 	const FBuildQuote Quote = QuoteStand(*Definition, Outline, Pavement);
 	if (!CanAfford(Quote)) // preview: WhyStandRefused is asked by the tool every frame - silent here, PlaceStandInPlot announces
 	{

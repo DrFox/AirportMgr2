@@ -466,8 +466,53 @@ public:
 	 * Pavement is the pad the commit would lay - the afford gate prices it, so the readout
 	 * and the Build click agree on what a grass stand costs. No default, for
 	 * PlaceStandInPlot's reason.
+	 *
+	 * IN TWO HALVES since issue #439, which this is the composition of: WhyStandSiteRefused,
+	 * then WhyStandUnaffordable. A tool that wants to remember the answer may remember only the
+	 * first - see each half's own comment for why the second must not be remembered.
+	 * ENFORCED BY: Airside.Present.StandPlot.WhyStandRefusedIsTheTwoHalves
 	 */
 	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const = 0;
+
+	/**
+	 * The SITE half of WhyStandRefused: everything that reads the outline and the model and
+	 * nothing that reads money - self-crossing, too small, an unfit letter, an overlap, a taxiway
+	 * through the interior, a clearance strip. Empty means the ground would take a stand.
+	 *
+	 * THE HALF A CALLER MAY MEMOISE, against GetEditEpoch: it is a function of the outline and
+	 * the model, and the epoch moves on every edit of the model. No Pavement parameter, because
+	 * no gate in it reads one - every pavement passes or fails the site alike.
+	 */
+	virtual FString WhyStandSiteRefused(TArrayView<const FVector2D> Outline) const = 0;
+
+	/**
+	 * The MONEY half of WhyStandRefused: "cannot afford ..." when the purse cannot pay for a stand
+	 * on this Outline in this Pavement, else empty. ONE QUOTE AND A COMPARE, so cheap enough to
+	 * ask every frame - and it MUST be asked fresh, never memoised: the balance moves on its own
+	 * (landing fees, other purchases, refunds) through no edit of the model, so GetEditEpoch cannot
+	 * see it. Issue #439 was a memo that could not.
+	 *
+	 * EMPTY WHEN THERE IS NOTHING TO PRICE - no letter, or no template for it. The site half
+	 * refuses both, so that refusal is its to say, and the composition asks it first. (An outline
+	 * the site refuses for another reason may still be priced here, and refused; asked alone,
+	 * this half says only whether the money is there.)
+	 */
+	virtual FString WhyStandUnaffordable(TArrayView<const FVector2D> Outline, EPavement Pavement) const = 0;
+
+	/**
+	 * A counter that moves on EVERY edit of the model - node, segment, apron, entity, undo, redo,
+	 * a network swapped in or cleared - and on nothing else. What a memo of an answer that reads
+	 * the model keys on, beside the outline it was asked about.
+	 *
+	 * WHY NOT URoadNetwork::GetEditRevision, which is the counter a memo would reach for: it is
+	 * scoped to nodes and segments, so PlaceEntity and RemoveEntity - a stand placed into the
+	 * outline - do not move it, and it is not a UPROPERTY, so an undone-to network starts its own
+	 * clock again from wherever it was duplicated. This one is counted at the facade's one
+	 * notification door (URoadEditFacade::NotifyChanged), which an edit passes through to be
+	 * rebuilt at all - so a new mutator gets it by notifying, not by remembering a second call.
+	 * ENFORCED BY: Airside.Present.EditEpoch.MovesOnEveryEditDoor (a place, a delete, an undo and a clear)
+	 */
+	virtual uint32 GetEditEpoch() const = 0;
 
 	/**
 	 * Why a depot plot with this Outline may not be placed, or empty. WhyStandRefused's

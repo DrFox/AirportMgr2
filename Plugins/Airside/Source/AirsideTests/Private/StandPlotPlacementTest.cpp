@@ -1275,6 +1275,145 @@ bool FStandPlotAffordsWithTheChosenPavementTest::RunTest(const FString& Paramete
 	return true;
 }
 
+/**
+ * WhyStandRefused IS ITS TWO HALVES, SITE FIRST (issue #439). FStandPlotTool remembers the site
+ * half and asks the money half fresh, while PlaceStandInPlot asks the composition - so the pair
+ * and the whole must be the same function, or the Build button lights over a stand the commit
+ * refuses. Four cases pick out the composition's three outcomes and its precedence.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotWhyStandRefusedIsTheTwoHalvesTest,
+	"Airside.Present.StandPlot.WhyStandRefusedIsTheTwoHalves",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotWhyStandRefusedIsTheTwoHalvesTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotPlacementTest;
+
+	FExactFundsPurse Purse; // before the world - the facade holds a raw pointer to it
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	if (!TestNotNull(TEXT("the actor has an edit facade"), Facade)) { return false; }
+	Facade->SetPurse(&Purse);
+	ON_SCOPE_EXIT { Facade->SetPurse(nullptr); };
+
+	const TArray<FVector2D> B = { {0,0}, {5000,0}, {5000,3950}, {0,3950} };
+	const TArray<FVector2D> Tiny = { {0,0}, {100,0}, {100,100}, {0,100} };
+
+	// A SITE REFUSAL WITH NOTHING TO PRICE: a 1 m box reads as no letter, so the money half is
+	// silent and the whole is the site's word, whatever is in the purse.
+	Purse.Funds = 0.0;
+	const FString TinySite = Facade->WhyStandSiteRefused(Tiny);
+	TestTrue(TEXT("a 1 m box is refused by the site half"), !TinySite.IsEmpty());
+	TestEqual(TEXT("the money half has nothing to price on it"),
+		Facade->WhyStandUnaffordable(Tiny, EPavement::Grass), FString());
+	TestEqual(TEXT("and the whole is the site's word"),
+		Facade->WhyStandRefused(Tiny, EPavement::Grass), TinySite);
+
+	// GROUND THAT TAKES A STAND, MONEY SHORT: the whole is the money half's word.
+	TestEqual(TEXT("an empty network takes a stand box: the site half is clear"),
+		Facade->WhyStandSiteRefused(B), FString());
+	const FString Poor = Facade->WhyStandUnaffordable(B, EPavement::Grass);
+	TestTrue(TEXT("the money half says it cannot afford it"), Poor.Contains(TEXT("afford")));
+	TestEqual(TEXT("and the whole is that"), Facade->WhyStandRefused(B, EPavement::Grass), Poor);
+
+	// BOTH CLEAR.
+	Purse.Funds = 1.0e12;
+	TestEqual(TEXT("funded: the money half is clear"), Facade->WhyStandUnaffordable(B, EPavement::Grass), FString());
+	TestEqual(TEXT("funded: the whole is clear"), Facade->WhyStandRefused(B, EPavement::Grass), FString());
+
+	// SITE OUTRANKS MONEY: a refused site is never priced, exactly the order the one function had.
+	// The purse is empty again, so the money half WOULD refuse - and the whole must not say so.
+	if (!TestTrue(TEXT("a first stand is placed"),
+		Facade->PlaceStandInPlot(B, B[0], B[1], EPavement::Grass) != INDEX_NONE)) { return false; }
+	Purse.Funds = 0.0;
+	const FString Overlap = Facade->WhyStandSiteRefused(B);
+	TestTrue(TEXT("the same box now overlaps the first stand"), Overlap.Contains(TEXT("overlaps")));
+	TestTrue(TEXT("and the money half alone would still refuse"),
+		Facade->WhyStandUnaffordable(B, EPavement::Grass).Contains(TEXT("afford")));
+	TestEqual(TEXT("but the whole names the overlap, the site's word first"),
+		Facade->WhyStandRefused(B, EPavement::Grass), Overlap);
+	return true;
+}
+
+/**
+ * THE EDIT EPOCH MOVES ON EVERY EDIT DOOR AND ON NOTHING ELSE (issue #439). A memo of an answer
+ * that reads the model keys on it, so a door it missed is a stale answer: measured across the
+ * doors a stand's site refusal can be invalidated by - a node, a stand placed, a stand removed,
+ * an undo, a rebuild batch, a clear - and a read-only query, which must not move it.
+ *
+ * AND WHY URoadNetwork::GetEditRevision IS NOT THE COUNTER (the header says so; this measures it):
+ * a stand placed into an outline does not move it, so a memo keyed on it would keep the "" it
+ * memoised before the stand arrived.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEditEpochMovesOnEveryEditDoorTest,
+	"Airside.Present.EditEpoch.MovesOnEveryEditDoor",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEditEpochMovesOnEveryEditDoorTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotPlacementTest;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	if (!TestNotNull(TEXT("the actor has an edit facade"), Facade)) { return false; }
+	IRoadEditTarget* Target = Actor;
+
+	const TArray<FVector2D> B = { {0,0}, {5000,0}, {5000,3950}, {0,3950} };
+	const uint32 Start = Target->GetEditEpoch();
+	uint32 Last = Start;
+	const auto MovedBy = [&](const TCHAR* Door)
+	{
+		const uint32 Now = Target->GetEditEpoch();
+		TestTrue(FString::Printf(TEXT("%s moves the epoch"), Door), Now != Last);
+		Last = Now;
+	};
+
+	// A QUERY IS NOT AN EDIT.
+	Target->WhyStandRefused(B, EPavement::Grass);
+	Target->WhyStandSiteRefused(B);
+	TestEqual(TEXT("asking a refusal moves nothing"), Target->GetEditEpoch(), Last);
+
+	Target->PlaceNode(FVector2D(0.0, -8000.0));
+	MovedBy(TEXT("a node placed"));
+
+	// THE DOOR EditRevision MISSES: an entity, placed and removed.
+	const uint32 RevisionBefore = Actor->Network->GetEditRevision();
+	const int32 Placed = Target->PlaceStandInPlot(B, B[0], B[1], EPavement::Grass);
+	if (!TestTrue(TEXT("a stand is placed"), Placed != INDEX_NONE)) { return false; }
+	MovedBy(TEXT("a stand placed"));
+	TestEqual(TEXT("and the network's own EditRevision did NOT - which is why it cannot key the memo"),
+		Actor->Network->GetEditRevision(), RevisionBefore);
+
+	if (!TestTrue(TEXT("the stand is removed"), Target->DeleteEntity(Placed))) { return false; }
+	MovedBy(TEXT("a stand removed"));
+	TestEqual(TEXT("and again EditRevision did not"), Actor->Network->GetEditRevision(), RevisionBefore);
+
+	if (!TestTrue(TEXT("undo steps back"), Facade->Undo())) { return false; }
+	MovedBy(TEXT("an undo"));
+
+	{
+		FRoadRebuildBatch Batch(*Actor);
+		Target->PlaceNode(FVector2D(0.0, 8000.0));
+		MovedBy(TEXT("an edit inside an open rebuild batch (the notify is folded, the model has changed)"));
+	}
+
+	Actor->ClearNetwork();
+	MovedBy(TEXT("a clear"));
+	TestTrue(TEXT("and it never came back to where it began"), Last != Start);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandPlotDemolishRefundsThePadTest,
 	"Airside.Present.StandPlot.DemolishRefundsThePad",

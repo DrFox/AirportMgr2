@@ -276,6 +276,9 @@ public:
 	virtual int32 PlaceStandInPlot(const TArray<FVector2D>& Outline,
 		FVector2D EntranceA, FVector2D EntranceB, EPavement Pavement) override;
 	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const override;
+	virtual FString WhyStandSiteRefused(TArrayView<const FVector2D> Outline) const override;
+	virtual FString WhyStandUnaffordable(TArrayView<const FVector2D> Outline, EPavement Pavement) const override;
+	virtual uint32 GetEditEpoch() const override { return EditEpoch; }
 
 	/**
 	 * See IRoadEditTarget::WhySegmentRefused. Builds the straight shape a click lays (ConnectNodes
@@ -443,8 +446,14 @@ public:
 	FString WhyUpgradeRefusedImpl(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface,
 		FBuildQuote* OutUnaffordable) const;
 
-	/** WhyStandRefused with the same out-parameter, for PlaceStandInPlot - see WhyUpgradeRefusedImpl. */
+	/** WhyStandRefused with the same out-parameter, for PlaceStandInPlot - see WhyUpgradeRefusedImpl.
+	 *  The two halves' composition and nothing more, so the tool that asks them one at a time
+	 *  (issue #439) and the commit that asks them together cannot be two evaluators. */
 	FString WhyStandRefusedImpl(TArrayView<const FVector2D> Outline, EPavement Pavement, FBuildQuote* OutUnaffordable) const;
+
+	/** WhyStandUnaffordable with the same out-parameter - see WhyStandRefusedImpl. */
+	FString WhyStandUnaffordableImpl(TArrayView<const FVector2D> Outline, EPavement Pavement,
+		FBuildQuote* OutUnaffordable) const;
 
 	// --- Undo ----------------------------------------------------------------------------
 
@@ -768,6 +777,14 @@ private:
 
 	/** How many notifies the open batch has folded, for the close's log line only. */
 	int32 FoldedNotifyCount = 0;
+
+	/**
+	 * Bumped by every NotifyChanged, batched or not - see IRoadEditTarget::GetEditEpoch. A
+	 * session clock, not saved. It is not reset by AdoptNetwork or ClearNetwork: a swap is
+	 * itself an edit, and a counter that could go back to a value it once held would let a
+	 * memo keyed on it match a network it never saw.
+	 */
+	uint32 EditEpoch = 0;
 
 	/**
 	 * Warn that Who is about to read the guideline graph while a batch has deferred the rebuild

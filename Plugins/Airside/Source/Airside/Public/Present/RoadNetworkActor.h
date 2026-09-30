@@ -612,6 +612,12 @@ public:
 	/** Forwards to the facade - see URoadEditFacade::WhyStandRefused. */
 	virtual FString WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const override;
 
+	/** Forward to the facade - see IRoadEditTarget::WhyStandSiteRefused, WhyStandUnaffordable and
+	 *  GetEditEpoch. */
+	virtual FString WhyStandSiteRefused(TArrayView<const FVector2D> Outline) const override;
+	virtual FString WhyStandUnaffordable(TArrayView<const FVector2D> Outline, EPavement Pavement) const override;
+	virtual uint32 GetEditEpoch() const override;
+
 	/** Forwards to the facade - see IRoadEditTarget::WhyPlotRefused. */
 	virtual FString WhyPlotRefused(TArrayView<const FVector2D> Outline) const override;
 

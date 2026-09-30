@@ -230,6 +230,12 @@ struct FNullEditTarget : IRoadEditTarget
 	 *  string "placeable" - the one WhyStandRefused implementer where an empty Outline is
 	 *  the normal case, not a malformed one. */
 	virtual FString WhyStandRefused(TArrayView<const FVector2D>, EPavement) const override { return TEXT("no target"); }
+	/** WhyStandRefused's two halves: the SITE half carries the refusal (it is asked first, and a
+	 *  refused site is never priced), the money half has nothing to say about ground it will not
+	 *  take. A constant epoch, because a null target has no model to edit. */
+	virtual FString WhyStandSiteRefused(TArrayView<const FVector2D>) const override { return TEXT("no target"); }
+	virtual FString WhyStandUnaffordable(TArrayView<const FVector2D>, EPavement) const override { return FString(); }
+	virtual uint32 GetEditEpoch() const override { return 0; }
 	/** ALLOWED, unlike WhyStandRefused above: a null target has no network, so no strip to be
 	 *  inside, and the road fakes built on this (TaxiwayWidthTest's FFakeWidthTarget) record a
 	 *  click's ConnectNodes - a refusal here would stop the click before it reached them. */

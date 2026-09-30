@@ -1133,6 +1133,21 @@ FString ARoadNetworkActor::WhyStandRefused(TArrayView<const FVector2D> Outline, 
 	return Facade->WhyStandRefused(Outline, Pavement);
 }
 
+FString ARoadNetworkActor::WhyStandSiteRefused(TArrayView<const FVector2D> Outline) const
+{
+	return Facade->WhyStandSiteRefused(Outline);
+}
+
+FString ARoadNetworkActor::WhyStandUnaffordable(TArrayView<const FVector2D> Outline, EPavement Pavement) const
+{
+	return Facade->WhyStandUnaffordable(Outline, Pavement);
+}
+
+uint32 ARoadNetworkActor::GetEditEpoch() const
+{
+	return Facade->GetEditEpoch();
+}
+
 bool ARoadNetworkActor::DeleteEntity(int32 EntityIndex)
 {
 	return Facade->DeleteEntity(EntityIndex);

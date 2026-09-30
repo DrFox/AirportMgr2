@@ -10,6 +10,7 @@
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "InputCoreTypes.h"
+#include "Model/BuildPurse.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
@@ -19,6 +20,7 @@
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Present/AirsideTraffic.h"
+#include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/IcaoCode.h"
@@ -1594,11 +1596,39 @@ bool FStandPlotSurfaceRowPlacesItsPavementTest::RunTest(const FString& Parameter
 	return true;
 }
 
+// NAMED, NOT ANONYMOUS - see the fixture namespace at the top of this file.
+namespace StandPlotToolFixture
+{
+	/**
+	 * A purse whose balance the test moves BETWEEN readouts - the landing fees that arrive while
+	 * a stand sits in Confirm. Declared BEFORE the world in each test, so it outlives the
+	 * facade that holds a raw pointer to it.
+	 */
+	struct FMovableFundsPurse : IBuildPurse
+	{
+		double Funds = 0.0;
+
+		virtual bool CanAfford(const FBuildQuote& Quote) const override { return Quote.BaseAmount() <= Funds; }
+		virtual int32 Charge(const FBuildQuote& Quote) override { Funds -= Quote.BaseAmount(); return 1; }
+		virtual void Reverse(int32) override {}
+		virtual void Credit(const FBuildQuote& Quote) override { Funds += Quote.BaseAmount(); }
+		virtual FText Describe(const FBuildQuote& Quote) const override { return FText::AsNumber(Quote.BaseAmount()); }
+	};
+
+	bool SaysAnything(const FToolReadout& Readout, const TCHAR* Fragment)
+	{
+		return Readout.Warnings.ContainsByPredicate(
+			[Fragment](const FString& Warning) { return Warning.Contains(Fragment); });
+	}
+}
+
 /**
- * THE REFUSAL MEMO KEYS ON THE PAVEMENT (brief Step 6): the same locked rectangle asked again
- * after a Surface pick must reach the facade again, or a row change would leave the readout
- * showing the previous pavement's "cannot afford". Counted through GetRefusalCountForTest, the
- * probe StagedPlotToolTest already counts the memo by.
+ * A SURFACE PICK RE-PRICES THE LOCKED RECTANGLE WITHOUT RE-ASKING ITS GROUND (brief Step 6, as
+ * changed by issue #439): the pavement is priced by the money half, which is asked fresh, so a
+ * row change cannot leave the readout showing the previous pavement's "cannot afford". No site
+ * gate reads the pavement, so the site half is NOT re-asked - counted through
+ * GetRefusalCountForTest, the probe StagedPlotToolTest counts the memo by. The name is the old
+ * one, kept because RefusalFor's own comment names it: what is re-asked is the refusal's money half.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandPlotSurfaceChangeReasksRefusalTest,
@@ -1606,6 +1636,151 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FStandPlotSurfaceChangeReasksRefusalTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FMovableFundsPurse Purse;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	if (!TestNotNull(TEXT("the actor has an edit facade"), Facade)) { return false; }
+	Facade->SetPurse(&Purse);
+	ON_SCOPE_EXIT { Facade->SetPurse(nullptr); };
+
+	const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(EIcaoCode::C));
+	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+	FStandPlotTool Tool;
+	if (!TestTrue(TEXT("a Code C stand reaches Confirm"), DrawStand(Tool, Actor, Width, Depth))) { return false; }
+	const FToolContext Frame = At(Actor, AnchorCursor);
+
+	// EXACTLY ENOUGH FOR GRASS, which is what a fresh tool paves with (2026-09-28) - so tarmac,
+	// dearer, is the pick that must flip the readout, and back again.
+	TArray<FVector2D> Outline;
+	Tool.Rect(Frame, Outline);
+	const TOptional<EIcaoCode> Letter = StandBox::LetterOf(Outline);
+	if (!TestTrue(TEXT("the drawn box reads as a letter"), Letter.IsSet())) { return false; }
+	const UEntityDefinition* Definition = Actor->ResolveStandDefinitionFor(*Letter);
+	if (!TestNotNull(TEXT("that letter's definition resolves"), Definition)) { return false; }
+	const double GrassPrice = Facade->QuoteStand(*Definition, Outline, EPavement::Grass).BaseAmount();
+	const double TarmacPrice = Facade->QuoteStand(*Definition, Outline, EPavement::Tarmac).BaseAmount();
+	if (!TestTrue(TEXT("the premise: grass is cheaper than tarmac, or the flip below proves nothing"),
+		GrassPrice < TarmacPrice)) { return false; }
+	Purse.Funds = GrassPrice;
+
+	TestTrue(TEXT("grass is affordable"), ReadoutOf(Tool, Frame).bCommittable);
+	const int32 AfterFirst = Tool.GetRefusalCountForTest();
+	ReadoutOf(Tool, Frame);
+	TestEqual(TEXT("the control: the same shape is answered from the memo"),
+		Tool.GetRefusalCountForTest(), AfterFirst);
+
+	// TARMAC: a NEW pavement the purse cannot pay for.
+	Tool.SelectVariant(Frame, 0, Pavement::Offered({}).IndexOfByKey(EPavement::Tarmac));
+	const FToolReadout OnTarmac = ReadoutOf(Tool, Frame);
+	TestFalse(TEXT("the same shape on the dearer pavement is not committable"), OnTarmac.bCommittable);
+	TestTrue(TEXT("and it says it cannot afford it"), SaysAnything(OnTarmac, TEXT("afford")));
+	TestEqual(TEXT("the pavement moved, the ground did not: the site half is not re-asked"),
+		Tool.GetRefusalCountForTest(), AfterFirst);
+
+	Tool.SelectVariant(Frame, 0, Pavement::Offered({}).IndexOfByKey(EPavement::Grass));
+	TestTrue(TEXT("back on grass it lights again"), ReadoutOf(Tool, Frame).bCommittable);
+	return true;
+}
+
+/**
+ * THE BUILD BUTTON FOLLOWS THE PURSE (issue #439). A stand drawn ahead of the money reaches
+ * Confirm greyed with "cannot afford"; when the landing fees arrive the NEXT readout must
+ * light Build - the refusal memo used to key on the outline and pavement alone, so the
+ * locked shape kept answering "cannot afford" until the player redrew it. Measured through
+ * the readout the Build button reads (BuildActions' edit.build), and back down again, since a
+ * memoised "" would be stale in the other direction.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotConfirmReadoutFollowsThePurseTest,
+	"Airside.Tool.StandPlot.ConfirmReadoutFollowsThePurse",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotConfirmReadoutFollowsThePurseTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FMovableFundsPurse Purse;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	if (!TestNotNull(TEXT("the actor has an edit facade"), Facade)) { return false; }
+	Facade->SetPurse(&Purse);
+	ON_SCOPE_EXIT { Facade->SetPurse(nullptr); };
+
+	const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(EIcaoCode::C));
+	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+	FStandPlotTool Tool;
+	if (!TestTrue(TEXT("a Code C stand reaches Confirm"), DrawStand(Tool, Actor, Width, Depth))) { return false; }
+	const FToolContext Frame = At(Actor, AnchorCursor);
+
+	// WHAT THIS BOX COSTS on the tool's own pavement, read from the facade's one quote rather
+	// than typed, so the exact-funds edges below track the price table.
+	TArray<FVector2D> Outline;
+	Tool.Rect(Frame, Outline);
+	const TOptional<EIcaoCode> Letter = StandBox::LetterOf(Outline);
+	if (!TestTrue(TEXT("the drawn box reads as a letter"), Letter.IsSet())) { return false; }
+	const UEntityDefinition* Definition = Actor->ResolveStandDefinitionFor(*Letter);
+	if (!TestNotNull(TEXT("that letter's definition resolves"), Definition)) { return false; }
+	const double Price = Facade->QuoteStand(*Definition, Outline, EPavement::Grass).BaseAmount();
+	if (!TestTrue(TEXT("the premise: a stand costs something, or an empty purse proves nothing"),
+		Price > 0.0)) { return false; }
+
+	// SHORT: drawn ahead of the money.
+	Purse.Funds = 0.0;
+	const FToolReadout Short = ReadoutOf(Tool, Frame);
+	TestFalse(TEXT("purse short: Build is not committable"), Short.bCommittable);
+	TestTrue(TEXT("purse short: the readout says why"), SaysAnything(Short, TEXT("afford")));
+	TestTrue(TEXT("in the facade's own words: the tool's pair of halves is the commit's one evaluator"),
+		Short.Warnings.Contains(Actor->WhyStandRefused(Outline, EPavement::Grass)));
+	const int32 SiteAsks = Tool.GetRefusalCountForTest();
+
+	// CREDITED, exactly the price - the edge, not a comfortable surplus.
+	Purse.Funds = Price;
+	const FToolReadout Funded = ReadoutOf(Tool, Frame);
+	TestTrue(TEXT("purse credited: the NEXT readout is committable"), Funded.bCommittable);
+	TestFalse(TEXT("purse credited: no refusal is left on the readout"), SaysAnything(Funded, TEXT("afford")));
+
+	// AND BACK DOWN: the balance moves both ways, so a memoised "" would be stale too.
+	Purse.Funds = Price - 1.0;
+	TestFalse(TEXT("purse drained again: Build is not committable"), ReadoutOf(Tool, Frame).bCommittable);
+
+	// THE SPLIT'S POINT: the money moved, the ground did not, so the geometry half - the
+	// expensive one - is still answered from its memo. Only the quote and the compare are fresh.
+	TestEqual(TEXT("a purse change does not re-ask the site half"), Tool.GetRefusalCountForTest(), SiteAsks);
+
+	// THE COMMIT AGREES with the readout that lit it.
+	Purse.Funds = Price;
+	if (!TestTrue(TEXT("committable before the click"), ReadoutOf(Tool, Frame).bCommittable)) { return false; }
+	Tool.OnCommit(Frame);
+	TestEqual(TEXT("Build placed the stand"), LiveStands(Actor), 1);
+	TestEqual(TEXT("and charged it, to the unit"), Purse.Funds, 0.0, 1e-6);
+	return true;
+}
+
+/**
+ * THE MEMOISED "" DOES NOT SURVIVE A STAND PLACED INTO THE OUTLINE (issue #439's reverse case).
+ * The site refusal reads the network - overlaps, taxiways, the clearance strip - so a locked
+ * shape must re-ask once the network has moved under it, or Build stays lit over a stand the
+ * commit will refuse and lands in the "should be unreachable" bLastCommitRefused branch.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotConfirmReadoutSeesAStandPlacedIntoTheOutlineTest,
+	"Airside.Tool.StandPlot.ConfirmReadoutSeesAStandPlacedIntoTheOutline",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotConfirmReadoutSeesAStandPlacedIntoTheOutlineTest::RunTest(const FString& Parameters)
 {
 	using namespace StandPlotToolFixture;
 
@@ -1619,18 +1794,87 @@ bool FStandPlotSurfaceChangeReasksRefusalTest::RunTest(const FString& Parameters
 	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
 	FStandPlotTool Tool;
 	if (!TestTrue(TEXT("a Code C stand reaches Confirm"), DrawStand(Tool, Actor, Width, Depth))) { return false; }
+	const FToolContext Frame = At(Actor, AnchorCursor);
 
-	ReadoutOf(Tool, At(Actor, AnchorCursor));
-	const int32 AfterFirst = Tool.GetRefusalCountForTest();
-	ReadoutOf(Tool, At(Actor, AnchorCursor));
-	TestEqual(TEXT("the control: the same shape and pavement is answered from the memo"),
-		Tool.GetRefusalCountForTest(), AfterFirst);
+	const FToolReadout Clear = ReadoutOf(Tool, Frame);
+	if (!TestTrue(TEXT("the control: nothing is in the way, so Build is committable"), Clear.bCommittable))
+	{
+		return false;
+	}
 
-	// TARMAC: a NEW pavement - grass is what a fresh tool already has (2026-09-28).
-	Tool.SelectVariant(At(Actor, AnchorCursor), 0, Pavement::Offered({}).IndexOfByKey(EPavement::Tarmac));
-	ReadoutOf(Tool, At(Actor, AnchorCursor));
-	TestEqual(TEXT("the same shape on a new pavement is asked again"),
-		Tool.GetRefusalCountForTest(), AfterFirst + 1);
+	// SOMEONE ELSE'S STAND lands on the very ground the pinned shape covers - placed the way
+	// the commit places one, through the target, so this is the facade's own edit door.
+	TArray<FVector2D> Outline;
+	Tool.Rect(Frame, Outline);
+	IRoadEditTarget* Target = Actor;
+	if (!TestTrue(TEXT("the intruding stand is placed"),
+		Target->PlaceStandInPlot(Outline, Outline[0], Outline[1], EPavement::Grass) != INDEX_NONE))
+	{
+		return false;
+	}
+
+	const FToolReadout Blocked = ReadoutOf(Tool, Frame);
+	TestFalse(TEXT("the next readout is not committable"), Blocked.bCommittable);
+	TestTrue(TEXT("and it names the overlap"), SaysAnything(Blocked, TEXT("overlaps")));
+	TestTrue(TEXT("in the facade's own words"),
+		Blocked.Warnings.Contains(Actor->WhyStandRefused(Outline, EPavement::Grass)));
+	return true;
+}
+
+/**
+ * EVERY WAY OUT OF A SHAPE DROPS WHAT WAS MEMOISED ABOUT IT (issue #439): a cancel, a deactivate
+ * and a commit each reset the site memo, so a later gesture that reproduces the same outline (grid
+ * snap makes that likely) is asked afresh instead of answered with the last gesture's payload. The
+ * memo is measured directly (HasRefusalMemoForTest) rather than by counting asks, because a count
+ * cannot say WHICH boundary did it - the click that starts the next gesture follows most of them.
+ * Goes red if FStagedPlotTool::OnGestureBoundary is unwired at any one of the three.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandPlotGestureBoundariesDropTheRefusalMemoTest,
+	"Airside.Tool.StandPlot.GestureBoundariesDropTheRefusalMemo",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandPlotGestureBoundariesDropTheRefusalMemoTest::RunTest(const FString& Parameters)
+{
+	using namespace StandPlotToolFixture;
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	TaxiwayWorld(Actor);
+
+	const double Width = ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(EIcaoCode::C));
+	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+	const FToolContext Frame = At(Actor, AnchorCursor);
+	FStandPlotTool Tool;
+
+	TestFalse(TEXT("a fresh tool remembers nothing"), Tool.HasRefusalMemoForTest());
+
+	// DEACTIVATE.
+	if (!TestTrue(TEXT("Confirm, first gesture"), DrawStand(Tool, Actor, Width, Depth))) { return false; }
+	ReadoutOf(Tool, Frame);
+	if (!TestTrue(TEXT("the control: a readout in Confirm leaves an answer memoised"),
+		Tool.HasRefusalMemoForTest())) { return false; }
+	Tool.OnDeactivate(Frame);
+	TestFalse(TEXT("a deactivate drops it"), Tool.HasRefusalMemoForTest());
+
+	// CANCEL: one step back, the shape still half there - and the same outline can be re-pinned.
+	if (!TestTrue(TEXT("Confirm, second gesture"), DrawStand(Tool, Actor, Width, Depth))) { return false; }
+	ReadoutOf(Tool, Frame);
+	if (!TestTrue(TEXT("the control again"), Tool.HasRefusalMemoForTest())) { return false; }
+	Tool.OnCancel(Frame);
+	TestFalse(TEXT("a cancel drops it"), Tool.HasRefusalMemoForTest());
+
+	// COMMIT: back to the same outline, built.
+	const FVector2D Anchor = PinnedAnchor(Tool, Actor);
+	Tool.OnClick(At(Actor, Anchor + FVector2D(Width, Depth)));
+	if (!TestTrue(TEXT("Confirm again after the cancel"), Tool.GetStage() == EStandStage::Confirm)) { return false; }
+	ReadoutOf(Tool, Frame);
+	if (!TestTrue(TEXT("the control, third time"), Tool.HasRefusalMemoForTest())) { return false; }
+	Tool.OnCommit(Frame);
+	if (!TestEqual(TEXT("the commit built it"), LiveStands(Actor), 1)) { return false; }
+	TestFalse(TEXT("a commit drops it"), Tool.HasRefusalMemoForTest());
 	return true;
 }
 
