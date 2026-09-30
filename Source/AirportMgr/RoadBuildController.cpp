@@ -94,8 +94,9 @@ void ARoadBuildController::BeginPlay()
 	// would otherwise be invisible in play and present in the editor.
 	Buildings = AAirsideBuildingsActor::FindOrCreate(GetWorld(), Target);
 
-	// See HasRunway's own comment: the cache this subscribes to invalidate is issue #187.
-	BindRunwayCacheInvalidation();
+	// See HasRunway's own comment: the cache this subscribes to invalidate is issue #187; the
+	// replaced-network listener beside it is #426's.
+	BindFacadeListeners();
 
 	// Session is constructed from ToolRegistry() already - see FBuildSession's constructor.
 	// There is no second list here to fall out of step with it: the mismatch this project
@@ -1112,7 +1113,7 @@ bool ARoadBuildController::HasRunway() const
 	return bRunwayCache;
 }
 
-void ARoadBuildController::BindRunwayCacheInvalidation()
+void ARoadBuildController::BindFacadeListeners()
 {
 	// A fresh Target's runway state has not been read yet, whatever the old one's cache said -
 	// invalidated unconditionally, even when Target is null (HasRunway's own null check then
@@ -1128,10 +1129,18 @@ void ARoadBuildController::BindRunwayCacheInvalidation()
 		// per notify.
 		return;
 	}
+	// THE OLD TARGET LETS GO OF THIS DRIVER (#426): its OnReplaced must not put down a tool that
+	// now works on a different airport. RemoveAll(this) takes both bindings and nothing else's.
+	if (URoadEditFacade* Old = BoundRunwayCacheFacade.Get())
+	{
+		Old->OnChanged.RemoveAll(this);
+		Old->OnReplaced.RemoveAll(this);
+	}
 	BoundRunwayCacheFacade = Facade;
 	if (Facade != nullptr)
 	{
 		Facade->OnChanged.AddUObject(this, &ARoadBuildController::OnNetworkChangedInvalidateRunwayCache);
+		Facade->OnReplaced.AddUObject(this, &ARoadBuildController::OnNetworkReplaced);
 	}
 }
 
@@ -1140,6 +1149,21 @@ void ARoadBuildController::OnNetworkChangedInvalidateRunwayCache(EChangeKind Kin
 	if (Kind == EChangeKind::Topology)
 	{
 		bRunwayCacheValid = false;
+	}
+}
+
+void ARoadBuildController::OnNetworkReplaced(ENetworkReplace Phase)
+{
+	// The tool may be part-way through something built on a graph that no longer exists - or,
+	// on Discarding, a graph about to be discarded, which is the last moment its cancel can act
+	// on the nodes it means. See FBuildSession::OnNetworkReplaced for what each phase retires.
+	Session.OnNetworkReplaced(MakeToolContext(), Phase);
+	if (Phase == ENetworkReplace::Adopted)
+	{
+		// The deactivate abandons the tool's stage, and the readout described the replaced
+		// network - see InvalidateToolReadoutCache.
+		InvalidateToolReadoutCache();
+		UE_LOG(LogRoadBuild, Log, TEXT("Network replaced: tool put down, readout and frame caches retired"));
 	}
 }
 
@@ -1329,14 +1353,11 @@ void ARoadBuildController::OnUndo()
 		return;
 	}
 
-	// The tool may be part-way through something built on a graph that no longer exists.
-	if (IBuildTool* Tool = GetActiveTool())
-	{
-		Tool->OnDeactivate(MakeToolContext());
-	}
-
-	// The deactivate above abandons the tool's stage - see InvalidateToolReadoutCache.
-	InvalidateToolReadoutCache();
+	// NO DEACTIVATE HERE ANY MORE (#426): the tool may be part-way through something built on a
+	// graph that no longer exists, but the facade announces that itself (OnReplaced), and
+	// OnNetworkReplaced answers it - for this undo and for one from anywhere else, which this
+	// hand-paired call never covered (the settings dialog's Revert undoes straight on the actor).
+	// ENFORCED BY: AirportMgr.Actions.UndoFromAnywhereRetiresTheTool
 
 	UE_LOG(LogRoadBuild, Log, TEXT("Undid: %s"), *Label);
 }
@@ -1355,13 +1376,8 @@ void ARoadBuildController::OnRedo()
 		return;
 	}
 
-	if (IBuildTool* Tool = GetActiveTool())
-	{
-		Tool->OnDeactivate(MakeToolContext());
-	}
-
-	// The deactivate above abandons the tool's stage - see InvalidateToolReadoutCache.
-	InvalidateToolReadoutCache();
+	// The tool and the readout are put down by OnNetworkReplaced - see OnUndo, and the
+	// facade's OnReplaced for why a redo is announced as a replacement.
 }
 
 void ARoadBuildController::OnPrimaryPressed()
@@ -1639,17 +1655,15 @@ void ARoadBuildController::OnClearNetwork()
 		return;
 	}
 
-	// The tool may be holding a node from the graph about to be discarded.
-	if (IBuildTool* Tool = GetActiveTool())
-	{
-		Tool->OnDeactivate(MakeToolContext());
-	}
-
+	// The tool may be holding a node from the graph about to be discarded - the facade's
+	// ClearNetwork announces Discarding before it clears, and OnNetworkReplaced puts the tool
+	// down against the old graph, as this line used to by hand (#426).
+	// ENFORCED BY: Airside.Present.ReplacementIsAnnounced (the phases), AirportMgr.Actions.LoadRetiresTheToolAndCaches
 	Target->ClearNetwork();
 	UE_LOG(LogRoadBuild, Log, TEXT("Network cleared."));
 
-	// The network the last readout described no longer exists - see InvalidateToolReadoutCache.
-	InvalidateToolReadoutCache();
+	// The network the last readout described no longer exists - retired by OnNetworkReplaced on
+	// the Adopted phase, which also covers a clear from Blueprint.
 }
 
 // --- Sim clock and quick save ---------------------------------------------------------------

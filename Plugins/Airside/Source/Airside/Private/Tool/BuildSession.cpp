@@ -606,4 +606,25 @@ void FBuildSession::CancelActiveGesture(const FToolContext& Context)
 	}
 }
 
+void FBuildSession::OnNetworkReplaced(const FToolContext& Context, ENetworkReplace Phase)
+{
+	// THE TOOL LETS GO IN BOTH PHASES - see the header: idempotent across a Discarding/Adopted
+	// pair, and the only phase an undo sends is Adopted. The tool stays SELECTED: a replacement
+	// changes the graph under it, not which tool the player picked.
+	if (IBuildTool* Tool = GetActiveTool())
+	{
+		Tool->OnDeactivate(Context);
+	}
+	if (Phase == ENetworkReplace::Discarding)
+	{
+		// EVERY SELECTION KIND IS AN INDEX OR AN AGENT ID (FSelection), and neither survives a
+		// network with no history in common with this one - see the header.
+		Selection.Clear();
+		return;
+	}
+	// OnDeactivate abandons the tool's stage, and the network under every cached context just
+	// changed - neither is visible to GetFrameContext's key (CancelActiveGesture's reason).
+	InvalidateFrameContextCache();
+}
+
 #undef LOCTEXT_NAMESPACE

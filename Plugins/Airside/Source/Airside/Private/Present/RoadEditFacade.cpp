@@ -410,6 +410,44 @@ bool URoadEditFacade::RollBackOpenEdit(URoadEditHistory* Use)
 	return true;
 }
 
+void URoadEditFacade::AnnounceReplaced(ENetworkReplace Phase)
+{
+	// Logged, so "did the drivers hear that the airport was replaced" is one grep - the question
+	// #426 was, for a load, answered by reading five call sites.
+	UE_LOG(LogRoadMesh, Log, TEXT("Network replaced: %s"),
+		Phase == ENetworkReplace::Discarding ? TEXT("discarding the live graph") : TEXT("replacement adopted"));
+	OnReplaced.Broadcast(Phase);
+}
+
+bool URoadEditFacade::RestoreInPlace(TFunctionRef<bool(URoadNetwork&)> Deserialise)
+{
+	ARoadNetworkActor& Owner = Actor();
+	if (Owner.Network == nullptr)
+	{
+		// NOTHING TO RESTORE INTO, and nothing announced: no replacement happened. A caller that
+		// wants a load to make a network makes one first (AirportOps' LoadFromSlot refuses).
+		UE_LOG(LogRoadMesh, Warning, TEXT("RestoreInPlace refused: no live network to restore into"));
+		return false;
+	}
+
+	// THE ORDER IS THE HEADER'S, step for step - see RestoreInPlace there for why each is where it is.
+	AnnounceReplaced(ENetworkReplace::Discarding);
+	const bool bRestored = Deserialise(*Owner.Network);
+	if (bRestored)
+	{
+		Owner.RepairLoadedNetwork();
+		// THROUGH THE FACADE'S OWN DOOR (issue #191) - the undo stack is this class's to manage.
+		ClearHistory();
+	}
+	else
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("RestoreInPlace: the restore failed - rebuilding what the network holds, history kept"));
+	}
+	AdoptNetwork(*Owner.Network);
+	AnnounceReplaced(ENetworkReplace::Adopted);
+	return bRestored;
+}
+
 bool URoadEditFacade::ApplyInteractiveMutation(const TCHAR* Label,
 	TFunctionRef<bool(URoadNetwork&)> Mutate, bool bChangesGraphShape,
 	TFunctionRef<bool(const URoadNetwork&)> Verify)

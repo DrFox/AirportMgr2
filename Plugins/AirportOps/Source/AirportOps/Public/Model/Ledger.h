@@ -171,8 +171,18 @@ public:
 	 * nothing had happened would be the expensive kind of correct. The same idiom
 	 * URoadNetwork::GetGuidelineRevision uses, and for the same reason: the cheapest question
 	 * a poller can ask is "has anything changed since the number I remember".
+	 *
+	 * AND BY EVERY LOAD (Serialize, issue #426): a load restores the rows and the balance with no Post, so the bar and
+	 * the ledger panel - both gated on this - showed the pre-load money until the next fee.
 	 */
 	int32 Revision() const { return RevisionCount; }
+
+	/**
+	 * A RESTORE IS A CHANGE: the tagged pass, then RevisionCount bumped on a load - UJobBoard::Serialize's idiom, and
+	 * for its reason: OpsSave::DeserializeObject restores this object without any other hook a view could notice.
+	 * ENFORCED BY: AirportOps.Model.Save.RestoreMovesTheRevisions, Check-Architecture rule 41 (persistent-revision-bumps-on-load)
+	 */
+	virtual void Serialize(FArchive& Ar) override;
 
 	const TArray<FLedgerEntry>& Entries() const { return Rows; }
 

@@ -3,6 +3,7 @@
 #include "LedgerViewModels.h"
 #include "Misc/AutomationTest.h"
 #include "Model/Ledger.h"
+#include "Model/OpsSave.h"
 #include "Model/Pricing.h"
 #include "Model/SimClock.h"
 
@@ -92,6 +93,18 @@ bool FLedgerPanelGateTest::RunTest(const FString& Parameters)
 	Fixture.Ledger->MaxDays = 0;
 	Fixture.Ledger->RollUp(100000.0);
 	TestTrue(TEXT("and so does a roll-up"), Fixture.Refresh());
+
+	// AND SO DOES A LOAD (#426). A save game restores the rows and the balance INTO this ledger with no Post, so the
+	// gate used to stay shut: the panel - and the bar, gated the same way - showed the money of the session just
+	// replaced until the next fee. The bytes go through OpsSave, as the ledger's own blob does.
+	TArray<uint8> Saved;
+	OpsSave::SerializeObject(*Fixture.Ledger, Saved);
+	const FString SavedBalance = Fixture.Pricing->Format(Fixture.Ledger->Balance()).ToString();
+	Fixture.Ledger->Post(100000.0, ELedgerCategory::LandingFee, 900.0, FText::FromString(TEXT("After the save")));
+	Fixture.Refresh();
+	OpsSave::DeserializeObject(*Fixture.Ledger, Saved);
+	TestTrue(TEXT("a load opens the gate"), Fixture.Refresh());
+	TestEqual(TEXT("and the balance shown is the loaded one"), Fixture.Panel->GetBalance().ToString(), SavedBalance);
 	return true;
 }
 

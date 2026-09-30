@@ -102,21 +102,10 @@ void UFlightBoard::Serialize(FArchive& Ar)
 		return;
 	}
 
-	// RETIRED, NOT MERELY DROPPED: a viewmodel row, the inspector's cached lookup, a test's local - anything still
-	// holding a flight this load replaces - must read null from here on, not the pre-load state, which is exactly the
-	// wrong answer #425 was (a same-session load "restored" each flight as it was NOW). Garbage makes every weak
-	// pointer to it null at once; the object itself lives until the next collection, so a raw pointer is not dangling.
-	for (TArray<TObjectPtr<UFlight>>* List : { &Flights, &History })
-	{
-		for (const TObjectPtr<UFlight>& Each : *List)
-		{
-			if (Each != nullptr)
-			{
-				Each->MarkAsGarbage();
-			}
-		}
-		List->Reset();
-	}
+	// RETIRED, NOT MERELY DROPPED - see RetireEveryFlight. OnBeforeRestore has already done it under OpsSave::Restore;
+	// here as well because a board deserialised directly (OpsSave::DeserializeObject, as FlightSaveTest does) gets no
+	// OnBeforeRestore, and a second retire of an empty board costs nothing.
+	RetireEveryFlight();
 
 	if (Ar.AtEnd())
 	{
@@ -363,8 +352,8 @@ void UFlightBoard::Enqueue(UFlight& Flight, double Since)
 		Flight.Id, *Flight.Callsign, Queue().Find(&Flight) + 1);
 	++RevisionCount;
 	// THE QUEUE PASS'S WAKE-UP (ops batch 3 §5): the queue is no longer ticked every frame, so a flight joining it
-	// says so. Here, the one site every Inbound flight passes through while the game runs; a load's re-queue is
-	// covered by the load's MarkAllDirty instead.
+	// says so. Here, the one site every Inbound flight passes through - while the game runs, and since #426 a load's
+	// re-queue too (DemoteRestoredMidFlight), which the load's MarkAllDirty used to be the only thing to wake.
 	// ENFORCED BY: AirportOps.Model.FlightBoard.EnqueuePublishesInbound
 	if (Bus != nullptr)
 	{
@@ -711,6 +700,71 @@ EArrivalRefusal UFlightBoard::AcceptImmediate(UGroundTraffic& Traffic, const URo
 	return WhyNotAcceptable(Traffic, Network, *Flight);
 }
 
+int32 UFlightBoard::RetireEveryFlight()
+{
+	// RETIRED, NOT MERELY DROPPED: a viewmodel row, the inspector's cached lookup, a test's local - anything still
+	// holding a flight this load replaces - must read null from here on, not the pre-load state, which is exactly the
+	// wrong answer #425 was (a same-session load "restored" each flight as it was NOW). Garbage makes every weak
+	// pointer to it null at once; the object itself lives until the next collection, so a raw pointer is not dangling.
+	int32 Retired = 0;
+	for (TArray<TObjectPtr<UFlight>>* List : { &Flights, &History })
+	{
+		for (const TObjectPtr<UFlight>& Each : *List)
+		{
+			if (Each != nullptr)
+			{
+				Each->MarkAsGarbage();
+				++Retired;
+			}
+		}
+		List->Reset();
+	}
+	return Retired;
+}
+
+void UFlightBoard::OnBeforeRestore()
+{
+	// WHATEVER THE SNAPSHOT HOLDS (#426 (b)) - see the header. The indices named the retired flights, and a restore
+	// is a change: every viewmodel keyed on Revision re-reads, which is what empties an inbox the snapshot has no
+	// flights for. Serialize repeats all three when there IS a blob, on the flights that blob brings.
+	const int32 Retired = RetireEveryFlight();
+	RebuildIndices();
+	++RevisionCount;
+	if (Retired > 0)
+	{
+		UE_LOG(LogAirportOps, Log, TEXT("Restore: %d flight(s) of the replaced session retired"), Retired);
+	}
+}
+
+void UFlightBoard::RestoreAfterLoad(UGroundTraffic& Traffic, const URoadNetwork& Network, USimClock& Clock,
+	bool bAirportAdmits)
+{
+	// THE ORDER IS THE HEADER'S, step for step - see RestoreAfterLoad there for why each is where it is.
+	// 1. BESIDE ITS CAUSE (review ruling M5): the load's ClearAgents threw away every aeroplane, so a flight saved
+	// landing or taxiing in goes round again and one on the ground retires as departed - dated by the LOADED clock.
+	const TArray<UFlight*> Requeued = DemoteRestoredMidFlight(Clock.Now());
+
+	// 2. THE ONE THING A LOAD DOES HAVE TO CANCEL (review ruling I2): the flights step 1 put back in the queue were on
+	// the ground when the closure happened, so the closure left them - and at an airport that is not open they can
+	// never land again. AND EVERY OTHER FLIGHT STILL TO ARRIVE (whole-stack review I1): an Accepted flight saved at the
+	// closed airport, which the closure's own cancel never met. Before step 4, so none is armed.
+	int32 Cancelled = 0;
+	if (!bAirportAdmits)
+	{
+		Cancelled = CancelUnarrivedAtLoad(Clock.Now());
+	}
+
+	// 3 AND 4, IN THIS ORDER, and both are needed. The network's rebuild regenerated the guideline graph, which takes
+	// every node claim with it (FTrafficOccupancy::ReleaseGuidelineClaims), so the restored flights' stand holds have
+	// to be re-made against the new nodes BEFORE anything can allocate - the genuine holds first, the re-queued last.
+	// Then the arrivals go back on the clock, whose queue was never saved.
+	OnGraphRebuilt(Traffic, Network, Requeued);
+	RearmSchedules(Traffic, Network, Clock);
+
+	UE_LOG(LogAirportOps, Log, TEXT("Load: flights restored - %d re-queued, %d cancelled at a closed airport, %d live"),
+		Requeued.Num(), Cancelled, Flights.Num());
+}
+
 void UFlightBoard::OnAfterRestore(int32 SnapshotVersion)
 {
 	// Flights.Num() replaces the bHadFlights flag OpsSave::Restore used to keep around this
@@ -758,8 +812,8 @@ TArray<UFlight*> UFlightBoard::DemoteRestoredMidFlight(double Now)
 	// #404: AGENTS ARE NOT SAVED - UOpsRuntime::LoadFromSlot clears every one before OpsSave::Restore - so a flight
 	// saved past Inbound comes back naming an aeroplane that does not exist, and nothing would ever move it again.
 	// Ruled (spec 2026-09-29-ops-batch3 §0, §4): the arrivals side GOES ROUND AGAIN, the ground side RETIRES AS
-	// DEPARTED. CALLED BY LoadFromSlot, beside the ClearAgents that causes it (review ruling M5) - not from
-	// OnAfterRestore, which is handed no clock and runs for every restore, agents cleared or not.
+	// DEPARTED. STEP 1 OF RestoreAfterLoad, which LoadFromSlot calls after the ClearAgents that causes it (review ruling
+	// M5) - not from OnAfterRestore, which is handed no clock and runs for every restore, agents cleared or not.
 	// ENFORCED BY: AirportOps.Model.FlightSave.MidFlightGoesRoundOrRetires, AirportOps.Present.RuntimeLoad.MidFlightRequeuesOrRetires
 	TArray<UFlight*> Requeued;
 	int32 Retired = 0;
@@ -784,8 +838,10 @@ TArray<UFlight*> UFlightBoard::DemoteRestoredMidFlight(double Now)
 				Each->Id, *Each->Callsign, *FlightBoardText::PhaseName(Each->Phase), Each->AgentId);
 			ByAgent.Remove(Each->AgentId);
 			Each->AgentId = INDEX_NONE;
-			Each->Phase = EFlightPhase::Inbound;
-			Each->HoldingSince = Now;
+			// THROUGH Enqueue, THE LIVE DOOR INTO THE QUEUE (#426): Inbound, HoldingSince, the revision, and the
+			// FlightInbound that wakes the arrival-queue pass - which this used to skip by setting the phase by hand,
+			// leaving the load's MarkAllDirty as the only thing that dispatched it.
+			Enqueue(*Each, Now);
 			Requeued.Add(Each);
 		}
 		else if (Each->Phase >= EFlightPhase::Turnaround && Each->Phase <= EFlightPhase::Departing)

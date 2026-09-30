@@ -63,7 +63,9 @@ public:
 	 * The balance crossed zero - the back-in-credit toast. The ONE money delegate: the bar keeps its own
 	 * Ledger->Revision gate, because a load restores the balance without a post and an event-only bar would
 	 * be stale after every load (stage 3 review). OnMoneyPosted/OnLandingFeeChanged were cut for having no
-	 * listener - declared, never consumed.
+	 * listener - declared, never consumed. THE GATE SEES A LOAD only since #426 - ULedger::Serialize bumps the
+	 * revision; before it, a load moved the balance and not the revision, and the bar was stale all the same.
+	 * ENFORCED BY: AirportOps.Model.Save.RestoreMovesTheRevisions
 	 */
 	UPROPERTY(BlueprintAssignable) FOpsBalanceSignChanged OnBalanceSignChanged;
 

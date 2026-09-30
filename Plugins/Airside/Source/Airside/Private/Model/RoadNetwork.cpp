@@ -1531,6 +1531,53 @@ void URoadNetwork::PostLoad()
 	EnsureStandNumbers();
 }
 
+void URoadNetwork::Serialize(FArchive& Ar)
+{
+	Super::Serialize(Ar);
+
+	// ONLY A REAL LOAD: a reference collector or a memory count also comes through Serialize and changes nothing.
+	if (!Ar.IsLoading() || Ar.IsObjectReferenceCollector() || Ar.IsCountingMemory())
+	{
+		return;
+	}
+
+	// THE CLOCKS MOVE, THE "DERIVED FROM" STAMP MOVES WITH THEM - see the header. The road and the guideline graph
+	// just arrived together, so whether the one was derived from the other is exactly what it was before the load;
+	// a load must not make AreGuidelinesBehindRoad say yes on its own (an editor undo rebuilds nothing after it).
+	const bool bWasDerived = GuidelinesDerivedAt == EditRevision;
+	++EditRevision;
+	++GuidelineRevision;
+	if (bWasDerived)
+	{
+		GuidelinesDerivedAt = EditRevision;
+	}
+}
+
+int32 URoadNetwork::RepointTransientDefaultProfile(URoadProfile* Default)
+{
+	// ONLY WHEN THE SAVED DEFAULT WAS A TRANSIENT OBJECT, AND NOT ALREADY THIS ACTOR'S - see the header. A content-asset
+	// default resolves to itself in every session, and a segment naming it keeps it; the same session's same actor
+	// re-finds its own fallback, which is already right.
+	URoadProfile* Saved = DefaultProfile;
+	if (Default == nullptr || Saved == nullptr || Saved == Default || !Saved->IsIn(GetTransientPackage()))
+	{
+		return 0;
+	}
+	int32 Repointed = 0;
+	for (FRoadSegment& Segment : Segments)
+	{
+		// BY IDENTITY WITH THE SAVED DEFAULT - see the header. No EditRevision bump: the load that called this has
+		// already moved it (Serialize).
+		if (Segment.bAlive && Segment.Profile == Saved)
+		{
+			Segment.Profile = Default;
+			++Repointed;
+		}
+	}
+	DefaultProfile = Default;
+	return Repointed;
+}
+
 bool URoadNetwork::GiveStandOutlineIfMissing(FEntityInstance& Instance, const FLetterEnvelope& CodeCEnvelope)
 {
 	if (!Instance.IsStand() || Instance.Outline.Num() >= 3)

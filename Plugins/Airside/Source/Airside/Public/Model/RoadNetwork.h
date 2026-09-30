@@ -36,12 +36,29 @@ class AIRSIDE_API URoadNetwork : public UObject
 public:
 	/**
 	 * Super::PostLoad() then EnsureStandOutlines() and EnsureStandNumbers() - see those
-	 * functions. Only override this
-	 * class has: a level saved before outlines existed (or before stands could be point-
+	 * functions. The only override this class had until Serialize (below, #426) joined it
+	 * - and a LEVEL'S load only: a save game's load is Serialize alone, which is why
+	 * ARoadNetworkActor::RepairLoadedNetwork runs the pair again. Needed because
+	 * a level saved before outlines existed (or before stands could be point-
 	 * placed at all) loads with live IsStand() entities carrying no Outline, and nothing
 	 * else in the load path would ever give them one.
 	 */
 	virtual void PostLoad() override;
+
+	/**
+	 * A LOAD IS AN EDIT, as far as the session clocks know (issue #426): EditRevision and GuidelineRevision move on
+	 * every load, because a save game deserialises INTO the live network rather than into a new object, and every
+	 * cache keyed on those clocks - the deletion plan, the ghost, the pose-node index, the ops runtime's network poll -
+	 * would otherwise keep its answer for the graph just replaced. HERE, in Serialize, rather than in a call a loader
+	 * must remember (UJobBoard::Serialize's idiom, and UFlightBoard's): OpsSave, a Memento's DuplicateObject and the
+	 * editor's transaction buffer all deserialise through Serialize.
+	 *
+	 * "HAS THE GUIDELINE GRAPH BEEN DERIVED FROM THIS ROAD" SURVIVES THE BUMP: the road and the guideline graph are
+	 * both UPROPERTYs and load together, so a load moves the clocks without making AreGuidelinesBehindRoad say yes -
+	 * that would refuse every plan after an editor undo, where nothing rebuilds.
+	 * ENFORCED BY: AirportOps.Model.Save.RestoreMovesTheRevisions, Airside.Present.DeletionPlanForgetsARestore
+	 */
+	virtual void Serialize(FArchive& Ar) override;
 
 	FRoadNodeId AddNode(const FVector2D& Position);
 	bool RemoveNode(FRoadNodeId Node);
@@ -120,6 +137,7 @@ public:
 	 * nodes and segments, and a guideline-only edit (a holding bar placed, an edge relinked)
 	 * leaves every node and segment exactly where it was, so it must not invalidate either
 	 * cache. Not a UPROPERTY - a session clock, not state, same as GuidelineRevision.
+	 * AND BY EVERY LOAD (Serialize, #426): a save game restores into this object, not a new one.
 	 */
 	uint32 GetEditRevision() const { return EditRevision; }
 
@@ -243,6 +261,29 @@ public:
 	 * round trip. Null is still legal and still means what it meant before.
 	 */
 	UPROPERTY() TObjectPtr<URoadProfile> DefaultProfile;
+
+	/**
+	 * A LOADED network whose DefaultProfile is a TRANSIENT-PACKAGE object other than Default: DefaultProfile, and every
+	 * live segment naming that same object, are pointed at Default - the loading actor's own default. Returns how many
+	 * segments moved. Called by ARoadNetworkActor::RepairLoadedNetwork only.
+	 *
+	 * WHY (#425 review, audited for #426): a default-width taxiway is laid with ARoadNetworkActor::ResolveProfile's
+	 * fallback, made in the transient package, and DefaultProfile names the same object. A LEVEL save writes such a
+	 * reference as null, which is what DefaultProfile's own comment above was written for. A SAVE GAME does not:
+	 * OpsSave's FObjectAndNameAsStringProxyArchive writes its PATH, and a load re-finds that path in whatever process
+	 * reads it - the live fallback in the same session, nothing in a fresh one, and in an editor that has run a PIE
+	 * or a test since, whichever same-named transient profile that process happens to hold. That last is the one this
+	 * repairs: a road following a profile some other actor or session made. BY IDENTITY WITH THE SAVED DEFAULT, because
+	 * both pointers were written as the same path and re-found as the same object, whichever that turned out to be.
+	 * RE-POINTED, NOT NULLED - null would mean the same through ProfileFor, but several readers dereference
+	 * FRoadSegment::Profile directly (StandTurnOffMarkingBuilder, PlotGesture, RoadNaming), and nulling crashed the
+	 * first on the first load that tried it. A SEGMENT WHOSE PROFILE IS NOT THE SAVED DEFAULT IS LEFT ALONE - an
+	 * authored width tier is a content asset and resolves correctly, and a road drawn deliberately narrow stays
+	 * narrow - and so is every segment when the saved default was a content asset, or came back null (nothing
+	 * resolved: ProfileFor's fallback, as after a level load).
+	 * ENFORCED BY: Check-Architecture rule 4 (allowed callers), AirportOps.Present.RuntimeLoad.RunsEveryLoadRepair
+	 */
+	int32 RepointTransientDefaultProfile(URoadProfile* Default);
 
 	/**
 	 * The profile that governs Segment - its own, or DefaultProfile when it has none.
@@ -480,8 +521,10 @@ public:
 	/**
 	 * Bumped by every guideline mutation - node or edge added, removed or relinked - so a
 	 * table derived from the graph (FNodeReachCache) can tell it is stale without walking
-	 * it. Not saved: it dates a graph within one session, and a loaded graph starts at zero
-	 * with no derived table alive to fool. Node POSITIONS are not covered because nothing
+	 * it. Not saved: it dates a graph within one session. A loaded graph "starts at zero with
+	 * no derived table alive to fool" only when the load makes a NEW object; a save game
+	 * restores INTO the live one, with every derived table still alive - so Serialize bumps
+	 * this on every load (#426). Node POSITIONS are not covered because nothing
 	 * moves a guideline node in place; the builder makes fresh ones. If that changes, the
 	 * mover bumps this too.
 	 */

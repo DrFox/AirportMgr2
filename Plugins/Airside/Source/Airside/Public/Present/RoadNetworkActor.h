@@ -1256,6 +1256,26 @@ public:
 	int32 RebindStandDefinitions();
 
 	/**
+	 * EVERY REPAIR A LOADED NETWORK NEEDS, in one order, for BOTH loads (issue #426): a level's (PostRegisterAllComponents,
+	 * after serialisation and registration) and a save game's (URoadEditFacade::RestoreInPlace, after OpsSave has
+	 * deserialised into the live network). Before RebuildMesh in both, since every repair here feeds the rebuild.
+	 *
+	 *   outlines, then numbers - URoadNetwork::PostLoad's pair, which a save game never gets (OpsSave::Restore is
+	 *     Serialize alone); a no-op after a level's PostLoad already ran them;
+	 *   definitions - a D/E/F stand's is a runtime object no later session has (RebindStandDefinitions);
+	 *   anchors - a definition re-authored since the save (UEntityDefinition::RefreshResolvedAnchors);
+	 *   the default profile - URoadNetwork::RepointTransientDefaultProfile, the one reference the network blob holds
+	 *     that a later session cannot resolve to the right object.
+	 *
+	 * ONE FUNCTION BECAUSE TWO LISTS DRIFTED: the load's own comment claimed "THE LOAD-TIME REPAIRS A LEVEL GETS" and ran
+	 * two of the four, so a depot re-authored since the save kept stale anchors and PoseRole. Returns how many things
+	 * it changed, for the log.
+	 * ENFORCED BY: Check-Architecture rule 4 (allowed callers: RefreshResolvedAnchors, RebindStandDefinitions and
+	 * EnsureStandOutlines only here), AirportOps.Present.RuntimeLoad.RunsEveryLoadRepair
+	 */
+	int32 RepairLoadedNetwork();
+
+	/**
 	 * What the fuel depot tool places: the authored value if there is one, else the
 	 * configured content default. Null is a supported state - PlaceEntity refuses and names
 	 * the asset that is missing.

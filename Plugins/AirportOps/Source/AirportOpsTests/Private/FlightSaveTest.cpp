@@ -295,8 +295,10 @@ bool FFlightBoardHistorySplitMigratesAnOldSaveTest::RunTest(const FString& Param
  * #404 (spec 2026-09-29-ops-batch3 §4): agents are not saved - UOpsRuntime::LoadFromSlot clears them - so a flight
  * saved past Inbound came back pointing at an agent that no longer existed, and sat in its phase for ever. The
  * arrivals side goes round again (Inbound, stand re-held, at the back of the queue); the ground side retires as
- * departed, unscored. The load sequence is LoadFromSlot's own, by hand: clear agents, discard the queue, restore,
- * re-apply holds, re-arm, tick - and the flight must LAND AGAIN, its fee charged once across the whole of it.
+ * departed, unscored. The load is LoadFromSlot's: clear agents, discard the queue, restore, then the board's own
+ * UFlightBoard::RestoreAfterLoad - demote, re-apply holds, re-arm - and a tick; and the flight must LAND AGAIN, its fee
+ * charged once across the whole of it. RestoreAfterLoad, not its four steps typed out here (issue #426): this test used
+ * to re-type the order by hand, so a production reorder would have left it green.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFlightMidFlightGoesRoundTest,
@@ -393,14 +395,15 @@ bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
 		OpsSave::Restore(Snapshot, OpsSaveTest::Persistents(*RestoredClock, *Restored, *RestoredFuel), *RestoredNet))) { return false; }
 	LiveBoard = Restored;
 	LiveClock = RestoredClock;
-	// BESIDE THE ClearAgents, as LoadFromSlot calls it (review ruling M5): dated by the restored clock.
-	const TArray<UFlight*> Requeued = Restored->DemoteRestoredMidFlight(RestoredClock->Now());
+	// THE REST OF THE LOAD, IN THE BOARD'S OWN ORDER, as LoadFromSlot calls it once the network is adopted: dated by the
+	// restored clock, at an airport that admits arrivals.
+	Restored->RestoreAfterLoad(*Traffic, *Net, *RestoredClock, /*bAirportAdmits*/ true);
 
 	UFlight* Again = Restored->FindByIdForTest(Taxiing->Id);
 	UFlight* Retired = Restored->FindByIdForTest(OnStand->Id);
 	if (!TestNotNull(TEXT("the taxiing flight came back"), Again) || !TestNotNull(TEXT("and the one on its stand"), Retired)) { return false; }
 	TestEqual(TEXT("taxiing in when saved: it goes round again - Inbound"), Again->Phase, EFlightPhase::Inbound);
-	TestTrue(TEXT("and is handed back as re-queued"), Requeued.Num() == 1 && Requeued[0] == Again);
+	TestTrue(TEXT("and is the one flight in the queue"), Restored->Queue().Num() == 1 && Restored->Queue()[0] == Again);
 	TestEqual(TEXT("with no agent - its aeroplane was not saved"), Again->AgentId, static_cast<int32>(INDEX_NONE));
 	TestNull(TEXT("and nothing found by the dead agent id"), Restored->FlightForAgent(OldAgent));
 	TestEqual(TEXT("joining the queue now, at the loaded time"), Again->HoldingSince, SavedAt, 1e-9);
@@ -413,12 +416,10 @@ bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
 	Bus.Drain();
 	TestEqual(TEXT("nothing the roster would score was published - the save system is not the player's fault"), Scored, 0);
 
-	// THE REST OF THE LOAD: holds re-made, arrivals re-armed - then the queue must clear it.
-	Restored->OnGraphRebuilt(*Traffic, *Net, Requeued);
+	// THE HOLDS RE-MADE AND THE ARRIVALS RE-ARMED by the same call - then the queue must clear it.
 	const FEntityInstance* Stand = Net->GetEntity(Again->Stand);
 	TestTrue(TEXT("its stand is held again, under its own holder id"), Stand != nullptr
 		&& Traffic->IsStandHeld(Stand->PoseNode, 0) && !Traffic->IsStandHeld(Stand->PoseNode, Again->HolderId()));
-	Restored->RearmSchedules(*Traffic, *Net, *RestoredClock);
 	TestEqual(TEXT("re-arming leaves it holding"), Again->Phase, EFlightPhase::Inbound);
 	TestEqual(TEXT("at the time it joined"), Again->HoldingSince, SavedAt, 1e-9);
 	RestoredClock->Advance(1.0);

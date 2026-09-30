@@ -5,6 +5,16 @@
 #include "Model/Pricing.h"
 #include "Model/SimClock.h"
 
+void ULedger::Serialize(FArchive& Ar)
+{
+	Super::Serialize(Ar);
+	// ONLY A REAL LOAD: a reference collector or a memory count comes through here too, and changes nothing.
+	if (Ar.IsLoading() && !Ar.IsObjectReferenceCollector() && !Ar.IsCountingMemory())
+	{
+		++RevisionCount;   // See Revision: a restore is a change.
+	}
+}
+
 void ULedger::Open(double InStartingBalance)
 {
 	StartingBalance = InStartingBalance;

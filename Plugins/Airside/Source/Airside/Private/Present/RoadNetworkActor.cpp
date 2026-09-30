@@ -380,27 +380,9 @@ void ARoadNetworkActor::PostRegisterAllComponents()
 			}
 		}
 
-		// THE DEFINITIONS FIRST, before anything below reads one: a D/E/F stand's definition is
-		// never saved (see LetterStandDefinitions), so a loaded or duplicated level arrives
-		// with it null until this re-points it - and a null Definition is a stand
-		// FAnchorLink::Gather skips, which RebuildMesh below would otherwise bake in.
-		RebindStandDefinitions();
-
-		// Before RebuildMesh, which is what calls FAnchorLink::Build - the very consumer of
-		// GetAnchorWorldHeading this exists to keep correct. Loading a level saved before
-		// FResolvedAnchor grew LocalHeading and Role restores those UPROPERTYs at their
-		// defaults (0.0 and Aircraft), and nothing else ever repairs that - see
-		// UEntityDefinition::RefreshResolvedAnchors for why this is the one moment it can.
-		if (Network != nullptr)
-		{
-			const int32 RefreshedAnchors = UEntityDefinition::RefreshResolvedAnchors(*Network);
-			if (RefreshedAnchors > 0)
-			{
-				UE_LOG(LogRoadMesh, Log,
-					TEXT("Refreshed %d resolved anchor(s) against their current definitions."),
-					RefreshedAnchors);
-			}
-		}
+		// THE LOAD-TIME REPAIRS, the same function a save game's load runs (#426) - see
+		// RepairLoadedNetwork for each one and why it has to come before the rebuild.
+		RepairLoadedNetwork();
 
 		RebuildMesh();
 	}
@@ -552,6 +534,60 @@ int32 ARoadNetworkActor::RebindStandDefinitions()
 	// FORWARDS TO StandDefinitions (issue #298), handing over Network - which this actor owns,
 	// not the cache - see UStandDefinitionCache::RebindStandDefinitions for the walk itself.
 	return StandDefinitions->RebindStandDefinitions(Network);
+}
+
+int32 ARoadNetworkActor::RepairLoadedNetwork()
+{
+	if (Network == nullptr)
+	{
+		return 0;
+	}
+
+	// OUTLINES FIRST: a stand saved before stands had them gets its Code C box, and only a
+	// stand with an outline has a letter to rebind by (below). Then the numbers. The pair
+	// URoadNetwork::PostLoad runs for a LEVEL, which a save game never gets - OpsSave::Restore
+	// is Serialize alone (final review C2) - and a no-op the second time for a level.
+	const int32 Outlined = Network->EnsureStandOutlines();
+	const int32 Numbered = Network->EnsureStandNumbers();
+
+	// THE DEFINITIONS NEXT, before anything below reads one: a D/E/F stand's definition is
+	// never saved (see LetterStandDefinitions), so a loaded or duplicated level arrives
+	// with it null until this re-points it - and a null Definition is a stand
+	// FAnchorLink::Gather skips, which RebuildMesh would otherwise bake in. A save game's
+	// arrives naming the saving session's object, which a new session does not have.
+	const int32 Rebound = RebindStandDefinitions();
+
+	// Before RebuildMesh, which is what calls FAnchorLink::Build - the very consumer of
+	// GetAnchorWorldHeading this exists to keep correct. Loading a level saved before
+	// FResolvedAnchor grew LocalHeading and Role restores those UPROPERTYs at their
+	// defaults (0.0 and Aircraft), and nothing else ever repairs that - see
+	// UEntityDefinition::RefreshResolvedAnchors for why this is the one moment it can. AFTER
+	// the rebind, so a stand's anchors are refreshed against the definition it now has.
+	const int32 RefreshedAnchors = UEntityDefinition::RefreshResolvedAnchors(*Network);
+	if (RefreshedAnchors > 0)
+	{
+		UE_LOG(LogRoadMesh, Log,
+			TEXT("Refreshed %d resolved anchor(s) against their current definitions."),
+			RefreshedAnchors);
+	}
+
+	// THE ONE SAVED REFERENCE NO LATER SESSION RESOLVES TO THE RIGHT OBJECT - see
+	// URoadNetwork::RepointTransientDefaultProfile. ResolveProfile() because it is what RebuildMesh
+	// then hands the network as DefaultProfile (URoadSurfacePresenter::Rebuild, before its solve), so
+	// a re-pointed road and a road that never had a profile of its own end on the same object.
+	const int32 Forgotten = Network->RepointTransientDefaultProfile(ResolveProfile());
+
+	// ONE LINE WHEN A LOAD REPAIRED ANYTHING, so "did it" is one grep - the questions the
+	// comments above answer by reasoning, answered by measurement. Silent when nothing needed
+	// it: PostRegisterAllComponents re-runs on every editor re-registration of this actor.
+	const int32 Total = Outlined + Numbered + Rebound + RefreshedAnchors + Forgotten;
+	if (Total > 0)
+	{
+		UE_LOG(LogRoadMesh, Log,
+			TEXT("Load repairs on %s: %d outline(s), %d number(s), %d definition(s), %d anchor(s), %d transient profile ref(s)"),
+			*GetName(), Outlined, Numbered, Rebound, RefreshedAnchors, Forgotten);
+	}
+	return Total;
 }
 
 UEntityDefinition* ARoadNetworkActor::ResolveFuelDepotDefinition() const

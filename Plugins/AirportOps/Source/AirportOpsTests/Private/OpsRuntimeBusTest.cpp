@@ -960,4 +960,83 @@ bool FRedirectStandGoesTest::RunTest(const FString&)
 	return true;
 }
 
+/**
+ * #426 ROW 7 AND THE #425 REVIEW'S AUDIT OF THE "Network" BLOB: A SAVE-GAME LOAD GETS EVERY REPAIR A LEVEL LOAD GETS.
+ * The load's own comment said it replicated "THE LOAD-TIME REPAIRS A LEVEL GETS FROM PostLoad AND
+ * PostRegisterAllComponents" and ran two of the four: no EnsureStandNumbers, no RefreshResolvedAnchors. Now both go
+ * through ARoadNetworkActor::RepairLoadedNetwork, so this measures each repair across one real LoadFromSlot.
+ *
+ * THE PROFILE: a default-width taxiway is laid with the actor's own fallback profile, which ResolveProfile makes in the
+ * TRANSIENT package - and DefaultProfile names the same object. OpsSave writes both as a PATH, which a later session
+ * resolves to nothing (then ProfileFor falls back, correctly) or to whatever same-named transient object that process
+ * happens to hold - a previous PIE's actor's, or a test's. A LEVEL save writes such a reference as null; the repair makes a
+ * save game agree, so the taxiway follows THIS session's default. Simulated here by the level's default changing
+ * between the save and the load, which leaves the saved path resolving to a profile the actor no longer uses.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRuntimeLoadRunsEveryRepairTest, "AirportOps.Present.RuntimeLoad.RunsEveryLoadRepair",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FRuntimeLoadRunsEveryRepairTest::RunTest(const FString&)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor to attach to"), Actor)) { return false; }
+	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(20000.0, 0.0));
+	Actor->ConnectNodes(A, B);
+	URoadNetwork* Net = Actor->Network;
+	const URoadProfile* SavedDefault = Actor->ResolveProfile();
+	const FRoadSegment* Laid = Net->GetSegments().FindByPredicate([](const FRoadSegment& S) { return S.bAlive; });
+	if (!TestNotNull(TEXT("a taxiway was laid"), Laid)
+		|| !TestTrue(TEXT("with the actor's fallback profile, which lives in the transient package - or the profile check proves nothing"),
+			Laid->Profile == SavedDefault && SavedDefault != nullptr && SavedDefault->IsIn(GetTransientPackage())))
+	{
+		return false;
+	}
+
+	// A STAND SAVED UNNUMBERED, as one from before 2026-09-29 is.
+	UEntityDefinition* StandDefinition = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Stand = Net->PlaceEntity(StandDefinition, StandDefinition->Anchors, FVector2D(-40000.0, 40000.0), 0.0);
+	FRoadNetworkTestAccess(*Net).ClearStandNumbersForTest();
+	// AN ENTITY WHOSE DEFINITION IS RE-AUTHORED AFTER THE SAVE.
+	UEntityDefinition* Kit = NewObject<UEntityDefinition>(GetTransientPackage());
+	Kit->PoseRole = EServiceRole::Baggage;
+	FEntityAnchor Belt;
+	Belt.Id = TEXT("belt");
+	Belt.Role = EServiceRole::Baggage;
+	Belt.LocalHeading = 1.0;
+	Kit->Anchors.Add(Belt);
+	const FEntityInstanceId Placed = Net->PlaceEntity(Kit, Kit->Anchors, FVector2D(40000.0, 40000.0), 0.0, 0.0, EServiceRole::Baggage);
+	if (!TestTrue(TEXT("both entities placed"), Stand.IsSet() && Placed.IsSet())
+		|| !TestEqual(TEXT("and the stand really is unnumbered"), Net->GetEntity(Stand)->StandNumber, 0))
+	{
+		return false;
+	}
+
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	const FString Slot = TEXT("AirportOpsTest_LoadRepairs");
+	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
+
+	// BETWEEN THE SESSIONS.
+	Kit->Anchors[0].LocalHeading = 2.0;
+	URoadProfile* NewDefault = TestProfiles::Taxiway();
+	Actor->Profile = NewDefault;
+	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
+
+	const FEntityInstance* LoadedStand = Actor->Network->GetEntity(Stand);
+	TestTrue(TEXT("EnsureStandNumbers ran: the unnumbered stand has a number"),
+		LoadedStand != nullptr && LoadedStand->StandNumber > 0);
+	double Heading = -1.0;
+	TestTrue(TEXT("the re-authored entity's anchor resolves"), Actor->Network->GetAnchorWorldHeading(Placed, TEXT("belt"), Heading));
+	TestEqual(TEXT("RefreshResolvedAnchors ran: it reports the definition's heading now, not the saved snapshot"), Heading, 2.0, 1e-9);
+	const FRoadSegment* Loaded = Actor->Network->GetSegments().FindByPredicate([](const FRoadSegment& S) { return S.bAlive; });
+	if (TestNotNull(TEXT("the taxiway came back"), Loaded))
+	{
+		TestTrue(TEXT("and follows THIS session's default profile, not the transient object the saved path resolved to"),
+			Actor->Network->ProfileFor(*Loaded) == NewDefault);
+	}
+	TestTrue(TEXT("DefaultProfile names this actor's own default"), Actor->Network->DefaultProfile == NewDefault);
+	return true;
+}
+
 #endif

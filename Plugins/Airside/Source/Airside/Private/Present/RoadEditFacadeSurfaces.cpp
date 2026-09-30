@@ -72,6 +72,11 @@ bool URoadEditFacade::Undo()
 	{
 		Purse->Reverse(ChargeId);
 	}
+
+	// ANNOUNCED LAST, AFTER THE MONEY (#426): a listener puts its tool down on this, and a
+	// part-drawn chain's cancel may credit a node's scrap - which must post after the reversal
+	// of the step this undid, as it did when ARoadBuildController deactivated after Undo returned.
+	AnnounceReplaced(ENetworkReplace::Adopted);
 	return true;
 }
 
@@ -101,6 +106,11 @@ bool URoadEditFacade::Redo()
 		// and the ledger refuses a second reversal of it on purpose.
 		History->SetUndoTopCharge(Purse->Charge(Quote));
 	}
+
+	// ANNOUNCED LAST, AFTER SetUndoTopCharge (#426): a listener's tool, put down on this, may
+	// commit an edit of its own (a chain's bare node deleted) - a new undo step, which must not
+	// land on top before the redone step has been handed its charge.
+	AnnounceReplaced(ENetworkReplace::Adopted);
 	return true;
 }
 
@@ -1051,6 +1061,11 @@ int32 URoadEditFacade::FindEntityAt(FVector2D Where, double Radius) const
 
 void URoadEditFacade::ClearNetwork()
 {
+	// FIRST, BEFORE THE CLEAR'S OWN UNDO STEP (#426): a listener's tool abandons against the graph
+	// its indices still name, and any edit that abandon commits lands beneath "clear network" on
+	// the stack - where ARoadBuildController's own deactivate-before-clear used to put it.
+	AnnounceReplaced(ENetworkReplace::Discarding);
+
 	ARoadNetworkActor& Owner = Actor();
 	Owner.HideGhost();
 
@@ -1068,6 +1083,7 @@ void URoadEditFacade::ClearNetwork()
 	// use; HideGhost above already ran once, and AdoptNetwork's own call is harmless
 	// repeated.
 	AdoptNetwork(*NewObject<URoadNetwork>(&Owner));
+	AnnounceReplaced(ENetworkReplace::Adopted);
 }
 
 FRoutePlan URoadEditFacade::FindRoute(
