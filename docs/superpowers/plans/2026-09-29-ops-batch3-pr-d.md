@@ -37,6 +37,8 @@ OpsRuntime.cpp 24/345.
   per-frame retry would strand a blocked pushback until the 30 s net, with a Warning each time. The retry, and the
   departure-ready half of the safety net, are left as they are, for the orchestrator's ruling.
 
+**Spec deviation (ruled 2026-09-30):** §5's "JobBoard dirtied by RunwayFreed, replacing DepartTheReady's per-frame retry" is not done - the retry is kept and the safety net covers the arrival queue only (see the finding above and the ledger).
+
 ## Files
 
 | File | Change |
@@ -172,3 +174,27 @@ Findings for the orchestrator:
   releases Node claims of any holder, flight holds included, and `UFlightBoard::OnGraphRebuilt` (Reapply) runs only from
   `LoadFromSlot`. The stands diff now reports those holds freed, truthfully. Pre-existing; not fixed here.
 - **SpeedChanged dirties the queue** (not in the spec's list): a pass run while paused consumes its dirt.
+
+## Review ledger (fresh review of PR D, 2026-09-30: 0 Critical, 2 Important)
+
+Rulings are the orchestrator's. Each fix got a test that failed first (red line quoted) unless marked pin; pins went red under
+their mutation. Full suite after: see the end of this section.
+
+| # | Finding | Ruling / fix | Test (red line) |
+|---|---|---|---|
+| Item 6 | DepartTheReady's per-frame retry is not a runway wait | RULING: accepted as found. PlanAny never refuses for a held runway; the one transient refusal is PushbackBlocked, which no event covers. Retry kept, no RunwayFreed -> JobBoard dirtier, safety net covers the queue only. Spec deviation noted above | - |
+| I1 | An in-play guideline rebuild dropped every accepted flight's stand hold (`ReleaseGuidelineClaims` takes every Node claim; Reapply ran only on load) - a later accept double-booked the stand. Pre-existing on main | `UGroundTraffic::OnGraphRebuilt` snapshots non-agent (negative-holder) Node claims on stand poses BY ENTITY before the release and re-holds each on that entity's pose after the agents' goal claims; a hold whose stand is gone is dropped with a Log line (the flight's dead Stand is HeldStandLost's evidence); a refused re-hold Warns | `AirportOps.Present.RuntimeEdit.KeepsAcceptedStandHold` ("after the edit the stand is still held, by the same flight" expected -1, got 0; "a second offer is refused" expected null); `Airside.Model.Traffic.RebuildKeepsStandHolds` ("stand 0 is still held, by its own holder" -7, got 0); `AirportOps.Model.StandAllocator.SurvivesAGraphRebuild` rewritten - it asserted the drop - ("the rebuild itself keeps the hold" -1, got 0) |
+| I1 knock-on | ClearanceFor caches NoFreeStand on OccupancyRevision; a stand freed by claim churn moves no revision | Checked, no fix needed: the only flight that can be refused NoFreeStand is a stand-less (or dead-stand) one, and TickQueue re-reserves before it asks - HoldStand bumps the revision, invalidating the cache. Pinned | `AirportOps.Model.ArrivalQueue.StandFreedByChurnIsNotStale` (pin, green; mutation "HoldStand without its bump" -> "clears the flight - not the cached NoFreeStand" expected 1, got 0) |
+| I2 | StandsDiff's deleted-stand block measured nothing (every hold read freed on a rebuild) | Both stands held, stand 0 deleted: exactly stand 0 reported, stand 1 still held by -9 | red pre-I1 ("naming the deleted stand 0 alone", "stand 1 is still held" -9, got 0); mutation "no RemoveEntity" -> "the rebuild reports one broadcast" expected 3, got 2 |
+| M1 | False safety Warnings | (a) bRetry re-dirty keeps `bQueueCovered`; (b) both flags reset whenever the net is disarmed; (c) `DiffNow()` (DiffFreedom on the last diffed network, weak) at the end of RetireAgent, ReleaseHold, ClearAgents - the event is real, not suppressed | (a) `AirportOps.Present.ArrivalQueue.RetryStaysCovered` ("no safety Warning" expected 0, got 1); (c) `RetireFreesWithoutAdvance` (0, got 1), `RunwayFreed.DespawnOnRunway` ("frees the strip at once" 1, got 0), `RunwayFreed.ClearAgents` (1, got 0), `StandsDiff` ("the release itself fires" 1, got 0). (b) NOT pinned: a stale flag needs the net to fire and be disarmed between a clock callback and the drain that follows it, which no public path does |
+| M2 | Stand baseline keyed by pose | `TMap<FEntityInstanceId, FGuidelineNodeId>`; the pose kept for the event payload | covered by StandsDiff/RebuildKeepsStandHolds |
+| M3 | Rule 33 too narrow | Any `TickQueue\s*\(` bar the definition, `&X::TickQueue`, comments stripped, function re-read at every column-0 definition (free functions too) | control: a bare `TickQueue(...)` in `UFlightBoard::TickOffers` and `&UFlightBoard::TickQueue` in a free function after RunArrivalQueue -> 2 FAILs; a comment naming `TickQueue(` -> none |
+| M4 | Catch-ups and net cancels unpinned | `FOpsEventBus::IsDirtyForTest` | `AirportOps.Present.ArrivalQueue.AttachAndLoadMarkItDirty` (mutation no Attach MarkAllDirty -> "an attach marks the queue pass dirty"; no load MarkAllDirty -> "a load marks..."); `NetCancelledOnLoadAndDetach` (mutation -> "a load cancels the net", "a detach cancels it") |
+| M5 | Two ENFORCED BY lines overclaimed | IsChainHeld: reworded, no ENFORCED BY (no test can see a copy that agrees); "Airside never learns ops": ENFORCED BY Check-Architecture rule 1b (cross-plugin) | - |
+| M6 | FRig lost the PlaceNode WHY | Restored ("a network, which a fresh actor lacks until its first edit...") | - |
+| M7 | Cost comment omitted O(S^2) Contains | Gone with M2: TSet/TMap baselines; comment counts the lookups | - |
+
+Renamed from the ruling's `AirportOps.Present.Runtime.EditKeepsAcceptedStandHold`: a dotted child under the existing bare
+`AirportOps.Present.Runtime` test made the automation tree drop that test (run count 1541 where 1542 was due).
+
+Full suite after the review fixes: `1542 test(s) run, 0 failed, 0 crashed` (+8). Check-Architecture PASS, rule-12 111.
