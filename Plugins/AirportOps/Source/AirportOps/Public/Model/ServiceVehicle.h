@@ -63,7 +63,7 @@ enum class EServiceVehicleState : uint8
 	 * ended, its job was taken from under it, or it has just been dispatched from home. TRANSIENT BY CONTRACT:
 	 * UJobBoard::StartNext ends it the same Step and leaves the vehicle in one of the settled states, so a Step
 	 * never finishes with one.
-	 * ENFORCED BY: UJobBoard::Step's closing walk (an ensure that also sends a stuck vehicle home -
+	 * ENFORCED BY: UJobBoard::Step's closing walk (an Error log that also sends a stuck vehicle home -
 	 * AirportOps.Fuel.Lifecycle.StepEndSettlesAStrandedDecision); AirportOps.Fuel.Lifecycle.BlockedHeadJobNeverLeavesItServingWithNoJob
 	 * (FFuelFixture's per-Step check); its price: AirportOps.Service.Bid.DecidingVehiclePricesWhereItStands
 	 *

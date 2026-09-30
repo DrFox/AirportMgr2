@@ -3552,8 +3552,8 @@ bool FFuelLifecycleStepEndSettlesTest::RunTest(const FString& Parameters)
 {
 	// THE STEP-END WALK IS A RECOVERY, NOT ONLY AN ALARM. No path leaves a vehicle Deciding at the end of a Step any more
 	// (StartNext lands every decision), so this stages one - the serve's job let go, the state left at Deciding - and runs
-	// ONE Step: the walk must say so (an ensure, expected here) and send it home, rather than leave it on the hydrant with
-	// the ensure firing every Step for good.
+	// ONE Step: the walk must say so (an Error line, expected here) and send it home, rather than leave it on the hydrant
+	// with the Error firing every Step for good.
 	FFuelFixture Fixture;
 	Fixture.Build(/*bWithRoad=*/true);
 	const FName Bowser = Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode;
@@ -3572,14 +3572,12 @@ bool FFuelLifecycleStepEndSettlesTest::RunTest(const FString& Parameters)
 	Vehicle->CurrentJob = 0;
 	FServiceVehicleLifecycle::SeedStateForTest(*Vehicle, EServiceVehicleState::Deciding);
 
-	// THE ENSURE IS THE POINT AND IS EXPECTED: the automation framework reports an ensure's log lines as errors, so each
-	// shape they take is named. Any number - the count is the engine's to change, the recovery below is what is measured.
-	AddExpectedError(TEXT("Ensure condition failed"), EAutomationExpectedErrorFlags::Contains, 0);
-	AddExpectedError(TEXT("Callstack"), EAutomationExpectedErrorFlags::Contains, 0);
-	AddExpectedError(TEXT("ends a Step Deciding"), EAutomationExpectedErrorFlags::Contains, 0);
-	AddExpectedError(TEXT("Handled ensure"), EAutomationExpectedErrorFlags::Contains, 0);
-	AddExpectedError(TEXT("Stack:"), EAutomationExpectedErrorFlags::Contains, 0);
-	AddExpectedError(TEXT("LogOutputDevice"), EAutomationExpectedErrorFlags::Contains, 0);
+	// THE ERROR IS THE POINT AND IS EXPECTED: the walk logs one Error line per vehicle it finds Deciding, and the framework
+	// fails a test that logs an Error it has not declared. EXACTLY ONE (Occurrences = 1: the framework fails the test if it is
+	// seen any other number of times, and 0 would mean "one or more, no upper limit") - one vehicle is staged, so a second
+	// leak in this Step must not be absorbed. It is an Error line and not an ensure because an ensure's [Callstack] makes
+	// Run-AirsideTests.ps1 report the whole run as a teardown crash (issue #291).
+	AddExpectedError(TEXT("ends a Step Deciding"), EAutomationExpectedErrorFlags::Contains, 1);
 	Fixture.Service->Step(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
 
 	const FServiceVehicle* After = Fixture.Service->FindVehicle(VehicleId);

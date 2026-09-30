@@ -1210,7 +1210,7 @@ bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 		// NO BRANCH FOR "SERVING WITH NO JOB": it was the backstop for the wedge final review #1 found - parked at a
 		// stand with a decision that did not land, asked again every tick until it did, which kept this whole pass
 		// running every frame. The state no longer exists (EndServe leaves the vehicle Deciding and StartNext always
-		// settles it), and the ensure below says so if a path to it comes back.
+		// settles it), and the Error below says so if a path to it comes back.
 		// ENFORCED BY: AirportOps.Fuel.Lifecycle.BlockedHeadJobNeverLeavesItServingWithNoJob
 	}
 
@@ -1258,10 +1258,15 @@ bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 	// departure's phase change can recall a vehicle out for that aircraft (DropAircraft). The walk is O(fleet): 2 vehicles
 	// per starter depot on 2026-09-30 (Trucks 1 x the UTILITY and FUEL types, FFuelFixture's default), and a bought fleet
 	// grows it by the player's purchases, like the walks above it. A vehicle that does finish Deciding is a path to the old
-	// wedge - said, not polled: the ensure names it in the log the moment it is made, where the backstop hid it behind a
+	// wedge - said, not polled: the Error names it in the log the moment it is made, where the backstop hid it behind a
 	// board pass that ran every frame - AND SETTLED, as StartNext's own tail settles it: a future path must not park a
-	// vehicle on the hydrant for good with the ensure merely firing every Step. Ids first, then acted on: GoToFacility can
+	// vehicle on the hydrant for good with the Error merely firing every Step. Ids first, then acted on: GoToFacility can
 	// dispatch, the broadcast can re-enter, and the vehicle array can move under a live reference.
+	// AN ERROR LOG, NOT AN ENSURE (2026-09-30, after #454): an ensure prints a [Callstack], and Tools/Run-AirsideTests.ps1
+	// fails the whole run on any [Callstack] in the log as a crash during teardown (issue #291) - so the one test that
+	// stages this on purpose turned every full-suite run red with every test green. The detection is kept: the automation
+	// framework fails any test that logs an Error it has not declared, so a leak of Deciding in another test still goes red
+	// there, and StepEndSettlesAStrandedDecision declares exactly one.
 	// ENFORCED BY: AirportOps.Fuel.Lifecycle.BlockedHeadJobNeverLeavesItServingWithNoJob (FFuelFixture's per-Step check),
 	// AirportOps.Fuel.Lifecycle.StepEndSettlesAStrandedDecision (the recovery)
 	TArray<int32> Undecided;
@@ -1274,7 +1279,7 @@ bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 	}
 	for (const int32 VehicleId : Undecided)
 	{
-		ensureAlwaysMsgf(false, TEXT("Vehicle %d ends a Step Deciding - a decision that never landed"), VehicleId);
+		UE_LOG(LogAirportOps, Error, TEXT("Vehicle %d ends a Step Deciding - a decision that never landed"), VehicleId);
 		if (FServiceVehicle* Vehicle = FindVehicleMutable(VehicleId))
 		{
 			GoToFacility(*Vehicle, Traffic, Network, Clock);
