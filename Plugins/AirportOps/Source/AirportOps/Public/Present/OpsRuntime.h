@@ -144,8 +144,8 @@ public:
 
 	/**
 	 * Board's vehicle catalogue and starter fleet, resolved from Scenario's rows and Content's chassis
-	 * (UAirsideSettings::ResolveVehicle) through FServiceFleet::ResolveCatalogue (#430). THE ONE RESOLVE Attach runs and
-	 * the one the world-free fixtures run, so a test's catalogue is the game's - the same reason StandDesignVehicleOf is
+	 * (UAirsideSettings::ResolveVehicle) through FServiceFleet::ResolveCatalogue (#430). THE ONE RESOLVE the runtime runs -
+	 * at attach and after every load, by ApplyScenarioFigures (#449) - and the one the world-free fixtures run, so a test's catalogue is the game's - the same reason StandDesignVehicleOf is
 	 * a static here. A forwarder, not logic: the join is the fleet's, the chassis Content's.
 	 * ENFORCED BY: AirportOps.Fleet.EveryBuyableTypeHasAChassis (walks the attached runtime's catalogue)
 	 */
@@ -452,6 +452,15 @@ private:
 	FDelegateHandle RefusalHandle;
 
 	void Detach();
+
+	/**
+	 * Every design figure the scenario sets, onto its receiver - the clock's day, the vehicle catalogue and starter fleet
+	 * (ResolveVehicleCatalogue), the refill rate, the module offers, the inbox cap, the airline tuning. THE ONE DOOR (#449), run at Attach and after every load: each
+	 * field it writes is Transient on its receiver, the ruling UAirlineRoster::Tuning set, so a save carries the game and
+	 * never the design. New-game acts (the start hour, the opening balance, the roster reset) stay in Attach.
+	 * ENFORCED BY: AirportOps.Present.RuntimeLoad.DesignFiguresAreTheScenarios
+	 */
+	void ApplyScenarioFigures(const class UScenario& Scenario);
 	void ApplySpeed(ESimSpeed Speed);
 	void OnAgentPhase(const FAgentTransition& Transition);
 	void OnArrivalRefused(EArrivalRefusal Why);

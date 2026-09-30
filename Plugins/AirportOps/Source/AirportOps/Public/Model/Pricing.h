@@ -56,18 +56,23 @@ public:
 	 * The decision becomes "am I full?", a question about the airport, rather than a slider
 	 * with one correct position. Below 1.0 raising fees would always be right; above 1.0,
 	 * always wrong. Both are traps, and a player would find either in an afternoon.
+	 *
+	 * TRANSIENT, with RefundFraction, CurrencySymbol and FuelPricePerLitre (#449): design figures, whose home is this
+	 * class's defaults, not a save - the ruling UAirlineRoster::Tuning set. Saved, a retuned default would lose to
+	 * every old save. LandingFeeMultiplier stays saved: it is the player's.
+	 * ENFORCED BY: AirportOps.Model.Save.DesignFiguresAreNotSaved
 	 */
-	UPROPERTY() double Elasticity = 1.0;
+	UPROPERTY(Transient) double Elasticity = 1.0;
 
-	/** What tearing something out gives back, as a fraction of today's price. */
-	UPROPERTY() double RefundFraction = 0.5;
+	/** What tearing something out gives back, as a fraction of today's price. Transient - see Elasticity. */
+	UPROPERTY(Transient) double RefundFraction = 0.5;
 
 	/**
 	 * U+00A4, the Unicode GENERIC currency sign - the glyph whose whole purpose is to stand in
 	 * for an unspecified currency. No real country is implied, and unlike an invented glyph it
 	 * is present in every font the UI might fall back to.
 	 */
-	UPROPERTY() FString CurrencySymbol = TEXT("¤");
+	UPROPERTY(Transient) FString CurrencySymbol = TEXT("¤");
 
 	/** What this aeroplane pays to land, the player's lever included. */
 	double LandingFee(const FAirframe& Airframe) const;
@@ -104,8 +109,8 @@ public:
 	 */
 	double FuelFee(double Litres) const;
 
-	/** What the airport charges per litre of fuel delivered. First guess. */
-	UPROPERTY() double FuelPricePerLitre = 1.5;
+	/** What the airport charges per litre of fuel delivered. First guess. Transient - see Elasticity. */
+	UPROPERTY(Transient) double FuelPricePerLitre = 1.5;
 
 	/** Offers per day scale by this. See Elasticity. */
 	double DemandFactor() const;

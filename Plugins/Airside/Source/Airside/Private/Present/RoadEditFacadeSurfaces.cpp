@@ -1143,9 +1143,9 @@ FRoutePlan URoadEditFacade::FindRoute(
 	{
 		if (const UGroundTraffic* Model = TrafficModelProvider())
 		{
-			Query.Occupancy = &Model->GetOccupancy();
-			Query.CongestionWeight = Model->Rules.CongestionWeight;
-			Query.RunwayPenalty = Model->Rules.RunwayPenalty;
+			// THE RULES IN FORCE, through the one copy (FRouteQuery::WithRules, #449). No querying agent: the player's
+			// probe owns no claims.
+			Query.WithRules(Model->Rules, Model->GetOccupancy(), 0);
 		}
 	}
 

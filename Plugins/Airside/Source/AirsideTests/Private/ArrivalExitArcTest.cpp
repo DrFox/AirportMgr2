@@ -78,14 +78,37 @@ bool FTrafficVacatedHandoverIsContinuousTest::RunTest(const FString& Parameters)
 	// What one tick may change, with half again for the frame the handover spends twice.
 	const double SpeedStepAllowed = FMath::Max3(Airframe.Chassis.Ground.Landing.Decel, Airframe.Chassis.Ground.Taxi.Accel,
 		Airframe.Chassis.Ground.Taxi.Decel) * Dt * 1.5 + 1.0;
-	const double HeadingStepAllowed = FMath::DegreesToRadians(Airframe.Chassis.Ground.MaxTurnRateDegPerSec) * Dt * 1.5 + 1.0e-4;
+	// WHAT ONE TICK MAY TURN IS THE STEER LAW'S (#449). A pivoting airframe turns at MaxTurnRateDegPerSec flat; a
+	// rolling-steer one at v sin(lock) / L about its steered axle, and v tan(lock) / L on the final turn, which pivots
+	// about the fixed axle (TightestReversibleRadius's reason) - so tan, the larger, bounds both. The default airframe
+	// was a hand copy with no wheelbase until #449 and pivoted; the Meridian it is now rolls. Restated here rather than
+	// read off the chassis helpers, for TightestFollowableRadius's reason. Per tick, at the speed measured then.
+	const bool bRolls = Airframe.Chassis.EffectiveSteerLaw() == ESteerLaw::RollingSteer;
+	const double LockTan = FMath::Tan(FMath::DegreesToRadians(FMath::Clamp(Airframe.Chassis.Ground.MaxSteerDegrees, 0.0, 89.0)));
+	auto HeadingStepAllowedAt = [&](double AtSpeed)
+	{
+		const double Rate = bRolls ? AtSpeed * LockTan / FMath::Max(Airframe.Chassis.Wheelbase(), 1.0)
+			: FMath::DegreesToRadians(Airframe.Chassis.Ground.MaxTurnRateDegPerSec);
+		return Rate * Dt * 1.5 + 1.0e-4;
+	};
+	// THE LAW'S BOUND IS LOOSE AT TAXI SPEED - 7 degrees a tick at 1000 uu/s (#477 review) against steps of about 0.1 -
+	// so it cannot see the defect this test exists for, a heading mis-seeded at the phase flip. The HANDOVER FRAME gets
+	// its own bound: the first Taxiing tick after Arriving turns no more than half a degree. A seed off by a degree or
+	// two shows as that whole jump, because a rolling-steer follower takes an error out at v sin(error) / L, a few
+	// percent of it a tick.
+	constexpr double HandoverStepAllowedDeg = 0.5;
 
 	bool bHadGround = false;
 	FVector2D PrevAt = FVector2D::ZeroVector;
 	double PrevHeading = 0.0;
 	double PrevSpeed = -1.0;
-	double WorstSpeedStep = 0.0, WorstHeadingStep = 0.0;
-	double WorstSpeedAt = 0.0, WorstHeadingAt = 0.0;
+	EAgentPhase PrevPhase = EAgentPhase::Arriving;
+	double WorstSpeedStep = 0.0, WorstSpeedAt = 0.0;
+	// TWO WORSTS, both logged (#477 review): the largest step outright, and the step closest to its own tick's bound.
+	double LargestHeadingStep = 0.0, LargestHeadingAt = 0.0;
+	bool bHaveTightest = false;
+	double TightestMargin = 0.0, TightestStep = 0.0, TightestAt = 0.0, TightestAllowed = 0.0;
+	double HandoverStep = -1.0, HandoverAt = 0.0;
 	bool bSawTaxi = false, bParked = false;
 	int32 Ticks = 0;
 	for (; Ticks < 600 * 60; ++Ticks)
@@ -108,7 +131,21 @@ bool FTrafficVacatedHandoverIsContinuousTest::RunTest(const FString& Parameters)
 			const double SpeedStep = FMath::Abs(Speed - PrevSpeed);
 			const double HeadingStep = FMath::Abs(FMath::UnwindRadians(M.Heading - PrevHeading));
 			if (SpeedStep > WorstSpeedStep) { WorstSpeedStep = SpeedStep; WorstSpeedAt = Ticks * Dt; }
-			if (HeadingStep > WorstHeadingStep) { WorstHeadingStep = HeadingStep; WorstHeadingAt = Ticks * Dt; }
+			if (HeadingStep > LargestHeadingStep) { LargestHeadingStep = HeadingStep; LargestHeadingAt = Ticks * Dt; }
+			// THE TIGHTEST AGAINST ITS OWN TICK'S BOUND, the faster of the two speeds either side of the step. A FLAG, not
+			// a zero test: a record of a zero step was overwritten by every later tick, and logged the last one (#477 review).
+			const double AllowedHere = HeadingStepAllowedAt(FMath::Max(Speed, PrevSpeed));
+			const double Margin = AllowedHere - HeadingStep;
+			if (!bHaveTightest || Margin < TightestMargin)
+			{
+				bHaveTightest = true;
+				TightestMargin = Margin; TightestStep = HeadingStep; TightestAt = Ticks * Dt; TightestAllowed = AllowedHere;
+			}
+			if (HandoverStep < 0.0 && PrevPhase == EAgentPhase::Arriving && Agent->Phase == EAgentPhase::Taxiing)
+			{
+				HandoverStep = HeadingStep;
+				HandoverAt = Ticks * Dt;
+			}
 		}
 		// THE HANDOVER, tick by tick, so a failure is read off the numbers: the frame the
 		// phase flips and the two either side of it.
@@ -131,22 +168,32 @@ bool FTrafficVacatedHandoverIsContinuousTest::RunTest(const FString& Parameters)
 		PrevAt = M.Position;
 		PrevHeading = M.Heading;
 		PrevSpeed = Speed;
+		PrevPhase = Agent->Phase;
 		bHadGround = true;
 	}
 
 	UE_LOG(LogAirsideTests, Log,
-		TEXT("Handover measured over %d ticks: worst speed step %.1f uu/s per tick at %.2f s (allowed %.1f), worst heading step %.3f deg at %.2f s (allowed %.3f), parked %d"),
+		TEXT("Handover measured over %d ticks: worst speed step %.1f uu/s per tick at %.2f s (allowed %.1f); largest heading step %.3f deg at %.2f s; ")
+		TEXT("tightest heading step %.3f deg at %.2f s against %.3f allowed (margin %.3f); handover-frame step %.3f deg at %.2f s (allowed %.1f); parked %d"),
 		Ticks, WorstSpeedStep, WorstSpeedAt, SpeedStepAllowed,
-		FMath::RadiansToDegrees(WorstHeadingStep), WorstHeadingAt, FMath::RadiansToDegrees(HeadingStepAllowed), bParked);
+		FMath::RadiansToDegrees(LargestHeadingStep), LargestHeadingAt,
+		FMath::RadiansToDegrees(TightestStep), TightestAt, FMath::RadiansToDegrees(TightestAllowed), FMath::RadiansToDegrees(TightestMargin),
+		FMath::RadiansToDegrees(HandoverStep), HandoverAt, HandoverStepAllowedDeg, bParked);
 
 	TestTrue(TEXT("the aircraft taxied after landing"), bSawTaxi);
 	TestTrue(TEXT("and parked within ten minutes"), bParked);
 	TestTrue(FString::Printf(TEXT("no speed step beyond one tick's braking or acceleration (worst %.1f uu/s at %.2f s, allowed %.1f)"),
 			WorstSpeedStep, WorstSpeedAt, SpeedStepAllowed),
 		WorstSpeedStep <= SpeedStepAllowed);
-	TestTrue(FString::Printf(TEXT("no heading step beyond one tick's turn (worst %.3f deg at %.2f s, allowed %.3f)"),
-			FMath::RadiansToDegrees(WorstHeadingStep), WorstHeadingAt, FMath::RadiansToDegrees(HeadingStepAllowed)),
-		WorstHeadingStep <= HeadingStepAllowed);
+	TestTrue(FString::Printf(TEXT("no heading step beyond one tick's turn (tightest %.3f deg at %.2f s, allowed %.3f)"),
+			FMath::RadiansToDegrees(TightestStep), TightestAt, FMath::RadiansToDegrees(TightestAllowed)),
+		bHaveTightest && TightestMargin >= 0.0);
+	if (TestTrue(TEXT("the handover frame was measured"), HandoverStep >= 0.0))
+	{
+		TestTrue(FString::Printf(TEXT("the heading carries across the phase flip (%.3f deg on the first taxiing tick, allowed %.1f)"),
+				FMath::RadiansToDegrees(HandoverStep), HandoverStepAllowedDeg),
+			FMath::RadiansToDegrees(HandoverStep) <= HandoverStepAllowedDeg);
+	}
 	return true;
 }
 

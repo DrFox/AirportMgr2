@@ -225,4 +225,26 @@ bool FRouteErrandRefusalTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoutePolicyWithRulesTest,
+	"Airside.Model.RoutePolicy.WithRulesCarriesTheRules",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoutePolicyWithRulesTest::RunTest(const FString& Parameters)
+{
+	// #449: THE RULES REACH A QUERY WHOLE. Both figures tuned away from the query's own defaults, so a WithRules that
+	// dropped either - the rejoin's missing RunwayPenalty - reads the default and fails here.
+	FTrafficRules Rules;
+	Rules.RunwayPenalty = FRouteQuery().RunwayPenalty + 7.0;
+	Rules.CongestionWeight = FRouteQuery().CongestionWeight + 3.0;
+	FTrafficOccupancy Table;
+	FRouteQuery Q = FRouteQuery::For(ERouteErrand::Replan, FGuidelineNodeId(), FGuidelineNodeId(), 0.0, ETraversalClass::Aircraft);
+	Q.WithRules(Rules, Table, 42);
+	TestEqual(TEXT("the runway penalty is the rules'"), Q.RunwayPenalty, Rules.RunwayPenalty, 1e-12);
+	TestEqual(TEXT("so is the congestion weight"), Q.CongestionWeight, Rules.CongestionWeight, 1e-12);
+	TestTrue(TEXT("and the table it weighs"), Q.Occupancy == &Table);
+	TestEqual(TEXT("for the agent asking"), Q.QueryingAgent, 42);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

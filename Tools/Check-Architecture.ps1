@@ -362,9 +362,13 @@ $ranRules.Add('doc comments')
 # what it accepts today.
 $AllowedCallers = @(
     @{
+        # NOT AirsideSettings.cpp SINCE #449: the content-less default airframe was a hand copy of UAircraftType::
+        # Airframe() assembled from these figures, and had drifted from it (8 of 20 fields, the wrong steer law). It is
+        # BuildPiperMeridian -> Airframe() now, which this pattern does not match - a PiperMeridian*() call there again
+        # would be the hand copy coming back.
         Name        = 'PiperMeridian fallback'
         Pattern     = '(?<![A-Za-z])PiperMeridian\w*\s*\('
-        ProdAllowed = @('Public\Entities\AircraftType.h', 'Private\Entities\AircraftType.cpp', 'Private\Content\AirsideSettings.cpp')
+        ProdAllowed = @('Public\Entities\AircraftType.h', 'Private\Entities\AircraftType.cpp')
         TestAllowed = @('Private\AirsideTestFixtures.cpp')
         ProdReason  = 'go through UAirsideSettings::ResolveDefaultAirframe'
         TestReason  = 'go through TestAirframes::Piper() (AirsideTestFixtures.h)'
@@ -472,6 +476,16 @@ $AllowedCallers = @(
         ProdAllowed = @('Public\Content\AirsideSettings.h', 'Private\Content\AirsideSettings.cpp', 'Public\Present\RoadNetworkActor.h', 'Private\Present\RoadNetworkActor.cpp', 'Private\Debug\RoadJunctionGallery.cpp', 'Private\Testing\AirsideTestGraph.cpp')
         TestExempt  = $true
         ProdReason  = "go through Content/ or ARoadNetworkActor - see this row's own comment for the one pre-existing exception"
+    },
+    @{
+        # THE ROW ABOVE, ONE LEVEL DOWN (#449): the settings CDO read raw is the same bypass as GetContent() - the apron's
+        # build and upkeep rates were read that way in two plugins, outside every Resolve* door. Content/ reads it; the
+        # rest ask a resolver (ResolveApronRates for the rates).
+        Name        = 'GetDefault<UAirsideSettings> outside Content/'
+        Pattern     = 'GetDefault\s*<\s*UAirsideSettings\s*>'
+        ProdAllowed = @('Public\Content\AirsideSettings.h', 'Private\Content\AirsideSettings.cpp')
+        TestExempt  = $true
+        ProdReason  = 'ask a UAirsideSettings::Resolve* function (ResolveApronRates for the apron rates) - a raw CDO read is a second door (#449)'
     },
     @{
         # RigUtilityLookContentFields (#308, review of PR #335). ResolveRigVehicle's and
@@ -817,6 +831,27 @@ $AllowedCallers = @(
         ProdAllowed = @('Public\Model\JobBoard.h')
         TestExempt  = $true
         ProdReason  = "a catalogue row is written by FServiceFleet::ResolveCatalogue alone; read one through UJobBoard::TypeFor or GetCatalogue"
+    },
+    @{
+        # ONE HOME PER OPS DESIGN DEFAULT (#449): the refill rate was typed 500 in three files, the inbox cap 8 in two,
+        # and the fallback fuel load 0.7 beside the offer's 0.5-0.9 draw. They live in OpsDesignDefaults.h; a literal
+        # assigned to one of these names, or the draw typed out, is the next copy. A test sets them freely.
+        Name        = 'ops design default typed twice'
+        Pattern     = '\b(RefillLitresPerMinutePerPump|DepotRefillLitresPerMinutePerPump|MaxPendingOffers)\s*=\s*[0-9]|FRandRange\s*\(\s*0\.5\s*,\s*0\.9|FuelCapacityLitres\s*,\s*0\.0\s*\)\s*\*\s*0\.'
+        ProdAllowed = @('Public\Model\OpsDesignDefaults.h')
+        TestExempt  = $true
+        ProdReason  = 'use the constant in Model/OpsDesignDefaults.h - the scenario asset overrides it per game through UOpsRuntime::ApplyScenarioFigures (#449)'
+    },
+    @{
+        # THE RULES REACH A ROUTE QUERY THROUGH ONE CALL (#449): FRouteQuery::WithRules copies RunwayPenalty AND
+        # CongestionWeight off FTrafficRules. Six sites typed them across by hand, and the rejoin forgot the penalty. An
+        # assignment to either field, or the explicit-weight WithCongestion, outside the query and the rules is that
+        # copy again. A test states its own figures, so tests are exempt.
+        Name        = 'route query cost figure copied'
+        Pattern     = '(\.|->)(RunwayPenalty|CongestionWeight)\s*=(?!=)|\bWithCongestion\s*\('
+        ProdAllowed = @('Public\Model\RouteSearch.h', 'Private\Model\RouteSearch.cpp', 'Public\Model\TrafficRules.h')
+        TestExempt  = $true
+        ProdReason  = 'build the query with FRouteQuery::WithRules(Rules, Occupancy, Agent) - both figures, from the rules in force (#449)'
     }
 )
 foreach ($row in $AllowedCallers) {

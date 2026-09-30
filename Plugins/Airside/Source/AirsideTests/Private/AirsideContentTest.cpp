@@ -561,4 +561,45 @@ bool FRoadProfilesOfferTarmacAndGrassTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDefaultAirframeIsTheMeridiansOwnTest,
+	"Airside.Content.DefaultAirframeIsTheMeridiansOwn",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDefaultAirframeIsTheMeridiansOwnTest::RunTest(const FString& Parameters)
+{
+	// #449: THE CONTENT-LESS DEFAULT IS THE MERIDIAN READ THE WAY AN ASSET IS READ - BuildPiperMeridian, then
+	// UAircraftType::Airframe() - on EVERY property of FAirframe, walked by reflection so a field added next month is
+	// compared without anyone adding it here. The hand copy this replaced set 8 of 20 and drove on the wrong steer law.
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	if (Content != nullptr && !Content->DefaultAircraft.IsNull())
+	{
+		// A CONTENT DEFAULT WINS, and is the same mapping by construction (Airframe() of that asset) - but then this is
+		// not the fallback, and the comparison below would be against the wrong aeroplane.
+		AddInfo(TEXT("The content set names a DefaultAircraft; the fallback is not what ResolveDefaultAirframe returns"));
+		return true;
+	}
+
+	UAircraftType* Meridian = NewObject<UAircraftType>(GetTransientPackage());
+	UAircraftType::BuildPiperMeridian(Meridian);
+	const FAirframe Expected = Meridian->Airframe();
+	const FAirframe Resolved = UAirsideSettings::ResolveDefaultAirframe();
+
+	int32 Compared = 0;
+	for (TFieldIterator<FProperty> It(FAirframe::StaticStruct()); It; ++It)
+	{
+		++Compared;
+		TestTrue(FString::Printf(TEXT("FAirframe::%s is the Meridian's own"), *It->GetName()),
+			It->Identical_InContainer(&Resolved, &Expected));
+	}
+	// A FLOOR, NOT A COUNT: 14 on 2026-09-30, and a field added later is compared without this changing.
+	TestTrue(FString::Printf(TEXT("every property was compared (%d)"), Compared), Compared >= 14);
+
+	// THE TWO FIGURES THE HAND COPY GOT WRONG, named so a failure says what a fleet test would feel.
+	TestEqual(TEXT("it steers like every modelled aeroplane - RollingSteer, not the FChassis default Pivot"),
+		Resolved.Chassis.SteerLaw, ESteerLaw::RollingSteer);
+	TestEqual(TEXT("with the Meridian's measured wheelbase"), Resolved.Chassis.FixedAxleX, -237.8, 1e-9);
+	return true;
+}
+
 #endif

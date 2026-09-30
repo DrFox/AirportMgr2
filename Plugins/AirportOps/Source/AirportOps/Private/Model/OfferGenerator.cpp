@@ -253,7 +253,8 @@ UFlight* UOfferGenerator::MakeOffer(const FVector2D& Focus, const UAirlineDefini
 	// THE FUEL LOAD, fixed now so the row shows the size of the job before the accept - 50-90% of
 	// the tank, from this generator's own stream so a seed repeats (spec 2026-09-28-fuel-litres).
 	const double Tank = Chosen.Airframe.FuelCapacityLitres;
-	Offer->FuelLitres = Tank > 0.0 ? FMath::RoundToDouble(Tank * Stream.FRandRange(0.5, 0.9)) : 0.0;
+	Offer->FuelLitres = Tank > 0.0
+		? FMath::RoundToDouble(Tank * Stream.FRandRange(OpsDesignDefaults::FuelLoadDrawMin, OpsDesignDefaults::FuelLoadDrawMax)) : 0.0;
 
 	// CARRIED WITH THE FLIGHT, not left for the board's own field to answer later - see
 	// UFlight::ApproachFocus.

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/RoadEntity.h"
+#include "Model/OpsDesignDefaults.h"
 
 struct FServiceVehicleType;
 
@@ -77,8 +78,9 @@ public:
 class AIRPORTOPS_API FFuelRolePolicy final : public IServiceRolePolicy
 {
 public:
-	/** Litres per GAME minute per pump module a depot refills a returning vehicle at. */
-	double RefillLitresPerMinutePerPump = 500.0;
+	/** Litres per GAME minute per pump module a depot refills a returning vehicle at. UJobBoard hands its own in every
+	 *  time it asks; this default is the one design default, not a third copy of it (#449). */
+	double RefillLitresPerMinutePerPump = OpsDesignDefaults::RefillLitresPerMinutePerPump;
 
 	/**
 	 * Half a litre: a tank 0.2 L short of the job is not worth a trip to the depot, a tank that reads 999.8 of 1000 is full,

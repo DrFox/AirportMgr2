@@ -2,6 +2,7 @@
 #include "AirsideTestFixtures.h"
 #include "AirsideTestsLog.h"
 #include "Misc/AutomationTest.h"
+#include "Model/TrafficClaims.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
@@ -240,8 +241,10 @@ bool FTrafficCrossingHeadOnKeepsRunwayFreeTest::RunTest(const FString& Parameter
 	TestFalse(TEXT("neither aircraft was released onto the strip: each one's exit is the other's bar"), bEverArmed);
 	TestTrue(FString::Printf(TEXT("nobody stood still on the runway (%.1f s)"), StoodOnStrip), StoodOnStrip < 0.5);
 	TestFalse(TEXT("so the runway is FREE - a landing may be cleared past the jam"), Traffic->GetOccupancy().IsHeld(Strip, 0));
-	TestTrue(TEXT("both still hold short at their bars, noses on the lines (centre half a footprint short of 17000)"),
-		FMath::Abs(QA->Follower.Travelled - 16500.0) < 100.0 && FMath::Abs(QB->Follower.Travelled - 16500.0) < 100.0);
+	// THE BODY CENTRE, NOT Follower.Travelled (#449): route distance is the nose gear's, and the claims are measured from the centre FClaimPass::CentreOf puts BodyCentreX - SteerAxleX from it - 316 uu aft on the Meridian. The default airframe was a hand copy with no footprint until #449, so the two coincided and this read one for the other.
+	TestTrue(FString::Printf(TEXT("both still hold short at their bars, noses on the lines (centre half a footprint short of 17000: %.0f, %.0f)"),
+			FClaimPass::CentreOf(*QA), FClaimPass::CentreOf(*QB)),
+		FMath::Abs(FClaimPass::CentreOf(*QA) - 16500.0) < 100.0 && FMath::Abs(FClaimPass::CentreOf(*QB) - 16500.0) < 100.0);
 	// ON THE TRANSITION ONLY, one per waiter - not one per tick for 30 s.
 	TestTrue(FString::Printf(TEXT("the hold at the bar names the held exit, once per waiter (%d line(s))"), ExitLines),
 		ExitLines >= 1 && ExitLines <= 2);
@@ -440,7 +443,8 @@ bool FTrafficAsymmetricBarToBarHoldsTest::RunTest(const FString& Parameters)
 		bArmedWhileHeld = bArmedWhileHeld || Traffic->FindAgent(Plane)->GetCrossingPhase() != ECrossingPhase::None;
 		return true;
 	});
-	const double HeldAt = Traffic->FindAgent(Plane)->Follower.Travelled;
+	// THE BODY CENTRE, NOT Follower.Travelled (#449): route distance is the nose gear's, and the claims are measured from the centre FClaimPass::CentreOf puts BodyCentreX - SteerAxleX from it - 316 uu aft on the Meridian. The default airframe was a hand copy with no footprint until #449, so the two coincided and this read one for the other.
+	const double HeldAt = FClaimPass::CentreOf(*Traffic->FindAgent(Plane));
 	const int32 WaitingOn = Traffic->FindAgent(Plane)->GetWaitingOn();
 
 	Traffic->OccupancyForTest().ReleaseAll(CrossingExitRunwayHolder);

@@ -132,8 +132,9 @@ public:
 	static void ResetGetContentCallCountForTest() { GetContentCallCountForTest = 0; }
 
 	/**
-	 * The airframe a route wears when there is no design aircraft to ask - THE ONE place
-	 * UAircraftType::PiperMeridian*() may still be called from production code.
+	 * The airframe a route wears when there is no design aircraft to ask. With no content
+	 * DefaultAircraft it is the Meridian read the way any asset is read - BuildPiperMeridian
+	 * then UAircraftType::Airframe(), one mapping (#449) - not a hand-assembled FAirframe.
 	 *
 	 * Issue #30: those four functions used to be called directly at seven sites (RouteTool's
 	 * three *For helpers, RoadBuildController::LandAircraftNearViewFocus's four), each one a place the
@@ -143,6 +144,22 @@ public:
 	 * at all, which every automation test still is.
 	 */
 	static FAirframe ResolveDefaultAirframe();
+
+	/** The apron's two rates, as ResolveApronRates hands them out. Plain C++: an answer, not state. */
+	struct FApronRates
+	{
+		double CostPerSquareMetre = 0.0;
+		double UpkeepPerSquareMetrePerDay = 0.0;
+	};
+
+	/**
+	 * What a square metre of apron costs to lay and to keep - ApronCostPerSquareMetre and
+	 * ApronUpkeepPerSquareMetrePerDay, read in ONE place (#449). They were read raw off this class's CDO in two
+	 * plugins (the facade's apron quote, the runtime's daily upkeep), outside the Resolve* door every other content
+	 * default goes through. Zeros with no settings object, which is what both readers did by hand.
+	 * ENFORCED BY: Check-Architecture rule 4 ('GetDefault<UAirsideSettings> outside Content/')
+	 */
+	static FApronRates ResolveApronRates();
 
 	/**
 	 * The performance a SERVICE VEHICLE moves with - the one place a truck's figures live.

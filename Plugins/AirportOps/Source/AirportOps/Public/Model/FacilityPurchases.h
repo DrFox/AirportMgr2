@@ -130,8 +130,9 @@ class AIRPORTOPS_API UFacilityPurchases : public UObject
 	GENERATED_BODY()
 
 public:
-	/** Copied from UScenario::ModuleOffers at attach. A module with no row is not for sale. */
-	UPROPERTY() TMap<EDepotModule, FModuleOffer> ModuleOffers;
+	/** Copied from UScenario::ModuleOffers by UOpsRuntime::ApplyScenarioFigures. A module with no row is not for sale.
+	 *  Transient, the ruling every design figure follows (#449) - this class is not saved at all, so it only says so. */
+	UPROPERTY(Transient) TMap<EDepotModule, FModuleOffer> ModuleOffers;
 
 	/** Set by UOpsRuntime's constructor, like UAgentRescue's boards. Null refuses everything NotAFacility. */
 	UPROPERTY() TObjectPtr<UJobBoard> JobBoard = nullptr;

@@ -7,6 +7,7 @@
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/SceneComponent.h"
+#include "Content/FenceKit.h"
 #include "Engine/StaticMesh.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/DepotCapability.h"
@@ -35,20 +36,26 @@ namespace
 	constexpr double PumpHeightUu = 150.0;
 
 	/**
-	 * The chainlink kit's figures, uu - the asset README's, not chosen here. POST AND FABRIC
-	 * HEIGHT ARE ONE DECISION WITH THE TEXTURE: its V range IS 240 uu of fabric, so changing the
-	 * fabric height without regenerating chainlink.png makes the diamonds stop being square.
+	 * The chainlink kit's figures, uu - the asset README's, not chosen here, and FFenceKit's since #449 (they were
+	 * typed here). POST AND FABRIC HEIGHT ARE ONE DECISION WITH THE TEXTURE: its V range IS the fabric height, so the
+	 * fabric tiles along the run at that length - see FFenceKit::TileUu.
 	 */
-	constexpr double FencePostHeightUu = 245.0;
-	constexpr double FenceFabricHeightUu = 240.0;
-	constexpr double FenceLinePostDiameterUu = 6.0;
-	constexpr double FenceHeavyPostDiameterUu = 9.0;
+	constexpr double FencePostHeightUu = FFenceKit::PostHeightUu;
+	constexpr double FenceFabricHeightUu = FFenceKit::FabricHeightUu;
+	constexpr double FenceLinePostDiameterUu = FFenceKit::LinePostDiameterUu;
+	constexpr double FenceHeavyPostDiameterUu = FFenceKit::HeavyPostDiameterUu;
 
-	/** The asset contract's layout, gated at the truck corridor's width. */
+	// SOLVE/ CANNOT INCLUDE CONTENT/, so FenceLayout::FSpec keeps a default of its own for its tests - pinned here to the
+	// kit's, so the two 240s cannot drift into rectangles (#449).
+	static_assert(FenceLayout::FSpec{}.TileUu == FFenceKit::TileUu,
+		"FenceLayout::FSpec's TileUu default must be the chainlink kit's (FFenceKit::TileUu, the fabric height)");
+
+	/** The asset contract's layout, gated at the truck corridor's width, tiled at the kit's own length. */
 	FenceLayout::FSpec FenceSpec()
 	{
 		FenceLayout::FSpec Spec;
 		Spec.GateWidthUu = PlotYard::GateCorridorUu;
+		Spec.TileUu = FFenceKit::TileUu;
 		return Spec;
 	}
 

@@ -38,7 +38,9 @@ namespace FenceLayout
 		 */
 		double FaceOffsetUu = 3.0;
 
-		/** Run per texture tile, uu. U is distance along the edge divided by this. */
+		/** Run per texture tile, uu. U is distance along the edge divided by this. The chainlink kit's own figure is
+		 *  FFenceKit::TileUu (Content/, which Solve/ may not include); this default is pinned to it by a static_assert
+		 *  in PlotPresenter.cpp (#449). */
 		double TileUu = 240.0;
 
 		/**

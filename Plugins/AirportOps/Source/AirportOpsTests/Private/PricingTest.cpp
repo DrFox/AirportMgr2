@@ -171,4 +171,5 @@ bool FPricingBuildAndScrapTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+
 #endif

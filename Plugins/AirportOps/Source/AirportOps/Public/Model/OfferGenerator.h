@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/ArrivalPlanner.h"
+#include "Model/OpsDesignDefaults.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadEntity.h"
 #include "UObject/Object.h"
@@ -136,8 +137,10 @@ public:
 	 */
 	UPROPERTY() int32 DroppedOffers = 0;
 
-	/** The inbox cap (spec ruling 6). Copied from UScenario at attach. */
-	UPROPERTY() int32 MaxPendingOffers = 8;
+	/** The inbox cap (spec ruling 6). Copied from UScenario by UOpsRuntime::ApplyScenarioFigures. TRANSIENT (#449):
+	 *  the scenario's, never the save's - see USimClock::RealSecondsDaylight.
+	 *  ENFORCED BY: AirportOps.Model.Save.DesignFiguresAreNotSaved (not saved), AirportOps.Present.RuntimeLoad.DesignFiguresAreTheScenarios (re-applied) */
+	UPROPERTY(Transient) int32 MaxPendingOffers = OpsDesignDefaults::MaxPendingOffers;
 
 	/**
 	 * Whether this field could EVER take this airframe, and why not when it could not.
