@@ -495,7 +495,7 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		// NOT IN THE SUMMARY'S COUNTS, which are one per AGENT (Considered, above): counting a
 		// second route per pushing aeroplane made "re-resolved" go negative (2026-09-27). Said
 		// on its own line instead, when it did not survive.
-		if (Agent.Phase == EAgentPhase::Manoeuvring && Agent.TaxiOutPlan.IsValid() && !Agent.bTaxiOutStale)
+		if (Agent.Phase == EAgentPhase::Manoeuvring && Agent.TaxiOutPlan.IsValid() && !Agent.IsWaitingFor(EAgentWait::ForTaxiOutRoute))
 		{
 			const FPlanReResolver::EReResolve TaxiOut =
 				PlanReResolver.ReResolvePlan(Agent, Agent.TaxiOutPlan, 0, Context, NodeIndex);
@@ -505,7 +505,7 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 				// where you are", which is right for the step under the wheels and wrong for one
 				// the aeroplane has not reached. And NEVER ARMED FROM: its end is the old runway
 				// entry, which is where the aeroplane went when this was armed anyway.
-				Agent.MarkTaxiOutStale();
+				Agent.WaitFor(EAgentWait::ForTaxiOutRoute);
 				Agent.DisarmDeparture();
 				UE_LOG(LogAirsideTraffic, Log,
 					TEXT("Agent %d: its taxi-out did not survive the rebuild; it will be planned again where the push ends"),
@@ -1025,7 +1025,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		// Plan.Start was re-pointed to when it could be - a live goal for anything that asks it.
 		// (The stand re-offer searches a stranded waiter's stand from where it stands, not from
 		// here, since #429's review.) Spec 2026-09-07-stand-occupancy §5, amended.
-		if (!bDriving && Agent.bAwaitingStand && Plan.Start.IsSet())
+		if (!bDriving && Agent.IsWaitingFor(EAgentWait::ForStand) && Plan.Start.IsSet())
 		{
 			Agent.SetGoal(Plan.Start);
 		}
@@ -1252,8 +1252,15 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	// inbound to it, keeps it - the strip spec's ruling that the occupant finishes its
 	// turnaround (2026-09-28). StandAdmission::Judge closes it to NEW choices only.
 	// ENFORCED BY: Airside.Model.Traffic.StripClosedStandKeepsItsOccupant
+	//
+	// AND NOT A DEPARTURE HOLDING FOR ITS WAY OUT (issue #444). A held taxi out is DISARMED (the rebuild that stales it
+	// and the taxi's runway-entry guard both disarm it), so `!bDepartureArmed` let this branch take a departing aeroplane
+	// for a taxi-in whose stand had gone: retargeted to a stand, or armed to wait for one beside its taxi-out wait - the
+	// double wait two flags allowed. With one wait, the stand's would REPLACE the taxi out's. It is a departure; its own
+	// retry plans it a way out.
+	// ENFORCED BY: Airside.Model.Traffic.HeldTaxiOut.RebuildDoesNotRetargetItToAStand
 	if (!Goal.IsSet() && Agent.Class == ETraversalClass::Aircraft && Agent.AsAircraft() != nullptr
-		&& !Agent.bDepartureArmed
+		&& !Agent.bDepartureArmed && !Agent.IsWaitingFor(EAgentWait::ForTaxiOutRoute)
 		&& Failed < Plan.Steps.Num())
 	{
 		const FGuidelineNodeId ReplanFrom = UGroundTraffic::StepFromNode(Plan, Failed);
@@ -1262,7 +1269,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		if (NewStand.IsSet())
 		{
 			Agent.SetGoal(NewStand);
-			Agent.ClearAwaitingStand();
+			Agent.EndWait();
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d: its stand is gone; retargeting to the stand at node %d"),
 				Agent.Id, NewStand.Index);
 		}
@@ -1270,11 +1277,11 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		{
 			// GOAL UNCHANGED, deliberately: this branch is reached only when Goal (above)
 			// failed to resolve, so the agent's existing GoalNode - whatever it is, live or
-			// dead - is exactly what it carried into this call. SetAwaitingStand still takes
-			// it explicitly rather than leaving bAwaitingStand to flip on its own, so the
-			// invariant reads the same way at every call site: the flag never moves without
+			// dead - is exactly what it carried into this call. WaitFor still takes
+			// it explicitly rather than leaving the wait to flip on its own, so the
+			// invariant reads the same way at every call site: the wait never moves without
 			// naming the node it goes with.
-			Agent.SetAwaitingStand(Agent.GoalNode);
+			Agent.WaitFor(EAgentWait::ForStand, Agent.GoalNode);
 			UE_LOG(LogAirsideTraffic, Warning, TEXT("Agent %d: its stand is gone and no free stand is reachable; it will wait"),
 				Agent.Id);
 		}

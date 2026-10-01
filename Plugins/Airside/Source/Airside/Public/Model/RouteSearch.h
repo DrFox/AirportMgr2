@@ -165,6 +165,14 @@ struct AIRSIDE_API FRoutePlan
 	}
 
 	/**
+	 * Whether a walk that has covered Travelled uu of this plan has run its whole Length - the
+	 * end of a manoeuvre. FPushbackRun::HasArrived and FReverseRun::HasArrived spelled the same
+	 * expression each (closed #297's residue, issue #444): one copy, so the two manoeuvres cannot
+	 * disagree about when they are over. The tolerance is for a walk that stops a rounding short.
+	 */
+	bool IsRunBy(double Travelled) const { return Travelled >= Length - UE_KINDA_SMALL_NUMBER; }
+
+	/**
 	 * Which way the vehicle travels along each SPAN of Polyline - one entry per span, so
 	 * Polyline.Num() - 1 of them, Forward unless the step covering it is a bay's reverse leg.
 	 *

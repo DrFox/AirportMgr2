@@ -392,18 +392,18 @@ bool FRoadAgentInvariantMethodsTest::RunTest(const FString& Parameters)
 	Agent.ResetStall();
 	TestEqual(TEXT("ResetStall zeroes the clock"), Agent.GetStalledSeconds(), 0.0);
 
-	// SetAwaitingStand/ClearAwaitingStand: "bAwaitingStand implies GoalNode set" is the
-	// invariant the review named as maintained only by convention - SetAwaitingStand takes
-	// the goal as a parameter so a caller cannot arm the wait without saying what it is
-	// waiting from.
+	// WaitFor(ForStand)/EndWait (SetAwaitingStand/ClearAwaitingStand until #444): "waiting for a
+	// stand implies GoalNode set" is the invariant the review named as maintained only by
+	// convention - WaitFor takes the node as a parameter so a caller cannot arm the wait without
+	// saying what it is waiting from.
 	FGuidelineNodeId WaitFrom;
 	WaitFrom.Index = 13;
-	Agent.SetAwaitingStand(WaitFrom);
-	TestTrue(TEXT("SetAwaitingStand arms the wait"), Agent.bAwaitingStand);
-	TestTrue(TEXT("SetAwaitingStand sets the goal it waits from"), Agent.GoalNode == WaitFrom);
-	Agent.ClearAwaitingStand();
-	TestFalse(TEXT("ClearAwaitingStand ends the wait"), Agent.bAwaitingStand);
-	TestTrue(TEXT("ClearAwaitingStand leaves the goal alone"), Agent.GoalNode == WaitFrom);
+	Agent.WaitFor(EAgentWait::ForStand, WaitFrom);
+	TestTrue(TEXT("WaitFor arms the wait"), Agent.IsWaitingFor(EAgentWait::ForStand));
+	TestTrue(TEXT("WaitFor sets the goal it waits from"), Agent.GoalNode == WaitFrom);
+	Agent.EndWait();
+	TestTrue(TEXT("EndWait ends the wait"), Agent.IsWaitingFor(EAgentWait::None));
+	TestTrue(TEXT("EndWait leaves the goal alone"), Agent.GoalNode == WaitFrom);
 
 	return true;
 }
@@ -1151,6 +1151,58 @@ bool FRoadAgentEveryPhaseChangeNamesItsEventTest::RunTest(const FString& Paramet
 	{
 		TestTrue(*FString::Printf(TEXT("the drive reached %s"), *UEnum::GetValueAsString(Phase)), Seen.Contains(Phase));
 	}
+	return true;
+}
+
+/**
+ * ONE WAIT AT A TIME, AND A HOLD RE-ENTERED KEEPS ITS MEMORY (issue #444). The flag bAwaitingStand and the triple
+ * bTaxiOutStale / bTaxiOutHoldSaid / TaxiOutRefusedAt could both be set on one aeroplane - a held departure the rebuild
+ * then armed to wait for a stand - and the triple was reset by hand at three sites while the push-end handover wrote
+ * its flag past the mutator. EAgentWait is one value: arming a second wait REPLACES the first. And the door leaves a
+ * wait it is asked to arm again exactly as it was, because the push-end hold re-arms it every frame it holds: a door
+ * that forgot the said line and the refusal each time would say the line and ask the planner every frame.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRoadAgentOneWaitTest, "Airside.Model.RoadAgent.OneWaitAtATime",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FRoadAgentOneWaitTest::RunTest(const FString& Parameters)
+{
+	FRoadAgent Agent;
+	TestTrue(TEXT("a new agent waits for nothing"), Agent.IsWaitingFor(EAgentWait::None));
+
+	Agent.WaitFor(EAgentWait::ForTaxiOutRoute);
+	Agent.MarkWaitSaid();
+	Agent.MarkWaitRefusedAt(7);
+	// THE PUSH-END HOLD, re-entered: the same wait again.
+	Agent.WaitFor(EAgentWait::ForTaxiOutRoute);
+	TestTrue(TEXT("re-arming the same wait keeps its said line"), Agent.HasSaidWait());
+	TestTrue(TEXT("and its refusal"), Agent.WasWaitRefusedAt(7));
+
+	// THE DOUBLE WAIT: a stand wait armed on a held taxi out replaces it - there is no state with both.
+	FGuidelineNodeId From;
+	From.Index = 4;
+	Agent.WaitFor(EAgentWait::ForStand, From);
+	TestTrue(TEXT("the later wait is the agent's one wait"), Agent.IsWaitingFor(EAgentWait::ForStand));
+	TestFalse(TEXT("the taxi-out wait is gone with it - not held beside it"), Agent.IsWaitingFor(EAgentWait::ForTaxiOutRoute));
+	TestFalse(TEXT("and its payload did not carry across"), Agent.HasSaidWait() || Agent.WasWaitRefusedAt(7));
+
+	// THE DOOR'S OTHER SIDE: EndWait forgets the payload, so a new hold always asks at once.
+	Agent.WaitFor(EAgentWait::ForTaxiOutRoute);
+	Agent.MarkWaitSaid();
+	Agent.MarkWaitRefusedAt(9);
+	Agent.EndWait();
+	Agent.WaitFor(EAgentWait::ForTaxiOutRoute);
+	TestFalse(TEXT("a new hold has said nothing yet"), Agent.HasSaidWait());
+	TestFalse(TEXT("and has been refused at no revision"), Agent.WasWaitRefusedAt(9));
+
+	// THE SEAM, AT THE COMPOSITION: a taxi out marked stale while the push still runs is not yet held - the wait
+	// applies from where the push ends (IsHoldingForTaxiOut), which is what the retry pass and the card both read.
+	FRoadAgent Pushing;
+	Pushing.Phase = EAgentPhase::Manoeuvring;
+	Pushing.Pushback.Plan.Length = 1000.0;
+	Pushing.WaitFor(EAgentWait::ForTaxiOutRoute);
+	TestFalse(TEXT("a stale taxi out mid-push is not a hold yet"), Pushing.IsHoldingForTaxiOut());
+	Pushing.Pushback.Travelled = 1000.0;
+	TestTrue(TEXT("at the push's end it is"), Pushing.IsHoldingForTaxiOut());
 	return true;
 }
 

@@ -1,6 +1,10 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Model/RoadNetwork.h"
 #include "Model/RunwayFacts.h"
+#include "Model/RunwayQuery.h"
+#include "Profiles/RoadProfile.h"
+#include "Testing/AirsideTestGraph.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -61,6 +65,41 @@ bool FRunwayEndTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and the direction again"), ThereAndBack.Direction, End.Direction);
 	}
 
+	return true;
+}
+
+/**
+ * A QUERIED END'S DIRECTION IS A UNIT VECTOR, and so is its Reversed() (issue #444). FLandingRun::Start and FTakeoffRun::Start
+ * re-normalised the end they were handed; #444 dropped both copies on FRunwayEnd's own contract ("Unit vector from
+ * Threshold toward the far end"), which RunwayQuery writes as Along / Length. This holds the producers to it: a strip laid
+ * on a 3-4-5 diagonal of 50 000 uu, so a raw, unnormalised Along could not pass by accident.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRunwayEndQueriedDirectionIsUnitTest,
+	"Airside.Model.RunwayQueryEndIsUnit",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRunwayEndQueriedDirectionIsUnitTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FRoadNodeId A = Net->AddNode(FVector2D(0.0, 0.0));
+	const FRoadNodeId B = Net->AddNode(FVector2D(30000.0, 40000.0));
+	Net->AddStraightSegment(A, B, TestProfiles::Runway());
+
+	// FVector2D has no IsNormalized; unit length to a tolerance far tighter than any figure the poses are read at.
+	auto IsUnit = [](const FVector2D& V) { return FMath::IsNearlyEqual(V.SizeSquared(), 1.0, 1.0e-9); };
+	FRunwayEnd End;
+	if (!TestTrue(TEXT("the strip is found from beside its threshold"),
+		RunwayQuery::RunwayExtentAt(*Net, FVector2D(300.0, 400.0), End))) { return false; }
+	TestTrue(FString::Printf(TEXT("its Direction is unit length (%.9f)"), End.Direction.Size()), IsUnit(End.Direction));
+	TestTrue(TEXT("and so is its Reversed()'s"), IsUnit(End.Reversed().Direction));
+	TestTrue(TEXT("and PointAt walks it in uu: its far end is the strip's length away"),
+		FMath::IsNearlyEqual(FVector2D::Distance(End.Threshold, End.PointAt(End.Length)), End.Length, 1.0));
+
+	const TArray<FRunwayEnd> Departures = RunwayQuery::DepartureRunways(*Net);
+	if (!TestEqual(TEXT("one runway takes departures"), Departures.Num(), 1)) { return false; }
+	TestTrue(TEXT("the departure enumeration's end is unit too"), IsUnit(Departures[0].Direction));
+	TestTrue(TEXT("and its Reversed()'s"), IsUnit(Departures[0].Reversed().Direction));
 	return true;
 }
 

@@ -43,7 +43,7 @@ bool FStandRetargetTest::RunTest(const FString& Parameters)
 		const FRoadAgent* P = Traffic->FindAgent(Id);
 		TestEqual(TEXT("still arriving"), P->Phase, EAgentPhase::Arriving);
 		TestTrue(TEXT("its goal is now the spare stand"), P->GoalNode == A.Pose(Spare));
-		TestFalse(TEXT("and it is not waiting"), P->bAwaitingStand);
+		TestFalse(TEXT("and it is not waiting"), P->IsWaitingFor(EAgentWait::ForStand));
 		TestTrue(TEXT("the spare stand is held for it, between ticks"),
 			Traffic->GetOccupancy().IsHeld(FTrafficResource::OfNode(P->GoalNode), 0));
 	}
@@ -54,7 +54,7 @@ bool FStandRetargetTest::RunTest(const FString& Parameters)
 	Traffic->OnGraphRebuilt(*A.Net);
 	{
 		const FRoadAgent* P = Traffic->FindAgent(Id);
-		TestTrue(TEXT("awaiting a stand"), P->bAwaitingStand);
+		TestTrue(TEXT("awaiting a stand"), P->IsWaitingFor(EAgentWait::ForStand));
 		TestTrue(TEXT("with a live node to wait at"), A.Net->GetGuidelineNode(P->GoalNode) != nullptr);
 		TestEqual(TEXT("status says so"), InspectFacts::StatusOf(*P), FString(TEXT("No stand - waiting")));
 	}
@@ -72,7 +72,7 @@ bool FStandRetargetTest::RunTest(const FString& Parameters)
 	Traffic->Advance(0.05, A.Net);   // the re-offer runs at the end of a tick
 	{
 		const FRoadAgent* P = Traffic->FindAgent(Id);
-		TestFalse(TEXT("no longer waiting"), P->bAwaitingStand);
+		TestFalse(TEXT("no longer waiting"), P->IsWaitingFor(EAgentWait::ForStand));
 		TestTrue(TEXT("heading for the new stand"), P->GoalNode == A.Pose(NewStand));
 		TestEqual(TEXT("taxiing again"), P->Phase, EAgentPhase::Taxiing);
 	}
@@ -128,7 +128,7 @@ bool FStripClosedStandKeepsItsOccupantTest::RunTest(const FString& Parameters)
 		if (!TestNotNull(TEXT("the aircraft is still there"), P)) { return false; }
 		TestEqual(TEXT("still parked - not evicted by the rebuild"), P->Phase, EAgentPhase::Parked);
 		TestTrue(TEXT("on the same stand"), P->GoalNode == Parked);
-		TestFalse(TEXT("and not sent looking for another"), P->bAwaitingStand);
+		TestFalse(TEXT("and not sent looking for another"), P->IsWaitingFor(EAgentWait::ForStand));
 	}
 	return true;
 }

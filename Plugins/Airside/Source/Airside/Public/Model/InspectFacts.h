@@ -227,9 +227,12 @@ namespace InspectFacts
 	AIRSIDE_API bool DescribeStand(const UGroundTraffic* Traffic, const URoadNetwork& Network, int32 EntityIndex, FStandFacts& Out);
 
 	/**
-	 * One line, first match wins: No stand - waiting; Departure armed; the hold line (HoldLine,
-	 * the blocker named "aircraft N" - DescribeAgent names a vehicle, the game module a flight); Crossing runway;
-	 * Shutting down (Ns); Parked; On final / Landing roll; Rolling / Climbing; Taxiing.
+	 * One line, first match wins: the wait (No stand - waiting; No way to the runway - waiting); Departure
+	 * armed; the hold line (HoldLine, the blocker named "aircraft N" - DescribeAgent names a vehicle, the game
+	 * module a flight); Crossing runway; Shutting down (Ns); On final; Climbing; then the phase's own word,
+	 * FAgentPhaseTraits::DisplayText - distinct per phase, so a push reads Manoeuvring, as the flight board does,
+	 * and not Taxiing (issue #444).
+	 * ENFORCED BY: Airside.Model.InspectFacts.StatusDistinctPerPhase, .HeldTaxiOutIsNotTaxiing
 	 * A STRING, not an enum: presentation of several orthogonal model facts, and nothing
 	 * branches on it.
 	 */

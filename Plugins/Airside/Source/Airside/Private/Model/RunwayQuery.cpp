@@ -480,7 +480,7 @@ namespace RunwayQuery
 				// InUseRunwayAt resolves the end in use itself, so both probes would answer the same end twice.
 				// The use is read off the resolved end's seed: every member of a strip carries the strip's facts.
 				FRunwayEnd End;
-				if (InUseRunwayAt(Network, R.End.Threshold + R.End.Direction * 10.0, End)
+				if (InUseRunwayAt(Network, R.End.PointAt(10.0), End)
 					&& TakesTraffic(RunwayFactsFor(Network, End.Seed).Use, Traffic))
 				{
 					Out.Add(End);
@@ -502,9 +502,28 @@ namespace RunwayQuery
 
 	bool IsChainHeld(const URoadNetwork& Network, FRoadSegmentId Seed, const FTrafficOccupancy* Occupancy)
 	{
+		// THE CHAIN OVERLOAD over a fresh walk - RunwayChainOrSeed is what URoadNetwork::RunwaySurfaces made its
+		// resources from - so "held" is defined once (issue #446 item 8).
+		return Occupancy != nullptr && IsChainHeld(Network.RunwayChainOrSeed(Seed), Occupancy);
+	}
+
+	bool IsChainHeld(TConstArrayView<FRoadSegmentId> ChainOrSeed, const FTrafficOccupancy* Occupancy)
+	{
+		if (Occupancy == nullptr)
+		{
+			return false;
+		}
+		// THE STRIP'S SURFACES, as URoadNetwork::RunwaySurfaces builds them, in inline storage: this is asked per strip
+		// per frame by the freed diff, and a strip of up to eight segments stays off the heap. A longer one spills to
+		// it and is answered the same - the size is a cost, not a limit.
+		TArray<FTrafficResource, TInlineAllocator<8>> Surfaces;
+		for (const FRoadSegmentId& Segment : ChainOrSeed)
+		{
+			Surfaces.Add(FTrafficResource::OfSurface(Segment));
+		}
 		// No agent of our own to be occupying anything: nothing has been dispatched yet, so
 		// bCountOwnOccupied is false - see FTrafficOccupancy::IsAnyHeld.
-		return Occupancy != nullptr && Occupancy->IsAnyHeld(Network.RunwaySurfaces(Seed), 0, false);
+		return Occupancy->IsAnyHeld(Surfaces, 0, false);
 	}
 
 	FRunwayRank RankRunway(const URoadNetwork& Network, const FRunwayEnd& End, ERunwayTraffic Traffic,

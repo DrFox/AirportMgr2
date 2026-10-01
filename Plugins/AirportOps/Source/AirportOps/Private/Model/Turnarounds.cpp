@@ -196,7 +196,7 @@ void FTurnarounds::OnAircraftPhase(UJobBoard& Board, UGroundTraffic& Traffic, co
 		return;
 	}
 	// A PARKED EVENT IS A FACT ABOUT THE PAST: the ops bus delivers it on the next ops step (spec
-	// 2026-09-29 §1), and the agent may have moved on since. UGroundTraffic::ReofferStands redirects an
+	// 2026-09-29 §1), and the agent may have moved on since. UGroundTraffic::RetryWaiters redirects an
 	// aircraft parked on a fallback junction to a stand that freed in the same frame, and its GoalNode is
 	// then the NEW stand - acting on it would open a turnaround for an aircraft still taxiing in. Its own
 	// Parked event for the real stand follows. SINCE #436 THE AIRCRAFT CASE IS THE EVENT'S OWN: GoalAtEvent is the

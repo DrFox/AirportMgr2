@@ -398,14 +398,14 @@ bool FSendAgentByPhaseTest::RunTest(const FString& Parameters)
 			TestGraph::Rebuild(*Air.Net);
 			Traffic->OnGraphRebuilt(*Air.Net);
 			const bool bWaiting = RunUntil(*Traffic, *Air.Net, 600.0,
-				[&]() { const FRoadAgent* A = Traffic->FindAgent(Id); return A && A->Phase == EAgentPhase::Taxiing && A->bAwaitingStand; });
+				[&]() { const FRoadAgent* A = Traffic->FindAgent(Id); return A && A->Phase == EAgentPhase::Taxiing && A->IsWaitingFor(EAgentWait::ForStand); });
 			FGroundTrafficTestAccess(*Traffic).Strand(Id);
 			Traffic->ReleaseHold(Holder);
 			Traffic->Advance(0.05, Air.Net);
 			const FRoadAgent* Stranded = Traffic->FindAgent(Id);
 			const FGuidelineNode* GoalNode = Stranded != nullptr ? Air.Net->GetGuidelineNode(Stranded->GoalNode) : nullptr;
 			if (TestTrue(TEXT("an aircraft waiting for a stand, stranded well short of its goal node"), bWaiting && Stranded != nullptr
-				&& Stranded->Phase == EAgentPhase::Stranded && Stranded->bAwaitingStand && GoalNode != nullptr
+				&& Stranded->Phase == EAgentPhase::Stranded && Stranded->IsWaitingFor(EAgentWait::ForStand) && GoalNode != nullptr
 				&& FVector2D::Distance(GoalNode->Position, Stranded->LastMotion.Position) > UGroundTraffic::RescueRejoinRadius))
 			{
 				const FVector2D Was = Stranded->LastMotion.Position;

@@ -68,7 +68,7 @@ enum class ERouteRelease : uint8
 	/**
 	 * NOTHING. An extension's claims all still describe its route. The next claim pass's ReleaseExcept drops whatever
 	 * the new route does not ask for in any case - this enum is about the frame BEFORE it, when a planner reading the
-	 * table between ticks (DepartAgent, ReofferStands, the ops drain) must not see ground held for a route nobody
+	 * table between ticks (DepartAgent, the stand retry, the ops drain) must not see ground held for a route nobody
 	 * is driving.
 	 */
 	None,

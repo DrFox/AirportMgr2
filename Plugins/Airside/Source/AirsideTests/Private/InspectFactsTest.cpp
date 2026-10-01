@@ -285,6 +285,68 @@ bool FStandPartiallyJoinedIsUnserviceableTest::RunTest(const FString& Parameters
 	return true;
 }
 
+/**
+ * EVERY PHASE HAS ITS OWN LINE ON THE CARD (issue #444). StatusOf's switch ended `case Taxiing: default: return
+ * "Taxiing"`, so a pushing aeroplane and a reversing truck both read "Taxiing" while the flight board said
+ * "Manoeuvring" for the first. Walked over the REFLECTED enum, not a list typed here, so a phase added later is
+ * asked too - and two phases sharing a line fail by name.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectFactsStatusPerPhaseTest, "Airside.Model.InspectFacts.StatusDistinctPerPhase",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FInspectFactsStatusPerPhaseTest::RunTest(const FString& Parameters)
+{
+	const UEnum* Enum = StaticEnum<EAgentPhase>();
+	if (!TestNotNull(TEXT("EAgentPhase reflects"), Enum)) { return false; }
+	TMap<FString, FString> PhaseBySaid;
+	int32 Asked = 0;
+	for (int32 Index = 0; Index < Enum->NumEnums(); ++Index)
+	{
+		const FString Name = Enum->GetNameStringByIndex(Index);
+		if (Name.EndsWith(TEXT("_MAX"))) { continue; }
+		// A BARE AGENT IN EACH PHASE: no wait, no hold, not armed, not crossing - only the phase speaks.
+		FRoadAgent Agent;
+		Agent.Phase = static_cast<EAgentPhase>(Enum->GetValueByIndex(Index));
+		const FString Said = InspectFacts::StatusOf(Agent);
+		++Asked;
+		if (const FString* Other = PhaseBySaid.Find(Said))
+		{
+			AddError(FString::Printf(TEXT("%s and %s both read \"%s\" on the card"), **Other, *Name, *Said));
+			continue;
+		}
+		PhaseBySaid.Add(Said, Name);
+	}
+	TestTrue(TEXT("every phase was asked"), Asked >= 8);
+	FRoadAgent Reversing;
+	Reversing.Phase = EAgentPhase::Reversing;
+	TestNotEqual(TEXT("a reversing agent's card is not Taxiing"), InspectFacts::StatusOf(Reversing), FString(TEXT("Taxiing")));
+	FRoadAgent Pushed;
+	Pushed.Phase = EAgentPhase::Manoeuvring;
+	TestEqual(TEXT("a pushed aeroplane's card says what the flight board says"), InspectFacts::StatusOf(Pushed),
+		FString(TEXT("Manoeuvring")));
+	return true;
+}
+
+/**
+ * A HELD TAXI-OUT SAYS SO (issue #444). An aeroplane whose way to the runway died holds where its push or its taxi
+ * ended until a new one is planned - and its card read "Taxiing" (stood still) or, at the end of a push, the push's
+ * line. The wait is a fact about the agent, not about the phase it waits in.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectFactsHeldTaxiOutTest, "Airside.Model.InspectFacts.HeldTaxiOutIsNotTaxiing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FInspectFactsHeldTaxiOutTest::RunTest(const FString& Parameters)
+{
+	// A follower with no drivable plan counts as arrived (FRouteFollower::HasArrived), which is exactly where the
+	// taxi-complete guard holds a taxi-out whose route a rebuild stranded.
+	FRoadAgent Held;
+	Held.Phase = EAgentPhase::Taxiing;
+	Held.WaitFor(EAgentWait::ForTaxiOutRoute);
+	if (!TestTrue(TEXT("precondition: it is holding for a taxi-out route"), Held.IsHoldingForTaxiOut())) { return false; }
+	const FString Said = InspectFacts::StatusOf(Held);
+	TestNotEqual(TEXT("a held taxi-out's card is not Taxiing"), Said, FString(TEXT("Taxiing")));
+	TestTrue(TEXT("it says it is waiting"), Said.Contains(TEXT("waiting")));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectFactsPushbackTest, "Airside.Model.InspectFacts.PushbackDemand",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FInspectFactsPushbackTest::RunTest(const FString& Parameters)

@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
+#include "Model/ArrivalPlanner.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
@@ -10,6 +11,7 @@
 #include "Model/RouteSearch.h"
 #include "Model/TrafficOccupancy.h"
 #include "Testing/AirsideTestGraph.h"
+#include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -244,6 +246,166 @@ bool FHeldTaxiOutRestartKeepsPoseAndEngineTest::RunTest(const FString&)
 	TestTrue(TEXT("and its goal moved to the runway entry the new route ends at"),
 		Agent->GoalNode.IsSet() && Agent->GoalNode != HeldGoal
 		&& Agent->GoalNode == Agent->Follower.Plan.Steps.Last().To);
+	return true;
+}
+
+/**
+ * A HELD DEPARTURE IS NOT SENT TO A STAND BY A REBUILD (issue #444, #496's review). A taxi out that cannot be driven holds
+ * DISARMED, and FPlanReResolver::ReResolvePlan's "the goal was a stand and the stand is gone" branch asked only
+ * `!bDepartureArmed` - so a later rebuild that lost the end of the plan it held on took the departure for a taxi-in:
+ * retargeted to a free stand, or armed to wait for one beside its taxi-out wait (the double wait two flags allowed). The
+ * branch now skips an agent waiting for a taxi-out route; this drives it there for real.
+ *
+ * THE TAXI-COMPLETE GUARD'S HOLD, because its plan stays LIVE while it holds: a rebuild that loses the runway entry ahead of
+ * a taxiing departure, with no way round, TRUNCATES its taxi out, and where the truncated route ends - far from the entry -
+ * the guard disarms it and it holds, refused. (A hold on a STRANDED plan is skipped by the rebuild as not valid and never
+ * reaches the branch.) Then the plan's own end node goes, with nothing within ResolveRadius of it and a free stand
+ * reachable from the node before it - every condition of the branch but the departure's own wait.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHeldTaxiOutNotRetargetedTest, "Airside.Model.Traffic.HeldTaxiOut.RebuildDoesNotRetargetItToAStand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FHeldTaxiOutNotRetargetedTest::RunTest(const FString&)
+{
+	const FAirframe Piper = TestAirframes::Piper();
+	const FTestAirport Air = FTestAirport::Build(Piper, { .StandCount = 2 });
+	URoadNetwork* Net = Air.Net;
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+
+	// AN AEROPLANE ON A STAND, then sent off for the runway - and taxiing out, its push done.
+	const int32 Id = Traffic->DispatchArrival(*Net, Air.Threshold - FVector2D(1000.0, 0.0), Piper, 0.0);
+	if (!TestTrue(TEXT("an arrival is admitted"), Id > 0)) { return false; }
+	if (!TestTrue(TEXT("and parks"), RunUntil(*Traffic, *Net, 900.0, [&]()
+		{
+			const FRoadAgent* A = Traffic->FindAgent(Id);
+			return A != nullptr && A->Phase == EAgentPhase::Parked;
+		}))) { return false; }
+	if (!TestEqual(TEXT("it departs"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None)) { return false; }
+	if (!TestTrue(TEXT("and is taxiing out, armed"), RunUntil(*Traffic, *Net, 300.0, [&]()
+		{
+			const FRoadAgent* A = Traffic->FindAgent(Id);
+			return A != nullptr && A->Phase == EAgentPhase::Taxiing && A->bDepartureArmed;
+		}, 1.0 / 30.0))) { return false; }
+
+	// THE RUNWAY'S LINES GO - every guideline node within 30 m of the centreline, the entry among them - while the taxi out
+	// is still a step short of them: the rebuild cannot route round, and truncates the taxi out where the taxiway ends.
+	TArray<FGuidelineNodeId> OnRunway;
+	for (int32 Index = 0; Index < Net->GetGuidelineNodes().Num(); ++Index)
+	{
+		const FGuidelineNode& Node = Net->GetGuidelineNodes()[Index];
+		if (Node.bAlive && FMath::Abs(Node.Position.Y) <= 3000.0)
+		{
+			OnRunway.Add(Net->GuidelineNodeIdAt(Index));
+		}
+	}
+	for (const FGuidelineNodeId Node : OnRunway) { Net->RemoveGuidelineNode(Node); }
+	Traffic->OnGraphRebuilt(*Net);
+
+	// THE REFUSED HOLD: it taxis to where its route now ends, far from the entry; the guard disarms it, it holds, and the
+	// retry finds no way to a runway from there.
+	const int32 AskedBefore = Traffic->TaxiOutReplanAttemptsForTest();
+	if (!TestTrue(TEXT("it reaches the truncated end and holds"), RunUntil(*Traffic, *Net, 300.0, [&]()
+		{
+			const FRoadAgent* A = Traffic->FindAgent(Id);
+			return A != nullptr && A->IsHoldingForTaxiOut();
+		}, 1.0 / 30.0))) { return false; }
+	const FRoadAgent* Held = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("disarmed, its plan still live, and refused: asked, and the hold's line said"),
+		!Held->bDepartureArmed && Held->Follower.Plan.IsValid() && Held->Follower.Plan.Steps.Num() > 0
+		&& Traffic->TaxiOutReplanAttemptsForTest() > AskedBefore && Held->HasSaidWait())) { return false; }
+
+	// THE PLAN'S END NODE GOES, with no node within ResolveRadius of where it was - so the plan's goal no longer resolves -
+	// and a FREE STAND reachable from the node before it: the retarget branch's every other condition, held true here so that
+	// only the guard can be what keeps it out.
+	const FRoutePlan& Plan = Held->Follower.Plan;
+	const FGuidelineNodeId PlanEnd = Plan.Steps.Last().To;
+	const FGuidelineNode* PlanEndNode = Net->GetGuidelineNode(PlanEnd);
+	if (!TestNotNull(TEXT("the plan's end node is live"), PlanEndNode)) { return false; }
+	const FVector2D PlanEndAt = PlanEndNode->Position;
+	const FGuidelineNodeId Before = UGroundTraffic::StepFromNode(Plan, Plan.Steps.Num() - 1);
+	if (!TestTrue(TEXT("a free stand is reachable from the node before it"),
+		ArrivalPlanner::ChooseStand(*Net, Before, Piper, &Traffic->GetOccupancy(), Id).IsSet())) { return false; }
+	TestTrue(TEXT("its end node is deleted"), Net->RemoveGuidelineNode(PlanEnd));
+	if (!TestFalse(TEXT("and nothing is within ResolveRadius of where it was"),
+		RouteSearch::FindNearestNode(*Net, PlanEndAt, Held->Class, Traffic->Rules.ResolveRadius).IsSet())) { return false; }
+
+	FLogLineSpy Spy(FName(TEXT("LogAirsideTraffic")));
+	GLog->AddOutputDevice(&Spy);
+	Traffic->OnGraphRebuilt(*Net);
+	GLog->RemoveOutputDevice(&Spy);
+
+	const FRoadAgent* After = Traffic->FindAgent(Id);
+	if (!TestNotNull(TEXT("it is still there"), After)) { return false; }
+	TestFalse(TEXT("no retarget line: it was not taken for a taxi-in whose stand had gone"),
+		Spy.CapturedLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("its stand is gone")); }));
+	TestTrue(TEXT("it still waits for a way to the runway - not for a stand"), After->IsWaitingFor(EAgentWait::ForTaxiOutRoute));
+	for (const FEntityInstanceId Stand : Air.Stands)
+	{
+		TestTrue(TEXT("and its goal is no stand's pose"), After->GoalNode != Air.Pose(Stand));
+	}
+
+	// THE PLAYER'S FIX: a line from where it holds to the runway. It is asked again, finds it, and is a departure again.
+	const int32 AskedAtFix = Traffic->TaxiOutReplanAttemptsForTest();
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	TestGraph::Join(*Net, TestGraph::Node(*Net, After->LastMotion.Position.X, After->LastMotion.Position.Y),
+		TestGraph::Node(*Net, After->LastMotion.Position.X, 0.0), Options);
+	Traffic->Advance(1.0 / 30.0, Net);
+	const FRoadAgent* Fixed = Traffic->FindAgent(Id);
+	if (!TestNotNull(TEXT("it is there after the fix"), Fixed)) { return false; }
+	TestTrue(TEXT("asked again after the fix"), Traffic->TaxiOutReplanAttemptsForTest() > AskedAtFix);
+	TestTrue(TEXT("and re-armed for the runway"), Fixed->bDepartureArmed && !Fixed->IsWaitingFor(EAgentWait::ForTaxiOutRoute));
+	return true;
+}
+
+/**
+ * A HELD TAXI OUT'S RESTART IS CLAIMED BEFORE IT MOVES (issue #444, #496's review). The taxi-out replan ran between the claim
+ * pass and the motion until #444, and a restart clears the agent's arbitration (FRoadAgent::ApplyRouteChange), so the step it
+ * was restarted in ran its motion on a route no claim pass had seen. Somebody stands on the first node of the new route; the
+ * restarted aeroplane must not move toward it.
+ *
+ * NOT AN ORDER PIN, and that is a measured result, not a gap: with the replan put back before the motion (2026-10-01) this
+ * still passes, because a restart is from rest (ChangeRoute's Restart, speed 0) and the step it is made in moves the aeroplane
+ * 0 uu - the next step's Arbitrate refuses it either way. #444's end-of-step retry is the one pass's place, not a motion fix.
+ * What it pins is the behaviour at the composition: a held taxi out restarted toward a node somebody stands on is refused
+ * there, by that agent, and stays put.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHeldTaxiOutRestartClaimedFirstTest, "Airside.Model.Traffic.HeldTaxiOut.RestartIsClaimedBeforeItMoves",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FHeldTaxiOutRestartClaimedFirstTest::RunTest(const FString&)
+{
+	using namespace HeldTaxiOutGateTest;
+	const FGateField F = Build();
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Id = HoldWithNoWayOut(F, *Traffic);
+	if (!TestTrue(TEXT("it holds for a way out"), Id > 0)) { return false; }
+	const FRoadAgent* Held = Traffic->FindAgent(Id);
+	const FVector2D HeldAt = Held->LastMotion.Position;
+
+	// THE FIX, AND ITS FIRST NODE TAKEN: RestartKeepsPoseAndEngine's line from J to the runway - the replan starts at J, the
+	// node nearest where it holds - and agent 99 standing on J (a phantom, GroundTrafficTest's way of planting one).
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	TestGraph::Join(*F.Net, F.J, TestGraph::Node(*F.Net, 0.0, 0.0), Options);
+	const FGuidelineNodeId Taken = F.J;
+	FTrafficClaim Sitting;
+	Sitting.AgentId = 99;
+	Sitting.Resource = FTrafficResource::OfNode(Taken);
+	Sitting.bOccupied = true;
+	FTrafficClaim Blocker;
+	Traffic->OccupancyForTest().TryClaim(Sitting, Blocker);
+
+	// TWO SUBSTEPS: the one the replan happens in, and the first it could move in under either order.
+	const int32 AskedBefore = Traffic->TaxiOutReplanAttemptsForTest();
+	Traffic->Advance(1.0 / 30.0, F.Net);
+	Traffic->Advance(1.0 / 30.0, F.Net);
+	const FRoadAgent* Agent = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("it was replanned onto the new line, starting at J"),
+		Agent != nullptr && Traffic->TaxiOutReplanAttemptsForTest() > AskedBefore && !Agent->IsHoldingForTaxiOut()
+		&& Agent->Follower.Plan.Start == Taken)) { return false; }
+	TestEqual(TEXT("the claim pass saw the new route and refused it at J"), Agent->GetWaitingOn(), 99);
+	const double Moved = FVector2D::Distance(Agent->LastMotion.Position, HeldAt);
+	TestTrue(FString::Printf(TEXT("and it has not moved toward J - %.4f uu"), Moved),
+		Moved < 0.001);
 	return true;
 }
 

@@ -1240,6 +1240,28 @@ $AllowedCallers = @(
         ProdAllowed = @('Private\Present\OpsRuntime.cpp')
         TestExempt  = $true
         ProdReason  = 'point a publisher at the bus by adding it to UOpsRuntime::Publishers(); Attach and Detach are the only writers of its slots (#445)'
+    },
+    @{
+        # RULE 82 (#444): AN AGENT'S WAIT IS WRITTEN THROUGH ITS DOOR. EAgentWait and its payload (bWaitSaid, WaitRefusedAt) replaced
+        # bAwaitingStand and a flag triple that was reset by hand at three sites, one of them a bare `bTaxiOutStale = true` past the
+        # mutator. The fields are private, but UGroundTraffic and FClaimPass are FRoadAgent's friends and compile a direct write - so
+        # this, not access, is what keeps them to FRoadAgent::WaitFor / EndWait (which leave a re-armed wait's payload as it was).
+        # FRoadAgent's own two files are the door; rule 6's `Agent.<field> =` shape misses a write through any other name.
+        Name        = 'agent wait written outside its door (rule 82)'
+        Pattern     = '\b(?:Wait|bWaitSaid|WaitRefusedAt)\s*=(?!=)|\bWaitRefusedAt\s*\.\s*(?:Reset|Emplace)\s*\('
+        ProdAllowed = @('Public\Model\RoadAgent.h', 'Private\Model\RoadAgent.cpp')
+        TestExempt  = $true
+        ProdReason  = 'arm or end a wait through FRoadAgent::WaitFor / EndWait, and its payload through MarkWaitSaid / MarkWaitRefusedAt / ForgetWaitRefusal - the door keeps the wait and its payload together (#444)'
+    },
+    @{
+        # RULE 83 (#444): A POINT ON A RUNWAY IS FRunwayEnd::PointAt. "Threshold + Direction * x" was spelled at five sites after #88
+        # bundled the end (the landing and take-off poses, the taxi's runway-entry guard, two probes just inside an end) - the
+        # #88 shape, back. DOES NOT SEE the sum through a local copy of either field.
+        Name        = 'runway point spelled by hand (rule 83)'
+        Pattern     = '\bThreshold\s*\+\s*[\w\.\->]*Direction\s*\*'
+        ProdAllowed = @('Public\Model\RunwayFacts.h')
+        TestExempt  = $true
+        ProdReason  = 'ask FRunwayEnd::PointAt(Along) - the one spelling of a point along the strip (#444)'
     }
 )
 # EACH FILE'S COMMENT-STRIPPED LINES, made once and only for a file some row's raw pattern hits (Strip-ArchComments, with the helpers at the top).
@@ -4033,6 +4055,87 @@ if ($phaseSwitchesSeen -eq 0) {
 }
 $ranRules.Add('flight-phase-groupings')
 
+# --- 81. NO default: IN A SWITCH ON EAgentPhase (#444) ----------------------------------------------------------------
+# What each agent phase MEANS was spelled by its consumers, behind default: arms - StatusOf's `case Taxiing: default:` put a
+# push and a reverse on the card as "Taxiing" while the flight board said Manoeuvring; DistanceAlongPlan, SpeedAlongPlan and
+# DescribeMotion gave a phase they did not name the follower's figures; FRoadAgent::Advance would have returned false ("drop
+# this agent") for one. Reversing (2026-09-17) and Stranded (2026-09-28) each fell into somebody's default on arrival. What a
+# phase means is FAgentPhaseTraits' row now (Model/AgentPhase.h, whose count fails the build for a phase with no row); a
+# switch that still decides per phase names EVERY phase. A switch whose body has a `case EAgentPhase::` (rule 58(d)'s shape:
+# comments and strings stripped, the body flattened to its own depth so a nested switch's default is not this one's), in any
+# production file of Airside, AirsideEditor, AirportOps or the game module, FAILS when:
+#   a. it has a `default:` - a new phase becomes that switch's fallback, silently;
+#   b. it is not inside AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN/_END - C4062 is off on this toolchain, so "no default" alone is a
+#      comment, not a contract (ExhaustiveSwitch.h): a phase missing from the switch would compile and fall through.
+# NOT BANNED: an `if` on one phase, a grouping by `||` (not linted - see below), and anything in a test. WHAT NO REGEX SEES:
+# a phase set spelled as an OR of comparisons (`Phase == Parked || Phase == Stranded`) - rule 58(b)'s shape for flight
+# phases; for agent phases the remaining ones are transition tests and arms of one-off decisions (#444's PR lists them), and
+# the pin on the MEANING is Airside.Model.Traffic.IsOnRouteClassifiesEveryPhase (every column, every phase). Nothing is
+# allow-listed: FTurnarounds::OnAircraftPhase (#427's split of UJobBoard::OnAgentPhase) has no switch on a phase. The rule fails,
+# rather than passes, when it sees no switch on EAgentPhase at all - FRoadAgent::Advance is one. THE BODY IS READ FROM THE
+# SWITCH'S OWN BRACE (#496's review): the scan used to start at the first `{` anywhere on the switch's line, so a brace EARLIER on
+# that line (`case X: { switch (Phase) {`) opened the scan one level too high, blanked the switch's body as nested and skipped it.
+# Mutation-checked 2026-10-01 (the PR body has the output), that shape included.
+$agentPhaseTrees = @($plugin, $editor, $ops, (Join-Path $Root 'Source\AirportMgr'))
+$agentPhaseSwitchesSeen = 0
+foreach ($agentPhaseTree in $agentPhaseTrees) {
+    foreach ($file in Get-Sources $agentPhaseTree @('.cpp', '.h')) {
+        if ($file.Name -like '*Test.cpp' -or $file.Name -like '*Test.h' -or $file.FullName -match '[\\/]Testing[\\/]') { continue }
+        $lines = Get-Content -LiteralPath $file.FullName
+        if (-not ($lines -match 'case\s+EAgentPhase::')) { continue }
+        $inBlock = $false
+        $codeLines = New-Object System.Collections.Generic.List[string]
+        $exhaustiveAt = New-Object System.Collections.Generic.List[bool]
+        $exhaustive = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            if ($code -match '\bAIRSIDE_EXHAUSTIVE_SWITCH_BEGIN\b') { $exhaustive = $true }
+            $codeLines.Add($code)
+            $exhaustiveAt.Add($exhaustive)
+            if ($code -match '\bAIRSIDE_EXHAUSTIVE_SWITCH_END\b') { $exhaustive = $false }
+        }
+        for ($i = 0; $i -lt $codeLines.Count; $i++) {
+          foreach ($switchAt in [regex]::Matches($codeLines[$i], '\bswitch\s*\(')) {
+            # THE SWITCH'S OWN BRACE: the first `{` AFTER the keyword, on its line or the next three - never one before it.
+            $open = -1
+            $openCol = 0
+            for ($j = $i; $j -lt [Math]::Min($i + 4, $codeLines.Count); $j++) {
+                $from = if ($j -eq $i) { $switchAt.Index } else { 0 }
+                $col = $codeLines[$j].IndexOf('{', $from)
+                if ($col -ge 0) { $open = $j; $openCol = $col; break }
+            }
+            if ($open -lt 0) { continue }
+            $depth = 0
+            $flat = New-Object System.Text.StringBuilder
+            $closed = $false
+            for ($j = $open; $j -lt $codeLines.Count -and -not $closed; $j++) {
+                $text = if ($j -eq $open) { $codeLines[$j].Substring($openCol) } else { $codeLines[$j] }
+                foreach ($ch in $text.ToCharArray()) {
+                    if ($ch -eq '{') { $depth++; if ($depth -gt 1) { [void]$flat.Append(' ') } }
+                    elseif ($ch -eq '}') { $depth--; if ($depth -eq 0) { $closed = $true; break } else { [void]$flat.Append(' ') } }
+                    elseif ($depth -eq 1) { [void]$flat.Append($ch) }
+                    else { [void]$flat.Append(' ') }
+                }
+                [void]$flat.Append(' ')
+            }
+            $body = $flat.ToString()
+            if ($body -notmatch '\bcase\s+EAgentPhase::') { continue }
+            $agentPhaseSwitchesSeen++
+            if ($body -match '\bdefault\s*:') {
+                $failures.Add("agent-phase-switch: $($file.FullName):$($i + 1) switches on EAgentPhase with a default - name every phase, so a new one is a build error here and not this switch's fallback; what a phase MEANS is FAgentPhaseTraits' row (#444)")
+            }
+            if (-not $exhaustiveAt[$i]) {
+                $failures.Add("agent-phase-switch: $($file.FullName):$($i + 1) switches on EAgentPhase outside AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN/_END - C4062 is off on this toolchain, so a new phase would pass it silently (#444)")
+            }
+          }
+        }
+    }
+}
+if ($agentPhaseSwitchesSeen -eq 0) {
+    $failures.Add("agent-phase-switch: found no switch on EAgentPhase in the production trees - FRoadAgent::Advance is one; rule 81's switch check no longer sees its shape; update it, do not let it check nothing")
+}
+$ranRules.Add('agent-phase-switch')
+
 # --- 66. THE WINDOWS A KEY OPENS ARE TOGGLED WINDOWS (#447) ----------------------------------------------------
 # Whether a window is open is the HOST'S (UUiWindowHost::Toggle/IsShown), and what its close button means is FUiWindowSpec::bToggled: a toggled window's
 # close IS the toggle, an untoggled one's sticks. UBuildHudLayer::PanelFor is the list of windows a key or a bar button toggles, and every panel on it must
@@ -4594,11 +4697,16 @@ $modelLineDefault = 800
 $modelLineSlack = 50
 $modelLineBudget = [ordered]@{
     'Plugins\Airside\Source\Airside\Private\Model\RoadNetwork.cpp'            = 2287   # raised from 2200 by #495: #490/#450 load migrations (depot backfill in EnsureStandNumbers, EnsureStandFrontages, the stand-entrance default in PlaceEntity)
-    'Plugins\Airside\Source\Airside\Private\Model\GroundTraffic.cpp'          = 2121
+    # 2026-10-01 #444: lowered from 2121 - the retry pass and its two arms went to GroundTrafficWaiters.cpp (one responsibility).
+    'Plugins\Airside\Source\Airside\Private\Model\GroundTraffic.cpp'          = 1954
     'Plugins\Airside\Source\Airside\Private\Model\TrafficClaims.cpp'          = 1898
     'Plugins\AirportOps\Source\AirportOps\Private\Model\FlightBoard.cpp'      = 1746
-    'Plugins\Airside\Source\Airside\Private\Model\RoadAgent.cpp'              = 1583
-    'Plugins\Airside\Source\Airside\Private\Model\GroundTrafficRebuild.cpp'   = 1582
+    # 2026-10-01 #444: raised from 1583. The wait's one door (WaitFor/EndWait, in place of three flag mutators and a bare write) and
+    # the exhaustive-switch reasons on DescribeMotion and Advance (a phase added is a build error there now). No natural cut: what
+    # is left of the size is Advance's per-phase arms and the engine/gear state, the struct's own; a sibling file would only dodge.
+    'Plugins\Airside\Source\Airside\Private\Model\RoadAgent.cpp'              = 1610
+    # 2026-10-01 #444: raised from 1582 - the retarget branch's guard for a held departure, with its reason and its test.
+    'Plugins\Airside\Source\Airside\Private\Model\GroundTrafficRebuild.cpp'   = 1589
     'Plugins\Airside\Source\Airside\Private\Model\RouteSearch.cpp'            = 1191
     'Plugins\AirportOps\Source\AirportOps\Private\Model\JobBoard.cpp'         = 1048
     'Plugins\Airside\Source\Airside\Private\Model\ArrivalPlanner.cpp'         = 943

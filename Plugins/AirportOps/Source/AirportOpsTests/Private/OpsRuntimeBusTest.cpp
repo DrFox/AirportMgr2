@@ -264,7 +264,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeBusStaleParkedTest, "AirportOps.Pres
 bool FOpsRuntimeBusStaleParkedTest::RunTest(const FString&)
 {
 	// THE STAGE 1 REVIEW'S SCENARIO (finding 1): the bus delivers Parked a step late, and by then
-	// UGroundTraffic::ReofferStands may have redirected the aircraft to a stand that freed - so its
+	// UGroundTraffic::RetryWaiters may have redirected the aircraft to a stand that freed - so its
 	// GoalNode is a STAND while it is still taxiing. Staged directly: an aircraft taxiing to a stand,
 	// and a Parked event for it that is no longer true.
 	FAirsideTestWorld TestWorld;
@@ -1005,7 +1005,7 @@ namespace
 			Traffic->OnGraphRebuilt(*Field.Net);
 			Drain();
 			const FRoadAgent* P = Aircraft();
-			return P != nullptr && P->bAwaitingStand
+			return P != nullptr && P->IsWaitingFor(EAgentWait::ForStand)
 				&& RunUntil(600.0, [this]() { const FRoadAgent* A = Aircraft(); return A != nullptr && A->Phase == EAgentPhase::Parked; }, bDrain);
 		}
 	};
@@ -1110,7 +1110,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSameFrameRedirectTest, "AirportOps.Model.Bus.S
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FSameFrameRedirectTest::RunTest(const FString&)
 {
-	// REVIEW M7: the Parked event is heard a step late, and ReofferStands may have redirected the aeroplane to a
+	// REVIEW M7: the Parked event is heard a step late, and RetryWaiters may have redirected the aeroplane to a
 	// freed stand before it is - so its LIVE goal IS a stand while it is taxiing. The flight must not enter Turnaround
 	// from that stale Parked. Since #436 the boards decide on the event's GoalAtEvent - the junction it parked on -
 	// and this is the half of that rule FallbackParkStaysTaxiIn cannot reach: a board that read the live goal instead

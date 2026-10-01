@@ -131,5 +131,5 @@ struct AIRSIDE_API FReverseRun
 		FVector2D& OutPosition, double& OutHeading);
 
 	/** True once the vehicle has backed the length of its manoeuvre. */
-	bool HasArrived() const { return Travelled >= Plan.Length - UE_KINDA_SMALL_NUMBER; }
+	bool HasArrived() const { return Plan.IsRunBy(Travelled); }
 };

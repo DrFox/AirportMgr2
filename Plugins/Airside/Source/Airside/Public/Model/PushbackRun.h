@@ -82,5 +82,5 @@ struct AIRSIDE_API FPushbackRun
 		FVector2D& OutPosition, double& OutHeading);
 
 	/** True once the manoeuvre has run the length of its route. */
-	bool HasArrived() const { return Travelled >= Plan.Length - UE_KINDA_SMALL_NUMBER; }
+	bool HasArrived() const { return Plan.IsRunBy(Travelled); }
 };

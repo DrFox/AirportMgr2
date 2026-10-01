@@ -107,8 +107,10 @@ bool FLandingRun::Begin(const FRunwayEnd& InEnd, const FAirframe& InAirframe, do
 
 	VacateAt = InVacateAt;
 
+	// AS GIVEN, NOT RE-NORMALISED (issue #444, closed #297's residue): FRunwayEnd::Direction is a unit vector by its
+	// own contract, written by RunwayQuery (Along / Length) and Reversed (negated), and FTakeoffRun normalised its own
+	// copy too - two consumers re-deriving the one fact the struct owns. A zero direction is still refused above.
 	End = InEnd;
-	End.Direction = InEnd.Direction.GetSafeNormal();
 	// Ground/Climb/Approach are NOT copied here any more (issue #83) - Advance takes the
 	// airframe fresh from its caller every frame instead.
 
@@ -283,7 +285,7 @@ bool FLandingRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 		break;
 	}
 
-	OutPosition = End.Threshold + End.Direction * Travelled;
+	OutPosition = End.PointAt(Travelled);
 	OutHeading = Heading;
 	OutAltitude = Altitude;
 	OutPitch = Pitch;
