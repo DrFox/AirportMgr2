@@ -956,8 +956,8 @@ $AllowedCallers = @(
         # NO ONE-STRING FACE (#445 item 7): a dynamic delegate whose one argument is an FString is a sentence its publisher
         # decided - UOpsEvents::OnNotification and OnWarning were, and every save, load and purchase toast they carried was
         # worded in UOpsRuntime. A face carries facts (an enum, a USTRUCT, the nouns their owners name) and the toast widget
-        # composes the sentence. FOpsLandRefused (Airside's refusal sentence BESIDE its reason, #456 review) and FOpsBuildRefused
-        # (three nouns) are not one-string faces. FString OR FText, by reference OR by value (#499 review): an FText sentence is
+        # composes the sentence. FOpsLandRefused and FOpsArrivalRefused (Airside's refusal sentence BESIDE its reason - #456
+        # review, and #471 for a dispatch's) and FOpsBuildRefused (three nouns) are not one-string faces. FString OR FText, by reference OR by value (#499 review): an FText sentence is
         # the same catch-all, localised.
         Name        = 'one-string dynamic delegate (a sentence face)'
         Pattern     = 'DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam\s*\(\s*\w+\s*,\s*(?:const\s+)?(?:FString|FText)\s*&?\s*,'
