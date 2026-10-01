@@ -100,7 +100,7 @@ struct FToolRegistration
 	 * edit are one fact about that tool - CLAUDE.md's "lists that must agree are ONE list",
 	 * applied before the second list exists rather than after it has drifted. Read in
 	 * exactly one place, FBuildSession::MakeContext, and asserted entry-by-entry by name in
-	 * Airside.Tool.EditHandlesAreDeclaredForEveryRegistryEntry.
+	 * Airside.Tool.RegistryRulingsAreDeclaredForEveryEntry.
 	 */
 	EEditHandleKind EditHandles = EEditHandleKind::None;
 

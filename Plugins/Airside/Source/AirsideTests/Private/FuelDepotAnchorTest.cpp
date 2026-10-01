@@ -183,10 +183,10 @@ bool FStandFuelAnchorJoinsRoadTest::RunTest(const FString& Parameters)
 	// meaningless, and it is the half every existing test relies on.
 	TestTrue(TEXT("the stand's own pose still joins the taxiway"), IncidentCount(*Net, Pose) > 0);
 
-	const TArray<FName> FuelIds = Net->GetAnchorIdsForRole(Placed, EServiceRole::Fuel);
-	if (!TestEqual(TEXT("the stand has one fuel anchor"), FuelIds.Num(), 1)) { return false; }
+	const FName FuelId = Net->FirstAnchorIdForRole(Placed, EServiceRole::Fuel);
+	if (!TestFalse(TEXT("the stand has a fuel anchor"), FuelId.IsNone())) { return false; }
 
-	const FResolvedAnchor* Fuel = Net->FindResolvedAnchor(Placed, FuelIds[0]);
+	const FResolvedAnchor* Fuel = Net->FindResolvedAnchor(Placed, FuelId);
 	if (!TestNotNull(TEXT("it resolved to a node"), Fuel)) { return false; }
 	TestTrue(TEXT("and now joins the road"), IncidentCount(*Net, Fuel->Node) > 0);
 

@@ -70,10 +70,11 @@ void GraphOverlay::DescribeStands(const URoadNetwork& Network, IToolPreviewSink&
 
 		// NO STOP MARK AND NO POSE RING, for any kind, since 2026-09-27. They were an
 		// AIRCRAFT's - where its nose gear stops (Pending) and a second ring at a different
-		// radius saying which pose was committed (StandPose) - and a depot lost both first, as
-		// unexplained circles on the road. A stand lost them when its stop became PAINT
-		// (FStandMarkingBuilder's stop bar, 6 m across): the ground now says where to stop, at
-		// every zoom and with the overlay off, so two rings on top of it only said it again.
+		// radius saying which pose was committed (EPreviewStyle::StandPose, since deleted) - and a
+		// depot lost both first, as unexplained circles on the road. A stand lost them when its
+		// stop became PAINT (FStandMarkingBuilder's stop bar, 6 m across): the ground now says
+		// where to stop, at every zoom and with the overlay off, so two rings on top of it only
+		// said it again.
 		// The heading they helped read is still unmistakable from the footprint above.
 		// ENFORCED BY: Airside.Tool.StandOverlayMarkers, Airside.Tool.DepotOverlayMarkers
 

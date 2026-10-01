@@ -27,7 +27,7 @@ ARoadBuildHUD::ARoadBuildHUD()
 		EPreviewStyle::Refused, EPreviewStyle::Guideline, EPreviewStyle::Route,
 		EPreviewStyle::RunwayHoldingPosition, EPreviewStyle::IntermediateHoldingPosition,
 		EPreviewStyle::Hover, EPreviewStyle::Selected, EPreviewStyle::NodeStub,
-		EPreviewStyle::NodeThrough, EPreviewStyle::NodeJunction, EPreviewStyle::StandPose,
+		EPreviewStyle::NodeThrough, EPreviewStyle::NodeJunction,
 		EPreviewStyle::ServiceAnchor, EPreviewStyle::Pinned, EPreviewStyle::Provisional,
 		EPreviewStyle::Guide, EPreviewStyle::Handle, EPreviewStyle::ReverseRoute,
 		EPreviewStyle::ReverseGuideline, EPreviewStyle::ServiceEdge,
@@ -70,10 +70,10 @@ void ARoadBuildHUD::DrawHUD()
 
 	// The graph first, so the tool's intent overdraws it rather than hiding beneath it.
 	//
-	// Two calls, not one: bDrawNodes and bDrawStands are INDEPENDENT toggles, and
-	// GraphOverlay::Describe would force them to rise and fall together. See GraphOverlay.h
-	// for why the split exists and why RoadBuildEditorTool::DrawPersistentState - which has
-	// no such toggle - calls Describe instead.
+	// Two calls, not one: bDrawNodes and bDrawStands are INDEPENDENT toggles, and a combined
+	// Describe would force them to rise and fall together - which is why there is none (see
+	// the tombstone in GraphOverlay.h; RoadBuildEditorTool::DrawPersistentState makes the same
+	// two calls, with the node rings behind the session's own toggle).
 	// AND THE SESSION'S ANSWER, not instead of bDrawNodes: that flag is the level author's
 	// master switch and stays one. This is the per-gesture question - the rings are
 	// scaffolding, and an airport being looked at rather than built should read as an

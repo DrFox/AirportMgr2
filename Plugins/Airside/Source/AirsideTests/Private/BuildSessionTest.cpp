@@ -9,6 +9,7 @@
 #include "Tool/SelectTool.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/SnapGuideChain.h"
+#include "ToolRegistryRulings.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -143,10 +144,12 @@ bool FBuildSessionTest::RunTest(const FString& Parameters)
 /**
  * EVERY REGISTERED TOOL HAS A CLEARANCE-STRIP DECISION (strip stage 3; spec: "a test
  * enumerates the placement tools and asserts each one's preview refuses a footprint inside a
- * strip, so a new tool that forgets the query goes red"). LISTS THAT MUST AGREE: the table
- * below and ToolRegistry() are checked by NAME, both ways - a registration missing from the
+ * strip, so a new tool that forgets the query goes red"). LISTS THAT MUST AGREE: the Strip
+ * column of ToolRegistryRulings.h and ToolRegistry() are checked by NAME, both ways, by
+ * Airside.Tool.RegistryRulingsAreDeclaredForEveryEntry - a registration missing from the
  * table fails naming it, so no tool ships without a ruling; a table row naming no registered
- * tool fails too, so a renamed tool cannot leave a stale row passing for it.
+ * tool fails too, so a renamed tool cannot leave a stale row passing for it (#462 M6 moved
+ * that half there, where the same table's other columns are checked).
  *
  * Each Judged row then asks ITS evaluator - the one the tool's readout and the facade's commit
  * both call (WhySegmentRefused for Taxiway/Road, WhyStandRefused for Stand, WhyPlotRefused for
@@ -161,39 +164,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FEveryPlacementToolHonoursTheStripTest::RunTest(const FString& Parameters)
 {
-	enum class EStripCoverage : uint8 { Judged, ExemptApron, ExemptRunway, PlacesNoPavement };
-	struct FRow { const TCHAR* Id; EStripCoverage Coverage; };
-	const FRow Table[] = {
-		{ TEXT("Taxiway"),         EStripCoverage::Judged },            // Task 4
-		{ TEXT("Road"),            EStripCoverage::Judged },            // Task 4
-		{ TEXT("Stand"),           EStripCoverage::Judged },            // #390
-		{ TEXT("FuelDepot"),       EStripCoverage::Judged },            // Task 5
-		{ TEXT("Apron"),           EStripCoverage::ExemptApron },       // plan ruling 1: aircraft pavement
-		{ TEXT("Runway"),          EStripCoverage::ExemptRunway },      // plan ruling 2: its own strip rules
-		{ TEXT("Select"),          EStripCoverage::PlacesNoPavement },
-		{ TEXT("Guideline"),       EStripCoverage::PlacesNoPavement },  // routing links on existing pavement
-		{ TEXT("HoldingPosition"), EStripCoverage::PlacesNoPavement },  // a mark on an existing node
-	};
-	const auto Find = [&Table](FName Id) -> const FRow*
-	{
-		for (const FRow& Row : Table)
-		{
-			if (Id == FName(Row.Id)) { return &Row; }
-		}
-		return nullptr;
-	};
-
-	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
-	for (const FToolRegistration& Tool : Registry)
-	{
-		TestNotNull(*FString::Printf(TEXT("registered tool '%s' has a clearance-strip decision in this table"),
-			*Tool.Id.ToString()), Find(Tool.Id));
-	}
-	for (const FRow& Row : Table)
-	{
-		TestTrue(*FString::Printf(TEXT("table row '%s' names a registered tool"), Row.Id),
-			Registry.ContainsByPredicate([&Row](const FToolRegistration& Tool) { return Tool.Id == FName(Row.Id); }));
-	}
+	// THE ROWS ARE ToolRegistryRulings.h's Strip column, one list with the registry checks.
+	const TConstArrayView<ToolRegistryRulings::FRow> Table = ToolRegistryRulings::Rows();
 
 	// THE JUDGED ROWS, each through its own evaluator on one field: a 24 m taxiway along y 0,
 	// keep-out 40 m.
@@ -220,9 +192,9 @@ bool FEveryPlacementToolHonoursTheStripTest::RunTest(const FString& Parameters)
 	const double StandWd = IcaoCode::StandWidthForLetter(EIcaoCode::C);
 	const double StandDp = IcaoCode::StandDepthForLetter(EIcaoCode::C);
 
-	for (const FRow& Row : Table)
+	for (const ToolRegistryRulings::FRow& Row : Table)
 	{
-		if (Row.Coverage != EStripCoverage::Judged) { continue; }
+		if (Row.Strip != ToolRegistryRulings::EStripCoverage::Judged) { continue; }
 		const FName Id(Row.Id);
 		FString Inside, Clear;
 		if (Id == FName(TEXT("Taxiway")))

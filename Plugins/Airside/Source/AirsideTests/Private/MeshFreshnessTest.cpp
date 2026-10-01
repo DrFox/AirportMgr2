@@ -155,9 +155,8 @@ bool FMeshRebuildsOnFacadeChangeTest::RunTest(const FString& Parameters)
 	}
 
 	// One isolated node, purely to bring the network into being - see MeshIsFreshAfterLoad's
-	// own comment on PlaceNode for why this is how every test here does it. Captured: the
-	// #77 section below reconnects to this exact node rather than assuming its index.
-	const int32 FirstNode = Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	// own comment on PlaceNode for why this is how every test here does it.
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 	const int32 Before = Actor->GetPresenter()->SurfaceTriangleCountForTest();
 
 	URoadProfile* Runway = TestProfiles::Runway();
@@ -188,52 +187,28 @@ bool FMeshRebuildsOnFacadeChangeTest::RunTest(const FString& Parameters)
 		"the runway existed, with no explicit RebuildMesh() call either"),
 		AfterUndo, Before);
 
-	// --- Issue #77: the ten mutators that used to leave notification to the TOOL ---------
+	// --- Issues #77, #125, #179: THE PER-MUTATOR "EXACTLY ONCE" COUNTS ARE NOT HERE ANY MORE ---
 	//
-	// RebuildCountForTest, not the triangle buffer, is the signal from here on: PlaceNode on
-	// an isolated point and MoveNode both leave the triangle count exactly where it was (a
-	// lone node draws nothing; a move keeps the same segment and profile, just shifted
-	// vertices), so a test that only compared triangle counts could pass while the broadcast
-	// itself was missing. A count survives both cases.
-	// EXACTLY ONE rebuild per successful call, not merely "at least one" - a mutator that
-	// notified twice for one edit would pass a "!=" check just as happily, and issue #77 is
-	// specifically about there being ONE broadcast point per commit.
-	const int32 RebuildsBeforePlaceNode = Actor->RebuildCountForTest();
-	const int32 SecondNode = Actor->PlaceNode(FVector2D(2000.0, 2000.0));
-	TestTrue(TEXT("a second node is placed"), SecondNode != INDEX_NONE);
-	TestEqual(TEXT("PlaceNode's OnChanged broadcast rebuilt the mesh exactly once, with no "
-		"explicit RebuildMesh() call from the tool"),
-		Actor->RebuildCountForTest(), RebuildsBeforePlaceNode + 1);
-
-	// A profile is needed for ConnectNodes to succeed at all - Actor has none authored, and
-	// ResolveProfile's content-default fallback is exactly what every other tool-level test
-	// here relies on, so this does not set one explicitly; if that ever stops resolving, the
-	// TestTrue on ConnectNodes below fails loudly rather than this test silently skipping it.
-	const int32 RebuildsBeforeConnect = Actor->RebuildCountForTest();
-	TestTrue(TEXT("the two placed nodes connect"), Actor->ConnectNodes(FirstNode, SecondNode));
-	TestEqual(TEXT("ConnectNodes's OnChanged broadcast rebuilt the mesh exactly once, with no "
-		"explicit RebuildMesh() call from the tool"),
-		Actor->RebuildCountForTest(), RebuildsBeforeConnect + 1);
-
-	// A REFUSAL must rebuild ZERO times - the split-brain issue #77 fixed included a tool
-	// that rebuilt even when its own ConnectNodes call was refused (RoadDrawTool's chaining
-	// state). A node cannot connect to itself; nothing about the model changes.
-	const int32 RebuildsBeforeRefusedConnect = Actor->RebuildCountForTest();
-	TestFalse(TEXT("a node cannot connect to itself"), Actor->ConnectNodes(SecondNode, SecondNode));
-	TestEqual(TEXT("the refused ConnectNodes rebuilt nothing"),
-		Actor->RebuildCountForTest(), RebuildsBeforeRefusedConnect);
-
-	const int32 RebuildsBeforeMove = Actor->RebuildCountForTest();
-	TestTrue(TEXT("the second node moves"), Actor->MoveNode(SecondNode, FVector2D(2500.0, 1800.0)));
-	TestEqual(TEXT("MoveNode's OnChanged broadcast rebuilt the mesh exactly once, with no "
-		"explicit RebuildMesh() call from the tool - the same per-frame notification a drag "
-		"relies on"), Actor->RebuildCountForTest(), RebuildsBeforeMove + 1);
-
-	const int32 RebuildsBeforeDelete = Actor->RebuildCountForTest();
-	TestTrue(TEXT("the second node deletes"), Actor->DeleteNode(SecondNode));
-	TestEqual(TEXT("DeleteNode's OnChanged broadcast rebuilt the mesh exactly once, with no "
-		"explicit RebuildMesh() call from the tool"),
-		Actor->RebuildCountForTest(), RebuildsBeforeDelete + 1);
+	// (#462 M4.) This section counted RebuildCountForTest around PlaceNode, ConnectNodes (made and
+	// refused), MoveNode, DeleteNode, ConnectGuidelines, DisconnectGuideline and
+	// SetIntermediateHoldingPosition (set and cleared), on ONE shared actor. Every one of them is a
+	// row of Airside.Present.MutatorNotifiesExactlyOnce below, on a FRESH world, which also pins the
+	// refusals and the EChangeKind - so a regression in any of them is named by its own row there
+	// ("...MutatorNotifiesExactlyOnce.ConnectNodesSuccess") instead of by a line in this one.
+	// What the table cannot say stays: the two UNDO rebuilds below, because they are about the undo
+	// STEP a hand-drawn link must have pushed, which is #125's defect.
+	//
+	// WHY THE COUNT AND NOT THE TRIANGLE BUFFER was the signal here: PlaceNode on an isolated point
+	// and MoveNode both leave the triangle count exactly where it was (a lone node draws nothing; a
+	// move keeps the same segment and profile, just shifted vertices), so a test that only compared
+	// triangle counts could pass while the broadcast itself was missing. EXACTLY ONE rebuild per
+	// successful call, not merely "at least one" - a mutator that notified twice for one edit would
+	// pass a "!=" check just as happily, and issue #77 is specifically about there being ONE
+	// broadcast point per commit. The table's rows are where that is asserted now.
+	//
+	// A REFUSAL must rebuild ZERO times - the split-brain issue #77 fixed included a tool that
+	// rebuilt even when its own ConnectNodes call was refused (RoadDrawTool's chaining state): the
+	// table's ConnectNodes.Refused row.
 
 	// --- Issue #125: ConnectGuidelines/DisconnectGuideline must commit too --------------
 	//
@@ -273,16 +248,14 @@ bool FMeshRebuildsOnFacadeChangeTest::RunTest(const FString& Parameters)
 	// step pushed for a hand-drawn link, and OnChanged never fired, so nothing here would have
 	// caught it: no explicit RebuildMesh() call anywhere in this test, exactly like every
 	// other mutator above.
-	const int32 RebuildsBeforeLink = Actor->RebuildCountForTest();
-	const int32 LinkEdge = Actor->ConnectGuidelines(LinkLeft, LinkRight);
-	TestTrue(TEXT("the guideline link is made"), LinkEdge != INDEX_NONE);
-	TestEqual(TEXT("ConnectGuidelines's OnChanged broadcast rebuilt the mesh exactly once (#125)"),
-		Actor->RebuildCountForTest(), RebuildsBeforeLink + 1);
+	TestTrue(TEXT("the guideline link is made"),
+		Actor->ConnectGuidelines(LinkLeft, LinkRight) != INDEX_NONE);
 
+	const int32 RebuildsBeforeLinkUndo = Actor->RebuildCountForTest();
 	TestTrue(TEXT("and the hand-drawn link undoes"), Actor->Undo());
-	TestEqual(TEXT("Undo's OnChanged broadcast rebuilt the mesh again - there was an undo step "
+	TestEqual(TEXT("Undo's OnChanged broadcast rebuilt the mesh - there was an undo step "
 		"to take, which is exactly what #125 says was missing"),
-		Actor->RebuildCountForTest(), RebuildsBeforeLink + 2);
+		Actor->RebuildCountForTest(), RebuildsBeforeLinkUndo + 1);
 
 	// Relinked so DisconnectGuideline has something to remove. RE-RESOLVED, not reused: the
 	// undo above rebuilt the mesh, and derived guideline nodes are freed and reallocated on
@@ -299,48 +272,18 @@ bool FMeshRebuildsOnFacadeChangeTest::RunTest(const FString& Parameters)
 
 	// THE SAME DEFECT, THE SAME FIX: DisconnectGuideline returned RemoveGuidelineEdge's
 	// result directly with the scope still open, so a SUCCESSFUL removal was abandoned too.
-	const int32 RebuildsBeforeUnlink = Actor->RebuildCountForTest();
 	TestTrue(TEXT("the guideline link is removed"), Actor->DisconnectGuideline(RelinkEdge));
-	TestEqual(TEXT("DisconnectGuideline's OnChanged broadcast rebuilt the mesh exactly once (#125)"),
-		Actor->RebuildCountForTest(), RebuildsBeforeUnlink + 1);
 
+	const int32 RebuildsBeforeUnlinkUndo = Actor->RebuildCountForTest();
 	TestTrue(TEXT("and the disconnect undoes"), Actor->Undo());
-	TestEqual(TEXT("whose Undo rebuilt the mesh once more"),
-		Actor->RebuildCountForTest(), RebuildsBeforeUnlink + 2);
-
-	// --- Issue #179: SetIntermediateHoldingPosition must commit through CommitAndNotify too --
-	//
-	// A fresh, isolated taxiway: the guideline nodes above have all been rebuilt at least
-	// once by this point (reallocated by position, not handle - see the reconnect comment
-	// above), so a new pair keeps this section from depending on any of that history.
-	const int32 HoldA = Actor->PlaceNode(FVector2D(100000.0, 100000.0));
-	const int32 HoldB = Actor->PlaceNode(FVector2D(106000.0, 100000.0));
-	TestTrue(TEXT("the holding-position taxiway connects"), Actor->ConnectNodes(HoldA, HoldB));
-	const int32 HoldNode = NearestGuidelineIndex(FVector2D(106000.0, 100000.0));
-	if (!TestTrue(TEXT("found a guideline node to toggle a holding position at"), HoldNode != INDEX_NONE))
-	{
-		return false;
-	}
-
-	// EXACTLY ONE, the same claim as every mutator above: before #179 this committed its
-	// scope with no OnChanged.Broadcast() at all, on the reasoning (now wrong - see
-	// RoadEditFacade.h) that a holding position changes no mesh.
-	const int32 RebuildsBeforeHold = Actor->RebuildCountForTest();
-	TestTrue(TEXT("the holding position is set"), Actor->SetIntermediateHoldingPosition(HoldNode, true));
-	TestEqual(TEXT("SetIntermediateHoldingPosition's OnChanged broadcast rebuilt the mesh exactly "
-		"once (#179) - the HoldingPaint layer derives from this flag and was left stale before"),
-		Actor->RebuildCountForTest(), RebuildsBeforeHold + 1);
-
-	const int32 RebuildsBeforeHoldClear = Actor->RebuildCountForTest();
-	TestTrue(TEXT("the holding position clears"), Actor->SetIntermediateHoldingPosition(HoldNode, false));
-	TestEqual(TEXT("and clearing it notifies too, exactly once"),
-		Actor->RebuildCountForTest(), RebuildsBeforeHoldClear + 1);
+	TestEqual(TEXT("whose Undo rebuilt the mesh too"),
+		Actor->RebuildCountForTest(), RebuildsBeforeUnlinkUndo + 1);
 
 	return true;
 }
 
 // ---------------------------------------------------------------------------------------
-// Issue #179: MeshRebuildsOnFacadeChange above counts REBUILDS, which proves OnChanged fired
+// Issue #179: MutatorNotifiesExactlyOnce below counts REBUILDS, which proves OnChanged fired
 // but not that the HoldingPaint layer itself changed shape - a mutator could notify Topology
 // and still leave this one layer untouched if RebuildMarkings' own wiring were wrong.
 // HoldingPositionMarkingTest.cpp already measures FHoldingPositionMarkingBuilder::Build
@@ -401,15 +344,14 @@ bool FHoldingPositionMeshFollowsToggleTest::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------------------
-// Issue #194 (2026-09-21 test-suite review). MeshRebuildsOnFacadeChange above pins "exactly
-// one rebuild" for 8 of URoadEditFacade's mutators - PlaceNode, ConnectNodes (success and
-// refused), MoveNode, DeleteNode, ConnectGuidelines, DisconnectGuideline and Undo, plus the
+// Issue #194 (2026-09-21 test-suite review). MeshRebuildsOnFacadeChange above used to pin
+// "exactly one rebuild" for 8 of URoadEditFacade's mutators - PlaceNode, ConnectNodes (success
+// and refused), MoveNode, DeleteNode, ConnectGuidelines, DisconnectGuideline and Undo, plus the
 // two SetIntermediateHoldingPosition calls #179 added - out of roughly twenty the class
-// commits a scope for. A silent regression in any of the REST (SplitSegment, DeleteSegment,
-// PlaceRunway, SetRunwayFacts, AddApron, DeleteApron, MoveApronCorner, PlaceEntity,
-// PlaceEntityInPlot, DeleteEntity, MergeNodes, ClearNetwork, Redo, and both branches of
-// EndInteractiveEdit) would leave the mesh, the guideline overlay or the undo stack stale
-// with nothing here to say so.
+// commits a scope for; #462 M4 moved those counts into this table, where each has a row of its
+// own, and left that test the PlaceRunway/Undo triangle half and the two undo rebuilds. A
+// silent regression in any mutator would leave the mesh, the guideline overlay or the undo
+// stack stale with nothing to say so, which is why every one has a row below.
 //
 // ONE TABLE, not another dozen IMPLEMENT_SIMPLE_AUTOMATION_TESTs: IMPLEMENT_COMPLEX_
 // AUTOMATION_TEST's GetTests below names every row, so a failure reads
@@ -539,8 +481,9 @@ namespace
 	bool Case_ConnectNodesRefused(FAutomationTestBase& T)
 	{
 		// FromIndex == ToIndex short-circuits before MakeLiveNodeId ever runs, so this needs
-		// no placed node at all - MeshRebuildsOnFacadeChange above already proves the same
-		// guard refuses a REAL node joining itself; this row only measures the notify count.
+		// no placed node at all - a REAL node joining itself meets the same first guard (it ran
+		// that way in MeshRebuildsOnFacadeChange until #462 M4 folded it into this row); this row
+		// measures the notify count.
 		return RefusesWithNoRebuild(T, TEXT("a node cannot join itself"),
 			[](ARoadNetworkActor& Actor) { return Actor.ConnectNodes(0, 0); });
 	}
@@ -1122,6 +1065,15 @@ namespace
 		// pavement nor the graph's shape, and routing it through Topology reallocates the
 		// very node whose flag was just set (RoadEditTarget.h's own EChangeKind comment).
 		T.TestEqual(TEXT("as Markings, not Topology"), Actor->TopologyRebuildCountForTest(), TopologyBefore);
+
+		// AND CLEARING IT NOTIFIES TOO, exactly once - the same function, the other branch of its
+		// bSet. Moved here from MeshRebuildsOnFacadeChange (#462 M4), whose copy was the only
+		// measurement of the clear leg: a bare Commit() on that path would have left the dashed bar
+		// painted after the player took it away.
+		const int32 RebuildsBeforeClear = Actor->RebuildCountForTest();
+		T.TestTrue(TEXT("the holding position clears"), Actor->SetIntermediateHoldingPosition(HoldNode, false));
+		T.TestEqual(TEXT("and clearing it notifies exactly once"),
+			Actor->RebuildCountForTest(), RebuildsBeforeClear + 1);
 		return true;
 	}
 

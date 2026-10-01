@@ -446,7 +446,7 @@ void FEditTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink
 
 	// AND THE ONE UNDER THE CURSOR AGAIN, as Hover. Two meanings - "grabbable" and "this
 	// one" - so two styles; the overlay draws them at different radii so neither simply
-	// overdraws the other, the same arrangement StandPose and Pending already have.
+	// overdraws the other (the Handle case in PreviewPalette::DefaultLook has the radii).
 	const FEditHandle Under = NearestHandle(Context, *Network);
 	FVector2D HoverAt;
 	if (Under.IsSet() && Under.PositionIn(*Network, HoverAt))

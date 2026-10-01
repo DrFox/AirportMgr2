@@ -336,20 +336,12 @@ enum class EPreviewStyle : uint8
 	/** Three or more incident segments - a real junction, with a solved boundary. */
 	NodeJunction,
 
-	/**
-	 * A placed entity's own committed pose - the thing it IS, not Pending's "a gesture would
-	 * put one here". StandPreview::Describe marks the same position again as Pending,
-	 * because that call is shared with an in-progress placement; GraphOverlay drew THIS
-	 * marker afterwards and at a different radius (see ARoadBuildHUD::Marker's StandPose
-	 * case) so the two remain distinguishable on screen instead of one ring simply
-	 * overdrawing the other.
-	 *
-	 * NO EMITTER SINCE 2026-09-27: GraphOverlay stopped drawing it when a stand's stop mark
-	 * became paint (FStandMarkingBuilder's stop bar). Kept, with its look, rather than removed
-	 * from this enum and every palette/HUD list that must agree with it, for a pose marker that
-	 * is wanted again (a selected stand, say).
-	 */
-	StandPose,
+	// NO StandPose HERE, deleted by #462. It was a placed entity's committed pose, a ring at a
+	// second radius beside StandPreview's Pending one, and nothing has emitted it since
+	// 2026-09-27 (GraphOverlay.h). It had been kept "for a pose marker that is wanted again", at
+	// the price of a palette row, a look case, a HUD seeding entry and three absence asserts that
+	// all had to agree with it. A pose marker that is wanted again is a new style with a reason
+	// then, not this one's look held in reserve.
 
 	/** A resolved anchor: the guideline node a vehicle will actually route to on this stand. */
 	ServiceAnchor,

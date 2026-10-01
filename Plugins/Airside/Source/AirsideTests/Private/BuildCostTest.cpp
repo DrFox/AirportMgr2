@@ -228,6 +228,11 @@ bool FBuildCostUpkeepUsesBuildFactorTest::RunTest(const FString& Parameters)
 {
 	// A RUNWAY'S PAVEMENT IS ITS FACTS', a road's is its segment's (Review Focus 2). Two
 	// networks, identical but for one fact each: upkeep must move by exactly the factor.
+	//
+	// THE UPKEEP AND THE BUILD MUST AGREE: grass is priced below tarmac for the build and the
+	// upkeep alike, or a grass road's upkeep would bill a surface its construction did not charge
+	// for. This is the upkeep half; BuildCostFactorOnEveryKind is the build half (#462 M7 moved the
+	// pair's WHY here from the deleted Airside.Build.GrassRoadCost).
 	auto UpkeepOf = [](bool bRunway, EPavement P)
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
@@ -241,6 +246,13 @@ bool FBuildCostUpkeepUsesBuildFactorTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("grass runway upkeep is 0.4 of tarmac"), UpkeepOf(true, EPavement::Grass), 0.4 * UpkeepOf(true, EPavement::Tarmac), 1e-6);
 	TestEqual(TEXT("grass taxiway upkeep is 0.4 of tarmac"), UpkeepOf(false, EPavement::Grass), 0.4 * UpkeepOf(false, EPavement::Tarmac), 1e-6);
 	TestTrue(TEXT("and upkeep is not zero, or the ratio proves nothing"), UpkeepOf(true, EPavement::Tarmac) > 0.0);
+
+	// THE ABSOLUTE FIGURE, which every ratio above is blind to (moved from the deleted
+	// Airside.Build.GrassRoadCost, #462 M7): a rule that doubled upkeep, or got DailyUpkeep's
+	// uu-to-metre conversion wrong, scales tarmac and grass alike and leaves each 0.4 standing.
+	// 100000 uu is 1000 m, at 1 a metre a day.
+	TestEqual(TEXT("1000 m of tarmac taxiway at 1 a metre a day upkeeps at 1000 a day"),
+		UpkeepOf(false, EPavement::Tarmac), 1000.0, 1e-6);
 	return true;
 }
 

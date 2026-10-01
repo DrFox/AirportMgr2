@@ -546,7 +546,7 @@ public:
 	 * draw and landed the frame rate on a different point along that same ramp.
 	 *
 	 * CHOSEN FOR 60 FPS - THIS FIGURE'S OWN FLOOR for full effect, not a project-wide
-	 * constant (Airside.Model.Traffic.SubstepCeilingCoversTheSpeedLadder picks a different,
+	 * constant (AirportOps.Model.SimClock.SubstepCeilingCoversTheSpeedLadder picks a different,
 	 * lower one - 30 fps - for the substep ceiling; each figure's floor is authored against
 	 * what THAT figure needs, not shared): 400 RPM at three blades is 40 degrees a frame at
 	 * 60 fps, which is exactly

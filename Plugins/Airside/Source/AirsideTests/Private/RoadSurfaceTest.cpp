@@ -273,37 +273,6 @@ bool FRsGrassRoadLaidTest::RunTest(const FString& Parameters)
 }
 
 /**
- * GRASS IS PRICED BELOW TARMAC, for the build and the upkeep alike - the two must agree or a
- * grass road's upkeep would bill a surface its construction did not charge for.
- */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FRsGrassCostTest,
-	"Airside.Build.GrassRoadCost",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FRsGrassCostTest::RunTest(const FString& Parameters)
-{
-	URoadProfile* Profile = URoadProfile::MakeTransient(2300.0, 1500.0);
-	Profile->CostPerMetre = 100.0;
-	Profile->UpkeepPerMetrePerDay = 2.0;
-
-	const double Tarmac = BuildCost::ForSegment(*Profile, 10000.0).BaseAmount();
-	const double Grass = BuildCost::ForSegment(*Profile, 10000.0, EPavement::Grass).BaseAmount();
-	TestEqual(TEXT("100 m of tarmac at 100 a metre"), Tarmac, 10000.0, 1e-6);
-	TestEqual(TEXT("the same on grass costs the grass factor of it"), Grass, 10000.0 * Pavement::RateFactor(EPavement::Grass), 1e-6);
-	TestTrue(TEXT("and the factor is a discount"), Pavement::RateFactor(EPavement::Grass) < 1.0);
-
-	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	const FRoadSegmentId Seg = TestGraph::Lay(*Net, Net->AddNode(FVector2D(0.0, 0.0)), Net->AddNode(FVector2D(10000.0, 0.0)), Profile);
-	const double TarmacUpkeep = BuildCost::DailyUpkeep(*Net, 0.0);
-	TestTrue(TEXT("the segment takes grass"), Net->SetSegmentSurface(Seg, EPavement::Grass));
-	const double GrassUpkeep = BuildCost::DailyUpkeep(*Net, 0.0);
-	TestEqual(TEXT("upkeep on tarmac"), TarmacUpkeep, 200.0, 1e-6);
-	TestEqual(TEXT("upkeep on grass takes the same factor the build did"), GrassUpkeep, 200.0 * Pavement::RateFactor(EPavement::Grass), 1e-6);
-	return true;
-}
-
-/**
  * A GRASS ROAD IS PAINTED WITH THE GRASS SLOT, kerbs and run-offs included, and a junction
  * where grass meets tarmac stays TARMAC - paved wins. The grass arm has the lowest segment id,
  * so the old widest-then-lowest-id rule alone would have paved the junction with grass: the

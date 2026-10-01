@@ -110,15 +110,12 @@ bool FAgentActorTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and at the position it was given"), At.X, 1200.0);
 		TestEqual(TEXT("on both axes"), At.Y, -400.0);
 
-		// PITCHING KEEPS THE MAINS ON THE GROUND, which is the whole of the flare looking
-		// right. Reported from play: "the rear wheels now push into the ground on the plane
-		// landing, as if the pivot point for the flare has changed" - and it had. Pitch
-		// rotates about the ACTOR ORIGIN, and plane2's origin moved to the nose gear when it
-		// was re-exported into UAircraftType's local space (2026-09-13). A nose-up attitude
-		// about a pivot at the very front levers everything behind it downwards: at 8
-		// degrees the mains go 63 uu under the tarmac.
-		//
-		// An aeroplane pitches about its MAIN GEAR on the ground, so that is the pivot.
+		// PITCHING KEEPS THE MAINS ON THE GROUND - measured in
+		// Airside.Present.MeridianPitchesAboutItsMains, which is the one pitched check (#462 M28:
+		// this test used to repeat the same SetMotion arithmetic with plane2's mains typed in as
+		// -454.3, differing from the Meridian's only in where the pivot came from). What stays
+		// here is the LEVEL case, which is a different property: the pivot must cost a level
+		// aircraft nothing.
 		//
 		// ITS OWN ACTOR, not the one above: SetMotion is the only way to pose an agent, so a
 		// test that borrowed it would leave it pitched and pointing somewhere else for every
@@ -142,53 +139,6 @@ bool FAgentActorTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("a level aircraft stands exactly where it was put, whatever its "
 				"heading"), Flaring->GetActorLocation().X, 700.0, 0.01);
 			TestEqual(TEXT("on both axes"), Flaring->GetActorLocation().Y, -250.0, 0.01);
-
-			FAgentMotion Pitched;
-			Pitched.PitchDegrees = 8.0;
-			Pitched.PitchPivotX = -454.3;          // plane2's mains, measured
-			Flaring->SetMotion(Pitched, SurfaceZ);
-
-			// Where the main gear ended up in WORLD space, which is the thing that must not
-			// sink. Asked of the actor's own transform rather than recomputed here, so the
-			// test measures what the renderer will draw.
-			const FVector Mains = Flaring->GetActorTransform().TransformPosition(
-				FVector(Pitched.PitchPivotX, 0.0, 0.0));
-
-			TestTrue(FString::Printf(
-				TEXT("a pitched aircraft keeps its mains on the surface (Z %.1f against %.1f)"),
-				Mains.Z, SurfaceZ), FMath::Abs(Mains.Z - SurfaceZ) < 1.0);
-
-			// AND THE NOSE GEAR RISES, or the assertion above would pass on an aeroplane that
-			// simply refused to pitch at all. 454 uu of wheelbase at 8 degrees is 63 uu.
-			TestTrue(FString::Printf(TEXT("while the nose gear lifts off it (%.1f)"),
-				Flaring->GetActorLocation().Z),
-				Flaring->GetActorLocation().Z > SurfaceZ + 50.0);
-
-			// PITCHED AT A HEADING keeps the mains on the ground too, which is the case the
-			// yaw bug above broke. Measured on a diagonal so a correction applied in the
-			// wrong frame cannot hide behind a zero component.
-			FAgentMotion Turning;
-			Turning.Position = FVector2D(-1200.0, 900.0);
-			Turning.Heading = FMath::DegreesToRadians(115.0);
-			Turning.PitchDegrees = 8.0;
-			Turning.PitchPivotX = -454.3;
-			Flaring->SetMotion(Turning, SurfaceZ);
-
-			const FVector TurnedMains = Flaring->GetActorTransform().TransformPosition(
-				FVector(Turning.PitchPivotX, 0.0, 0.0));
-			TestTrue(FString::Printf(
-				TEXT("a pitched aircraft on a heading keeps its mains down (Z %.1f)"),
-				TurnedMains.Z), FMath::Abs(TurnedMains.Z - SurfaceZ) < 1.0);
-
-			// AND THE MAINS STAY ON THE ROUTE POINT'S OWN LINE. The pivot is what the model
-			// positioned; pitching may raise the nose but must not slide the aircraft
-			// sideways off the centreline it was placed on.
-			const FVector2D MainsPlan(TurnedMains.X, TurnedMains.Y);
-			const FVector2D Expected = Turning.Position + FVector2D(
-				FMath::Cos(Turning.Heading), FMath::Sin(Turning.Heading)) * Turning.PitchPivotX;
-			TestTrue(FString::Printf(TEXT("and do not slide off the line (%.1f uu away)"),
-				FVector2D::Distance(MainsPlan, Expected)),
-				FVector2D::Distance(MainsPlan, Expected) < 1.0);
 		}
 
 		// AN UNMEASURED AIRFRAME PITCHES ABOUT ITS ORIGIN exactly as it did before any of
@@ -251,6 +201,21 @@ bool FMeridianPitchesAboutItsMainsTest::RunTest(const FString& Parameters)
 	UAircraftType* Type = TestAirframes::PiperType();
 	const FAirframe Meridian = Type->Airframe();
 
+	// THE ONE PITCHED CHECK, since #462 M28. Airside.Present.AgentActor used to repeat this
+	// arithmetic with plane2's mains typed in (-454.3) - the same SetMotion call, the same
+	// three assertions, differing only in where the pivot came from - so this is the survivor
+	// and the pivot is the type's, which is the one source that can drift from the aeroplane.
+	// WHAT THE ARITHMETIC IS FOR, carried over from there:
+	//
+	// PITCHING KEEPS THE MAINS ON THE GROUND, which is the whole of the flare looking right.
+	// Reported from play: "the rear wheels now push into the ground on the plane landing, as
+	// if the pivot point for the flare has changed" - and it had. Pitch rotates about the
+	// ACTOR ORIGIN, and plane2's origin moved to the nose gear when it was re-exported into
+	// UAircraftType's local space (2026-09-13). A nose-up attitude about a pivot at the very
+	// front levers everything behind it downwards: at 8 degrees plane2's mains went 63 uu
+	// under the tarmac. An aeroplane pitches about its MAIN GEAR on the ground, so that is
+	// the pivot.
+	//
 	// 1. THE TYPE HAS A PIVOT TO BE CORRECTED ABOUT. Asserted before anything is drawn,
 	//    because if this is zero the actor assertions below would pass trivially: an
 	//    uncorrected aeroplane keeps its ORIGIN on the surface, and the origin is what
@@ -268,13 +233,16 @@ bool FMeridianPitchesAboutItsMainsTest::RunTest(const FString& Parameters)
 	}
 	Flaring->SetAirframe(AgentActorTestAirframe());
 
-	// THE PIVOT COMES FROM THE TYPE, NOT FROM A LITERAL. Airside.Present.AgentActor already
-	// pins the arithmetic with a hand-typed -454.3; what is being pinned HERE is that the
-	// figure BuildPiperMeridian carries is the one that arrives, so the test cannot keep
-	// passing against a number the aeroplane no longer has.
+	// THE PIVOT COMES FROM THE TYPE, NOT FROM A LITERAL: the figure BuildPiperMeridian carries
+	// is the one that arrives, so the test cannot keep passing against a number the aeroplane
+	// no longer has.
 	//
-	// ON A DIAGONAL, for AgentActor's reason: a correction differenced in the wrong frame is
-	// zero at heading zero and wrong everywhere else.
+	// ON A DIAGONAL, and that is the yaw-frame bug's case: a pivot correction differenced
+	// against the unrotated offset rather than the yawed one is zero at heading zero and wrong
+	// everywhere else - it displaced agents sideways by up to twice the wheelbase, reported
+	// from play as tracking way off the centre line, and the first version of the test this
+	// one replaces could not see it because it faced +X. (The level case, which that bug also
+	// breaks, stays in Airside.Present.AgentActor.)
 	FAgentMotion Pitched;
 	Pitched.Position = FVector2D(-800.0, 1500.0);
 	Pitched.Heading = FMath::DegreesToRadians(115.0);

@@ -48,9 +48,9 @@ namespace GraphOverlay
 	 * tool's own preview calls, so a placed stand and an in-progress one read as the same
 	 * object rather than the two this was filed to fix. Each RESOLVED anchor (the guideline
 	 * node a vehicle will actually route to) becomes ONE EPreviewStyle::ServiceAnchor marker.
-	 * No stop mark, no EPreviewStyle::StandPose ring and no fixture marks since 2026-09-27 -
-	 * the stand's paint shows its stop, and the fixture marks sat concentric with the anchor
-	 * ring. See the .cpp.
+	 * No stop mark, no pose ring (its style, EPreviewStyle::StandPose, is deleted - see
+	 * RoadBuildTool.h) and no fixture marks since 2026-09-27 - the stand's paint shows its
+	 * stop, and the fixture marks sat concentric with the anchor ring. See the .cpp.
 	 */
 	AIRSIDE_API void DescribeStands(const URoadNetwork& Network, IToolPreviewSink& Sink);
 
