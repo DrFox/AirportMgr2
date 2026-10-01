@@ -43,6 +43,14 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("one resolved anchor per declared anchor"),
 			Instance->ResolvedAnchors.Num(), Stand->Anchors.Num());
 
+		// THE POSE IS WHERE IT WAS PLACED, and the stand's stop-position marking is derived from
+		// exactly that (spec section 6): since stand and aircraft were split, the mark painted on the
+		// apron is where the stand IS, and where the nose gear stops is the same point by construction.
+		// An "Aircraft" fixture would have been a second copy of the stand's own position, free to
+		// disagree with it. (Moved here from Airside.Model.MarkingSources' stand block, which asserted
+		// it beside copies of this test's own anchor checks.)
+		TestTrue(TEXT("and its pose is the position it was placed at"), Instance->Position.Equals(Where, 0.01));
+
 		// Every anchor became a real guideline node, at the anchor's WORLD pose.
 		//
 		// Walked by ID. This loop iterates the DEFINITION, and an instance placed before the
@@ -153,8 +161,6 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 			// nothing dug into the concrete at the nose gear mark except paint.
 			TestEqual(TEXT("no ground fixture claims to be the aircraft"),
 				Net->GetAnchorIdsForRole(Placed, EServiceRole::Aircraft).Num(), 0);
-			TestTrue(TEXT("but the stand does declare it can take one"),
-				Stand->Provides(EServiceRole::Aircraft));
 
 			TestEqual(TEXT("one hydrant pit"),
 				Net->GetAnchorIdsForRole(Placed, EServiceRole::Fuel).Num(), 1);

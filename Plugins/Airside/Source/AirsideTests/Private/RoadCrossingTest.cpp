@@ -82,36 +82,6 @@ bool FRoadCrossesTaxiwayTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FRoadEndsAgainstTaxiwayTest,
-	"Airside.Build.RoadEndsAgainstTaxiway",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FRoadEndsAgainstTaxiwayTest::RunTest(const FString& Parameters)
-{
-	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	FRoadCrossingFixture::Lay(*Net, /*bFarSide=*/false);
-	TestGraph::Derive(*Net);
-
-	// A road dead-ending against a taxiway's side: the only arm of its own class at that
-	// node is itself, so there is nothing to turn INTO and the junction derives no vehicle
-	// path through it.
-	int32 VehicleTurns = 0, AircraftTurns = 0;
-	for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
-	{
-		if (!IsTurnPath(Edge)) { continue; }
-		VehicleTurns += Edge.AllowedTraffic.Allows(ETraversalClass::GroundVehicle) ? 1 : 0;
-		AircraftTurns += Edge.AllowedTraffic.Allows(ETraversalClass::Aircraft) ? 1 : 0;
-	}
-	TestEqual(TEXT("no vehicle path through the junction"), VehicleTurns, 0);
-
-	// NOT REFUSED, AND THE AIRCRAFT SIDE IS UNAFFECTED. The player may be about to draw the
-	// far side, so the tool lets it stand and the census counts it; meanwhile the taxiway
-	// must be exactly the taxiway it was.
-	TestTrue(TEXT("aircraft still turn through it"), AircraftTurns > 0);
-	return true;
-}
-
 namespace
 {
 	/** Does this edge admit ground vehicles and not aircraft (a road lane or road turn)? */
@@ -343,6 +313,23 @@ bool FRoadEndsAgainstTaxiwayStopLineTest::RunTest(const FString& Parameters)
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	const FRoadCrossingFixture Crossing = FRoadCrossingFixture::Lay(*Net, /*bFarSide=*/false);
 	TestGraph::Derive(*Net);
+
+	// A road dead-ending against a taxiway's side: the only arm of its own class at that
+	// node is itself, so there is nothing to turn INTO and the junction derives no vehicle
+	// path through it. (Airside.Build.RoadEndsAgainstTaxiway, folded in: the same fixture.)
+	int32 VehicleTurns = 0, AircraftTurns = 0;
+	for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
+	{
+		if (!IsTurnPath(Edge)) { continue; }
+		VehicleTurns += Edge.AllowedTraffic.Allows(ETraversalClass::GroundVehicle) ? 1 : 0;
+		AircraftTurns += Edge.AllowedTraffic.Allows(ETraversalClass::Aircraft) ? 1 : 0;
+	}
+	TestEqual(TEXT("no vehicle path through the junction"), VehicleTurns, 0);
+
+	// NOT REFUSED, AND THE AIRCRAFT SIDE IS UNAFFECTED. The player may be about to draw the
+	// far side, so the tool lets it stand and the census counts it; meanwhile the taxiway
+	// must be exactly the taxiway it was.
+	TestTrue(TEXT("aircraft still turn through it"), AircraftTurns > 0);
 
 	const URoadProfile* Taxiway = Net->ProfileFor(*Net->GetSegment(Crossing.West));
 	const double StripEdge = Taxiway->GetTotalWidth() * 0.5 + TaxiwayStrip::StripWidthOf(*Net, Crossing.West);

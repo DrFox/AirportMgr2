@@ -39,7 +39,15 @@ namespace ReverseTurnBuild
 	{
 		FJunction Out;
 		const TArray<URoadProfile*> Tiers = TestProfiles::ServiceTiers();
-		URoadProfile* Wide = Tiers.Num() == 3 ? Tiers[2] : nullptr;
+		// MISSING TIERS LEAVE Net NULL, so every test's TestNotNull(J.Net) FAILS. They used to build the T
+		// from a null Wide profile instead: the arms laid with no profile, nothing was ever derived, and
+		// the tests that assert "not laid", "the record is gone" or two unset ends equal passed on missing
+		// content - that guard could never fail, since Net was never null.
+		if (Tiers.Num() != 3)
+		{
+			return Out;
+		}
+		URoadProfile* Wide = Tiers[2];
 		Out.Net = NewObject<URoadNetwork>(GetTransientPackage());
 		Out.Node = Out.Net->AddNode(FVector2D::ZeroVector);
 		Out.PullPastFar = Out.Net->AddNode(FVector2D(PullPastLength, 0.0));
@@ -160,6 +168,12 @@ bool FReverseTurnPullPastTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("and no reverse edge was laid"), bAnyReverse);
 	TestTrue(TEXT("the rig's chain is what it is measured against"),
 		VehicleFit::ChainLength(UAirsideSettings::ResolveRigVehicle()) > 800.0);
+
+	// THE CONTROL: the same junction with a 40 m pull-past DOES lay. Without it every assertion above is
+	// also true of a build that lays no reverse turn at all, content missing or the pass broken.
+	const ReverseTurnBuild::FJunction Long = ReverseTurnBuild::Tee(4000.0, true);
+	if (!TestNotNull(TEXT("the control junction is built"), Long.Net)) { return false; }
+	TestTrue(TEXT("control: a pull-past that holds the chain lays the same turn"), Long.Net->GetReverseTurnEnd(0).IsSet());
 	return true;
 }
 
@@ -194,6 +208,10 @@ bool FReverseTurnDeadArmTest::RunTest(const FString& Parameters)
 	// THE BAY ROAD DELETED: nothing left to back into, so the next rebuild drops the record.
 	const ReverseTurnBuild::FJunction J = ReverseTurnBuild::Tee(4000.0, false);
 	if (!TestNotNull(TEXT("the content set has its service tiers"), J.Net)) { return false; }
+	// THE PREMISE: it was laid, with a record, before the bay road went - "gone" and "no end" are also what a
+	// network that never laid one reports.
+	if (!TestTrue(TEXT("the reverse turn was laid before its bay road was deleted"), J.Net->GetReverseTurnEnd(0).IsSet())) { return false; }
+	TestEqual(TEXT("with its record"), J.Net->GetReverseTurns().Num(), 1);
 	J.Net->RemoveSegment(J.Bay);
 	const FRoadDesignVehicles Designs = UAirsideSettings::ResolveRoadDesignVehicles();
 	TestGraph::Derive(*J.Net, &Designs);
@@ -211,6 +229,9 @@ bool FReverseTurnCopyTest::RunTest(const FString& Parameters)
 	// must carry the permission too, or a ghost rebuild would lay the junction without its bay.
 	const ReverseTurnBuild::FJunction J = ReverseTurnBuild::Tee(4000.0, false);
 	if (!TestNotNull(TEXT("the content set has its service tiers"), J.Net)) { return false; }
+	// THE PREMISE: the original HAS an end, or "the copy's equals the original's" below is two unset handles
+	// agreeing.
+	if (!TestTrue(TEXT("the original laid its reverse turn"), J.Net->GetReverseTurnEnd(0).IsSet())) { return false; }
 	URoadNetwork* Copy = NewObject<URoadNetwork>(GetTransientPackage());
 	Copy->CopyFrom(*J.Net);
 	TestEqual(TEXT("the record is copied"), Copy->GetReverseTurns().Num(), 1);

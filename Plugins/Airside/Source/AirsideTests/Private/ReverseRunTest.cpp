@@ -320,18 +320,46 @@ bool FReverseSpeedIsWhatItAchievedTest::RunTest(const FString& Parameters)
 	// THE LAST PARTIAL STEP. Travelled is clamped to Plan.Length, so the frame that arrives
 	// covers less ground than a full one - and must say so rather than claiming full speed
 	// into a vehicle that has stopped.
+	//
+	// READ ON THE ARRIVING FRAME, not after the loop: Advance returns FALSE on the call after it, and
+	// that call zeroes Speed (ENFORCED BY: the last assertion of this test), so a Speed read once the loop
+	// has ended is always 0 - which satisfied the bound this used to assert and would have satisfied it
+	// with the clamp deleted. The speed and the step are taken from the last call that still returned true.
 	FReverseRun Ending;
 	TestTrue(TEXT("a second run arms"),
 		Ending.Start(ArcPlan(Limit * 1.5), Truck, /*InReverseSpeed=*/100.0));
 	int32 Frames = 0;
-	while (Frames < 100000 && Ending.Advance(Dt, Truck, 1.0e6, Position, Heading))
+	double ArrivingSpeed = -1.0;
+	double ArrivingStep = -1.0;
+	for (;;)
 	{
+		const double TravelledBefore = Ending.Travelled;
+		if (Frames >= 100000 || !Ending.Advance(Dt, Truck, 1.0e6, Position, Heading))
+		{
+			break;
+		}
+		ArrivingSpeed = Ending.Speed;
+		ArrivingStep = Ending.Travelled - TravelledBefore;
 		++Frames;
 	}
 	TestTrue(TEXT("the manoeuvre finished within the frame budget"), Frames < 100000);
+	TestTrue(TEXT("and arrived"), Ending.HasArrived());
+
+	// THE PREMISE: this plan is not a whole number of full steps, so the frame that arrives IS a part-step.
+	// Without it "less than the authored speed" below would be a statement about the plan's length.
+	const double FullStep = 100.0 * Dt;
+	const double Remainder = FMath::Fmod(Ending.Plan.Length, FullStep);
+	if (!TestTrue(*FString::Printf(TEXT("the plan (%.3f uu) ends part-way through a step, not on a frame boundary"),
+		Ending.Plan.Length), Remainder > 1.0e-6 && Remainder < FullStep - 1.0e-6))
+	{
+		return false;
+	}
+	TestEqual(TEXT("the arriving frame reports the distance it covered over its time"),
+		ArrivingSpeed, ArrivingStep / Dt, 1.0e-6);
 	TestTrue(*FString::Printf(
-		TEXT("the arriving frame reports the part-step it actually took (%.3f uu/s)"),
-		Ending.Speed), Ending.Speed >= 0.0 && Ending.Speed <= 100.0 + 0.01);
+		TEXT("and that is the part-step it actually took (%.3f uu/s), not the authored 100"), ArrivingSpeed),
+		ArrivingSpeed > 0.0 && ArrivingSpeed < 100.0 - 0.01);
+	TestEqual(TEXT("and the call after arrival reports no speed"), Ending.Speed, 0.0, UE_DOUBLE_KINDA_SMALL_NUMBER);
 	return true;
 }
 

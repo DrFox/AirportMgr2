@@ -87,10 +87,13 @@ bool FRoadAnchorExtendsTheSegmentBehindItTest::RunTest(const FString& Parameters
 	// go flush against an apron on the very first click - see FApronLineGuideSource. Filled
 	// BEFORE the tool declines its own anchor, which is the ordering this asserts.
 	//
-	// HONOURED, NOT ASSUMED, the same way Airside.Tool.RoadAnchorCarriesItsHalfWidth does it:
-	// a content set with no taxiway would leave the widths legitimately zero.
-	if (const URoadProfile* Armed = Gesture.TestWorld.Actor->ResolveProfileFor(
-		ERoadKind::Taxiway, Gesture.Road()->GetWidthIndex()))
+	// A PROFILE IS REQUIRED, NOT HONOURED-IF-PRESENT: this used to skip the two assertions when none
+	// resolved ("a content set with no taxiway would leave the widths legitimately zero"), and a taxiway
+	// always resolves something (Airside.Present.ProfileResolutionIsOneRule), so the skip could only hide
+	// a broken resolution - the assertions ran zero times and the test stayed green.
+	const URoadProfile* Armed = Gesture.TestWorld.Actor->ResolveProfileFor(
+		ERoadKind::Taxiway, Gesture.Road()->GetWidthIndex());
+	if (TestNotNull(TEXT("the taxiway the gesture would lay resolves a profile"), Armed))
 	{
 		TestEqual(TEXT("carrying the half-width the first click would lay"),
 			Idle.HalfWidthLeft, Armed->GetHalfWidthLeft());
@@ -176,8 +179,10 @@ bool FRoadCornerFollowsTheGuideTest::RunTest(const FString& Parameters)
 
 	TestTrue(TEXT("the new node is exactly square to the segment behind it"),
 		FMath::IsNearlyEqual(Placed->Position.X, 6000.0, 1.0e-6));
-	TestFalse(TEXT("and therefore not where the raw cursor was"),
-		FMath::IsNearlyEqual(NearSquare.X, 6000.0, 1.0e-6));
+	// THE BUILT NODE, NOT THE TWO LITERALS: this compared NearSquare.X (6060, typed above) with 6000
+	// (typed here), which is false whatever the tool did. The question is whether the node that was built
+	// sits where the raw cursor was.
+	TestFalse(TEXT("and therefore not where the raw cursor was"), Placed->Position.Equals(NearSquare, 1.0));
 
 	return true;
 }

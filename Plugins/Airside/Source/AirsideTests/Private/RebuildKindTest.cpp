@@ -8,6 +8,7 @@
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestWorld.h"
+#include "Tool/BuildSession.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -92,28 +93,14 @@ bool FDragNotifiesGeometryOnlyTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and PlaceNode still runs the derived-graph pass"),
 		Actor->TopologyRebuildCountForTest(), TopologyBeforePlace + 1);
 
-	// --- Review follow-up: an ABANDONED drag must still catch the derived graph up --------
+	// --- An ABANDONED drag (Escape) must still catch the derived graph up - NOT HERE ------
 	//
-	// AbandonEdit only drops the undo SNAPSHOT; it does NOT put the node back (MoveNode
-	// bypasses the scope AbandonEdit would otherwise roll back - see the facade's class
-	// comment). Without EndInteractiveEdit(false) itself notifying Topology when something
-	// actually moved, cancelling a drag (Escape) would leave the guideline graph, anchor
-	// links, plots and traffic pointed at pre-drag positions FOREVER - nothing else would
-	// ever notify Topology for that edit again.
-	{
-		const int32 TopologyBeforeAbandon = Actor->TopologyRebuildCountForTest();
-		Facade->BeginInteractiveEdit(TEXT("drag then abandon"));
-		TestTrue(TEXT("the soon-to-be-abandoned drag still moves the node while it is live"),
-			Actor->MoveNode(A, FVector2D(500.0, 500.0)));
-		TestTrue(TEXT("and a second frame of it"),
-			Actor->MoveNode(A, FVector2D(700.0, 700.0)));
-		Facade->EndInteractiveEdit(/*bKeep*/ false);
-
-		TestEqual(TEXT("an abandoned drag that moved something still runs the derived-graph "
-			"pass exactly once, not zero times - the staleness a plain AbandonEdit would "
-			"otherwise leave forever"),
-			Actor->TopologyRebuildCountForTest(), TopologyBeforeAbandon + 1);
-	}
+	// A drag that moved something and then ended with EndInteractiveEdit(false) owes the derived graph
+	// exactly one Topology notify (AbandonEdit only drops the undo snapshot; it does not put the node
+	// back), or cancelling would leave the guideline graph, anchor links, plots and traffic pointed at
+	// pre-drag positions forever. That section was this file's, and is now the table row
+	// MutatorNotifiesExactlyOnce.EndInteractiveEdit.Abandon (MeshFreshnessTest.cpp), which measures the
+	// same counts on a fresh world; it is not repeated here.
 
 	// --- Review follow-up: a MOTIONLESS drag must cost NOTHING -----------------------------
 	//
@@ -135,22 +122,14 @@ bool FDragNotifiesGeometryOnlyTest::RunTest(const FString& Parameters)
 			Actor->RebuildCountForTest(), RebuildsBeforeNoOp);
 	}
 
-	// --- Review follow-up: a BARE call outside Begin/End must catch itself up -------------
+	// --- A BARE call outside Begin/End must catch itself up - NOT HERE ---------------------
 	//
-	// THE BARE-CALL TRAP. A MoveNode call with no wrapping BeginInteractiveEdit/
-	// EndInteractiveEdit - the exact shape RunwayToolTest/RoadNetworkActorTest and this very
-	// file's control assertions above use - has no later Topology notify coming from anyone:
-	// MoveNode's own notify is the only one this move will ever get, so it has to be
-	// Topology, not Geometry, or the derived graph would go stale the moment a caller forgot
-	// to wrap a single move in an interactive edit.
-	{
-		const int32 TopologyBeforeBareMove = Actor->TopologyRebuildCountForTest();
-		TestTrue(TEXT("a bare MoveNode call, wrapped by nothing, still moves the node"),
-			Actor->MoveNode(A, FVector2D(900.0, 900.0)));
-		TestEqual(TEXT("and runs the derived-graph pass exactly once by itself, because there "
-			"is no EndInteractiveEdit coming to do it later"),
-			Actor->TopologyRebuildCountForTest(), TopologyBeforeBareMove + 1);
-	}
+	// THE BARE-CALL TRAP. A MoveNode call with no wrapping BeginInteractiveEdit/EndInteractiveEdit has no
+	// later Topology notify coming from anyone: its own notify is the only one that move will ever get, so
+	// it has to be Topology, not Geometry, or the derived graph would go stale the moment a caller forgot
+	// to wrap a single move in an interactive edit. That section was this file's, and is now the table row
+	// MutatorNotifiesExactlyOnce.MoveNode.Bare (MeshFreshnessTest.cpp); this file's own control
+	// assertions above still make bare PlaceNode/ConnectNode calls of the same shape.
 
 	return true;
 }
@@ -235,22 +214,41 @@ bool FDragNotifiesGeometryOnlyInEditorWorldTest::RunTest(const FString& Paramete
 
 	// --- An editor undo mid-drag: PR #247's FEditorUndoClient still deactivates the tool -----
 	//
-	// DeactivateOnUndo/FEditTool::OnDeactivate call EndInteractiveEdit(bKeep=true) on whatever
-	// the drag had moved so far, exactly as OnDragEnd does. This is the abandon-shaped half
-	// of the same fix: a drag that moved something and was then cut short still owes the
-	// derived graph its one catch-up, even with no History to have recorded a snapshot for
-	// PostUndo to have reverted in the first place.
+	// DRIVEN, NOT RESTATED. This block used to open a drag and call EndInteractiveEdit itself - the
+	// drag above again - so it called no undo and passed with the deactivation path deleted. The
+	// editor's Ctrl+Z reaches the tool through URoadBuildEditorTool::DeactivateOnUndo, which hands
+	// FBuildSession::OnNetworkReplaced the same call PIE's controller makes, and that deactivates the
+	// active tool: FEditTool::OnDeactivate ends the drag it holds (EndInteractiveEdit(bKeep=true), as
+	// OnDragEnd does). With no History in this world - asserted above - that call is the ONLY thing that
+	// gives a drag cut short its one derived-graph catch-up. A real FEditTool holds the drag here and the
+	// session's own OnNetworkReplaced (Adopted: the phase an undo sends) cuts it short; DeactivateOnUndo's
+	// own hop to the session is Airside.Editor.UndoDeactivatesTheActiveBuildTool, which AirsideTests, with
+	// no dependency on the editor module, cannot call.
 	{
-		const int32 TopologyBeforeUndo = Actor->TopologyRebuildCountForTest();
-		Facade->BeginInteractiveEdit(TEXT("drag then editor-undo"));
-		TestTrue(TEXT("the drag moves before the undo lands"),
-			Actor->MoveNode(A, FVector2D(500.0, 500.0)));
-		// bKeep=true: FEditTool::OnDeactivate's own call, not a cancel - an editor Ctrl+Z does
-		// not reach into a live drag to abandon it, it simply ends the interaction the same
-		// way releasing the mouse would.
-		Facade->EndInteractiveEdit(/*bKeep*/ true);
+		FBuildSession Session;
+		Session.SelectTool(1);                       // Taxiway: lights AirsideNode handles
+		Session.SetGestureMode(EGestureMode::Edit);
+		FBuildSessionTunables Tunables;
 
-		TestEqual(TEXT("a drag cut short by deactivation still runs the derived-graph pass "
+		IBuildTool* Tool = Session.GetActiveTool();
+		if (!TestNotNull(TEXT("an edit tool is active"), Tool)) { return false; }
+		Tool->OnDragBegin(Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables));
+
+		const int32 TopologyBeforeUndo = Actor->TopologyRebuildCountForTest();
+		const FVector2D BeforeDrag = Actor->GetNetwork()->GetNodes()[A].Position;
+		const FToolContext Mid = Session.MakeContext(Actor, FVector2D(500.0, 500.0), Tunables);
+		Tool->OnDrag(Mid);
+		if (!TestFalse(TEXT("the drag moved the grabbed node, or there is nothing for the undo to cut short"),
+			Actor->GetNetwork()->GetNodes()[A].Position.Equals(BeforeDrag, 1.0)))
+		{
+			return false;
+		}
+		TestEqual(TEXT("and a drag frame runs no derived-graph pass of its own"),
+			Actor->TopologyRebuildCountForTest(), TopologyBeforeUndo);
+
+		Session.OnNetworkReplaced(Mid, ENetworkReplace::Adopted);
+
+		TestEqual(TEXT("a drag cut short by the undo's deactivation still runs the derived-graph pass "
 			"exactly once"),
 			Actor->TopologyRebuildCountForTest(), TopologyBeforeUndo + 1);
 	}

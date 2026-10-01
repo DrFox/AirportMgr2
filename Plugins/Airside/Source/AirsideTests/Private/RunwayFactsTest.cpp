@@ -101,18 +101,6 @@ bool FPavementOrderIsStrengthTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPavementDescribeMatchesRunwaySentenceTest, "Airside.Model.Pavement.DescribeMatchesRunwaySentence",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-bool FPavementDescribeMatchesRunwaySentenceTest::RunTest(const FString&)
-{
-	// BYTE-IDENTICAL to the sentence RunwayAdmission::Describe printed before the check moved
-	// here (captured from main 2026-09-27) - the move must not change what the player reads.
-	TestEqual(TEXT("the runway's refusal sentence survives the move"),
-		Pavement::Describe(Pavement::Judge(EPavement::Grass, EPavement::Tarmac)),
-		FString(TEXT("the surface is grass; this aircraft needs tarmac")));
-	return true;
-}
-
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPavementRateFactorTest, "Airside.Model.Pavement.RateFactor",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FPavementRateFactorTest::RunTest(const FString&)

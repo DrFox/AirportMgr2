@@ -1311,17 +1311,6 @@ bool FRoadNetworkTestAccess::SetEntityOutlineForTest(FEntityInstanceId Entity, T
 	return true;
 }
 
-bool FRoadNetworkTestAccess::SetGuidelineEdgeDirectionForTest(FGuidelineEdgeId Edge, EGuidelineDir Direction)
-{
-	FGuidelineEdge* Found = Network.GetGuidelineEdgeMutable(Edge);
-	if (Found == nullptr)
-	{
-		return false;
-	}
-	Found->Direction = Direction;
-	return true;
-}
-
 void FRoadNetworkTestAccess::ClearStandNumbersForTest()
 {
 	for (FEntityInstance& Instance : Network.Entities)

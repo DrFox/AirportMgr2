@@ -77,16 +77,18 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 	Net->AddStraightSegment(RoadA, RoadB, Service);
 	Net->AddStraightSegment(RoadB, RoadC, Service);
 
-	const FRoadNodeId WalkA = Net->AddNode(FVector2D(30000.0, -5000.0));
-	const FRoadNodeId WalkB = Net->AddNode(FVector2D(30000.0, 15000.0));
-	Net->AddStraightSegment(WalkA, WalkB, Walkway);
+	// THE WALKWAY CROSSES THE ROAD AT RoadC, THROUGH A NODE THE TWO SHARE: the road runs on past it to RoadD and the
+	// walkway runs through it from WalkA to WalkB. It used to stand 30 m clear of every road, so the zebra count below was
+	// zero whatever the derivation did - a walkway that meets no vehicle line cannot produce a node where the two classes meet.
+	const FRoadNodeId RoadD = Net->AddNode(FVector2D(35000.0, 10000.0));
+	const FRoadNodeId WalkA = Net->AddNode(FVector2D(25000.0, 5000.0));
+	const FRoadNodeId WalkB = Net->AddNode(FVector2D(25000.0, 15000.0));
+	Net->AddStraightSegment(RoadC, RoadD, Service);
+	Net->AddStraightSegment(WalkA, RoadC, Walkway);
+	Net->AddStraightSegment(RoadC, WalkB, Walkway);
 
 	const FRoadSolveResult Solved = TestGraph::Derive(*Net);
 	TestEqual(TEXT("the marking network solved"), Solved.FailedNodes, 0);
-
-	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-	const FEntityInstanceId Gate = Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(25000.0, 25000.0), UE_DOUBLE_PI);
-	TestTrue(TEXT("the stand is placed"), Gate.IsSet());
 
 	// --- Now walk spec section 6's table, row by row. -------------------------------
 
@@ -137,73 +139,24 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("walkway edging has a source"), Sources > 0);
 	}
 
-	// Stand number and stop position <- the entity's Aircraft anchor. That row has a real
-	// source and is asserted below.
-	//
-	// Stand lead-in line <- "the guideline into an Aircraft anchor" - which does NOT have a
-	// source. Nothing emits an edge terminating on an anchor node: the derivation only
-	// produces edges between a segment's two cut-line ends, or between arm ends at a
-	// junction. So this block pins the ENDPOINT a lead-in would terminate on, and nothing
-	// about the lead-in itself. Recorded in spec section 6 beside the zebra row.
-	{
-		const FEntityInstance* Instance = Net->GetEntity(Gate);
-		if (TestNotNull(TEXT("the stand resolves"), Instance))
-		{
-			// Spec section 6's stop-position marking is derived from the stand's OWN POSE,
-			// not from an anchor. That changed when stand and aircraft were split: the mark
-			// painted on the apron is where the stand is, and where the nose gear stops is
-			// the same point by construction. An "Aircraft" fixture would have been a
-			// second copy of the stand's own position, free to disagree with it.
-			TestTrue(TEXT("the stand declares it can take an aircraft"),
-				Stand->Provides(EServiceRole::Aircraft));
-			TestTrue(TEXT("and its pose is the stop position the marking derives from"),
-				Instance->Position.Equals(FVector2D(25000.0, 25000.0), 0.01));
+	// Stand number and stop position <- the entity's own POSE (no Aircraft anchor since stand and
+	// aircraft were split). That row has a real source and is asserted in Airside.Model.Entity - the
+	// pose, every anchor's node and an unknown id's miss - not repeated here: this table's stand block
+	// restated those, and asserted Provides(Aircraft) of a service list nothing in production reads.
+	// (Its note that the stand lead-in line "has no source" went with the block: FAnchorLink lays that
+	// line now, and Airside.Build.AnchorLink measures it.)
 
-			// The ground fixtures still resolve, by id.
-			TestNotNull(TEXT("the hydrant pit has a source, a live node"),
-				Net->GetAnchorNode(Gate, FName(TEXT("HydrantPit"))));
+	// Runway / taxiway edge treatment <- the surface profile's outermost band. NOT ASSERTED HERE: the
+	// block that was here read back the band MakeGuidedProfile had just added, so it could not fail
+	// whatever the model did. The profile's bands are measured where they are derived into surface:
+	// Airside.Build.ProfileBands.
 
-			TestNull(TEXT("an id the stand does not declare resolves to nothing"),
-				Net->GetAnchorNode(Gate, FName(TEXT("NoSuchAnchor"))));
-		}
-	}
-
-	// Runway / taxiway edge treatment <- the surface profile's outermost band.
-	{
-		TestTrue(TEXT("the taxiway profile has a band to derive its edge from"),
-			Taxiway->Bands.Num() > 0);
-		TestTrue(TEXT("with a real width"), Taxiway->GetTotalWidth() > 0.0);
-	}
-
-	// Hold bar <- a guideline node flagged holding-position.
-	//
-	// Nothing WRITES HoldingPositionFor yet - that is the build tool's job - so what section 6
-	// needs from the model here is that the node can CARRY the source. Asserting only that
-	// a node can be created would establish nothing about hold bars at all; this sets the
-	// field and reads it back through the network, which is the actual claim.
-	{
-		const FGuidelineNodeId Marked =
-			Net->AddGuidelineNode(FVector2D(1.0, 1.0), /*bDerived=*/false);
-		if (TestTrue(TEXT("a holding-position node can be created"), Marked.IsSet()))
-		{
-			// A RUNWAY, since 2026-09-07: a runway-holding position may protect nothing else,
-			// and the setter refuses a taxiway. Its own strip, far from the fixture's roads.
-			URoadProfile* RunwayProfile = TestProfiles::Runway();
-			const FRoadNodeId StripA = Net->AddNode(FVector2D(300000.0, 300000.0));
-			const FRoadNodeId StripB = Net->AddNode(FVector2D(360000.0, 300000.0));
-			const FRoadSegmentId Protected = Net->AddStraightSegment(StripA, StripB, RunwayProfile);
-			TestTrue(TEXT("there is a runway for it to protect"), Protected.IsSet() && Net->IsRunwaySegment(Protected));
-
-			TestTrue(TEXT("flagged as a runway-holding position"), Net->SetRunwayHoldingPositionForTest(Marked, Protected));
-
-			const FGuidelineNode* ReadBack = Net->GetGuidelineNode(Marked);
-			if (TestNotNull(TEXT("the holding-position node resolves"), ReadBack))
-			{
-				TestTrue(TEXT("and carries the surface it protects"),
-					ReadBack->HoldingPositionFor == Protected);
-			}
-		}
-	}
+	// Hold bar <- a guideline node flagged holding-position. The node CARRYING the source (Kind and For
+	// written together, read back through the network) is Airside.Model.Guideline.NarrowMutators, and the
+	// derivation WRITING it is Airside.Build.HoldingPositionSurvivesRebuild. This block's own premise,
+	// "nothing WRITES HoldingPositionFor yet", stopped being true when the builder began deriving the
+	// runway-holding positions, and the block - which set the field itself - stopped saying anything those
+	// two do not.
 
 	// Road centre line <- two adjacent lane guidelines of ONE surface.
 	//
@@ -279,7 +232,31 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 	// a thing the model can hold but nothing can currently produce. It needs either a
 	// hand-drawn guideline API or a crossing-detection pass. Recorded as a plan gap; the
 	// assertion below states what IS true today so the gap is visible rather than implied.
+	//
+	// MEASURED ON A WALKWAY THAT REALLY MEETS A ROAD (RoadC, above). The count below was taken when
+	// the walkway stood clear of every road, where it is zero by construction and the assertion could
+	// not tell a derivation that makes zebra sources from one that does not.
 	{
+		bool bWalkArm = false;
+		bool bDriveArm = false;
+		const FRoadNode* Crossing = Net->GetNode(RoadC);
+		if (!TestNotNull(TEXT("the node the walkway crosses the road at resolves"), Crossing)) { return false; }
+		for (const FRoadSegmentId ArmId : Crossing->Incident)
+		{
+			const FRoadSegment* Arm = Net->GetSegment(ArmId);
+			const URoadProfile* ArmProfile = Arm != nullptr ? Net->ProfileFor(*Arm) : nullptr;
+			if (ArmProfile != nullptr && ArmProfile->Guidelines.Num() > 0)
+			{
+				bWalkArm |= ArmProfile->Guidelines[0].Class == ETraversalClass::Pedestrian;
+				bDriveArm |= ArmProfile->Guidelines[0].Class == ETraversalClass::GroundVehicle;
+			}
+		}
+		if (!TestTrue(TEXT("the premise: a walkway arm and a service-road arm meet at one node, or the count "
+			"below cannot see a crossing"), bWalkArm && bDriveArm))
+		{
+			return false;
+		}
+
 		int32 MixedClassNodes = 0;
 		for (int32 Index = 0; Index < Net->GetGuidelineNodes().Num(); ++Index)
 		{

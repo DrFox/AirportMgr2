@@ -15,8 +15,3 @@ int32 TraversalPriority(ETraversalClass Class)
 	// safe direction to be wrong in.
 	return 0;
 }
-
-ETraversalClass ResolveRightOfWay(ETraversalClass A, ETraversalClass B)
-{
-	return TraversalPriority(A) >= TraversalPriority(B) ? A : B;
-}

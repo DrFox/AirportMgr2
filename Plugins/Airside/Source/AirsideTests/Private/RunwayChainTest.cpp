@@ -104,18 +104,22 @@ bool FArrivalPlannerRunwayOccupiedTest::RunTest(const FString& Parameters)
 	const FRoadNodeId T = Net->AddNode(FVector2D(0.0, 0.0));
 	const FRoadNodeId E = Net->AddNode(FVector2D(60000.0, 0.0));
 	const FRoadNodeId F = Net->AddNode(FVector2D(120000.0, 0.0));
-	const FRoadSegmentId R1 = Net->AddStraightSegment(T, E, Runway);
-	Net->AddStraightSegment(E, F, Runway);
+	Net->AddStraightSegment(T, E, Runway);
+	const FRoadSegmentId R2 = Net->AddStraightSegment(E, F, Runway);
 
 	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
 
 	FTrafficOccupancy Table;
-	FTrafficClaim Hold; Hold.AgentId = 42; Hold.Resource = FTrafficResource::OfSurface(R1); Hold.bOccupied = true;
+	// R2, THE FAR HALF - not R1, the segment nearest the approach, which is the plan's seed. Holding the
+	// seed would pass a check that asked about the seed alone, and the claim below is about the whole chain.
+	FTrafficClaim Hold; Hold.AgentId = 42; Hold.Resource = FTrafficResource::OfSurface(R2); Hold.bOccupied = true;
 	FTrafficClaim Blocker;
 	Table.TryClaim(Hold, Blocker);
 
 	const FArrivalPlan Held = ArrivalPlanner::Plan(*Net, FVector2D(-1000.0, 0.0), Airframe, &Table);
 	TestEqual(TEXT("a runway held on ANY segment of its chain refuses the arrival"), Held.Why, EArrivalRefusal::RunwayOccupied);
+	TestNotEqual(TEXT("the premise: the segment held is not the seed the plan resolved, so the refusal came from the chain"),
+		Held.End.Seed, R2);
 	TestEqual(TEXT("the plan still names the chain it was refused for"), Held.RunwayChain.Num(), 2);
 	TestTrue(TEXT("DescribeRefusal has words for it"), ArrivalPlanner::DescribeRefusal(Held).Contains(TEXT("in use")));
 

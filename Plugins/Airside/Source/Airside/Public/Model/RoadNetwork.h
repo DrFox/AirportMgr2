@@ -1394,10 +1394,6 @@ struct AIRSIDE_API FRoadNetworkTestAccess
 	 *  answer, to show a reader reads the stored one (Airside.Model.StandFrontage.ReadersReadTheStoredEdge). False for a dead entity. */
 	bool SetEntityFrontageForTest(FEntityInstanceId Entity, int32 FrontageEdge);
 
-	/** Write Direction directly onto a live guideline edge - a one-way sweep, which FAnchorLink
-	 *  never lays today (Airside.Build.StandTurnOff.NumberOnADrivableSweep). False for a dead edge. */
-	bool SetGuidelineEdgeDirectionForTest(FGuidelineEdgeId Edge, EGuidelineDir Direction);
-
 private:
 	URoadNetwork& Network;
 };

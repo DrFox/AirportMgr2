@@ -818,7 +818,19 @@ bool FHealSkippedSweepsBareEndsTest::RunTest(const FString& Parameters)
 	bLaid &= Actor->ConnectNodes(Apex, B, ERoadKind::ServiceRoad, 0);
 	if (!TestTrue(TEXT("the bent road is laid"), bLaid)) { return false; }
 
-	TestTrue(TEXT("the apex deletes"), Actor->DeleteNode(Apex));
+	// THE PREMISE, as Airside.Present.HealRefusedAcrossStrip has it: the apex PLANS a heal, and the strip makes
+	// the delete SKIP it. Without both, "no bare ends" below is what any delete leaves of a road with no heal to
+	// skip - this asserted the result of a skip it never established.
+	const FRoadDeletionPlan Plan = Actor->PlanNodeDeletion(Apex);
+	if (!TestTrue(TEXT("the apex plans a heal - or this proves nothing"), Plan.bValid && Plan.Rejoin.Num() > 0)) { return false; }
+
+	FLogLineSpy Spy(TEXT("LogRoadMesh"));
+	GLog->AddOutputDevice(&Spy);
+	const bool bDeleted = Actor->DeleteNode(Apex);
+	GLog->RemoveOutputDevice(&Spy);
+	TestTrue(TEXT("the apex deletes"), bDeleted);
+	TestTrue(FString::Printf(TEXT("and its heal is skipped (%s)"), *FString::Join(Spy.CapturedLines, TEXT(" | "))),
+		Spy.CapturedLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("Heal skipped: inside")); }));
 	TestEqual(TEXT("only the taxiway is left"), LiveSegments(Actor), 1);
 	TestEqual(TEXT("and only its two nodes - A and B were not left bare"), LiveNodes(Actor), 2);
 	return true;

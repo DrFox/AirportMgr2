@@ -100,6 +100,3 @@ enum class EDriveSide : uint8
  * has no defined winner.
  */
 AIRSIDE_API int32 TraversalPriority(ETraversalClass Class);
-
-/** Which of two contending classes proceeds. Returns the class itself when they match. */
-AIRSIDE_API ETraversalClass ResolveRightOfWay(ETraversalClass A, ETraversalClass B);

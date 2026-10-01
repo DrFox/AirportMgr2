@@ -60,26 +60,17 @@ bool FRoadTrafficTest::RunTest(const FString& Parameters)
 			TraversalPriority(ETraversalClass::Pedestrian) > TraversalPriority(ETraversalClass::GroundVehicle));
 	}
 
-	// WHICH class wins, against literal expectations. The exhaustive loop below derives
-	// its expectation from TraversalPriority, so on its own it would still pass if both
-	// functions were flipped together; these three pin the direction to the spec.
-	TestEqual(TEXT("emergency takes right of way over aircraft"),
-		ResolveRightOfWay(ETraversalClass::Emergency, ETraversalClass::Aircraft),
-		ETraversalClass::Emergency);
-	TestEqual(TEXT("aircraft take right of way over pedestrians"),
-		ResolveRightOfWay(ETraversalClass::Aircraft, ETraversalClass::Pedestrian),
-		ETraversalClass::Aircraft);
-	TestEqual(TEXT("pedestrians take right of way over ground vehicles"),
-		ResolveRightOfWay(ETraversalClass::Pedestrian, ETraversalClass::GroundVehicle),
-		ETraversalClass::Pedestrian);
-	TestEqual(TEXT("and the answer does not depend on argument order"),
-		ResolveRightOfWay(ETraversalClass::Aircraft, ETraversalClass::Emergency),
-		ETraversalClass::Emergency);
+	// The three comparisons above are LITERAL rank checks on purpose: the loop below derives
+	// nothing from them, so on its own it would pass with the whole order flipped. (A
+	// ResolveRightOfWay wrapper used to be asserted beside them, "which class wins" against literal
+	// expectations. It had no production caller - only this test - and was deleted 2026-10-01: the
+	// rank is the rule, and the winner of a pair is whichever has the higher one.)
 
-	// The order must be TOTAL, and right-of-way antisymmetric. Asserted exhaustively over
-	// every ordered pair rather than by spot-check: a partial order here would leave some
-	// crossing in the game with no defined winner, and the failure would surface as two
-	// agents deadlocked rather than as anything that looks like a rule bug.
+	// The order must be TOTAL. Asserted exhaustively over every ordered pair rather than by
+	// spot-check: a partial order here would leave some crossing in the game with no defined
+	// winner, and the failure would surface as two agents deadlocked rather than as anything
+	// that looks like a rule bug. Distinct ranks make the comparison antisymmetric as well -
+	// of any two different classes exactly one outranks the other.
 	{
 		const ETraversalClass Classes[] = {
 			ETraversalClass::Aircraft, ETraversalClass::GroundVehicle,
@@ -87,8 +78,6 @@ bool FRoadTrafficTest::RunTest(const FString& Parameters)
 
 		for (const ETraversalClass Left : Classes)
 		{
-			TestEqual(TEXT("a class ties with itself"), ResolveRightOfWay(Left, Left), Left);
-
 			for (const ETraversalClass Right : Classes)
 			{
 				if (Left == Right)
@@ -98,14 +87,6 @@ bool FRoadTrafficTest::RunTest(const FString& Parameters)
 
 				TestNotEqual(TEXT("distinct classes never tie in priority"),
 					TraversalPriority(Left), TraversalPriority(Right));
-
-				TestEqual(TEXT("right of way is symmetric in its argument order"),
-					ResolveRightOfWay(Left, Right), ResolveRightOfWay(Right, Left));
-
-				const ETraversalClass Expected =
-					TraversalPriority(Left) >= TraversalPriority(Right) ? Left : Right;
-				TestEqual(TEXT("the higher-priority class takes right of way"),
-					ResolveRightOfWay(Left, Right), Expected);
 			}
 		}
 	}
