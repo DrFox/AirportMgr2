@@ -241,8 +241,24 @@ struct AIRSIDE_API FRouteFollower
 	 * that threw the nosewheel 3.3 degrees in a frame, over and over. The triangle's rate is
 	 * continuous however the line is sampled. Airside.Model.FinalTurnParksSquare's per-frame
 	 * steering limit is what caught it.
+	 *
+	 * CONTINUOUS IS NOT STEADY, and this is only the window's FLOOR (2026-10-01). A triangle
+	 * narrower than a span holds the heading still along the middle of each span and swings
+	 * it at each vertex - a rate that is continuous but runs 0 / 50 / 0 / 70 deg/s. That was
+	 * the stand-entry jerk: a Piper's quarter wheelbase is ~60 uu, a 16-sample Code B lead-in
+	 * spans ~140. See FinalTurnHalfWindow for the window actually flown.
 	 */
 	static constexpr double FinalTurnHalfWindowOfWheelbase = 0.25;
+
+	/**
+	 * The half-window the armed last turn is flown with: the larger of the wheelbase floor
+	 * above and the LONGEST SPAN IN THAT TURN. At a half-window of one span the triangle
+	 * spreads each vertex's turn across the whole span either side - linear interpolation, in
+	 * effect - so a curve sampled at even angle steps turns at an even rate. Set by
+	 * ArmFinalTurn once per arming rather than per frame, so the window cannot itself change
+	 * mid-turn. ENFORCED BY: Airside.Model.FinalTurnSteadyOnCoarseLeadIn
+	 */
+	UPROPERTY() double FinalTurnHalfWindow = 0.0;
 
 private:
 	/** Fills ReverseLegSteps from Plan.Steps and resets ReverseLegCursor to 0. Called from

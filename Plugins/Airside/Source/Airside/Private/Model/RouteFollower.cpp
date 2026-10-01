@@ -165,7 +165,7 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FChassis& InChassis, dou
 		const double CarriedTo = FMath::Exp(-(FinalTurnFrom - WasTravelled) / L);
 		FinalTurnHandoverOffset = (RoadGeom::TrailPoint(NoseWas, Heading, -L) - MainsWanted) * CarriedTo;
 		FinalTurnHandoverHeading = FMath::UnwindRadians(
-			Heading - FinalTurnHeadingAt(WasTravelled - L, L * FinalTurnHalfWindowOfWheelbase)) * CarriedTo;
+			Heading - FinalTurnHeadingAt(WasTravelled - L, FinalTurnHalfWindow)) * CarriedTo;
 		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("Final turn: main gear takes the line at %.0f uu, %.2f deg and %.1f uu off it at the handover."),
 			Travelled, FMath::RadiansToDegrees(FinalTurnHandoverHeading), FinalTurnHandoverOffset.Size());
@@ -303,7 +303,7 @@ double FRouteFollower::HoldFinalTurn(double DeltaSeconds, const FChassis& InChas
 	// EFinalTurnAxle for why the last turn is flown this way.
 	const double L = InChassis.Wheelbase();
 	const double MainsAt = Travelled - L;
-	const double LineHeadingAtMains = FinalTurnHeadingAt(MainsAt, L * FinalTurnHalfWindowOfWheelbase);
+	const double LineHeadingAtMains = FinalTurnHeadingAt(MainsAt, FinalTurnHalfWindow);
 
 	// UNHINTED, unlike Advance's own walk: CursorVertex checkpoints TRAVELLED's walk, and the
 	// mains are a wheelbase behind it, so the hint would have to walk backwards. Paid only
@@ -428,7 +428,6 @@ void FRouteFollower::ArmFinalTurn(const FChassis& InChassis, bool bKeepIfDriving
 	}
 
 	const double L = InChassis.Wheelbase();
-	const double HalfWindow = L * FinalTurnHalfWindowOfWheelbase;
 
 	// A STRAIGHT IS A RUN WHOSE SPANS STAY WITHIN HALF A DEGREE OF ONE ANOTHER. Cumulative
 	// against one reference span, not span to span: a gentle curve sampled finely turns less
@@ -463,6 +462,11 @@ void FRouteFollower::ArmFinalTurn(const FChassis& InChassis, bool bKeepIfDriving
 		return;   // Straight in: nothing to square, and the nose law is already exact.
 	}
 
+	// THE WINDOW'S FLOOR. Widened below to the turn's own sampling once the turn is found -
+	// see FinalTurnHalfWindow - but the turn is found with the floor, because the search
+	// needs a window and the turn is what sizes it.
+	double HalfWindow = L * FinalTurnHalfWindowOfWheelbase;
+
 	// LONG ENOUGH TO FINISH ON. The mains stop a wheelbase behind the nose, and the heading
 	// is averaged half a window beyond them; both must be on the straight or the aircraft stops with
 	// the curve still in its heading - and with its nose off the line, short of the mark.
@@ -480,6 +484,7 @@ void FRouteFollower::ArmFinalTurn(const FChassis& InChassis, bool bKeepIfDriving
 	// blend has to absorb is what an EARLIER turn left in the heading. A scan per candidate,
 	// quadratic in the worst case, on ~50-100 points once per dispatch (2026-09-27).
 	int32 Enter = INDEX_NONE;
+	double StraightBehind = 0.0;
 	for (int32 Vertex = FinalFrom - 1; Vertex >= 1 && Enter == INDEX_NONE; --Vertex)
 	{
 		const double Reference = SpanHeading[Vertex - 1];
@@ -491,6 +496,7 @@ void FRouteFollower::ArmFinalTurn(const FChassis& InChassis, bool bKeepIfDriving
 		if (VertexDistance[Vertex] - VertexDistance[Back] >= Need)
 		{
 			Enter = Vertex;
+			StraightBehind = VertexDistance[Vertex] - VertexDistance[Back];
 		}
 	}
 	if (Enter == INDEX_NONE)
@@ -498,6 +504,19 @@ void FRouteFollower::ArmFinalTurn(const FChassis& InChassis, bool bKeepIfDriving
 		Refuse(FString::Printf(TEXT("no straight of %.0f uu before the last turn to hand over on"), Need));
 		return;
 	}
+
+	// THE WINDOW, WIDENED TO THE TURN'S SAMPLING - see FinalTurnHalfWindow. The turn is the
+	// spans from Enter to the final straight, so a straight between an EARLIER turn and this
+	// one is never counted (Airside.Model.FinalTurnHandoverIsSmooth has one, and counting it
+	// made the window longer than the final straight). Capped so both straights still hold
+	// the mains plus the window - the same Need as above - and never below the floor.
+	double LongestTurnSpan = 0.0;
+	for (int32 Span = Enter; Span < FinalFrom; ++Span)
+	{
+		LongestTurnSpan = FMath::Max(LongestTurnSpan, VertexDistance[Span + 1] - VertexDistance[Span]);
+	}
+	HalfWindow = FMath::Max(HalfWindow,
+		FMath::Min3(LongestTurnSpan, FinalStraight - L, StraightBehind - L));
 
 	// FORWARD ONLY: a reverse leg is FReverseRun's to drive, never this follower's, and a
 	// turn backed round is not a turn onto a stand.
@@ -551,13 +570,14 @@ void FRouteFollower::ArmFinalTurn(const FChassis& InChassis, bool bKeepIfDriving
 	}
 
 	FinalTurnFrom = From;
+	FinalTurnHalfWindow = HalfWindow;
 	if (!bWasDriving)
 	{
 		UE_LOG(LogAirsideTraffic, Log,
-			TEXT("Final turn: main gear holds the line from %.0f uu of %.0f - %.0f deg turn, final straight %.0f, wheelbase %.0f, peak steer %.1f of %.0f deg lock."),
+			TEXT("Final turn: main gear holds the line from %.0f uu of %.0f - %.0f deg turn, final straight %.0f, wheelbase %.0f, half-window %.0f, peak steer %.1f of %.0f deg lock."),
 			From, Plan.Length,
 			FMath::RadiansToDegrees(FMath::Abs(FMath::UnwindRadians(SpanHeading[Spans - 1] - SpanHeading[Enter - 1]))),
-			FinalStraight, L, PeakSteer, InChassis.Ground.MaxSteerDegrees);
+			FinalStraight, L, HalfWindow, PeakSteer, InChassis.Ground.MaxSteerDegrees);
 	}
 }
 
