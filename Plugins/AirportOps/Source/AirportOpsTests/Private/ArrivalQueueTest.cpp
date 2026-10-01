@@ -4,6 +4,7 @@
 #include "Model/ArrivalSequencer.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
+#include "Model/FlightRunway.h"
 #include "Model/GroundTraffic.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadEntity.h"
@@ -562,6 +563,10 @@ bool FQueueUnusableFreeRunwayTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("holding while the only runway it can use is held"), Flight->GetPhase(), EFlightPhase::Inbound);
 	TestEqual(TEXT("nothing dispatched into the refusal"), Traffic->GetAgentCount(), 0);
 	TestEqual(TEXT("and no refused-dispatch Warning, let alone one a pass"), Spy.Lines, 0);
+	// WHAT IT WAITS FOR is the strip it can use, not the free one it cannot - the arrivals row's "HOLDING for 09".
+	const TArray<FRunwayEnd> Waits = FlightRunway::For(*Rig.Board, *Traffic, *Flight);
+	TestTrue(TEXT("it waits for exactly the runway it can use"),
+		Waits.Num() == 1 && Net->RunwayChain(Waits[0].Seed).Contains(Rig.Airport.ThresholdSegment));
 
 	Rig.FreeRunway();
 	Rig.Clock->Advance(1.0 / 30.0);

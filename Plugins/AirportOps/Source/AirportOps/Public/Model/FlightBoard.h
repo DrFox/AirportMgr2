@@ -482,6 +482,9 @@ public:
 	/** The flights holding for the runway, in the order they joined - derived, never stored. FORWARDS to FArrivalQueue::Queue. */
 	TArray<UFlight*> Queue() const;
 
+	/** The runways a holding flight waits for. FORWARDS to FArrivalQueue::UsableRunwaysFor; FlightRunway::For is the reader. */
+	TArray<FRunwayEnd> UsableRunwaysFor(int32 FlightId) const { return Arrivals.UsableRunwaysFor(FlightId); }
+
 	/** Clear at most one holding flight whose runway is free, and dispatch it - the "ArrivalQueue" pass's one call. FORWARDS to
 	 *  FArrivalQueue::Tick (#442 item 4). Rule 33 reads THIS name: the pass alone calls it in production.
 	 *  ENFORCED BY: AirportOps.Model.ArrivalQueue.DueWhileBusyWaitsThenLands, Check-Architecture rule 33 (queue-is-a-pass) */

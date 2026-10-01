@@ -410,4 +410,42 @@ bool FArrivalsAcceptingOneFlightComposesOnlyTheNewRowTest::RunTest(const FString
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalsRowNamesItsRunwayTest, "AirportMgr.UI.Arrivals.RowNamesItsRunway",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalsRowNamesItsRunwayTest::RunTest(const FString& Parameters)
+{
+	// 2026-10-01, "show what runway has been chosen": the list's RefreshText hands each row the name RunwayOf gives its flight
+	// (the panel's is FlightRunway::Names), the status says it in the phase's words, and the name is in the key - so a row
+	// recomposes when its runway changes (a parallel built beside it re-letters 09 to 09L) and holds when nothing moved.
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = NewObject<UFlightBoard>();
+	UFlight* Holding = Flight(TEXT("CU 1"), EFlightPhase::Inbound);
+	Holding->HoldingSince = 5.0;
+	UFlight* Landing = Flight(TEXT("CU 2"), EFlightPhase::Landing);
+	UFlight* OnStand = Flight(TEXT("CU 3"), EFlightPhase::Turnaround);
+	for (UFlight* Each : { Holding, Landing, OnStand }) { Board->AddOffer(*Clock, Each); }
+	UArrivalsViewModel* List = NewObject<UArrivalsViewModel>();
+	List->SyncRows(*Board);
+	FString Name = TEXT("09L");
+	const auto RunwayOf = [&Name](const UFlight& F) { return F.GetPhase() == EFlightPhase::Turnaround ? FString() : Name; };
+	List->RefreshText(*Clock, RunwayOf);
+	auto StatusOf = [List](const UFlight* F)
+	{
+		for (const UArrivalRowViewModel* Row : List->GetRows()) { if (Row->Flight.Get() == F) { return Row->GetStatus().ToString(); } }
+		return FString();
+	};
+	TestEqual(TEXT("holding names what it waits for"), StatusOf(Holding), FString(TEXT("HOLDING for 09L")));
+	TestEqual(TEXT("landing names its runway"), StatusOf(Landing), FString(TEXT("LANDING 09L")));
+	TestEqual(TEXT("a phase with no runway keeps its bare word - no dangling 'for'"), StatusOf(OnStand), FString(TEXT("ON STAND")));
+
+	const int32 Settled = List->ComposeCountForTest();
+	List->RefreshText(*Clock, RunwayOf);
+	TestEqual(TEXT("nothing moved, nothing recomposes"), List->ComposeCountForTest(), Settled);
+	Name = TEXT("09R");
+	List->RefreshText(*Clock, RunwayOf);
+	TestEqual(TEXT("the runway changed: the two rows naming it recompose"), List->ComposeCountForTest(), Settled + 2);
+	TestEqual(TEXT("and say the new name"), StatusOf(Landing), FString(TEXT("LANDING 09R")));
+	return true;
+}
+
 #endif

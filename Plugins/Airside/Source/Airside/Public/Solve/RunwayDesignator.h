@@ -17,9 +17,9 @@
  * designator that silently used true north would be wrong at every real aerodrome and wrong
  * by an amount nobody would notice until they compared with a chart.
  *
- * PARALLEL RUNWAYS ARE NOT HANDLED. Two runways on the same bearing take L/C/R suffixes, and
- * deciding which is which needs to know about the other one - a question about an airport,
- * not about a direction. This namespace answers only what a single direction is called.
+ * PARALLEL RUNWAYS: two or three runways on the same bearing take L/(C/)R suffixes, and deciding
+ * WHICH runway is which needs the others - a question about an airport, answered by
+ * RunwayQuery::EndName. This namespace keeps only the rule from a rank to a letter (ParallelSuffix).
  *
  * Dependency-free like the rest of Solve/: a direction in, a number out.
  */
@@ -48,4 +48,11 @@ namespace RunwayDesignator
 	 * strip must not become "27/09" because a node was dragged.
 	 */
 	AIRSIDE_API FString ToPairText(const FVector2D& Direction);
+
+	/**
+	 * The parallel letter for the runway Rank places from the LEFT (0) as seen down the direction in use, of Count on
+	 * one bearing: "L"/"R" of two, "L"/"C"/"R" of three, and "" for one alone or more than three - which the ICAO
+	 * scheme handles by renumbering one of them, a choice about an airport this function will not make.
+	 */
+	AIRSIDE_API FString ParallelSuffix(int32 Rank, int32 Count);
 }

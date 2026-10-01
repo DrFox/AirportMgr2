@@ -542,6 +542,42 @@ namespace RunwayQuery
 		return true;
 	}
 
+	FString EndName(const URoadNetwork& Network, const FRunwayEnd& End)
+	{
+		const int32 Designator = RunwayDesignator::Designate(End.Direction);
+		const FString Number = RunwayDesignator::ToText(Designator);
+		if (Number.IsEmpty())
+		{
+			return Number;
+		}
+		// THE PILOT'S LEFT in the frame RunwayDesignator reads (north +X, east +Y): heading 090 is +Y and its left is
+		// north, +X - so (Dir.Y, -Dir.X).
+		const FVector2D Dir = End.Direction.GetSafeNormal();
+		const FVector2D Left(Dir.Y, -Dir.X);
+		// Every strip on this bearing, by its offset across End's line. End's own strip is the one ON that line (offset
+		// nearest 0, whichever of its ends the summary was found from); parallels are a strip width or more away.
+		TArray<double> Offsets;
+		double Own = TNumericLimits<double>::Max();
+		for (const FRunwaySummary& R : AirsideCapability::SummariseRunways(Network))
+		{
+			const int32 Other = RunwayDesignator::Designate(R.End.Direction);
+			if (Other != Designator && RunwayDesignator::Reciprocal(Other) != Designator)
+			{
+				continue;
+			}
+			const double Offset = FVector2D::DotProduct(R.End.Threshold - End.Threshold, Left);
+			Offsets.Add(Offset);
+			Own = FMath::Abs(Offset) < FMath::Abs(Own) ? Offset : Own;
+		}
+		// Rank from the left: how many strips lie further left than this one.
+		int32 Rank = 0;
+		for (const double Offset : Offsets)
+		{
+			Rank += Offset > Own + 1.0 ? 1 : 0;
+		}
+		return Number + RunwayDesignator::ParallelSuffix(Rank, Offsets.Num());
+	}
+
 	FRunwayRank RankRunway(const URoadNetwork& Network, const FRunwayEnd& End, ERunwayTraffic Traffic,
 		const FTrafficOccupancy* Occupancy, double TaxiLength)
 	{

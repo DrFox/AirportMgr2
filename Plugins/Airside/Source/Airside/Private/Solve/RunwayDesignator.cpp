@@ -69,3 +69,16 @@ namespace RunwayDesignator
 		return FString::Printf(TEXT("%s/%s"), *ToText(Low), *ToText(High));
 	}
 }
+
+FString RunwayDesignator::ParallelSuffix(int32 Rank, int32 Count)
+{
+	if (Count == 2 && (Rank == 0 || Rank == 1))
+	{
+		return Rank == 0 ? TEXT("L") : TEXT("R");
+	}
+	if (Count == 3 && Rank >= 0 && Rank < 3)
+	{
+		return Rank == 0 ? TEXT("L") : (Rank == 1 ? TEXT("C") : TEXT("R"));
+	}
+	return FString();
+}
