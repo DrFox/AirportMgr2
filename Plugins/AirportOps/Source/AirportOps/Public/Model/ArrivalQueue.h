@@ -100,6 +100,16 @@ public:
 	TArray<UFlight*> Queue(const UFlightBoard& Board) const;
 
 	/**
+	 * The runways a holding flight is waiting for - its cached clearance's FArrivalPlan::UsableRunways, the strips the queue's
+	 * gate asks about - or empty before its first clearance pass. What the ARRIVALS row names as "HOLDING for 09L" (2026-10-01).
+	 */
+	TArray<FRunwayEnd> UsableRunwaysFor(int32 FlightId) const
+	{
+		const FClearance* Cached = Clearances.Find(FlightId);
+		return Cached != nullptr ? Cached->Usable : TArray<FRunwayEnd>();
+	}
+
+	/**
 	 * WHY A HOLDING FLIGHT CAN NEVER LAND, or None (#442): the refusal its cached clearance (ClearanceFor - the plan minus
 	 * the runway, which Tick asks) holds, when that refusal is one the player must build or change something to clear
 	 * (ArrivalPlanner::IsPermanentRefusal). What the FlightCannotLand alert is derived from. An ACCEPTED flight is judged too
@@ -244,7 +254,7 @@ private:
 		uint32 StandChurnAt = 0;
 		bool bValid = false;
 		/** The plan's FArrivalPlan::UsableRunways: the strips TickQueue's live gate asks about. Dated with Why. */
-		TArray<FRoadSegmentId> Usable;
+		TArray<FRunwayEnd> Usable;
 	};
 	TMap<int32, FClearance> Clearances;
 

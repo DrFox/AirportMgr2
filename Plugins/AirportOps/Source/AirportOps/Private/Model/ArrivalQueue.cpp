@@ -274,8 +274,9 @@ FQueueTick FArrivalQueue::Tick(UFlightBoard& Board, UGroundTraffic& Traffic, con
 		{
 			return false;
 		}
-		const FClearance* Cached = Clearances.Find(F.Id);
-		return Cached != nullptr && !RunwayQuery::AreRunwaysHeld(Network, Cached->Usable, &Traffic.GetOccupancy());
+		TArray<FRoadSegmentId, TInlineAllocator<4>> Seeds;
+		for (const FRunwayEnd& End : UsableRunwaysFor(F.Id)) { Seeds.Add(End.Seed); }
+		return !Seeds.IsEmpty() && !RunwayQuery::AreRunwaysHeld(Network, Seeds, &Traffic.GetOccupancy());
 	};
 	// NULL SEQUENCER IS STRICT FIRST COME, for a test that does not wire one.
 	UFlight* Next = Board.Sequencer != nullptr ? Board.Sequencer->Next(Waiting, CanClear)

@@ -10,6 +10,9 @@
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Present/OpsRuntime.h"
+#include "Model/FlightRunway.h"
+#include "Model/GroundTraffic.h"
+#include "Present/RoadNetworkActor.h"
 #include "UI/UiRow.h"
 #include "UIStyle.h"
 
@@ -77,7 +80,16 @@ void UArrivalsPanelWidget::Refresh()
 		PaintBadge();
 		return;
 	}
-	Arrivals->RefreshText(*Runtime->GetClock());
+	// THE RUNWAY EACH FLIGHT IS ON OR WAITS FOR (FlightRunway, 2026-10-01). No target is no runway named, not a stale one.
+	const ARoadNetworkActor* Target = Runtime->GetTarget();
+	const URoadNetwork* Network = Target != nullptr ? Target->GetNetwork() : nullptr;
+	const UGroundTraffic* Traffic = Target != nullptr ? Target->GetGroundTraffic() : nullptr;
+	const UFlightBoard& Board = *Runtime->GetFlightBoard();
+	Arrivals->RefreshText(*Runtime->GetClock(), [Network, Traffic, &Board](const UFlight& Flight)
+	{
+		return Network != nullptr && Traffic != nullptr
+			? FlightRunway::Names(*Network, FlightRunway::For(Board, *Traffic, Flight)) : FString();
+	});
 	if (PanelStyle != nullptr)
 	{
 		PaintRows(*PanelStyle);

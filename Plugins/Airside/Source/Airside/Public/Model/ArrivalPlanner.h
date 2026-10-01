@@ -178,14 +178,14 @@ struct AIRSIDE_API FArrivalPlan
 	UPROPERTY() bool bOtherEndWouldServe = false;
 
 	/**
-	 * Every runway Plan found this airframe COULD land on, one seed per strip, the best among them or not - whatever
+	 * Every runway Plan found this airframe COULD land on, one end in use per strip, the best among them or not - whatever
 	 * Plan's own verdict. Under ERunwayBusy::Queue that is "usable once free", which is what the arrival queue caches
 	 * so its live gate asks about THESE strips only (RunwayQuery::AreRunwaysHeld). Asking whether ANY arrival runway was free cleared
 	 * a flight onto a free strip it could not use, the dispatch refused it RunwayOccupied, and it went round again every
 	 * frame: about 200 refusals and toasts a second (samples/refused.png, 2026-10-01).
 	 * ENFORCED BY: AirportOps.Model.ArrivalQueue.FreeRunwayItCannotUseIsNoClearance
 	 */
-	UPROPERTY() TArray<FRoadSegmentId> UsableRunways;
+	UPROPERTY() TArray<FRunwayEnd> UsableRunways;
 
 	/**
 	 * None means every step above succeeded and every other field is meaningful.

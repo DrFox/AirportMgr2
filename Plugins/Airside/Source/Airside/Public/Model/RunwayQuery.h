@@ -320,6 +320,17 @@ namespace RunwayQuery
 		const FTrafficOccupancy* Occupancy);
 
 	/**
+	 * The name of End as the direction it is used in - "09", or "09L" / "09R" where another runway on the field shares its
+	 * designator (2026-10-01: two parallel strips both read "09/27", so a list saying which one a flight uses said nothing).
+	 * Left is the PILOT'S left looking down End.Direction, ranked by each strip's offset across that line, so the same
+	 * strip is 09L one way and 27R the other, as on a chart. Derived on every call, like the designator itself: a runway
+	 * built or demolished re-letters the others, and there is nowhere for a stale letter to hide.
+	 * COST: one SummariseRunways walk (every segment); asked per arrivals row per compose, of 2 runways on 2026-10-01.
+	 * ENFORCED BY: Airside.Model.RunwayQuery.ParallelEndsAreLettered
+	 */
+	AIRSIDE_API FString EndName(const URoadNetwork& Network, const FRunwayEnd& End);
+
+	/**
 	 * The rank of the runway End for Traffic: held is IsChainHeld of its strip - the claim a movement makes at its
 	 * handover - dedicated is its ERunwayUse being set to exactly this kind of traffic (an unset use reads Mixed,
 	 * so is not dedicated), and Taxi is TaxiLength, which only the caller has (an arrival's taxi in from its exit,

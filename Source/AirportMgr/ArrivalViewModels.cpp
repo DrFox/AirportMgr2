@@ -26,20 +26,32 @@ bool UArrivalRowViewModel::IsHoldingPhase(const UFlight& Flight)
 // ENFORCED BY: C4062 as an error, AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN; Check-Architecture rule 58 (a switch on EFlightPhase outside Flight.h is
 // inside it and has no default); AirportMgr.Arrivals.StatusText (every phase the enum has: a live one says something, the rest are empty)
 AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
-FText UArrivalRowViewModel::DescribeStatus(const UFlight& Flight, double Now)
+FText UArrivalRowViewModel::DescribeStatus(const UFlight& Flight, double Now, const FString& Runway)
 {
+	// THE RUNWAY IN THE PHASE'S OWN WORDS (2026-10-01) - "HOLDING for 09L", "TAXI IN from 09L" - and the bare word when there
+	// is none to name (FlightRunway::For): a phase that names no runway never prints a dangling "for".
+	const FText Named = FText::FromString(Runway);
+	const auto With = [&Runway, &Named](const FText& Bare, const FText& Pattern)
+	{
+		return Runway.IsEmpty() ? Bare : FText::Format(Pattern, Named);
+	};
 	switch (Flight.GetPhase())
 	{
 	case EFlightPhase::Accepted:
 		return FText::Format(NSLOCTEXT("AirportMgr", "ArrivalIn", "in {0}"),
 			GameTimeText::Duration(FMath::Max(Flight.ArrivesAt - Now, 0.0)));
-	case EFlightPhase::Inbound:     return NSLOCTEXT("AirportMgr", "ArrivalHolding", "HOLDING");   // IsHoldingPhase's phase
-	case EFlightPhase::Landing:     return NSLOCTEXT("AirportMgr", "ArrivalLanding", "LANDING");
-	case EFlightPhase::TaxiIn:      return NSLOCTEXT("AirportMgr", "ArrivalTaxiIn", "TAXI IN");
+	case EFlightPhase::Inbound:     return With(NSLOCTEXT("AirportMgr", "ArrivalHolding", "HOLDING"),   // IsHoldingPhase's phase
+		NSLOCTEXT("AirportMgr", "ArrivalHoldingFor", "HOLDING for {0}"));
+	case EFlightPhase::Landing:     return With(NSLOCTEXT("AirportMgr", "ArrivalLanding", "LANDING"),
+		NSLOCTEXT("AirportMgr", "ArrivalLandingOn", "LANDING {0}"));
+	case EFlightPhase::TaxiIn:      return With(NSLOCTEXT("AirportMgr", "ArrivalTaxiIn", "TAXI IN"),
+		NSLOCTEXT("AirportMgr", "ArrivalTaxiInFrom", "TAXI IN from {0}"));
 	case EFlightPhase::Turnaround:  return NSLOCTEXT("AirportMgr", "ArrivalOnStand", "ON STAND");
 	case EFlightPhase::Manoeuvring: return NSLOCTEXT("AirportMgr", "ArrivalManoeuvring", "MANOEUVRING");
-	case EFlightPhase::TaxiOut:     return NSLOCTEXT("AirportMgr", "ArrivalTaxiOut", "TAXI OUT");
-	case EFlightPhase::Departing:   return NSLOCTEXT("AirportMgr", "ArrivalDeparting", "DEPARTING");
+	case EFlightPhase::TaxiOut:     return With(NSLOCTEXT("AirportMgr", "ArrivalTaxiOut", "TAXI OUT"),
+		NSLOCTEXT("AirportMgr", "ArrivalTaxiOutTo", "TAXI OUT to {0}"));
+	case EFlightPhase::Departing:   return With(NSLOCTEXT("AirportMgr", "ArrivalDeparting", "DEPARTING"),
+		NSLOCTEXT("AirportMgr", "ArrivalDepartingOn", "DEPARTING {0}"));
 	case EFlightPhase::Offered:
 	case EFlightPhase::Declined:
 	case EFlightPhase::Expired:
@@ -94,7 +106,7 @@ FText UArrivalRowViewModel::DescribeTurnaround(const UFlight& Flight, double Now
 		GameTimeText::Duration(Flight.ContractSeconds), Remaining);
 }
 
-FArrivalRowKey UArrivalRowViewModel::KeyFor(const UFlight& Live, int32 QueuePosition, double Now)
+FArrivalRowKey UArrivalRowViewModel::KeyFor(const UFlight& Live, int32 QueuePosition, double Now, const FString& Runway)
 {
 	// EACH FIELD IS THE NUMBER ITS SENTENCE PRINTS, taken through the same expression: DescribeStatus words Max(ArrivesAt - Now, 0),
 	// DescribeDetail words Duration(-Left) once late and Duration(Left) before, and the wait is Max(Now - HoldingSince, 0). WholeMinutes is
@@ -103,6 +115,7 @@ FArrivalRowKey UArrivalRowViewModel::KeyFor(const UFlight& Live, int32 QueuePosi
 	Out.Flight = &Live;
 	Out.Phase = Live.GetPhase();
 	Out.QueuePosition = QueuePosition;
+	Out.Runway = Runway;
 	Out.StatusMinutes = Live.GetPhase() == EFlightPhase::Accepted ? GameTimeText::WholeMinutes(FMath::Max(Live.ArrivesAt - Now, 0.0)) : 0;
 	Out.bContract = Live.ContractSeconds > 0.0;
 	if (Out.bContract)
@@ -122,14 +135,14 @@ FArrivalRowKey UArrivalRowViewModel::KeyFor(const UFlight& Live, int32 QueuePosi
 	return Out;
 }
 
-bool UArrivalRowViewModel::Refresh(const USimClock& Clock)
+bool UArrivalRowViewModel::Refresh(const USimClock& Clock, const FString& Runway)
 {
 	const UFlight* Live = Flight.Get();
 	if (Live == nullptr)
 	{
 		return false;
 	}
-	const FArrivalRowKey Wanted = KeyFor(*Live, QueuePosition, Clock.Now());
+	const FArrivalRowKey Wanted = KeyFor(*Live, QueuePosition, Clock.Now(), Runway);
 	if (bKeyValid && Wanted == Key)
 	{
 		return false;
@@ -141,7 +154,7 @@ bool UArrivalRowViewModel::Refresh(const USimClock& Clock)
 	Title = QueuePosition > 0
 		? FText::FromString(FString::Printf(TEXT("#%d %s"), QueuePosition, *Name))
 		: FText::FromString(Name);
-	Status = DescribeStatus(*Live, Clock.Now());
+	Status = DescribeStatus(*Live, Clock.Now(), Runway);
 	bHolding = IsHoldingPhase(*Live);
 	Detail = DescribeDetail(*Live, Clock.Now(), bLate);
 	return true;
@@ -216,9 +229,15 @@ void UArrivalsViewModel::SyncRows(const UFlightBoard& Board)
 
 void UArrivalsViewModel::RefreshText(const USimClock& Clock)
 {
+	RefreshText(Clock, [](const UFlight&) { return FString(); });
+}
+
+void UArrivalsViewModel::RefreshText(const USimClock& Clock, TFunctionRef<FString(const UFlight&)> RunwayOf)
+{
 	for (const TObjectPtr<UArrivalRowViewModel>& Row : Rows)
 	{
-		if (Row != nullptr && Row->Refresh(Clock))
+		const UFlight* Live = Row != nullptr ? Row->Flight.Get() : nullptr;
+		if (Live != nullptr && Row->Refresh(Clock, RunwayOf(*Live)))
 		{
 			++Composes;
 		}

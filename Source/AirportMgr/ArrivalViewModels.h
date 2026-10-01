@@ -24,6 +24,8 @@ struct FArrivalRowKey
 	/** The phase, by value: it is compared for EQUALITY only (Check-Architecture rule 58 bans grouping or ordering phases outside Flight.h). Value-initialised; bKeyValid, not this, says a key was ever set. */
 	EFlightPhase Phase{};
 	int32 QueuePosition = -1;
+	/** The runway the status names (FlightRunway::Names) - a strip built beside it re-letters it, and that moves no minute. */
+	FString Runway;
 	/** Accepted only: whole minutes to ArrivesAt. 0 in every other phase, whose word does not count down. */
 	int32 StatusMinutes = -1;
 	/** A flight with no contract (the debug land key's) has no detail line at all. */
@@ -61,10 +63,10 @@ public:
 	 * Composes the row's sentences - but only when KeyFor has moved since it last did (#446): it ran every tick for every row, folded or not,
 	 * about six FText::Format a row. True when it composed again.
 	 */
-	bool Refresh(const USimClock& Clock);
+	bool Refresh(const USimClock& Clock, const FString& Runway = FString());
 
-	/** What Refresh keys on, for Flight at Now in QueuePosition - public so a test can sweep the clock and ask it. */
-	static FArrivalRowKey KeyFor(const UFlight& Flight, int32 QueuePosition, double Now);
+	/** What Refresh keys on, for Flight at Now in QueuePosition naming Runway - public so a test can sweep the clock and ask it. */
+	static FArrivalRowKey KeyFor(const UFlight& Flight, int32 QueuePosition, double Now, const FString& Runway = FString());
 
 	/**
 	 * The stamp of the row's last compose - UNIQUE ACROSS ROWS, not a per-row count, so a panel that remembers the stamp it painted in a
@@ -91,8 +93,9 @@ public:
 	/** Whether Flight is in the phase DescribeStatus words "HOLDING" - what Refresh stores as IsHolding, public so a test can ask it of a flight. */
 	static bool IsHoldingPhase(const UFlight& Flight);
 
-	/** "HOLDING", "in 6 min", "LANDING", "TAXI IN", "ON STAND", ... - by phase. */
-	static FText DescribeStatus(const UFlight& Flight, double Now);
+	/** "HOLDING", "in 6 min", "LANDING", "TAXI IN", "ON STAND", ... - by phase; with Runway, "HOLDING for 09L", "LANDING 09L",
+	 *  "TAXI IN from 09L", "TAXI OUT to 27R", "DEPARTING 27R" - the phases FlightRunway::For names one in. */
+	static FText DescribeStatus(const UFlight& Flight, double Now, const FString& Runway = FString());
 
 	/**
 	 * "waited 3 min - 47 min left" while holding, "47 min left" otherwise, "12 min late" once
@@ -143,8 +146,12 @@ public:
 	/** The row SET: rebuilt only when the board's revision moved. A flight that stays keeps its row object (and its memo); one that goes loses it. */
 	void SyncRows(const UFlightBoard& Board);
 
-	/** Every row's sentences as of Clock - a row composes only when its key moved. */
+	/** Every row's sentences as of Clock - a row composes only when its key moved. Names no runway: see the overload. */
 	void RefreshText(const USimClock& Clock);
+
+	/** RefreshText, each row's status naming RunwayOf its flight (the panel passes FlightRunway's names) - part of the key, so
+	 *  a row recomposes when its runway changes and not otherwise. */
+	void RefreshText(const USimClock& Clock, TFunctionRef<FString(const UFlight&)> RunwayOf);
 
 	/** How many row composes RefreshText has caused, in total - a delta across ticks is the number a pin reads. */
 	int32 ComposeCountForTest() const { return Composes; }

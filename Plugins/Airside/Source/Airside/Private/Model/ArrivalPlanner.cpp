@@ -745,8 +745,8 @@ namespace ArrivalPlanner
 			}
 		}
 		// WHICH STRIPS WOULD DO, on whatever is returned - see FArrivalPlan::UsableRunways.
-		TArray<FRoadSegmentId> Usable;
-		for (const FArrivalPlan& Each : Tried) { if (Each.IsValid()) { Usable.Add(Each.End.Seed); } }
+		TArray<FRunwayEnd> Usable;
+		for (const FArrivalPlan& Each : Tried) { if (Each.IsValid()) { Usable.Add(Each.End); } }
 		if (Best.IsValid())
 		{
 			Best.UsableRunways = MoveTemp(Usable);

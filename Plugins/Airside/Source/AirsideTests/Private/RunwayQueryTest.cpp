@@ -104,4 +104,46 @@ bool FRunwayQueryOneEvaluatorTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * PARALLEL RUNWAYS ARE LETTERED (2026-10-01): two strips on one bearing both read "09/27", so the arrivals list could not say
+ * which a flight used. Two runways along +Y (heading 090), one at X 0 and one 100 m south: looking down 090 the pilot's left is
+ * NORTH (+X), so the X 0 strip is 09L and the other 09R - and walked the other way the letters swap, 27R and 27L, as on a chart.
+ * A third runway on another bearing letters nothing; a runway alone has no letter.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRunwayQueryParallelLettersTest,
+	"Airside.Model.RunwayQuery.ParallelEndsAreLettered",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRunwayQueryParallelLettersTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = TestProfiles::NarrowRunway();
+	auto Lay = [Net, Runway](const FVector2D& A, const FVector2D& B)
+	{
+		Net->AddStraightSegment(Net->AddNode(A), Net->AddNode(B), Runway);
+	};
+	auto End = [](const FVector2D& Threshold, const FVector2D& Direction)
+	{
+		FRunwayEnd Out;
+		Out.Threshold = Threshold;
+		Out.Direction = Direction;
+		return Out;
+	};
+	const FVector2D East(0.0, 1.0);
+
+	Lay(FVector2D(0.0, 0.0), FVector2D(0.0, 40000.0));
+	TestEqual(TEXT("a runway alone has no letter"), RunwayQuery::EndName(*Net, End(FVector2D(0.0, 0.0), East)), FString(TEXT("09")));
+
+	Lay(FVector2D(-10000.0, 0.0), FVector2D(-10000.0, 40000.0));
+	Lay(FVector2D(60000.0, 0.0), FVector2D(100000.0, 40000.0));   // 045: another bearing, letters nothing
+	TestEqual(TEXT("the north strip, looking east, is on the left"), RunwayQuery::EndName(*Net, End(FVector2D(0.0, 0.0), East)), FString(TEXT("09L")));
+	TestEqual(TEXT("the south strip, looking east, is on the right"), RunwayQuery::EndName(*Net, End(FVector2D(-10000.0, 0.0), East)), FString(TEXT("09R")));
+	TestEqual(TEXT("the north strip walked west is on the right"), RunwayQuery::EndName(*Net, End(FVector2D(0.0, 40000.0), -East)), FString(TEXT("27R")));
+	TestEqual(TEXT("the south strip walked west is on the left"), RunwayQuery::EndName(*Net, End(FVector2D(-10000.0, 40000.0), -East)), FString(TEXT("27L")));
+	TestEqual(TEXT("the other bearing's runway stays unlettered"),
+		RunwayQuery::EndName(*Net, End(FVector2D(60000.0, 0.0), FVector2D(1.0, 1.0).GetSafeNormal())), FString(TEXT("05")));
+	return true;
+}
+
 #endif
