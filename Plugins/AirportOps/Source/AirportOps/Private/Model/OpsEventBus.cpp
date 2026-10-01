@@ -38,9 +38,9 @@ FString FSpeedChangedEvent::Describe() const
 	return UEnum::GetValueAsString(Speed);
 }
 
-FString FNotificationEvent::Describe() const
+FString FSaveSlotEvent::Describe() const
 {
-	return FString::Printf(TEXT("\"%s\""), *Text);
+	return FString::Printf(TEXT("%s \"%s\""), *UEnum::GetValueAsString(Outcome), *Slot);
 }
 
 FString FOfferExpiredEvent::Describe() const

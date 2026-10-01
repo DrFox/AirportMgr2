@@ -6,18 +6,21 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+// THE PAYLOAD THESE MECHANICS TESTS CARRY is FSaveSlotEvent's slot name: they need an event whose instances a string tells
+// apart, and the one they used, the catch-all FNotificationEvent{Text}, was retired by #445 item 7 (Check-Architecture rule 4
+// keeps it out of tests too). Nothing here is about saving.
 namespace
 {
 	/** Wires a bus that records "<who>:<event>" per handler call. Prefixed: unity build. */
 	void BusTestWireRecorder(FOpsEventBus& Bus, TArray<FString>& Seen)
 	{
 		Bus.BeginWiring();
-		Bus.Subscribe<FNotificationEvent>(EOpsTier::Presentation, TEXT("ui"),
-			[&Seen](const FNotificationEvent& E) { Seen.Add(TEXT("ui:") + E.Text); });
-		Bus.Subscribe<FNotificationEvent>(EOpsTier::Sim, TEXT("sim"),
-			[&Seen](const FNotificationEvent& E) { Seen.Add(TEXT("sim:") + E.Text); });
-		Bus.Subscribe<FNotificationEvent>(EOpsTier::Reaction, TEXT("react"),
-			[&Seen](const FNotificationEvent& E) { Seen.Add(TEXT("react:") + E.Text); });
+		Bus.Subscribe<FSaveSlotEvent>(EOpsTier::Presentation, TEXT("ui"),
+			[&Seen](const FSaveSlotEvent& E) { Seen.Add(TEXT("ui:") + E.Slot); });
+		Bus.Subscribe<FSaveSlotEvent>(EOpsTier::Sim, TEXT("sim"),
+			[&Seen](const FSaveSlotEvent& E) { Seen.Add(TEXT("sim:") + E.Slot); });
+		Bus.Subscribe<FSaveSlotEvent>(EOpsTier::Reaction, TEXT("react"),
+			[&Seen](const FSaveSlotEvent& E) { Seen.Add(TEXT("react:") + E.Slot); });
 		Bus.EndWiring();
 	}
 }
@@ -29,8 +32,8 @@ bool FOpsEventBusTierOrderTest::RunTest(const FString&)
 	FOpsEventBus Bus;
 	TArray<FString> Seen;
 	BusTestWireRecorder(Bus, Seen);
-	Bus.Publish(FNotificationEvent{ TEXT("a") });
-	Bus.Publish(FNotificationEvent{ TEXT("b") });
+	Bus.Publish(FSaveSlotEvent{ EOpsSaveOutcome::Saved, TEXT("a") });
+	Bus.Publish(FSaveSlotEvent{ EOpsSaveOutcome::Saved, TEXT("b") });
 	TestEqual(TEXT("Publish only enqueues - nothing runs at the call site"), Seen.Num(), 0);
 	TestEqual(TEXT("both dispatched"), Bus.Drain(), 2);
 	// Registration order was ui, sim, react: the TIER decides, not who subscribed first.
@@ -48,16 +51,16 @@ bool FOpsEventBusNextRoundTest::RunTest(const FString&)
 	FOpsEventBus Bus;
 	TArray<FString> Seen;
 	Bus.BeginWiring();
-	Bus.Subscribe<FNotificationEvent>(EOpsTier::Sim, TEXT("sim"), [&Bus, &Seen](const FNotificationEvent& E)
+	Bus.Subscribe<FSaveSlotEvent>(EOpsTier::Sim, TEXT("sim"), [&Bus, &Seen](const FSaveSlotEvent& E)
 	{
-		Seen.Add(TEXT("sim:") + E.Text);
-		if (E.Text == TEXT("first")) { Bus.Publish(FNotificationEvent{ TEXT("chained") }); }
+		Seen.Add(TEXT("sim:") + E.Slot);
+		if (E.Slot == TEXT("first")) { Bus.Publish(FSaveSlotEvent{ EOpsSaveOutcome::Saved, TEXT("chained") }); }
 	});
-	Bus.Subscribe<FNotificationEvent>(EOpsTier::Presentation, TEXT("ui"),
-		[&Seen](const FNotificationEvent& E) { Seen.Add(TEXT("ui:") + E.Text); });
+	Bus.Subscribe<FSaveSlotEvent>(EOpsTier::Presentation, TEXT("ui"),
+		[&Seen](const FSaveSlotEvent& E) { Seen.Add(TEXT("ui:") + E.Slot); });
 	Bus.EndWiring();
-	Bus.Publish(FNotificationEvent{ TEXT("first") });
-	Bus.Publish(FNotificationEvent{ TEXT("second") });
+	Bus.Publish(FSaveSlotEvent{ EOpsSaveOutcome::Saved, TEXT("first") });
+	Bus.Publish(FSaveSlotEvent{ EOpsSaveOutcome::Saved, TEXT("second") });
 	TestEqual(TEXT("chained event drains in the same Drain call"), Bus.Drain(), 3);
 	// "chained" is published mid-round, so it waits for the whole first round - including
 	// "second" and every Presentation handler - rather than cutting in.
@@ -75,10 +78,10 @@ bool FOpsEventBusPassCoalesceTest::RunTest(const FString&)
 	int32 Runs = 0;
 	Bus.BeginWiring();
 	Bus.RegisterPass(TEXT("Assign"), [&Runs](const FPassRun&) { ++Runs; });
-	Bus.Subscribe<FNotificationEvent>(EOpsTier::Sim, TEXT("board"),
-		[&Bus](const FNotificationEvent&) { Bus.MarkDirty(TEXT("Assign")); });
+	Bus.Subscribe<FSaveSlotEvent>(EOpsTier::Sim, TEXT("board"),
+		[&Bus](const FSaveSlotEvent&) { Bus.MarkDirty(TEXT("Assign")); });
 	Bus.EndWiring();
-	for (int32 Index = 0; Index < 5; ++Index) { Bus.Publish(FNotificationEvent{ TEXT("job") }); }
+	for (int32 Index = 0; Index < 5; ++Index) { Bus.Publish(FSaveSlotEvent{ EOpsSaveOutcome::Saved, TEXT("job") }); }
 	Bus.Drain();
 	TestEqual(TEXT("five triggers in one round cost ONE pass - the reason passes exist"), Runs, 1);
 	Bus.Drain();
@@ -97,13 +100,13 @@ bool FOpsEventBusCapTest::RunTest(const FString&)
 	int32 Calls = 0;
 	Bus.BeginWiring();
 	// A handler that republishes forever - the loop the cap exists to break.
-	Bus.Subscribe<FNotificationEvent>(EOpsTier::Sim, TEXT("loop"), [&Bus, &Calls](const FNotificationEvent& E)
+	Bus.Subscribe<FSaveSlotEvent>(EOpsTier::Sim, TEXT("loop"), [&Bus, &Calls](const FSaveSlotEvent& E)
 	{
 		++Calls;
-		Bus.Publish(FNotificationEvent{ E.Text });
+		Bus.Publish(FSaveSlotEvent{ EOpsSaveOutcome::Saved, E.Slot });
 	});
 	Bus.EndWiring();
-	Bus.Publish(FNotificationEvent{ TEXT("x") });
+	Bus.Publish(FSaveSlotEvent{ EOpsSaveOutcome::Saved, TEXT("x") });
 	AddExpectedError(TEXT("round cap"), EAutomationExpectedErrorFlags::Contains, 1);
 	Bus.Drain();
 	TestEqual(TEXT("exactly MaxRounds rounds ran, then it stopped"), Calls, FOpsEventBus::MaxRounds);
@@ -118,12 +121,12 @@ bool FOpsEventBusPresentationPublishTest::RunTest(const FString&)
 	FOpsEventBus Bus;
 	TArray<FString> Seen;
 	Bus.BeginWiring();
-	Bus.Subscribe<FNotificationEvent>(EOpsTier::Presentation, TEXT("toast"),
-		[&Seen](const FNotificationEvent& E) { Seen.Add(TEXT("toast:") + E.Text); });
+	Bus.Subscribe<FSaveSlotEvent>(EOpsTier::Presentation, TEXT("toast"),
+		[&Seen](const FSaveSlotEvent& E) { Seen.Add(TEXT("toast:") + E.Slot); });
 	// A UI handler that runs a player command - an autosave on a speed change, say - whose own
 	// announcement must still reach the toast rather than being dropped (stage 1 review).
 	Bus.Subscribe<FSpeedChangedEvent>(EOpsTier::Presentation, TEXT("autosave"),
-		[&Bus](const FSpeedChangedEvent&) { Bus.Publish(FNotificationEvent{ TEXT("Saved") }); });
+		[&Bus](const FSpeedChangedEvent&) { Bus.Publish(FSaveSlotEvent{ EOpsSaveOutcome::Saved, TEXT("Saved") }); });
 	Bus.EndWiring();
 	Bus.Publish(FSpeedChangedEvent{ ESimSpeed::X2 });
 	TestEqual(TEXT("both the change and the command's announcement are dispatched in one Drain"), Bus.Drain(), 2);
@@ -138,11 +141,11 @@ bool FOpsEventBusDiscardTest::RunTest(const FString&)
 	FOpsEventBus Bus;
 	TArray<FString> Seen;
 	BusTestWireRecorder(Bus, Seen);
-	Bus.Publish(FNotificationEvent{ TEXT("stale") });
+	Bus.Publish(FSaveSlotEvent{ EOpsSaveOutcome::Saved, TEXT("stale") });
 	TestEqual(TEXT("Discard reports what it dropped"), Bus.Discard(), 1);
 	Bus.Drain();
 	TestEqual(TEXT("a discarded event never reaches a handler (the load path)"), Seen.Num(), 0);
-	TestEqual(TEXT("subscribers are listed by name"), Bus.SubscribersOf(FOpsEvent::IndexOfType<FNotificationEvent>()).Num(), 3);
+	TestEqual(TEXT("subscribers are listed by name"), Bus.SubscribersOf(FOpsEvent::IndexOfType<FSaveSlotEvent>()).Num(), 3);
 	TestEqual(TEXT("EventNames is index-aligned with FOpsEvent"),
 		FString(FOpsEventBus::EventNames()[FOpsEvent::IndexOfType<FSpeedChangedEvent>()]), FString(TEXT("SpeedChanged")));
 	return true;

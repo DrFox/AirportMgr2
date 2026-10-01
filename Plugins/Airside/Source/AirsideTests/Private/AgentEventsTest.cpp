@@ -23,8 +23,10 @@ bool FArrivalRefusedEventTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("actor spawned"), Actor)) { return false; }
 	Actor->PlaceNode(FVector2D::ZeroVector);  // forces the network into existence; no runway on it
 
+	// THE MODEL'S OWN DELEGATE, through the presenter's GetModel() - the presenter stopped relaying it (#445 item 6), so this is
+	// where AirportOps' bridge binds too.
 	TArray<EArrivalRefusal> Refusals;
-	Actor->GetTraffic()->OnArrivalRefused.AddLambda([&Refusals](EArrivalRefusal Why) { Refusals.Add(Why); });
+	Actor->GetTraffic()->GetModel()->OnArrivalRefused.AddLambda([&Refusals](EArrivalRefusal Why) { Refusals.Add(Why); });
 
 	// THE REFUSAL IS AN EVENT, not only a log line. AirportOps' flight board has to divert a
 	// flight when the airfield cannot take it, and a warning in the log is not something code

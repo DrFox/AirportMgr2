@@ -28,6 +28,8 @@
 #include "Model/OpsEventBus.h"
 #include "Model/OpsEvents.h"
 #include "Model/OpsSave.h"
+#include "Model/Pricing.h"
+#include "Model/ServiceFleet.h"
 #include "Model/RoadAgent.h"
 #include "OpsEventsTestListener.h"
 #include "Misc/ScopeExit.h"
@@ -132,6 +134,11 @@ bool FOpsRuntimeBusReattachTest::RunTest(const FString&)
 
 	UAirsideTraffic* Traffic = TestWorld.Actor->GetTraffic();
 	if (!TestNotNull(TEXT("the actor's traffic"), Traffic)) { return false; }
+	// THE OWNER OF EACH DELEGATE (#445 item 6): the phase is the presenter's relay (it adds the view); the four pure notifications
+	// are the model's own, which the bridges bind since the presenter stopped re-broadcasting them. A probe that broadcast on the
+	// wrong object would count zero events - red, naming the bridge.
+	UGroundTraffic* Model = Traffic->GetModel();
+	if (!TestNotNull(TEXT("the traffic's model"), Model)) { return false; }
 	URoadEditFacade* Facade = TestWorld.Actor->GetEditFacade();
 	if (!TestNotNull(TEXT("the actor's facade"), Facade)) { return false; }
 
@@ -147,13 +154,13 @@ bool FOpsRuntimeBusReattachTest::RunTest(const FString&)
 	const TArray<FBridgeProbe> Probes = {
 		{ TEXT("AgentPhase"), [&]() { Traffic->OnAgentPhaseChanged.Broadcast(OpsTestTransition(7, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked)); },
 			[&]() { return Bus.DispatchedCountOfForTest<FAgentPhaseEvent>(); } },
-		{ TEXT("ArrivalRefused"), [&]() { Traffic->OnArrivalRefused.Broadcast(EArrivalRefusal::NoRunway); },
+		{ TEXT("ArrivalRefused"), [&]() { Model->OnArrivalRefused.Broadcast(EArrivalRefusal::NoRunway); },
 			[&]() { return Bus.DispatchedCountOfForTest<FArrivalRefusedEvent>(); } },
-		{ TEXT("RunwayFreed"), [&]() { Traffic->OnRunwayFreed.Broadcast(FRoadSegmentId()); },
+		{ TEXT("RunwayFreed"), [&]() { Model->OnRunwayFreed.Broadcast(FRoadSegmentId()); },
 			[&]() { return Bus.DispatchedCountOfForTest<FRunwayFreedEvent>(); } },
-		{ TEXT("StandsFreed"), [&]() { Traffic->OnStandsFreed.Broadcast(TArray<FGuidelineNodeId>{ FGuidelineNodeId() }); },
+		{ TEXT("StandsFreed"), [&]() { Model->OnStandsFreed.Broadcast(TArray<FGuidelineNodeId>{ FGuidelineNodeId() }); },
 			[&]() { return Bus.DispatchedCountOfForTest<FStandsFreedEvent>(); } },
-		{ TEXT("PushGroundFreed"), [&]() { Traffic->OnPushGroundFreed.Broadcast(3); },
+		{ TEXT("PushGroundFreed"), [&]() { Model->OnPushGroundFreed.Broadcast(3); },
 			[&]() { return Bus.DispatchedCountOfForTest<FPushGroundFreedEvent>(); } },
 		{ TEXT("NetworkChanged"), [&]() { TestWorld.Actor->OnNetworkChanged.Broadcast(EChangeKind::Topology, *TestWorld.Actor->Network); },
 			[&]() { return Bus.DispatchedCountOfForTest<FNetworkChangedEvent>(); } },
@@ -247,13 +254,13 @@ bool FOpsRuntimeBusSaveFromHandlerTest::RunTest(const FString&)
 	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
 	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
 	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
-	Listener->SaveOnNote = Runtime;
+	Listener->SaveOnCue = Runtime;
 	Listener->SaveSlot = TEXT("AirportOpsTest_BusAutosave");
-	Runtime->GetEvents()->OnNotification.AddDynamic(Listener, &UOpsEventsTestListener::OnNoteSave);
+	Runtime->GetEvents()->OnSaveSlot.AddDynamic(Listener, &UOpsEventsTestListener::OnSaveSlotSave);
 
-	// A Blueprint autosave bound to a notification: SaveToSlot called from INSIDE Drain, which used
-	// to re-enter Drain and assert.
-	Runtime->GetBus().Publish(FNotificationEvent{ TEXT("autosave") });
+	// A Blueprint autosave bound to a UOpsEvents face (the save-slot one since #445 retired the catch-all notification):
+	// SaveToSlot called from INSIDE Drain, which used to re-enter Drain and assert.
+	Runtime->GetBus().Publish(FSaveSlotEvent{ EOpsSaveOutcome::Loaded, TEXT("autosave") });
 	Runtime->Tick(0.0);
 	TestTrue(TEXT("a save made from inside an ops event handler completes rather than asserting"), Listener->bSavedFromHandler);
 	return true;
@@ -716,13 +723,13 @@ bool FOpsRuntimeLoadFromHandlerTest::RunTest(const FString&)
 	Runtime->Tick(0.0);
 
 	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
-	Listener->LoadOnNote = Runtime;
+	Listener->LoadOnCue = Runtime;
 	Listener->LoadSlot = Slot;
-	Runtime->GetEvents()->OnNotification.AddDynamic(Listener, &UOpsEventsTestListener::OnNoteLoad);
+	Runtime->GetEvents()->OnSaveSlot.AddDynamic(Listener, &UOpsEventsTestListener::OnSaveSlotLoad);
 	const int32 PhasesBefore = RuntimeBusTestPhaseCount(*Runtime);
 
 	// THE LOAD'S TRIGGER, THEN AN EVENT BEHIND IT in the same batch - the one a discard would have dropped.
-	Runtime->GetBus().Publish(FNotificationEvent{ TEXT("autoload") });
+	Runtime->GetBus().Publish(FSaveSlotEvent{ EOpsSaveOutcome::Saved, TEXT("autoload") });
 	Runtime->GetBus().Publish(FAgentPhaseEvent{ OpsTestTransition(11, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked) });
 	AddExpectedMessagePlain(TEXT("refused: called from inside an ops event handler"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
 	Runtime->Tick(0.0);
@@ -1245,42 +1252,47 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeFleetToastsTest, "AirportOps.Present
 bool FOpsRuntimeFleetToastsTest::RunTest(const FString&)
 {
 	// THE FEED'S HALF OF #443: FleetChanged now carries four ways (Bought, Sold, Seeded, Withdrawn), and the runtime's
-	// Presentation subscriber toasts them through the one notification face. A seeded vehicle is not news - nobody did or
-	// paid anything - and a withdrawn one must say where its credit came from ("Bowser credited, depot removed"), which the
-	// feed could never say while a removed depot's vehicles left silently.
+	// Presentation subscriber hands them to the one purchase face. A seeded vehicle is not news - nobody did or paid anything -
+	// and a withdrawn one must say where its credit came from, which the feed could never say while a removed depot's vehicles
+	// left silently. THE WORDS ARE THE WIDGET'S SINCE #445 item 7 (AirportMgr.UI.ToastsWordSavesAndPurchases pins "Depot removed",
+	// "credited" and the figureless sale); this pins what reaches the face: the kind, the money as posted, and the nouns in their
+	// owners' words - FServiceFleet::NameOf and UPricing::Format, not a second spelling of either.
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
 	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
 	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
-	Runtime->GetEvents()->OnNotification.AddDynamic(Listener, &UOpsEventsTestListener::OnNote);
+	Runtime->GetEvents()->OnPurchase.AddDynamic(Listener, &UOpsEventsTestListener::OnPurchase);
 	Runtime->Tick(0.0);
-	const int32 Before = Listener->CountOf(TEXT("note:"));
+	const int32 Before = Listener->Purchases.Num();
+	const FString FuelName = FServiceFleet::NameOf(*Runtime->GetJobBoard(), TEXT("FUEL")).ToString();
 
 	Runtime->GetBus().Publish(FFleetChangedEvent{ 1, 7, TEXT("FUEL"), EFleetChange::Seeded, 0.0 });
 	Runtime->Tick(0.0);
-	TestEqual(TEXT("a seeded vehicle raises no toast"), Listener->CountOf(TEXT("note:")), Before);
+	TestEqual(TEXT("a seeded vehicle raises no toast"), Listener->Purchases.Num(), Before);
 
 	Runtime->GetBus().Publish(FFleetChangedEvent{ 1, 8, TEXT("FUEL"), EFleetChange::Withdrawn, 45000.0 });
 	Runtime->Tick(0.0);
-	if (!TestEqual(TEXT("a withdrawn one raises exactly one"), Listener->CountOf(TEXT("note:")), Before + 1)) { return false; }
-	const FString Withdrawn = Listener->Seen.Last();
-	TestTrue(FString::Printf(TEXT("that says the depot went ('%s')"), *Withdrawn), Withdrawn.Contains(TEXT("Depot removed")));
-	TestTrue(TEXT("and that the vehicle was credited"), Withdrawn.Contains(TEXT("credited")));
+	if (!TestEqual(TEXT("a withdrawn one raises exactly one"), Listener->Purchases.Num(), Before + 1)) { return false; }
+	const FOpsPurchase Withdrawn = Listener->Purchases.Last();
+	TestEqual(TEXT("as a withdrawal - the depot went"), Withdrawn.Kind, EOpsPurchaseKind::VehicleWithdrawn);
+	TestEqual(TEXT("with the credit as posted, so the widget can say it was credited"), Withdrawn.Amount, 45000.0);
+	TestEqual(TEXT("naming the vehicle as the fleet names it"), Withdrawn.Name.ToString(), FuelName);
+	TestEqual(TEXT("and the money as the pricing words it"), Withdrawn.Money.ToString(), Runtime->GetPricing()->Format(45000.0).ToString());
 
 	Runtime->GetBus().Publish(FFleetChangedEvent{ 1, 9, TEXT("FUEL"), EFleetChange::Bought, 90000.0 });
 	Runtime->GetBus().Publish(FFleetChangedEvent{ 1, 9, TEXT("FUEL"), EFleetChange::Sold, 45000.0 });
 	Runtime->Tick(0.0);
-	TestEqual(TEXT("and a purchase and a sale still toast, as before"), Listener->CountOf(TEXT("note:")), Before + 3);
-	TestTrue(TEXT("a paid sale names its money"), Listener->Seen.Last().Contains(TEXT("\u2014")));
+	if (!TestEqual(TEXT("and a purchase and a sale still toast, as before"), Listener->Purchases.Num(), Before + 3)) { return false; }
+	TestEqual(TEXT("the purchase as bought"), Listener->Purchases[Before + 1].Kind, EOpsPurchaseKind::VehicleBought);
+	TestEqual(TEXT("the sale as sold"), Listener->Purchases[Before + 2].Kind, EOpsPurchaseKind::VehicleSold);
+	TestEqual(TEXT("a paid sale carries its money"), Listener->Purchases[Before + 2].Amount, 45000.0);
 
-	// A SALE WORTH NOTHING (#487: a seeded vehicle fetches no resale) toasts without a figure, as a removal that credited nothing
-	// says "withdrawn" rather than "credited $0".
+	// A SALE WORTH NOTHING (#487: a seeded vehicle fetches no resale) still reaches the face - the widget words it without a figure.
 	Runtime->GetBus().Publish(FFleetChangedEvent{ 1, 10, TEXT("FUEL"), EFleetChange::Sold, 0.0 });
 	Runtime->Tick(0.0);
-	if (!TestEqual(TEXT("a worthless sale still toasts"), Listener->CountOf(TEXT("note:")), Before + 4)) { return false; }
-	const FString Worthless = Listener->Seen.Last();
-	TestTrue(FString::Printf(TEXT("and says the vehicle was sold ('%s')"), *Worthless), Worthless.Contains(TEXT("Sold")));
-	TestFalse(TEXT("without the em dash and a $0 after it"), Worthless.Contains(TEXT("\u2014")));
+	if (!TestEqual(TEXT("a worthless sale still toasts"), Listener->Purchases.Num(), Before + 4)) { return false; }
+	TestEqual(TEXT("as a sale"), Listener->Purchases.Last().Kind, EOpsPurchaseKind::VehicleSold);
+	TestEqual(TEXT("worth nothing, which is what drops the figure"), Listener->Purchases.Last().Amount, 0.0);
 	return true;
 }
 

@@ -26,9 +26,10 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 {
 	// THE SEAM TEST for the Mediator split: every name on UAirsideTraffic must reach
 	// UGroundTraffic, the view must appear and vanish on the model's own phase events, and
-	// both delegates must re-broadcast - because AirportOps binds to UAirsideTraffic's,
-	// and a relay that was never wired would leave the flight board deaf without any
-	// compile error to say so.
+	// the phase relay must re-broadcast - because AirportOps binds to UAirsideTraffic's for
+	// the phase, and a relay that was never wired would leave the flight board deaf without
+	// any compile error to say so. The refusal is the MODEL's own delegate since #445 item 6
+	// (the presenter's pure relay of it was cut), so it is heard there, through GetModel().
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
 	ARoadNetworkActor* Actor = TestWorld.Actor;
@@ -134,9 +135,9 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("removal was relayed as Taxiing -> Gone"), Relayed.Num(), 2);
 
 	TArray<EArrivalRefusal> Refusals;
-	Traffic->OnArrivalRefused.AddLambda([&Refusals](EArrivalRefusal Why) { Refusals.Add(Why); });
+	Model->OnArrivalRefused.AddLambda([&Refusals](EArrivalRefusal Why) { Refusals.Add(Why); });
 	TestFalse(TEXT("no runway: arrival refused"), Actor->DispatchArrival(FVector2D::ZeroVector, UAirsideSettings::ResolveDefaultAirframe()));
-	TestEqual(TEXT("the refusal relayed"), Refusals.Num(), 1);
+	TestEqual(TEXT("the refusal announced on the model, through the actor's dispatch"), Refusals.Num(), 1);
 
 	// AND THE ROUTING SIDE OF THE SAME SEAM. Spec §4: "vehicles always route with the table,
 	// aircraft never do" - the aircraft's route is fixed at clearance. That rule lives in
@@ -214,6 +215,56 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("the duplicate's relay is bound to the duplicate's model"), DupRelayed, 1);
 		TestNotNull(TEXT("and its view was spawned"), DupTraffic->GetNewestAgent());
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPhaseRelayShowsTheViewFirstTest,
+	"Airside.Present.PhaseRelayShowsTheViewFirst",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPhaseRelayShowsTheViewFirstTest::RunTest(const FString& Parameters)
+{
+	// THE ONE RELAY LEFT ON UAirsideTraffic, AND WHAT IT ADDS (#445 item 6). The other four were pure forwarders and were cut: a
+	// listener binds the model's delegate through GetModel(). This one stays because it is not pure - it spawns the agent's cube
+	// before re-broadcasting the birth and destroys it before re-broadcasting the death - and this measures exactly that, from
+	// INSIDE the listener: on Gone -> X the view the event describes is already standing, and on X -> Gone it is already gone. A
+	// relay reduced to a forwarder (or one that broadcast first) would hand the listener a phase with no view, or a dead one.
+	// Mutation-checked 2026-10-01: SpawnView skipped in OnModelPhaseChanged, this went red ("no view at birth").
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor spawned"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	URoadNetwork& Net = *Actor->Network;
+	UAirsideTraffic* Traffic = Actor->GetTraffic();
+	if (!TestNotNull(TEXT("the actor has a traffic object"), Traffic)) { return false; }
+
+	const FGuidelineNodeId A = Net.AddGuidelineNode(FVector2D(0.0, 0.0), false);
+	const FGuidelineNodeId B = Net.AddGuidelineNode(FVector2D(30000.0, 0.0), false);
+	// AUTHORED (bDerived false), as TrafficForwarders' own fixture is: a surface rebuild sweeps derived guidelines.
+	TestGraph::Join(Net, A, B, { EGuidelineDir::Bidirectional, nullptr, false });
+	const FRoutePlan Plan = TestGraph::Probe(Net, A, B, ETraversalClass::GroundVehicle);
+	if (!TestTrue(TEXT("route found"), Plan.IsValid())) { return false; }
+
+	int32 Births = 0;
+	int32 Deaths = 0;
+	bool bViewAtBirth = false;
+	bool bViewAtDeath = true;
+	Traffic->OnAgentPhaseChanged.AddLambda([&, Traffic](const FAgentTransition& T)
+	{
+		if (T.From == EAgentPhase::Gone) { ++Births; bViewAtBirth = Traffic->GetAgentView(T.AgentId) != nullptr; }
+		if (T.To == EAgentPhase::Gone) { ++Deaths; bViewAtDeath = Traffic->GetAgentView(T.AgentId) != nullptr; }
+	});
+
+	const FVehicle Van = UAirsideSettings::ResolveDefaultVehicle();
+	if (!TestTrue(TEXT("dispatch is accepted"), Actor->DispatchAgent(Plan, Van, ETraversalClass::GroundVehicle))) { return false; }
+	if (!TestEqual(TEXT("the birth was heard once, through the relay"), Births, 1)) { return false; }
+	TestTrue(TEXT("no view at birth would mean the relay broadcast before it spawned - the view stands when the listener hears Gone -> X"), bViewAtBirth);
+
+	TestTrue(TEXT("the agent retires"), Traffic->RetireAgent(Traffic->GetNewestAgentId()));
+	if (!TestEqual(TEXT("the death was heard once, through the relay"), Deaths, 1)) { return false; }
+	TestFalse(TEXT("the view is gone by the time the listener hears X -> Gone"), bViewAtDeath);
 	return true;
 }
 

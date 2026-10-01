@@ -120,7 +120,7 @@ public:
 
 	/**
 	 * A runway's strip was held and is not now - fired once per strip, with the seed its summary names, at the
-	 * end of the Advance (or OnGraphRebuilt) that saw it go. See DiffFreedom. Relayed by UAirsideTraffic.
+	 * end of the Advance (or OnGraphRebuilt) that saw it go. See DiffFreedom. Bound here, not relayed (#445).
 	 *
 	 * DERIVED, NOT RAISED AT A SITE (ops batch 3 §5): "held" is ArrivalPlanner::IsChainHeld, exactly what the
 	 * arrival queue's IsRunwayBusy asks, so "freed" means "what the queue asks just turned false" - whatever
@@ -142,7 +142,7 @@ public:
 
 	/**
 	 * A parked aircraft DepartAgent refused PushbackBlocked would not be refused that now - fired once, and the
-	 * aircraft dropped from the watch, at the end of the DiffFreedom that saw it. Relayed by UAirsideTraffic.
+	 * aircraft dropped from the watch, at the end of the DiffFreedom that saw it. Bound here, not relayed (#445).
 	 *
 	 * DERIVED WITH DepartAgent's OWN DECISION (AskDeparture), not raised where ground is released: the push
 	 * ground frees through the per-tick claim pass (a taxiing aircraft moving on), which has no event and moves

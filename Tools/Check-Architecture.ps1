@@ -953,6 +953,30 @@ $AllowedCallers = @(
         ProdReason  = 'bind through UOpsRuntime (it publishes into the ops bus; handlers run a drain later) - a production listener that acts inside the broadcast re-enters UGroundTraffic mid-Advance (#436, #193)'
     },
     @{
+        # THE CATCH-ALL TOAST IS RETIRED (#445 item 7). FNotificationEvent{FString} carried "Saved 'X'", "Save to 'X' failed" and
+        # "No save 'X'" as English lines from UOpsRuntime, so the toast widget - the one place that claims to decide what the
+        # player is told - could not tell a failed save from a good one, and showed both as Info. A save or a load is an
+        # FSaveSlotEvent now (an EOpsSaveOutcome and the slot), a purchase an FOpsPurchase, and the widget words both. Nothing
+        # brings the catch-all back, a test included: the bus's own tests publish FSaveSlotEvent instead.
+        Name        = 'FNotificationEvent (retired)'
+        Pattern     = '\bFNotificationEvent\b'
+        ProdAllowed = @()
+        ProdReason  = 'publish a typed event (FSaveSlotEvent, or a new one carrying the facts) and word it in UToastStackWidget (#445)'
+        TestReason  = 'the catch-all is gone - publish a typed event (#445)'
+    },
+    @{
+        # NO ONE-STRING FACE (#445 item 7): a dynamic delegate whose one argument is an FString is a sentence its publisher
+        # decided - UOpsEvents::OnNotification and OnWarning were, and every save, load and purchase toast they carried was
+        # worded in UOpsRuntime. A face carries facts (an enum, a USTRUCT, the nouns their owners name) and the toast widget
+        # composes the sentence. FOpsLandRefused (Airside's refusal sentence BESIDE its reason, #456 review) and FOpsBuildRefused
+        # (three nouns) are not one-string faces.
+        Name        = 'one-string dynamic delegate (a sentence face)'
+        Pattern     = 'DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam\s*\(\s*\w+\s*,\s*const\s+FString\s*&'
+        ProdAllowed = @()
+        TestExempt  = $true
+        ProdReason  = 'carry the facts (an enum, a USTRUCT) and let the toast widget word them (#445)'
+    },
+    @{
         # A ONE-SUBSTEP EDGE IS READ ON THE SUBSTEP (#446). FLandingRun::bTouchedDown is true for the one Advance that put
         # the wheels down; UAirsideTraffic read it once a FRAME, after up to 32 substeps, and lost the smoke of three
         # landings in four at x8. FRoadAgent::Advance reads it on the call that set it and reports EAgentEvent::TouchedDown,
@@ -4905,6 +4929,73 @@ if ($reachSeen -eq 0) {
     $failures.Add("turnaround-began-once: rule 78(c) found no reach through a UJobBoard receiver ($($beganReceivers -join ', ')) in Turnarounds.cpp or .h - the board is no longer passed by reference, so the rule checks nothing; update it")
 }
 $ranRules.Add('turnaround-began-once')
+
+# --- 87. A PRESENT-LAYER RELAY OF THE TRAFFIC MODEL ADDS BEHAVIOUR, OR IS NOT THERE (#445 item 6) --------------------------
+# UAirsideTraffic re-declared five of UGroundTraffic's delegates and re-broadcast each from a one-line handler. Four added
+# nothing: each Airside event cost a declaration, a handler and a bind on this layer as well as the model's, hand-paired,
+# and the five binds were guarded by IsBoundToObject of the first alone. The model's delegates are public, and a listener
+# binds them through GetModel() (UOpsRuntime's bridges do). What stays is the PHASE relay, because it adds the view: the cube
+# is spawned before any listener hears Gone -> X and destroyed before one hears X -> Gone. THE SHAPE, both halves:
+#  (a) AirsideTraffic.h declares no delegate type (DECLARE_*DELEGATE*) and no `FOn... On...;` member but the kept relays';
+#  (b) every `.Broadcast(` in AirsideTraffic.cpp sits inside a kept relay's function, and that function still calls each
+#      behaviour the relay is kept for - a relay whose behaviour moved out is a pure forwarder again.
+# WHAT NO REGEX SEES: the same shape on another Present object. The behaviour half - the view is there when the relay is
+# heard - is Airside.Present.PhaseRelayShowsTheViewFirst; the bridges' half is AirportOps.Present.Bus.ReattachDoesNotDouble.
+# RED ON 2026-10-01 against main d2bb63cd (the four pure relays: 4 delegate types, 4 members, 4 re-broadcasts), and
+# mutation-checked after: SpawnView dropped from OnModelPhaseChanged went red naming it.
+$relayKept = @{ 'OnAgentPhaseChanged' = @{ Function = 'UAirsideTraffic::OnModelPhaseChanged'; Behaviour = @('SpawnView', 'DestroyView') } }
+$relayHeader = Join-Path $Root 'Plugins\Airside\Source\Airside\Public\Present\AirsideTraffic.h'
+$relaySource = Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Present\AirsideTraffic.cpp'
+if (-not (Test-Path $relayHeader) -or -not (Test-Path $relaySource)) {
+    $failures.Add("relay-adds-behaviour: AirsideTraffic.h/.cpp named by rule 87 do not exist - update the rule, do not let it check nothing")
+}
+else {
+    $inBlock = $false
+    $code = @(Get-Content -LiteralPath $relayHeader | ForEach-Object { Strip-ArchCode $_ ([ref]$inBlock) })
+    $membersSeen = 0
+    for ($i = 0; $i -lt $code.Count; $i++) {
+        if ($code[$i] -match '\bDECLARE_\w*DELEGATE\w*\s*\(') {
+            $failures.Add("relay-adds-behaviour: AirsideTraffic.h:$($i + 1) declares a delegate type - a model notification is UGroundTraffic's own delegate, bound through GetModel(); relay it here only to add behaviour, and add the relay to rule 87 (#445): $($code[$i].Trim())")
+        }
+        if ($code[$i] -match '^\s*(FOn\w+)\s+(On\w+)\s*;') {
+            $membersSeen++
+            if (-not $relayKept.ContainsKey($Matches[2])) {
+                $failures.Add("relay-adds-behaviour: AirsideTraffic.h:$($i + 1) declares the relay $($Matches[2]) - a pure forwarder of the model's delegate; bind UGroundTraffic's through GetModel() (#445): $($code[$i].Trim())")
+            }
+        }
+    }
+    if ($membersSeen -eq 0) {
+        $failures.Add("relay-adds-behaviour: rule 87 found no delegate member in AirsideTraffic.h - the phase relay moved or the member shape changed, so the rule checks nothing; update it")
+    }
+    $keptFunctions = @{}
+    foreach ($kept in $relayKept.Values) { $keptFunctions[$kept.Function] = @{} }
+    $inBlock = $false
+    $code = @(Get-Content -LiteralPath $relaySource | ForEach-Object { Strip-ArchCode $_ ([ref]$inBlock) })
+    $current = ''
+    for ($i = 0; $i -lt $code.Count; $i++) {
+        $def = Get-ArchDefinition $code[$i]
+        if ($null -ne $def) { $current = $def }
+        if ($keptFunctions.ContainsKey($current)) {
+            foreach ($m in [regex]::Matches($code[$i], '\b(\w+)\s*\(')) { $keptFunctions[$current][$m.Groups[1].Value] = $true }
+        }
+        if ($code[$i] -match '\.Broadcast\s*\(' -and -not $keptFunctions.ContainsKey($current)) {
+            $failures.Add("relay-adds-behaviour: AirsideTraffic.cpp:$($i + 1) re-broadcasts from $current - a relay that adds nothing; listeners bind the model's delegate through GetModel() (#445): $($code[$i].Trim())")
+        }
+    }
+    foreach ($kept in $relayKept.Values) {
+        $calls = $keptFunctions[$kept.Function]
+        if ($calls.Count -eq 0) {
+            $failures.Add("relay-adds-behaviour: $($kept.Function) not found in AirsideTraffic.cpp - it moved or went; update rule 87, do not let it check nothing")
+            continue
+        }
+        foreach ($behaviour in $kept.Behaviour) {
+            if (-not $calls.ContainsKey($behaviour)) {
+                $failures.Add("relay-adds-behaviour: $($kept.Function) no longer calls $behaviour - the behaviour the relay is kept for; without it the relay is a pure forwarder, so cut it and bind the model's delegate (#445)")
+            }
+        }
+    }
+}
+$ranRules.Add('relay-adds-behaviour')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
