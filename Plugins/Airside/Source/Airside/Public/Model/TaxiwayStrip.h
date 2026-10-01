@@ -168,8 +168,9 @@ namespace TaxiwayStrip
 	 * ONE JUDGE FOR EVERY PAVEMENT PATH - the road tool's preview and click, the facade's
 	 * ConnectNodes, MoveNode and the delete heal - so the readout cannot approve what the commit
 	 * refuses (the WhyStandRefused pattern). Aprons and runways never reach it (plan rulings 1-2).
-	 * ENFORCED BY: Airside.Tool.EveryPlacementToolHonoursTheStrip (every registered tool has a
-	 * row: Judged, ExemptApron, ExemptRunway or PlacesNoPavement)
+	 * ENFORCED BY: Airside.Tool.RegistryRulingsAreDeclaredForEveryEntry (every registered tool
+	 * has a row: Judged, ExemptApron, ExemptRunway or PlacesNoPavement) and
+	 * Airside.Tool.EveryPlacementToolHonoursTheStrip (every Judged row refuses a footprint in a strip)
 	 */
 	AIRSIDE_API FStripVerdict JudgeSegment(const URoadNetwork& Network, const FSegmentShape& Shape,
 		bool bIsTaxiway, const FSegmentEnd& AtA, const FSegmentEnd& AtB,

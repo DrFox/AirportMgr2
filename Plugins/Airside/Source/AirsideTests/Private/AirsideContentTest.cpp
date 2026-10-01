@@ -619,13 +619,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FFixturePiperIsTheMeridiansOwnTest::RunTest(const FString& Parameters)
 {
 	// #479: TestAirframes::Piper() WAS A HAND COPY OF THE MERIDIAN, AND A WRONG ONE - the same drift #449 removed from
-	// production, left behind in the fixture 122 call sites lean on. It set the four performance structs and nothing
+	// production, left behind in the fixture 132 call sites lean on (git grep of TestAirframes::Piper(), 2026-10-01; it was 122 when this was
+	// written). It set the four performance structs and nothing
 	// else: the FChassis default Pivot steer law where every modelled aeroplane rolls on its mains, no wheelbase, a
 	// steered final turn, no body centre, no wingspan or TypeCode. Every traffic test that took it measured a vehicle no
 	// flight in the game is (#477 found six measuring the nose where the body centre was meant).
 	//
 	// AGAINST THE FALLBACK, NOT ResolveDefaultAirframe: the fixture must stay the Meridian whatever DefaultAircraft a
-	// content set names (a content change should not silently change what 122 call sites measure), so it is pinned to the
+	// content set names (a content change should not silently change what those 132 call sites measure), so it is pinned to the
 	// content-less branch directly. Every property, by reflection, so a field added to FAirframe is compared without
 	// anyone remembering this file.
 	const FAirframe Fixture = TestAirframes::Piper();

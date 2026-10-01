@@ -9,6 +9,7 @@
 #include "Tool/RoadBuildTool.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/RoadNaming.h"
+#include "ToolRegistryRulings.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -99,48 +100,56 @@ bool FEditModeSuppressesTheBuildToolTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FEditHandlesAreDeclaredForEveryRegistryEntryTest,
-	"Airside.Tool.EditHandlesAreDeclaredForEveryRegistryEntry",
+	FRegistryRulingsAreDeclaredForEveryEntryTest,
+	"Airside.Tool.RegistryRulingsAreDeclaredForEveryEntry",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FEditHandlesAreDeclaredForEveryRegistryEntryTest::RunTest(const FString& Parameters)
+bool FRegistryRulingsAreDeclaredForEveryEntryTest::RunTest(const FString& Parameters)
 {
+	// ONE TABLE, ONE COLUMN PER FIELD (#462 M6). This was three tests - EditHandles, road-node
+	// visibility, plot-ghost visibility - each holding its own TMap of the same nine tool names,
+	// so a new tool had to be added to three tables here and a fourth in BuildSessionTest; the
+	// rows now live in ToolRegistryRulings.h, with each column's reasons beside it.
+	//
 	// NAMES, NOT COUNTS. CLAUDE.md: where UE forces two lists to agree the consumer checks
-	// IDENTITY and logs both on mismatch. A count would pass on a table where two entries
-	// had swapped their handle kinds, which is precisely the drift this field exists to
-	// make impossible.
-	const TMap<FName, EEditHandleKind> Expected = {
-		{ TEXT("Select"),          EEditHandleKind::None            },
-		{ TEXT("Taxiway"),         EEditHandleKind::AirsideNode     },
-		{ TEXT("Apron"),           EEditHandleKind::ApronCorner     },
-		{ TEXT("Stand"),           EEditHandleKind::None            },
-		{ TEXT("Guideline"),       EEditHandleKind::None            },
-		{ TEXT("Runway"),          EEditHandleKind::RunwayThreshold },
-		{ TEXT("HoldingPosition"), EEditHandleKind::None            },
-		{ TEXT("Road"),            EEditHandleKind::ServiceRoadNode },
-		{ TEXT("FuelDepot"),       EEditHandleKind::None            },
-	};
-
+	// IDENTITY and logs both on mismatch. A count would pass on a table where two entries had
+	// swapped their answers, which is precisely the drift these fields exist to make impossible.
+	const TConstArrayView<ToolRegistryRulings::FRow> Rows = ToolRegistryRulings::Rows();
 	for (const FToolRegistration& Entry : ToolRegistry())
 	{
-		const EEditHandleKind* Want = Expected.Find(Entry.Id);
+		const ToolRegistryRulings::FRow* Want = Rows.FindByPredicate(
+			[&Entry](const ToolRegistryRulings::FRow& Row) { return Entry.Id == FName(Row.Id); });
 		if (Want == nullptr)
 		{
-			// A NEW TOOL MUST DECLARE WHAT EDIT MEANS FOR IT, even when the answer is None.
-			// Failing rather than defaulting is the point: the default is silent, and a tool
-			// that should have been editable would simply never light a handle.
+			// A NEW TOOL MUST RULE ON EVERY COLUMN, even when the answer is None or false. Failing
+			// rather than defaulting is the point: the default is silent, and a tool that should
+			// have been editable would simply never light a handle.
 			AddError(FString::Printf(
-				TEXT("registry entry '%s' is not named in this test - a new tool must say "
-					 "what Edit exposes for it, even if that is None"), *Entry.Id.ToString()));
+				TEXT("registry entry '%s' is not named in ToolRegistryRulings.h - a new tool must say "
+					 "what Edit exposes for it, whether the node rings and the plot ghost bays belong "
+					 "on screen under it, and how it answers the clearance strip"), *Entry.Id.ToString()));
 			continue;
 		}
 		TestTrue(*FString::Printf(
 			TEXT("'%s' declares the edit handles this test expects"), *Entry.Id.ToString()),
-			Entry.EditHandles == *Want);
+			Entry.EditHandles == Want->EditHandles);
+		TestEqual(*FString::Printf(TEXT("'%s' declares the node visibility this test expects"),
+			*Entry.Id.ToString()), Entry.bShowsRoadNodes, Want->bShowsRoadNodes);
+		TestEqual(*FString::Printf(TEXT("'%s' declares the ghost visibility this test expects"),
+			*Entry.Id.ToString()), Entry.bShowsPlotGhosts, Want->bShowsPlotGhosts);
 	}
 
-	TestEqual(TEXT("and the table holds no entry beyond the ones named here"),
-		ToolRegistry().Num(), Expected.Num());
+	// AND THE OTHER DIRECTION: a row naming no registered tool is a renamed tool leaving a stale
+	// row passing for it.
+	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
+	for (const ToolRegistryRulings::FRow& Row : Rows)
+	{
+		TestTrue(*FString::Printf(TEXT("table row '%s' names a registered tool"), Row.Id),
+			Registry.ContainsByPredicate(
+				[&Row](const FToolRegistration& Tool) { return Tool.Id == FName(Row.Id); }));
+	}
+	TestEqual(TEXT("and the table holds no entry beyond the ones registered"),
+		Registry.Num(), Rows.Num());
 	return true;
 }
 
@@ -431,6 +440,14 @@ bool FEditModeDragOffersGuidesTest::RunTest(const FString& Parameters)
 	const int32 L1 = Actor->PlaceNode(FVector2D(9000.0, 15000.0));
 	Actor->ConnectNodes(L0, L1);
 
+	// AND A THIRD ROAD whose row sits 80 uu above the second's, so a cursor between the two rows
+	// is inside both rows' tolerance and nearer the third - which is what the second drag below
+	// needs to tell a held winner from a fresh one. West of the drag, 3 to 6 km out, so no node
+	// is within snap reach of any cursor used here.
+	const int32 M0 = Actor->PlaceNode(FVector2D(-6000.0, 15080.0));
+	const int32 M1 = Actor->PlaceNode(FVector2D(-3000.0, 15080.0));
+	if (!TestTrue(TEXT("the third road connects"), Actor->ConnectNodes(M0, M1))) { return false; }
+
 	FBuildSession Session;
 	Session.SelectTool(1);
 	Session.SetGestureMode(EGestureMode::Edit);
@@ -457,12 +474,41 @@ bool FEditModeDragOffersGuidesTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("and the dashed line to whatever it lined up with is actually drawn"),
 		Sink.CountLines(EPreviewStyle::Guide) > 0);
 
+	// THE CONTROL FOR THE SECOND DRAG BELOW: still in this gesture, at a cursor 20 uu from the
+	// third row and 60 from the row held now, the hold rule (100 uu, SnapGuide::FTuning::
+	// StickinessUu) keeps the row it has. If it did not, no winner could leak across gestures at
+	// that cursor and the last assertion would pass for free.
+	const FVector2D BetweenRows(0.0, 15000.0 + 60.0);
+	const FToolContext Held = Session.MakeContext(Actor, BetweenRows, Tunables);
+	if (!TestEqual(TEXT("mid-drag the row already held is kept against one 40 uu nearer"),
+		Held.Guide.Winners.Num(), 1))
+	{
+		return false;
+	}
+	TestTrue(TEXT("and it is the row at 15000, not the nearer one at 15080"),
+		FMath::IsNearlyEqual(Held.Guide.Winners[0].Through.Y, 15000.0, 1.0));
+
 	Tool->OnDragEnd(Context);
 
 	// AND THE GUIDE DIES WITH THE GESTURE. A winner left behind would be inherited by the
 	// next drag and then held through the hysteresis rule itself.
 	const FToolContext After = Session.MakeContext(Actor, NearRow, Tunables);
 	TestFalse(TEXT("no guide is offered once nothing is in hand"), After.Guide.bActive);
+
+	// ...BUT THAT ASKS THE WRONG QUESTION ALONE (#463; it passed with the clearing line deleted):
+	// an idle tool resolves nothing whatever the session remembers. A leak shows in the NEXT
+	// drag, at the cursor the control above just held. A winner that leaked is held again; a
+	// forgotten one is judged afresh and the third row, 20 uu away, wins.
+	Tool->OnDragBegin(Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables));
+	if (!TestTrue(TEXT("a second drag started"), !Tool->IsIdle())) { return false; }
+
+	const FToolContext Second = Session.MakeContext(Actor, BetweenRows, Tunables);
+	if (!TestEqual(TEXT("a guide resolves in the second drag"), Second.Guide.Winners.Num(), 1))
+	{
+		return false;
+	}
+	TestTrue(TEXT("and it is the nearer row at 15080, not the one the first drag ended holding"),
+		FMath::IsNearlyEqual(Second.Guide.Winners[0].Through.Y, 15080.0, 1.0));
 	return true;
 }
 
@@ -912,51 +958,6 @@ bool FEditModeDrawsTheRemovalItWouldMakeTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FRoadNodeVisibilityIsDeclaredForEveryRegistryEntryTest,
-	"Airside.Tool.RoadNodeVisibilityIsDeclaredForEveryRegistryEntry",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FRoadNodeVisibilityIsDeclaredForEveryRegistryEntryTest::RunTest(const FString& Parameters)
-{
-	// NAMES, NOT COUNTS, like the EditHandles check beside it: a count passes on a table
-	// where two entries have swapped answers.
-	//
-	// THE FALSE ROWS ARE THE INTERESTING ONES. Holding-point and guideline LOOK like they
-	// need road nodes - both talk about clicking nodes - but they pick GUIDELINE nodes,
-	// which GuidelineOverlay draws under its own G toggle. The runway tool reads no snap at
-	// all. Getting any of those wrong puts the scaffolding back on screen for a tool that
-	// never wanted it.
-	const TMap<FName, bool> Expected = {
-		{ TEXT("Select"),          false },
-		{ TEXT("Taxiway"),         true  },   // snaps to nodes to chain and close junctions
-		{ TEXT("Apron"),           false },
-		{ TEXT("Stand"),           false },
-		{ TEXT("Guideline"),       false },   // guideline nodes, not road nodes
-		{ TEXT("Runway"),          false },   // reads no snap
-		{ TEXT("HoldingPosition"), false },   // guideline nodes, not road nodes
-		{ TEXT("Road"),            true  },   // the same FRoadDrawTool as Taxiway
-		{ TEXT("FuelDepot"),       false },
-	};
-
-	for (const FToolRegistration& Entry : ToolRegistry())
-	{
-		const bool* Want = Expected.Find(Entry.Id);
-		if (Want == nullptr)
-		{
-			AddError(FString::Printf(
-				TEXT("registry entry '%s' is not named in this test - a new tool must say "
-					 "whether the node rings belong on screen under it"), *Entry.Id.ToString()));
-			continue;
-		}
-		TestEqual(*FString::Printf(TEXT("'%s' declares the node visibility this test expects"),
-			*Entry.Id.ToString()), Entry.bShowsRoadNodes, *Want);
-	}
-	TestEqual(TEXT("and the table holds no entry beyond the ones named here"),
-		ToolRegistry().Num(), Expected.Num());
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRoadNodesStandDownOutsideTheRoadToolsTest,
 	"Airside.Tool.RoadNodesStandDownOutsideTheRoadTools",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -990,46 +991,6 @@ bool FRoadNodesStandDownOutsideTheRoadToolsTest::RunTest(const FString& Paramete
 
 	Session.SetGestureMode(EGestureMode::Build);
 	TestFalse(TEXT("and leaving Edit puts them away again"), Session.WantsRoadNodesDrawn());
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FPlotGhostVisibilityIsDeclaredForEveryRegistryEntryTest,
-	"Airside.Tool.PlotGhostVisibilityIsDeclaredForEveryRegistryEntry",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FPlotGhostVisibilityIsDeclaredForEveryRegistryEntryTest::RunTest(const FString& Parameters)
-{
-	// NAMES, NOT COUNTS, for the node-visibility test's reason above. Only the depot tool
-	// wants ghost bays: they are a plot's unbought capacity, and until a building edit mode
-	// can buy one, placing a depot is the only time that capacity is the question.
-	const TMap<FName, bool> Expected = {
-		{ TEXT("Select"),          false },   // normal operations: cyan boxes read as the building
-		{ TEXT("Taxiway"),         false },
-		{ TEXT("Apron"),           false },
-		{ TEXT("Stand"),           false },   // a stand has no bays
-		{ TEXT("Guideline"),       false },
-		{ TEXT("Runway"),          false },
-		{ TEXT("HoldingPosition"), false },
-		{ TEXT("Road"),            false },
-		{ TEXT("FuelDepot"),       true  },
-	};
-
-	for (const FToolRegistration& Entry : ToolRegistry())
-	{
-		const bool* Want = Expected.Find(Entry.Id);
-		if (Want == nullptr)
-		{
-			AddError(FString::Printf(
-				TEXT("registry entry '%s' is not named in this test - a new tool must say "
-					 "whether plot ghost bays belong on screen under it"), *Entry.Id.ToString()));
-			continue;
-		}
-		TestEqual(*FString::Printf(TEXT("'%s' declares the ghost visibility this test expects"),
-			*Entry.Id.ToString()), Entry.bShowsPlotGhosts, *Want);
-	}
-	TestEqual(TEXT("and the table holds no entry beyond the ones named here"),
-		ToolRegistry().Num(), Expected.Num());
 	return true;
 }
 

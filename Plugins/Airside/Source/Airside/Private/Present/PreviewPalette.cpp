@@ -66,9 +66,8 @@ FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 	case EPreviewStyle::NodeStub:                    return FLinearColor(1.0f, 0.55f, 0.1f);
 	case EPreviewStyle::NodeThrough:                 return FLinearColor(0.85f, 0.85f, 0.85f);
 	case EPreviewStyle::NodeJunction:                return FLinearColor(0.15f, 0.85f, 1.0f);
-	case EPreviewStyle::StandPose:                   return FLinearColor(0.25f, 0.7f, 1.0f);
 	// Where the service vehicles park - a consequence of where the aircraft sits, not a
-	// thing that IS one (contrast StandPose).
+	// thing that IS one.
 	case EPreviewStyle::ServiceAnchor:                return FLinearColor(0.9f, 0.6f, 0.2f);
 
 	// NEAR ServiceAnchor's amber-orange (both say "service ground here"), but distinct from it
@@ -160,20 +159,11 @@ FPreviewLook PreviewPalette::DefaultLook(EPreviewStyle Style)
 		Look.ThicknessScale = GraphThicknessScale;
 		break;
 
-	// DELIBERATELY not NodeRingRadius (1.0) - see ARoadBuildHUD::Marker's old comment on
-	// this exact number, moved here: GraphOverlay::DescribeStands drew this AFTER
-	// StandPreview::Describe's own Pending mark at the same position, and a ring at the same
-	// radius would just overdraw it instead of sitting visibly alongside it. Nothing emits
-	// StandPose since 2026-09-27 (see its enum comment); the look is kept for when one does.
-	case EPreviewStyle::StandPose:
-		Look.RadiusScale = 2.2f;
-		Look.ThicknessScale = GraphThicknessScale;
-		break;
-
-	// SMALLER THAN Hover's ring (1.0), for the reason StandPose's comment gives just above:
-	// FEditTool marks the handle under the cursor a second time as Hover, in the same frame
-	// and at the same position, and equal radii would simply overdraw rather than read as
-	// "grabbable, and this is the one". Heavier in thickness to stay visible at that size.
+	// SMALLER THAN Hover's ring (1.0), for the reason a pose ring once had a LARGER radius than
+	// the Pending mark it sat on (StandPose, deleted by #462): FEditTool marks the handle under
+	// the cursor a second time as Hover, in the same frame and at the same position, and equal
+	// radii would simply overdraw rather than read as "grabbable, and this is the one". Heavier
+	// in thickness to stay visible at that size.
 	case EPreviewStyle::Handle:
 		Look.RadiusScale = 0.6f;
 		Look.ThicknessScale = 1.5f;

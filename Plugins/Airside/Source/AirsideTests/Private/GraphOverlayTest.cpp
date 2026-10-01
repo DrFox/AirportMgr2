@@ -177,8 +177,6 @@ bool FGraphOverlayTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("DescribeNodes alone draws the node styles"),
 			NodesOnly.CountMarkers(EPreviewStyle::NodeStub) + NodesOnly.CountMarkers(EPreviewStyle::NodeThrough)
 				+ NodesOnly.CountMarkers(EPreviewStyle::NodeJunction) > 0);
-		TestEqual(TEXT("DescribeNodes alone draws no StandPose"),
-			NodesOnly.CountMarkers(EPreviewStyle::StandPose), 0);
 		TestEqual(TEXT("DescribeNodes alone draws no ServiceAnchor"),
 			NodesOnly.CountMarkers(EPreviewStyle::ServiceAnchor), 0);
 
@@ -248,7 +246,6 @@ bool FDepotOverlayMarkersTest::RunTest(const FString& Parameters)
 		GraphOverlay::DescribeStands(*Network, Sink);
 
 		TestEqual(TEXT("a placed depot draws no aircraft stop mark"), Sink.CountMarkers(EPreviewStyle::Pending), 0);
-		TestEqual(TEXT("a placed depot draws no aircraft pose ring"), Sink.CountMarkers(EPreviewStyle::StandPose), 0);
 		// A POINT-PLACED depot keeps its footprint box: with no plot it is the only geometry
 		// the thing has.
 		TestEqual(TEXT("a point-placed depot still draws its footprint box, four sides"),
@@ -284,8 +281,9 @@ bool FDepotOverlayMarkersTest::RunTest(const FString& Parameters)
 
 		// Since 2026-09-27 a stand draws no rings at its pose either - its painted stop bar
 		// shows the stop - so what proves the overlay still reaches the stand is its footprint.
-		TestEqual(TEXT("the stand draws no pose ring either"), Sink.CountMarkers(EPreviewStyle::StandPose), 0);
-		TestEqual(TEXT("nor any stop mark or service-point ring"), Sink.CountMarkers(EPreviewStyle::Pending), 0);
+		// (The old "no pose ring" assert is gone with the style; StandOverlayMarkers measures
+		// that NO marker of any style sits at the pose.)
+		TestEqual(TEXT("the stand draws no stop mark or service-point ring"), Sink.CountMarkers(EPreviewStyle::Pending), 0);
 		TestTrue(TEXT("but the stand still draws its aircraft footprint beyond the depot's four sides"),
 			Sink.CountLines(EPreviewStyle::Snap) > 4);
 	}
@@ -365,7 +363,7 @@ bool FStandOverlayMarkersTest::RunTest(const FString& Parameters)
 	// THE STYLE OF THOSE RINGS, which the position count above cannot see (merged in from
 	// Airside.Tool.GraphOverlay's old section 2, #462): the marker at each anchor must be the
 	// ServiceAnchor style, not a Pending or Snap ring that happens to land in the same place. Together
-	// with the count above this also pins "no StandPose ring and no Pending at all" - every marker
+	// with the count above this also pins "no pose ring and no Pending at all" - every marker
 	// drawn is a ServiceAnchor.
 	int32 ServiceAnchors = 0;
 	for (const TPair<FVector2D, EPreviewStyle>& Marker : Sink.Markers)

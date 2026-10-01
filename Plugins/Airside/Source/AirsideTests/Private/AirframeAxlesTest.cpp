@@ -17,6 +17,10 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+// Defined below, beside FFootprintMatchesTheMeshTest that first needed it; section 5 of the first test
+// asks the same question of the same rig.
+static int32 LeftMainWheel(const FReferenceSkeleton& Rig);
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FAirframeAxlesTest,
 	"Airside.Model.AirframeAxles",
@@ -108,15 +112,58 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	//    the datum moved: plane7 is a rebuild of the same aeroplane, so a wheelbase that had
 	//    shifted would mean the new model is a different size rather than the same one
 	//    re-origined. It is the one figure that survives the whole substitution unchanged.
+	//
+	//    MEASURED AGAINST PLANE7, NOT AGAINST THE BUILDER'S OWN FIGURES (#463; this section used
+	//    to assert 237.8 and -237.8 of BuildPiperMeridian, which is the number typed into the
+	//    builder read back out of it - it stays green however far the builder drifts from the
+	//    aeroplane it stands for). The builder is the content-less fallback's Meridian
+	//    (UAirsideSettings::ContentlessDefaultAirframe) and the fixture 132 call sites lean on
+	//    (git grep of TestAirframes::Piper(), 2026-10-01),
+	//    so what it must agree with is the SHIPPED asset, and that asset with the rig it was
+	//    measured from: the reference pose's left main wheel is where the mains are.
 	UAircraftType* Meridian = TestAirframes::PiperType();
 	const FAirframe Piper = Meridian->Airframe();
-	TestTrue(TEXT("the Meridian steers geometrically"), Piper.Chassis.HasAxles());
-	TestEqual(TEXT("its wheelbase is the measured 2.378 m, unchanged by the re-origin"),
-		Piper.Chassis.Wheelbase(), 237.8, 0.1);
-	TestEqual(TEXT("its steered axle is the origin, per the class convention"),
-		Piper.Chassis.SteerAxleX, 0.0, 0.01);
-	TestEqual(TEXT("and its mains are aft of that origin, not on it"),
-		Piper.Chassis.FixedAxleX, -237.8, 0.1);
+	const UAircraftType* Plane7 = LoadObject<UAircraftType>(nullptr,
+		TEXT("/Game/Entities/DA_Aircraft_Plane7.DA_Aircraft_Plane7"));
+	if (TestNotNull(TEXT("the shipped Meridian (plane7) loads"), Plane7))
+	{
+		const FAirframe Shipped = Plane7->Airframe();
+		TestTrue(TEXT("the shipped Meridian steers geometrically"), Shipped.Chassis.HasAxles());
+		TestEqual(TEXT("its wheelbase is the measured 2.378 m, unchanged by the re-origin"),
+			Shipped.Chassis.Wheelbase(), 237.8, 0.1);
+		TestEqual(TEXT("its steered axle is the origin, per the class convention"),
+			Shipped.Chassis.SteerAxleX, 0.0, 0.01);
+
+		TestEqual(TEXT("the code-built Meridian has the shipped one's steered axle"),
+			Piper.Chassis.SteerAxleX, Shipped.Chassis.SteerAxleX, 0.1);
+		TestEqual(TEXT("and its mains where the shipped one's are"),
+			Piper.Chassis.FixedAxleX, Shipped.Chassis.FixedAxleX, 0.1);
+		TestEqual(TEXT("and so its wheelbase"),
+			Piper.Chassis.Wheelbase(), Shipped.Chassis.Wheelbase(), 0.1);
+		TestEqual(TEXT("and its steering lock"),
+			Piper.Chassis.Ground.MaxSteerDegrees, Shipped.Chassis.Ground.MaxSteerDegrees, 0.01);
+
+		// THE ASSET AGAINST ITS RIG, which is what makes "shipped" mean measured: a DA edited by
+		// hand, or a mesh re-exported without re-running the authoring script, moves one of the
+		// two (the half-run pipeline FootprintMatchesTheMesh pins for the origin and the wheel's
+		// height, and not for where along the aeroplane the mains are).
+		USkeletalMesh* Mesh = Plane7->Mesh.LoadSynchronous();
+		if (TestNotNull(TEXT("plane7's mesh loads"), Mesh))
+		{
+			const FReferenceSkeleton& Rig = Mesh->GetRefSkeleton();
+			const int32 LeftWheel = LeftMainWheel(Rig);
+			if (TestTrue(TEXT("plane7's rig has a left main wheel bone"), LeftWheel != INDEX_NONE))
+			{
+				const double MainsX = FAnimationRuntime::GetComponentSpaceTransformRefPose(
+					Rig, LeftWheel).GetTranslation().X;
+				TestEqual(TEXT("the shipped Meridian's mains are at the rig's main wheel"),
+					Shipped.Chassis.FixedAxleX, MainsX, 0.5);
+				TestEqual(TEXT("and so is the code-built one's"),
+					Piper.Chassis.FixedAxleX, MainsX, 0.5);
+			}
+		}
+	}
+	TestTrue(TEXT("the code-built Meridian steers geometrically"), Piper.Chassis.HasAxles());
 	TestTrue(TEXT("it has a steering lock to turn on"), Piper.Chassis.Ground.MaxSteerDegrees > 0.0);
 
 	// AND IT IS NOW PITCHED ABOUT ITS MAINS, which ARoadAgentActor::SetPose keys off exactly

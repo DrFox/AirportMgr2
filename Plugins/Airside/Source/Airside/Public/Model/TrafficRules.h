@@ -193,6 +193,8 @@ struct AIRSIDE_API FTrafficRules
 	 * rubber-banding this substep split exists to remove, just moved to a higher speed
 	 * setting instead of fixed. 32 keeps a genuine hitch exactly as bounded as before; it
 	 * only stops ordinary top-speed play from being treated as one.
+	 * ENFORCED BY: AirportOps.Model.SimClock.SubstepCeilingCoversTheSpeedLadder (reads the
+	 * ladder from USimClock, so a rung added there turns this red rather than passing quietly)
 	 */
 	UPROPERTY(EditAnywhere, meta = (ClampMin = "1")) int32 MaxSubsteps = 32;
 

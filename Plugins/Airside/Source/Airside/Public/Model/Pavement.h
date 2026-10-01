@@ -107,7 +107,8 @@ namespace Pavement
 	 * per surface would mean a rate per profile per surface authored by hand. Tune it here, in
 	 * the one place both the quote and the upkeep read. (Moved from BuildCost::GrassRateFactor,
 	 * #356's, when ERoadSurface folded into EPavement.)
-	 * ENFORCED BY: Airside.Build.GrassRoadCost (quote and upkeep both at the factor)
+	 * ENFORCED BY: Airside.Build.BuildCostFactorOnEveryKind (the quote) and
+	 * Airside.Build.BuildCostUpkeepUsesBuildFactor (the upkeep, to the figure)
 	 */
 	AIRSIDE_API double RateFactor(EPavement P);
 }

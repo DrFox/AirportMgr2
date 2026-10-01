@@ -202,54 +202,121 @@ bool FCollinearAgainstAnApronIsFlushByHalfWidthTest::RunTest(const FString& Para
 }
 
 /**
- * THE APRON COLUMN OFF SILENCES EVERY RELATION - the 2026-09-20 report, in its new column.
+ * A COLUMN SWITCHED OFF SILENCES EVERY RELATION IN IT - the 2026-09-20 report, once per column
+ * that has a source (#462 M25: this was ApronColumnOffSilencesEveryRelation here and
+ * RunwayColumnOffSilencesEveryRelation in GuideToggleTest.cpp, the same shape twice, both
+ * resting on the one reference filter in FSnapGuideChain::ProposeAll).
+ *
+ * THE REPORT, AS A TEST. 2026-09-20: "i have parallel on and runway off [and] the guide will
+ * still show me that my taxiway is parallel to a runway". A column switched off must silence
+ * every relation in it, not just the one relation that happened to be named after it.
+ *
+ * ONE ROW PER COLUMN, each with the field that makes that column the only thing able to
+ * answer. A column added to the table needs a row here only if it has a source of its own.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FApronColumnOffSilencesEveryRelationTest,
-	"Airside.Tool.ApronColumnOffSilencesEveryRelation",
+	FColumnOffSilencesEveryRelationTest,
+	"Airside.Tool.ColumnOffSilencesEveryRelation",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FApronColumnOffSilencesEveryRelationTest::RunTest(const FString& Parameters)
+bool FColumnOffSilencesEveryRelationTest::RunTest(const FString& Parameters)
 {
-	FAirsideTestWorld TestWorld;
-	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
-	ARoadNetworkActor* Actor = TestWorld.Actor;
-	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
-	if (!TestTrue(TEXT("the apron is laid"), LayApron(Actor))) { return false; }
+	struct FColumnRow
+	{
+		const TCHAR* Name;
+		SnapGuide::EReference Reference;
+		FGuideAnchor Anchor;
+		FVector2D Cursor;
+		TFunction<bool(ARoadNetworkActor*)> Lay;
+		TFunction<void(FSnapGuideSettings&, bool)> SetColumn;
+	};
 
-	const FGuideAnchor Anchor = RoadAnchorAt(FVector2D(2000.0, -3000.0));
-	const FSnapGuideChain Chain;
+	const FColumnRow Rows[] = {
+		{ TEXT("Apron"), SnapGuide::EReference::Apron,
+			RoadAnchorAt(FVector2D(2000.0, -3000.0)), FVector2D(9000.0, -3000.0),
+			[](ARoadNetworkActor* Actor) { return LayApron(Actor); },
+			[](FSnapGuideSettings& Settings, bool bOn)
+			{
+				// EVERY RELATION ON, THE APRON COLUMN OFF, and no other column on either - so the
+				// apron is the only thing on the field that could answer, and nothing may.
+				Settings.bExtending = false;
+				Settings.bLevelWith = true;
+				Settings.bParallel = true;
+				Settings.bCollinear = true;
+				Settings.bAngledFrom = true;
+				Settings.bMatchingGap = true;
+				Settings.bTaxiway = false;
+				Settings.bServiceRoad = false;
+				Settings.bRunway = false;
+				Settings.bApron = bOn;
+				Settings.bStand = false;
+				Settings.bWorld = false;
+			} },
+		{ TEXT("Runway"), SnapGuide::EReference::Runway,
+			TestGuide::BareAnchor(FVector2D(0.0, 3000.0)), FVector2D(4000.0, 3100.0),
+			[](ARoadNetworkActor* Actor)
+			{
+				// A RUNWAY AS THE ONLY THING ON THE FIELD, so anything the chain offers must
+				// reference it.
+				//
+				// NOT ConnectNodes: ERoadKind has only Taxiway and ServiceRoad, because a runway
+				// is not a road kind - it is a segment laid through PlaceRunway with a profile
+				// that is continuous through junctions, which is what IsRunwaySegment then
+				// recognises.
+				return TestGuide::LayRunway(Actor, FVector2D(-20000.0, 0.0), FVector2D(20000.0, 0.0));
+			},
+			[](FSnapGuideSettings& Settings, bool bOn)
+			{
+				// EVERY RELATION ON, THE RUNWAY COLUMN OFF. Both road columns stay on so the test
+				// cannot pass merely by everything being switched off.
+				Settings.bParallel = true;
+				Settings.bCollinear = true;
+				Settings.bMatchingGap = true;
+				Settings.bTaxiway = true;
+				Settings.bServiceRoad = true;
+				Settings.bRunway = bOn;
+				Settings.bWorld = false;
+			} },
+	};
 
-	// EVERY RELATION ON, THE APRON COLUMN OFF, and no other column on either - so the apron is
-	// the only thing on the field that could answer, and nothing may.
-	FSnapGuideSettings Settings;
-	Settings.bExtending = false;
-	Settings.bLevelWith = true;
-	Settings.bParallel = true;
-	Settings.bCollinear = true;
-	Settings.bAngledFrom = true;
-	Settings.bMatchingGap = true;
-	Settings.bTaxiway = false;
-	Settings.bServiceRoad = false;
-	Settings.bRunway = false;
-	Settings.bApron = false;
-	Settings.bStand = false;
-	Settings.bWorld = false;
+	for (const FColumnRow& Row : Rows)
+	{
+		FAirsideTestWorld TestWorld;
+		if (!TestNotNull(*FString::Printf(TEXT("%s: a world"), Row.Name), TestWorld.World)) { return false; }
+		ARoadNetworkActor* Actor = TestWorld.Actor;
+		if (!TestNotNull(*FString::Printf(TEXT("%s: a network actor"), Row.Name), Actor)) { return false; }
 
-	const FVector2D Cursor(9000.0, -3000.0);
-	const SnapGuide::FResult Off = Chain.Resolve(
-		*Actor->Network, Anchor, Cursor, SnapGuide::FResult(), Settings);
-	TestFalse(TEXT("with the Apron column off, no relation answers"), Off.bActive);
+		// HONOURED, NOT ASSUMED. Laying can refuse (PlaceRunway does), and every assertion below
+		// would then be measuring an empty field while looking like a gating bug.
+		if (!TestTrue(*FString::Printf(TEXT("%s: the field is laid"), Row.Name), Row.Lay(Actor))) { return false; }
+		if (!TestTrue(*FString::Printf(TEXT("%s: and the network exists"), Row.Name), Actor->Network != nullptr))
+		{
+			return false;
+		}
 
-	// CONTROL LEG: the drag was fine. Switch the column on and the apron answers.
-	Settings.bApron = true;
-	const SnapGuide::FResult On = Chain.Resolve(
-		*Actor->Network, Anchor, Cursor, SnapGuide::FResult(), Settings);
-	if (!TestTrue(TEXT("with it on, the apron answers"), On.bActive)) { return false; }
-	TestEqual(TEXT("and what answers is the apron"),
-		static_cast<int32>(On.Winners[0].Reference),
-		static_cast<int32>(SnapGuide::EReference::Apron));
+		const FGuideAnchor& Anchor = Row.Anchor;
+		const FSnapGuideChain Chain;
+		FSnapGuideSettings Settings;
 
+		Row.SetColumn(Settings, /*bOn=*/false);
+		const SnapGuide::FResult Off = Chain.Resolve(
+			*Actor->Network, Anchor, Row.Cursor, SnapGuide::FResult(), Settings);
+		TestFalse(*FString::Printf(TEXT("%s: with the column off, no relation answers"), Row.Name), Off.bActive);
+		for (const SnapGuide::FCandidate& Winner : Off.Winners)
+		{
+			TestNotEqual(*FString::Printf(TEXT("%s: with the column off, no relation may reference it"), Row.Name),
+				static_cast<int32>(Winner.Reference), static_cast<int32>(Row.Reference));
+		}
+
+		// CONTROL LEG: the drag itself was fine. Without this, a Resolve that had simply broken
+		// would pass the assertions above.
+		Row.SetColumn(Settings, /*bOn=*/true);
+		const SnapGuide::FResult On = Chain.Resolve(
+			*Actor->Network, Anchor, Row.Cursor, SnapGuide::FResult(), Settings);
+		if (!TestTrue(*FString::Printf(TEXT("%s: with it on, the column answers"), Row.Name), On.bActive)) { return false; }
+		TestEqual(*FString::Printf(TEXT("%s: and what it offers is that column"), Row.Name),
+			static_cast<int32>(On.Winners[0].Reference), static_cast<int32>(Row.Reference));
+	}
 	return true;
 }
 

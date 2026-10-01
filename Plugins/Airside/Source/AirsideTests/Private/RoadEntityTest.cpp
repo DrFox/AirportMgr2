@@ -126,10 +126,17 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		Late.Id = TEXT("DeIcer");
 		Late.LocalPosition = FVector2D(-3000.0, 900.0);
 		Late.Role = EServiceRole::Fuel;
-		Stand->Anchors.Add(Late);
+		// AT THE FRONT, not the back: the role query production calls is FirstAnchorIdForRole
+		// (the array form is the one only tests asked), and it answers the FIRST id in definition
+		// order. Appended, the hydrant is still first on any implementation, so a query that read
+		// the definition instead of the instance would pass; at index 0 it answers "DeIcer", which
+		// this instance cannot follow.
+		Stand->Anchors.Insert(Late, 0);
 
 		// The instance predates it and cannot know where the de-icer parks. A MISS is the
-		// correct answer; an index would have read past the end of the array to get here.
+		// correct answer. An index would answer wrongly: at the front it shifts every anchor
+		// of the definition by one, so the instance's element N is no longer the definition's
+		// (and appended at the back it would have read past the end).
 		TestNull(TEXT("an anchor added after placement does not resolve on that instance"),
 			Net->GetAnchorNode(Placed, FName(TEXT("DeIcer"))));
 
@@ -140,13 +147,13 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 			Net->GetAnchorNode(Placed, FName(TEXT("BaggageHold"))));
 
 		// The role query must not offer an id the instance cannot follow.
-		for (const FName Id : Net->GetAnchorIdsForRole(Placed, EServiceRole::Fuel))
-		{
-			TestNotNull(TEXT("every id a role query returns resolves to a node"),
-				Net->GetAnchorNode(Placed, Id));
-		}
+		const FName FuelId = Net->FirstAnchorIdForRole(Placed, EServiceRole::Fuel);
+		TestEqual(TEXT("the role query skips the definition's new first fuel anchor for the one this instance resolved"),
+			FuelId, FName(TEXT("HydrantPit")));
+		TestNotNull(TEXT("and the id a role query returns resolves to a node"),
+			Net->GetAnchorNode(Placed, FuelId));
 
-		Stand->Anchors.Pop();
+		Stand->Anchors.RemoveAt(0);
 	}
 
 	// Anchors must be distinguishable by role, or "drive to the fuel position" has no
@@ -159,20 +166,29 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		{
 			// The aircraft stop position is the stand's own POSE, not a fixture: there is
 			// nothing dug into the concrete at the nose gear mark except paint.
-			TestEqual(TEXT("no ground fixture claims to be the aircraft"),
-				Net->GetAnchorIdsForRole(Placed, EServiceRole::Aircraft).Num(), 0);
+			TestTrue(TEXT("no ground fixture claims to be the aircraft"),
+				Net->FirstAnchorIdForRole(Placed, EServiceRole::Aircraft).IsNone());
 
-			TestEqual(TEXT("one hydrant pit"),
-				Net->GetAnchorIdsForRole(Placed, EServiceRole::Fuel).Num(), 1);
+			// ONE HYDRANT PIT AND ONE BAGGAGE BAY on the definition, counted by role (since
+			// 2026-09-17 the Code C stand paints one bay where it used to paint two). Role is a
+			// CATEGORY, not an identity - a stand with two belt loaders is legal, and a by-role query
+			// then answers the first in definition order - so anything that addresses a service
+			// position does it by ID, which is the invariant FResolvedAnchor exists to hold and the
+			// reason this asks by role at all. The query used to return the whole list and these
+			// counted it; production only ever read element 0, so FirstAnchorIdForRole is the one
+			// asked now and the count is taken from the definition the id must come from.
+			const auto AnchorsWithRole = [Stand](EServiceRole Role)
+			{
+				return Stand->Anchors.FilterByPredicate(
+					[Role](const FEntityAnchor& Anchor) { return Anchor.Role == Role; }).Num();
+			};
+			TestEqual(TEXT("the definition declares one fuel anchor"), AnchorsWithRole(EServiceRole::Fuel), 1);
+			TestEqual(TEXT("and one baggage anchor"), AnchorsWithRole(EServiceRole::Baggage), 1);
 
-			// ONE BAGGAGE BAY since 2026-09-17, where the Code C stand used to paint two. The
-			// query still returns an ARRAY rather than a single id, and that is the point
-			// worth keeping: role is a CATEGORY, not an identity. A stand with two belt
-			// loaders is legal and would answer twice here, so anything that addresses a
-			// service position does it by ID - which is the invariant FResolvedAnchor exists
-			// to hold, and the reason this asks by role at all.
-			TestEqual(TEXT("one baggage bay, and the query is still a list"),
-				Net->GetAnchorIdsForRole(Placed, EServiceRole::Baggage).Num(), 1);
+			TestEqual(TEXT("the hydrant pit is the fuel anchor"),
+				Net->FirstAnchorIdForRole(Placed, EServiceRole::Fuel), FName(TEXT("HydrantPit")));
+			TestEqual(TEXT("the baggage hold is the baggage anchor"),
+				Net->FirstAnchorIdForRole(Placed, EServiceRole::Baggage), FName(TEXT("BaggageHold")));
 
 			int32 IdsThatResolve = 0;
 			for (const FEntityAnchor& Anchor : Stand->Anchors)
@@ -418,7 +434,7 @@ bool FResolvedAnchorRefreshTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and carries the definition's original heading"), HeadingBefore, 1.0);
 	}
 	TestEqual(TEXT("and is filed under its original role"),
-		Net->GetAnchorIdsForRole(Placed, EServiceRole::Baggage).Num(), 1);
+		Net->FirstAnchorIdForRole(Placed, EServiceRole::Baggage), FName(TEXT("belt")));
 
 	// Edited AFTER placement - simulating a definition asset changed since the level that
 	// placed this instance was saved.
@@ -436,9 +452,9 @@ bool FResolvedAnchorRefreshTest::RunTest(const FString& Parameters)
 			HeadingStillSnapshot, 1.0);
 	}
 	TestEqual(TEXT("and is still filed under the OLD role before any refresh"),
-		Net->GetAnchorIdsForRole(Placed, EServiceRole::Baggage).Num(), 1);
-	TestEqual(TEXT("and not yet under the new one"),
-		Net->GetAnchorIdsForRole(Placed, EServiceRole::Fuel).Num(), 0);
+		Net->FirstAnchorIdForRole(Placed, EServiceRole::Baggage), FName(TEXT("belt")));
+	TestTrue(TEXT("and not yet under the new one"),
+		Net->FirstAnchorIdForRole(Placed, EServiceRole::Fuel).IsNone());
 
 	const int32 ChangedCount = UEntityDefinition::RefreshResolvedAnchors(*Net);
 	TestEqual(TEXT("exactly the one edited anchor is reported changed"), ChangedCount, 1);
@@ -450,9 +466,9 @@ bool FResolvedAnchorRefreshTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and now reports the NEW heading"), HeadingAfter, 2.0);
 	}
 	TestEqual(TEXT("and is now filed under the NEW role"),
-		Net->GetAnchorIdsForRole(Placed, EServiceRole::Fuel).Num(), 1);
-	TestEqual(TEXT("and no longer under the old one"),
-		Net->GetAnchorIdsForRole(Placed, EServiceRole::Baggage).Num(), 0);
+		Net->FirstAnchorIdForRole(Placed, EServiceRole::Fuel), FName(TEXT("belt")));
+	TestTrue(TEXT("and no longer under the old one"),
+		Net->FirstAnchorIdForRole(Placed, EServiceRole::Baggage).IsNone());
 
 	// A second refresh with nothing left to change reports zero - not a re-count of what
 	// it already fixed, and not a crash on an entity with no Definition (RemoveEntity

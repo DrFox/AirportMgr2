@@ -30,6 +30,11 @@ TArrayView<const ESimSpeed> USimClock::SpeedLadder()
 	// no error anywhere. It is exposed rather than a static local precisely so a test can
 	// read it - AirportOps.Model.SimClock.SpeedLadderCoversEveryRung walks StaticEnum and
 	// fails if the two ever drift apart.
+	//
+	// AND A THIRD FIGURE SIZED FROM THE TOP RUNG: Airside's FTrafficRules::MaxSubsteps must cover a
+	// frame at the fastest speed, or ordinary top-speed play is taken in coarse steps.
+	// ENFORCED BY: AirportOps.Model.SimClock.SubstepCeilingCoversTheSpeedLadder (reads every rung
+	// from here and runs the real Advance split)
 	static const ESimSpeed Ladder[] = {
 		ESimSpeed::X1, ESimSpeed::X2, ESimSpeed::X4, ESimSpeed::X8, ESimSpeed::X16, ESimSpeed::X32 };
 	return MakeArrayView(Ladder, UE_ARRAY_COUNT(Ladder));

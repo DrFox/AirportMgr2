@@ -51,12 +51,23 @@ namespace
 		}
 	};
 
-	/** An east-west service road through the origin, long enough to anchor anywhere on. */
-	void LayServiceRoad(ARoadNetworkActor* Actor)
+	/**
+	 * An east-west service road through the origin, long enough to anchor anywhere on - turned
+	 * RoadDegrees anticlockwise about the origin when a test needs the frontage OFF the world
+	 * axes (PlotGuideEndsWithTheGesture does: it needs two guides a few degrees apart).
+	 *
+	 * NOT CALLED LayServiceRoad, as it was: PlotPlaceToolTest.cpp has a function of that name in
+	 * ITS anonymous namespace, and this module is a unity build - once both files sit in one chunk
+	 * the two are the same function with two bodies (C2084). The adaptive build hid it while this
+	 * file was compiled on its own.
+	 */
+	void LayGuideRoad(ARoadNetworkActor* Actor, double RoadDegrees = 0.0)
 	{
 		IRoadEditTarget* Target = Actor;
-		const int32 West = Target->PlaceNode(FVector2D(-20000.0, 0.0));
-		const int32 East = Target->PlaceNode(FVector2D(20000.0, 0.0));
+		const double Radians = FMath::DegreesToRadians(RoadDegrees);
+		const FVector2D Half = FVector2D(FMath::Cos(Radians), FMath::Sin(Radians)) * 20000.0;
+		const int32 West = Target->PlaceNode(-Half);
+		const int32 East = Target->PlaceNode(Half);
 		Target->ConnectNodes(West, East, ERoadKind::ServiceRoad, INDEX_NONE);
 	}
 
@@ -100,16 +111,23 @@ namespace
 		FPlotPlaceTool* Plot() const { return static_cast<FPlotPlaceTool*>(Tool); }
 	};
 
-	/** Builds the world, lays the road and pins the frontage. Null Tool on any failure. */
-	bool StartGesture(FDepotGesture& Out)
+	/**
+	 * Selects the depot tool and pins its frontage - the anchor, then the far end - on the road
+	 * LayGuideRoad laid. Callable again on a world whose gesture was put down, which is what
+	 * a SECOND gesture on the same session is (the session's held guide outlives the tool).
+	 * Frontage is refilled; Tool is the freshly selected one.
+	 *
+	 * QuadCursor IS A RESOLVED FRAME, which is why it is a parameter: Quad takes a context, and a
+	 * context built with two corners pinned resolves a guide and STORES it as the session's held
+	 * winner. The default is where every test here has always read the frontage from; a test that
+	 * is about what the session holds when its own first frame arrives passes a cursor that no
+	 * guide is near (see PlotGuideEndsWithTheGesture).
+	 */
+	bool PinFrontage(FDepotGesture& Out, const FVector2D& QuadCursor = FVector2D(6000.0, 3000.0))
 	{
-		if (Out.TestWorld.World == nullptr || Out.TestWorld.Actor == nullptr) { return false; }
-		LayServiceRoad(Out.TestWorld.Actor);
-
 		const int32 Depot = DepotToolIndex();
 		if (Depot == INDEX_NONE) { return false; }
 
-		Out.Tunables = Out.TestWorld.Actor->MakeTunables(10000.0);
 		Out.Session.SelectTool(Depot);
 		Out.Tool = Out.Session.GetActiveTool();
 		if (Out.Tool == nullptr) { return false; }
@@ -118,8 +136,18 @@ namespace
 		Out.Tool->OnClick(Out.At(FVector2D(0.0, 1000.0)));
 		Out.Tool->OnClick(Out.At(FVector2D(6000.0, 1000.0)));
 
-		Out.Plot()->Quad(Out.At(FVector2D(6000.0, 3000.0)), Out.Frontage);
+		Out.Plot()->Quad(Out.At(QuadCursor), Out.Frontage);
 		return Out.Frontage.Num() >= 2;
+	}
+
+	/** Builds the world, lays the road and pins the frontage. Null Tool on any failure. */
+	bool StartGesture(FDepotGesture& Out, double RoadDegrees = 0.0)
+	{
+		if (Out.TestWorld.World == nullptr || Out.TestWorld.Actor == nullptr) { return false; }
+		LayGuideRoad(Out.TestWorld.Actor, RoadDegrees);
+
+		Out.Tunables = Out.TestWorld.Actor->MakeTunables(10000.0);
+		return PinFrontage(Out);
 	}
 }
 
@@ -325,6 +353,16 @@ bool FPlotCornerIgnoresADistantGuideTest::RunTest(const FString& Parameters)
  * THE WINNER DIES WITH THE GESTURE. The session holds it so hysteresis can work; a winner that
  * outlived the gesture would be held into the NEXT one by that same rule, and the player would
  * get a guide off an edge that no longer exists.
+ *
+ * MEASURED ONLY WHERE A LEAK SHOWS (#463; the first version asked "is a guide live after the
+ * gesture ends?" and passed with the clearing line deleted). A stale winner is invisible while
+ * the tool is idle - an idle tool describes no anchor, so nothing resolves whatever the session
+ * remembers - and a fresh gesture's own best guide hides it too, unless the stale one is in
+ * tolerance and within the stickiness of the best, where the hold rule keeps the INCUMBENT. So
+ * the road is turned four degrees: the frontage's square sits 4 degrees off the world +Y axis
+ * and a cursor at 92.2 degrees is 1.8 from one and 2.2 from the other. The hold rule is 2.0
+ * degrees (SnapGuide::FTuning::StickinessDegrees), so a held world axis stays at that cursor and
+ * a fresh resolve gives the frontage its due: the two answers differ exactly when a winner leaked.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FPlotGuideEndsWithTheGestureTest,
@@ -333,30 +371,85 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FPlotGuideEndsWithTheGestureTest::RunTest(const FString& Parameters)
 {
+	// FOUR DEGREES, which is what puts the frontage's square (94 degrees) and the world +Y axis
+	// (90) both inside the 7-degree tolerance of a cursor between them.
+	const double RoadDegrees = 4.0;
 	FDepotGesture Gesture;
-	if (!TestTrue(TEXT("a depot gesture with its frontage pinned"), StartGesture(Gesture)))
+	if (!TestTrue(TEXT("a depot gesture with its frontage pinned"), StartGesture(Gesture, RoadDegrees)))
 	{
 		return false;
 	}
 
-	const FVector2D Square = Gesture.Frontage[1] + FVector2D(60.0, 2000.0);
-	if (!TestTrue(TEXT("a guide is live mid-gesture"), Gesture.At(Square).Guide.bActive))
+	const FVector2D Along = (Gesture.Frontage[1] - Gesture.Frontage[0]).GetSafeNormal();
+
+	// A cursor at this heading, measured from the +X axis, 2000 uu out of the frontage's far end.
+	auto At = [&Gesture](double HeadingDegrees)
+	{
+		const double Radians = FMath::DegreesToRadians(HeadingDegrees);
+		return Gesture.At(Gesture.Frontage[1] + FVector2D(FMath::Cos(Radians), FMath::Sin(Radians)) * 2000.0);
+	};
+	auto AngularReference = [](const FToolContext& Context) -> int32
+	{
+		const SnapGuide::FCandidate* Angular = Context.Guide.Of(SnapGuide::EFit::Angular);
+		return Angular != nullptr ? static_cast<int32>(Angular->Reference) : INDEX_NONE;
+	};
+	const int32 World = static_cast<int32>(SnapGuide::EReference::World);
+
+	// 0.3 degrees off the world axis, 3.7 off the frontage's square: the world axis wins outright.
+	if (!TestEqual(TEXT("dragged almost along the world axis, the world axis is the guide"),
+		AngularReference(At(90.3)), World))
+	{
+		return false;
+	}
+
+	// THE CONTROL, which is what makes the rest measure something: still in THIS gesture, at the
+	// cursor the fresh gesture will use below, the frontage's square is the better guide by 0.4
+	// degrees and the world axis KEEPS the guide anyway - the hold rule. If it did not, no winner
+	// could leak into a second gesture at this cursor and the last assertion would pass for free.
+	if (!TestEqual(TEXT("mid-gesture the world axis is held against a challenger 0.4 degrees better"),
+		AngularReference(At(92.2)), World))
 	{
 		return false;
 	}
 
 	// PUT THE TOOL DOWN. SelectTool deactivates the depot tool, which returns it to Idle, so it
-	// offers no anchor and the session must forget the winner it was holding.
+	// offers no anchor and the session must forget the winner it was holding. Asked of the idle
+	// tool this proves nothing about forgetting (an idle tool resolves nothing whatever the
+	// session remembers), only that the query ran - it is the QUERY that clears.
 	Gesture.Session.SelectTool(0);
-	TestFalse(TEXT("with the tool put down, the guide is gone"),
-		Gesture.At(Square).Guide.bActive);
+	TestFalse(TEXT("with the tool put down, the guide is gone"), At(92.2).Guide.bActive);
 
-	// AND IT DOES NOT COME BACK on re-selecting the tool at the same cursor: the gesture starts
-	// from Idle, which has no anchor at all.
-	const int32 Depot = DepotToolIndex();
-	Gesture.Session.SelectTool(Depot);
-	TestFalse(TEXT("and a fresh gesture does not inherit it"),
-		Gesture.At(Square).Guide.bActive);
+	// A SECOND GESTURE on the same road and the same pins, at the cursor the control just held.
+	// A winner that leaked would be held again; a forgotten one is judged afresh, and the
+	// frontage's square (1.8 degrees off) beats the world axis (2.2).
+	//
+	// THE FRONTAGE IS READ FROM A CURSOR NO GUIDE IS NEAR (about 113 degrees out of the far end:
+	// 23 past the world +Y axis and 19 past the square, both outside the 7-degree tolerance, and
+	// 22 short of the next world axis). The default cursor is almost straight up, so that frame
+	// resolves the world axis itself and the SECOND GESTURE'S OWN first frame becomes the incumbent
+	// - hysteresis doing its job, with nothing leaked - which is how the first version of this
+	// failed on the unmutated tree.
+	if (!TestTrue(TEXT("a second depot gesture with its frontage pinned"),
+		PinFrontage(Gesture, FVector2D(4800.0, 4200.0))))
+	{
+		return false;
+	}
+	if (!TestTrue(TEXT("the second gesture pins the same frontage"),
+		(Gesture.Frontage[1] - Gesture.Frontage[0]).GetSafeNormal().Equals(Along, 1.0e-9)))
+	{
+		return false;
+	}
+
+	const FToolContext Fresh = At(92.2);
+	if (!TestTrue(TEXT("a guide is live in the second gesture"), Fresh.Guide.bActive)) { return false; }
+	TestNotEqual(TEXT("and it is not the world axis the first gesture ended holding"),
+		AngularReference(Fresh), World);
+	const SnapGuide::FCandidate* Angular = Fresh.Guide.Of(SnapGuide::EFit::Angular);
+	if (TestNotNull(TEXT("with an angular winner"), Angular))
+	{
+		TestTrue(TEXT("which is the one square to the frontage"),
+			FMath::Abs(FVector2D::DotProduct(Angular->Direction, Along)) < 1.0e-6);
+	}
 
 	return true;
 }

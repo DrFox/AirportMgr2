@@ -188,7 +188,7 @@ private:
 	/**
 	 * Node index text, gated on bDrawNodeIndices alone.
 	 *
-	 * The rings themselves come from GraphOverlay::Describe now - see DrawHUD - so this is
+	 * The rings themselves come from GraphOverlay::DescribeNodes - see DrawHUD - so this is
 	 * only the label loop that used to live inside DrawNodes. Off by default; it clutters a
 	 * dense graph.
 	 */
@@ -197,7 +197,7 @@ private:
 	/**
 	 * Anchor id text, gated on bDrawAnchorIds alone.
 	 *
-	 * The anchor rings themselves come from GraphOverlay::Describe now - see DrawHUD - so
+	 * The anchor rings themselves come from GraphOverlay::DescribeStands - see DrawHUD - so
 	 * this is only the label loop that used to live inside DrawStands.
 	 */
 	void DrawAnchorIds(const ARoadNetworkActor& Target);
