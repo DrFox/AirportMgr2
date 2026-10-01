@@ -95,7 +95,9 @@ enum class EAgentPhase : uint8;
  *  - how a vehicle moves: Airside's UGroundTraffic::SendAgentTo and its route-change seam (#429; JobBoardDrive.cpp);
  *  - the text: the ServiceText namespace (ServiceText.h).
  * What is left here is the jobs, the vehicles' lifecycle and the bidding (JobBoardBid.cpp). A new responsibility does not
- * enter by growing this file: Check-Architecture rule 77 holds every Model/*.cpp to a line budget that may only fall.
+ * enter by growing the class's .cpp files: Check-Architecture rule 77 holds JobBoard.cpp to its own figure and its siblings
+ * (JobBoardBid.cpp, JobBoardDrive.cpp) to the default every Model/*.cpp gets, a line budget that may only fall. It reads
+ * no header, this one included - a member declared here is review's to question, not the rule's.
  */
 UCLASS()
 class AIRPORTOPS_API UJobBoard : public UObject, public IOpsPersistent
