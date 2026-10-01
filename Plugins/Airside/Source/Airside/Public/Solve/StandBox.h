@@ -78,6 +78,24 @@ namespace StandBox
 		const FLetterEnvelope& Envelope);
 
 	/**
+	 * Which edge of Outline is the stand's ENTRANCE, as the index i of the edge Outline[i] -> Outline[(i + 1) % Num]: the edge whose
+	 * midpoint lies furthest BEHIND Position along Facing. INDEX_NONE for an outline of under three points.
+	 *
+	 * THE ONE SEARCH, HERE FOR THE ONE WRITER THAT STILL NEEDS IT (#450's leftover). UStandDefinitionCache::PoseFromOutline ran this on every
+	 * load and FStandMarkingBuilder::FrameFor ran a corner version of it on every rebuild; FEntityInstance::FrontageEdge stores the answer
+	 * now and both read it. What still asks is a WRITER of that field for a stand given no edge: URoadNetwork::PlaceEntity (a
+	 * point-placed or fixture stand) and URoadNetwork::EnsureStandFrontages (a stand saved before the field).
+	 *
+	 * MEASURED, NOT READ FROM A CORNER INDEX: the facade reverses a clockwise outline, which puts the drawn FAR edge at 0 -> 1, so no
+	 * index is reliably the entrance. The stand's facing survives any change of geometry, so the entrance is whatever sits furthest
+	 * behind the stop mark along it - whatever rule placed that mark. Position is the stop mark the midpoints are measured from;
+	 * it shifts every edge by the same amount and so cannot change which is rearmost, but it is taken (and subtracted, as the
+	 * reader always did) so the answer is bit-for-bit the one the readers gave. An exact tie keeps the FIRST edge, as the reader did.
+	 * ENFORCED BY: Airside.Solve.StandBox.EntranceEdgeIsTheRearmostMidpoint
+	 */
+	AIRSIDE_API int32 EntranceEdgeOf(TArrayView<const FVector2D> Outline, const FVector2D& Position, const FVector2D& Facing);
+
+	/**
 	 * PoseFor's inverse: the four corners of the letter's box at this pose, entrance edge
 	 * first. OutCorners is entrance-A, entrance-B, then the two corners inward of them, so
 	 * the entrance edge is corners 0->1 and PolygonArea is POSITIVE - the winding the pad

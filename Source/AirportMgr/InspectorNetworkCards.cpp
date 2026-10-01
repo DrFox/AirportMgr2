@@ -3,6 +3,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
+#include "Model/OpsNames.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RunwayFacts.h"
 #include "Present/OpsRuntime.h"
@@ -243,8 +244,11 @@ bool FDepotCard::Compose(const FInspectorCardInput& In, FInspectorCardView& Out)
 	// bReachable is the pose node having line on it, which for a depot means a
 	// SERVICE ROAD within its lead-in reach. The message names the fix rather than
 	// the symptom: the road is the thing the player goes and draws.
+	// THE DEPOT BY ITS NUMBER (OpsNames::DepotLabel, #490), as the job board's vehicle lines say it - not the entity INDEX (S.Index), which a bulldoze
+	// recycles into a different depot. The handle is read off the network by index, which is how DescribeStand was asked.
+	const FString DepotName = OpsNames::DepotLabel(Network, Network->EntityIdAt(S.Index));
 	Out.Title = FString::Format(
-		*NSLOCTEXT("AirportMgr", "InspectorDepotTitle", "Fuel depot {0}").ToString(), { S.Index });
+		*NSLOCTEXT("AirportMgr", "InspectorDepotTitle", "Fuel depot {0}").ToString(), { DepotName });
 	Out.Facts = S.bReachable
 		? NSLOCTEXT("AirportMgr", "InspectorDepotOnRoad", "On a service road").ToString()
 		: NSLOCTEXT("AirportMgr", "InspectorDepotNotOnRoad", "Fuel depot: not on a road").ToString();

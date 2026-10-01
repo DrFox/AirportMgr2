@@ -153,7 +153,8 @@ struct AIRSIDE_API FStandMarkingBuilder
 
 	/**
 	 * Entity's paint frame, or false when Entity is not a live drawn stand. The letter and
-	 * setback are Build()'s own derivation - see Build's header.
+	 * setback are Build()'s own derivation - see Build's header. The entrance is the stand's STORED edge
+	 * (FEntityInstance::FrontageEdge, #450's leftover); a stand with none is painted at the floor setback, not dropped.
 	 */
 	static bool FrameFor(const FEntityInstance& Entity, const FLetterEnvelopeTable& Envelopes, FStandPaintFrame& Out);
 
@@ -163,10 +164,12 @@ struct AIRSIDE_API FStandMarkingBuilder
 	 * painted.
 	 *
 	 * For each alive entity with IsStand() && IsPlotted(): the entrance midpoint is the
-	 * outline's rearmost reach along the pose's Facing, centred on the pose - measured, not
-	 * read from Outline[0..1], because URoadEditFacade::PlaceStandInPlot reverses a clockwise
+	 * stored entrance edge's reach along the pose's Facing, centred on the pose - read off
+	 * FEntityInstance::FrontageEdge (which says where the entrance is in the stored array), NOT assumed
+	 * to be Outline[0..1], because URoadEditFacade::PlaceStandInPlot reverses a clockwise
 	 * outline (and swaps which of its two ORIGINAL corners is "entrance A/B" to match), which
-	 * moves the entrance edge off indices 0->1 of the STORED array. NOT derived from the pose
+	 * moves the entrance edge off indices 0->1 of the STORED array. It was the outline's
+	 * rearmost corner, searched on every rebuild, until #450's leftover stored the edge. NOT derived from the pose
 	 * since 2026-09-27: StandBox::PoseFor now measures the pose from the far edge, so the
 	 * entrance-to-stop distance varies with the depth drawn. L is
 	 * the letter LetterForWingspan(DesignWingspan) reads back, or Code C - the same fallback

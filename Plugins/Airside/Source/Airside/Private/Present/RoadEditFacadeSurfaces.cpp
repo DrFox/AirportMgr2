@@ -32,6 +32,28 @@
 #include "Tool/PlotGesture.h"
 #include "Present/RoadEditHistory.h"
 
+// NAMED, NOT ANONYMOUS: the plugin is a UNITY build, and an anonymous helper of a common name compiles alone and collides with another file's copy.
+namespace RoadEditFacadeSurfacesLocal
+{
+	/**
+	 * Which edge of Outline runs EXACTLY from A to B, as the index i of the edge Outline[i] -> Outline[(i + 1) % Num]; INDEX_NONE when none does.
+	 * Exact equality and not a nearest-midpoint guess: the caller's points are the same floats it copied the outline's corners from, and a pair that
+	 * is not an edge is a caller that has not understood "given, not searched for" - see PlaceEntityInPlot's own comment on what it does about that.
+	 * One loop for the depot's plot and the stand's, so the two cannot come to mean different things by "the given edge".
+	 */
+	int32 EdgeIndexOf(const TArray<FVector2D>& Outline, const FVector2D& A, const FVector2D& B)
+	{
+		for (int32 Corner = 0; Corner < Outline.Num(); ++Corner)
+		{
+			if (Outline[Corner] == A && Outline[(Corner + 1) % Outline.Num()] == B)
+			{
+				return Corner;
+			}
+		}
+		return INDEX_NONE;
+	}
+}
+
 bool URoadEditFacade::Travel(TFunctionRef<URoadNetwork*(URoadEditHistory&, URoadNetwork&)> Step)
 {
 	ARoadNetworkActor& Owner = Actor();
@@ -455,15 +477,7 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 	// same floats, copied, and a frontage that is not an edge of its own outline is a caller that has not understood the
 	// contract ("given, not searched for") - refused, where a nearest-edge guess would have built a yard facing the wrong
 	// side and said nothing.
-	int32 FrontageEdge = INDEX_NONE;
-	for (int32 Corner = 0; Corner < Wound.Num(); ++Corner)
-	{
-		if (Wound[Corner] == FrontageA && Wound[(Corner + 1) % Wound.Num()] == FrontageB)
-		{
-			FrontageEdge = Corner;
-			break;
-		}
-	}
+	const int32 FrontageEdge = RoadEditFacadeSurfacesLocal::EdgeIndexOf(Wound, FrontageA, FrontageB);
 	if (FrontageEdge == INDEX_NONE)
 	{
 		UE_LOG(LogRoadMesh, Warning,
@@ -904,6 +918,23 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 		Swap(A, B);
 	}
 
+	// THE ENTRANCE MUST BE AN EDGE OF THE OUTLINE, REFUSED OTHERWISE - PlaceEntityInPlot's own rule for a depot's frontage, so a stand's plot and a
+	// depot's agree (#450's leftover). The edge of the wound outline that runs from A to B (swapped with the outline above, so in Wound's own direction)
+	// is STORED on the entity for the pose and paint readers; a pair that is no edge is a caller that has not understood "given, not searched for", and a
+	// nearest-edge guess would have built a stand facing the wrong side and said nothing. Refused here, after the winding is settled and BEFORE the
+	// letter, the definition or the quote - nothing is charged or opened. It lives at the commit and not in WhyStandRefused for the depot's reason: that
+	// evaluator is the OUTLINE's alone (the tool's readout asks it every frame with no entrance to give), and "the two halves and nothing more" is
+	// what Airside.Present.StandPlot.WhyStandRefusedIsTheTwoHalves holds.
+	// ENFORCED BY: Airside.Model.StandFrontage.RefusesAnEntranceThatIsNotAnEdge
+	const int32 EntranceEdge = RoadEditFacadeSurfacesLocal::EdgeIndexOf(Wound, A, B);
+	if (EntranceEdge == INDEX_NONE)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceStandInPlot refused: the entrance (%.0f, %.0f)-(%.0f, %.0f) is not an edge of the outline."),
+			A.X, A.Y, B.X, B.Y);
+		return INDEX_NONE;
+	}
+
 	const TOptional<EIcaoCode> Letter = StandBox::LetterOf(Wound);
 	// GUARANTEED SET: WhyStandRefused's size gate above already refused anything smaller
 	// than the smallest stand letter's floor (IcaoCode::SmallestStandLetter), which is the
@@ -960,6 +991,11 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 	Placement.Heading = RoadGeom::Bearing(Pose.Facing);
 	Placement.PoseRole = Definition->PoseRole;
 	Placement.Outline = Wound;
+
+	// THE ENTRANCE EDGE, STORED (#450's leftover) - found above, before anything was priced: it is the fact the gesture knew and the entity forgot,
+	// which UStandDefinitionCache::PoseFromOutline and FStandMarkingBuilder::FrameFor each re-derived by a heuristic of their own on every load and
+	// every rebuild. They read it now.
+	Placement.FrontageEdge = EntranceEdge;
 
 	// THE WIDEST SPAN THAT STILL READS BACK AS THIS LETTER - see
 	// IcaoCode::DesignSpanForLetter's own header for why MaxWingspanForLetter's ceiling

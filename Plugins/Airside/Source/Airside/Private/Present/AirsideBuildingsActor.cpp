@@ -351,8 +351,16 @@ void AAirsideBuildingsActor::ShowPlotGhosts(bool bVisible, FEntityInstanceId Onl
 	{
 		return;
 	}
-	const FString Whose = Only.IsSet() ? FString::Printf(TEXT("depot %d only"), Only.Index) : FString(TEXT("every plot"));
-	UE_LOG(LogAirside, Log, TEXT("Plots: ghost bays drawn for %s"), *Whose);
+	// A DIAGNOSTIC, SO IT NAMES THE SLOT (Only.Index), as the other depot log lines do (#490): split into two log calls so the line is a log call and not a
+	// Printf'd string that could be shown to the player - Check-Architecture rule 68's depot twin reads a depot's index in a Printf as player-facing text.
+	if (Only.IsSet())
+	{
+		UE_LOG(LogAirside, Log, TEXT("Plots: ghost bays drawn for depot %d only"), Only.Index);
+	}
+	else
+	{
+		UE_LOG(LogAirside, Log, TEXT("Plots: ghost bays drawn for every plot"));
+	}
 	ARoadNetworkActor* Road = Bound.Get();
 	if (Road != nullptr && Road->Network != nullptr)
 	{

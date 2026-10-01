@@ -176,19 +176,37 @@ bool FStandMarkingBuilder::FrameFor(const FEntityInstance& Entity, const FLetter
 	// THE ENTRANCE IS READ OFF THE OUTLINE, not derived from the pose, since 2026-09-27: the
 	// pose is now measured from the FAR edge (StandBox::PoseFor), so on a stand drawn deeper
 	// than its floor the entrance is further behind the stop mark than EntranceSetback, and only
-	// the outline knows by how much. The entrance is the outline's rearmost reach along Facing,
-	// measured rather than read from a corner index for PoseFor's own reason - the facade
-	// reverses a clockwise outline. Centred across on the pose, which PoseFor centres on the
-	// entrance. An outline of under three corners (a stand nobody drew) falls back to the
-	// floor figure its migrated box was built with - Code C's floor for an unknown letter.
+	// the outline knows by how much. THE OUTLINE'S ENTRANCE EDGE IS READ, NOT SEARCHED FOR (#450's leftover): this
+	// used to take the rearmost CORNER along Facing on every rebuild, measured rather than read from a corner index
+	// for PoseFor's own reason - the facade reverses a clockwise outline - and now reads the edge placement stored
+	// (FEntityInstance::FrontageEdge; the pose reader reads the same one, where it used to search by midpoint). Its
+	// reach is the rearmost of the edge's two ends: for the stand the game makes - a rectangle whose entrance faces
+	// its stop mark - both ends are level along Facing and it is the rearmost corner as before, which the pin measures
+	// on every fixture; for a stand whose rearmost corner is NOT on its entrance, it is the entrance that is painted from.
+	// ENFORCED BY: Airside.Model.StandFrontage.StoredEdgeIsTodaysHeuristicAnswer, Airside.Model.StandFrontage.ReadersReadTheStoredEdge
+	// Centred across on the pose, which PoseFor centres on the entrance.
+	//
+	// A STAND WITH NO STORED ENTRANCE (an outline the migration has not reached) falls back to the floor figure its migrated
+	// box was built with - Code C's floor for an unknown letter, the figure a stand nobody drew has always been painted
+	// from - rather than losing its paint, and says so once: EnsureStandFrontages runs before any rebuild in both load paths.
+	// ENFORCED BY: Airside.Model.StandFrontage.MigrationStoresTheEntranceOnce (both load paths store it, after the outlines), Airside.Present.StandPlot.OldPoseRederivedOnLoad
+	// (the migration ahead of what reads it)
 	double Behind = -StandBox::EntranceSetback(DepthLetter, GlyphLetter.IsSet()
 		? Envelopes[DepthLetter] : IcaoCode::FloorEnvelopeForLetter(DepthLetter));
-	if (Entity.Outline.Num() >= 3)
+	FVector2D EntranceA, EntranceB;
+	if (Entity.GetFrontage(EntranceA, EntranceB))
 	{
-		Behind = DBL_MAX;
-		for (const FVector2D& Corner : Entity.Outline)
+		Behind = FMath::Min(FVector2D::DotProduct(EntranceA - Entity.Position, Facing),
+			FVector2D::DotProduct(EntranceB - Entity.Position, Facing));
+	}
+	else
+	{
+		static bool bWarned = false;
+		if (!bWarned)
 		{
-			Behind = FMath::Min(Behind, FVector2D::DotProduct(Corner - Entity.Position, Facing));
+			bWarned = true;
+			UE_LOG(LogAirside, Warning,
+				TEXT("FStandMarkingBuilder: a drawn stand has no stored entrance edge (EnsureStandFrontages did not run?) - painted at the floor setback."));
 		}
 	}
 	Out.Setback = -Behind;

@@ -1319,8 +1319,9 @@ public:
 	 * after serialisation and registration) and a save game's (URoadEditFacade::RestoreInPlace, after OpsSave has
 	 * deserialised into the live network). Before RebuildMesh in both, since every repair here feeds the rebuild.
 	 *
-	 *   outlines, then numbers - URoadNetwork::PostLoad's pair, which a save game never gets (OpsSave::Restore is
-	 *     Serialize alone); a no-op after a level's PostLoad already ran them;
+	 *   outlines, then numbers (stands' and depots'), then the frontages (a depot's, then a stand's entrance - #450) -
+	 *     URoadNetwork::PostLoad's list, which a save game never gets (OpsSave::Restore is Serialize alone); a no-op
+	 *     after a level's PostLoad already ran them;
 	 *   definitions - a D/E/F stand's is a runtime object no later session has (RebindStandDefinitions);
 	 *   anchors - a definition re-authored since the save (UEntityDefinition::RefreshResolvedAnchors);
 	 *   the default profile - URoadNetwork::RepointTransientDefaultProfile, the one reference the network blob holds

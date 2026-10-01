@@ -325,17 +325,23 @@ struct AIRSIDE_API FEntityInstance
 
 	/**
 	 * Which edge of Outline is the plot's FRONTAGE - the one on the road - as the index i of the edge
-	 * Outline[i] -> Outline[(i + 1) % Num]. INDEX_NONE for a plop with no plot and for a stand, whose
-	 * entrance the stand code still finds by its own rule (#450 stored the depot's frontage and left those readers).
+	 * Outline[i] -> Outline[(i + 1) % Num]. INDEX_NONE for a plop with no plot. A STAND stores its ENTRANCE edge here, the one its stop
+	 * mark faces away from (#450's leftover); a stand with no outline yet has no edge to store.
 	 *
 	 * STORED, NOT RECOVERED. A plotted depot's frontage was a fact the gesture knew and the entity
 	 * forgot, so three readers each re-derived it by their own heuristic (the depot by the edge whose
 	 * midpoint is nearest Position, the stand cache by the rearmost midpoint, the stand paint by the
 	 * rearmost corner) and agreed only while a comment said they would. The facade writes the edge it was
-	 * GIVEN (URoadEditFacade::PlaceEntityInPlot), so DepotKit::ReservationOf hands the solve exactly what
-	 * the tool's preview and the commit handed it.
-	 * ENFORCED BY: Check-Architecture rule 4 row 'FEntityInstance::FrontageEdge write' (the facade, PlaceEntity's copy and
-	 * EnsureDepotFrontages are the only production writers)
+	 * GIVEN (URoadEditFacade::PlaceEntityInPlot, PlaceStandInPlot), so DepotKit::ReservationOf hands the solve exactly what
+	 * the tool's preview and the commit handed it, and the stand's pose (UStandDefinitionCache) and paint (FStandMarkingBuilder)
+	 * read the same edge instead of each searching for it.
+	 *
+	 * THE ONE STAND SEARCH SURVIVES AS A WRITER, StandBox::EntranceEdgeOf, for the stand that was given no edge: a point-placed or
+	 * fixture stand (PlaceEntity with an outline and no frontage) and one loaded from before the field existed
+	 * (URoadNetwork::EnsureStandFrontages). It is the rule the two stand readers used to run on every call, run once at the door - so what
+	 * is drawn does not move.
+	 * ENFORCED BY: Check-Architecture rule 4 row 'FEntityInstance::FrontageEdge write' (the facade, PlaceEntity's copy and the load
+	 * migrations are the only production writers), Airside.Model.StandFrontage.StoredEdgeIsTodaysHeuristicAnswer
 	 *
 	 * ASKING FAnchorLink AGAIN WAS REJECTED, as the old recovery's comment said: it would search the live
 	 * graph, so a road laid or deleted after the depot was built could move the frontage, and every shed
@@ -426,6 +432,19 @@ struct AIRSIDE_API FEntityInstance
 	 */
 	UPROPERTY() int32 StandNumber = 0;
 
+	/**
+	 * The depot's number as the player reads it - the inspector card's title and the lines that say where a service vehicle is
+	 * going or sitting ("to depot 3"). 1..N per airport in placement order; 0 means not a depot (a stand) or not yet numbered (a depot
+	 * saved before 2026-10-01, until URoadNetwork::EnsureStandNumbers gives it one).
+	 *
+	 * STANDNUMBER'S TWIN, FOR STANDNUMBER'S REASON (#490): every depot label printed the entity INDEX, which RoadSlot recycles into a
+	 * different depot after a delete, so a player who bulldozed depot 1 and built another read "depot 1" beside their memory of it.
+	 * ISSUED BY URoadNetwork::PlaceEntity FROM A SAVED COUNTER (NextDepotNumber) AND NEVER REUSED. A SEPARATE FIELD AND COUNTER rather than one
+	 * "display number" shared with stands: a stand's number is painted on the ground and a depot's is not, and "stand 3" and "depot 3"
+	 * are two different things the player counts separately. ENFORCED BY: Airside.Model.DepotNumbers.
+	 */
+	UPROPERTY() int32 DepotNumber = 0;
+
 	UPROPERTY() int32 Generation = 0;
 	UPROPERTY() bool  bAlive = false;
 };
@@ -468,7 +487,8 @@ struct AIRSIDE_API FEntityPlacement
 	/** The drawn plot, world space, implicitly closed. Empty for an ordinary plop. */
 	TArray<FVector2D> Outline;
 
-	/** Which edge of Outline is the frontage - see FEntityInstance::FrontageEdge. INDEX_NONE for a plop and a stand. */
+	/** Which edge of Outline is the frontage - see FEntityInstance::FrontageEdge. A depot's: the facade states it (INDEX_NONE for a plop).
+	 *  A stand's entrance when the facade was given one; INDEX_NONE = PlaceEntity derives it (StandBox::EntranceEdgeOf). */
 	int32 FrontageEdge = INDEX_NONE;
 
 	/** What fills the bays, in bay order. Empty for an ordinary plop. */

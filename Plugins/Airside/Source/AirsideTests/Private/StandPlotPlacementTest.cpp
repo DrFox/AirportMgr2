@@ -881,11 +881,19 @@ bool FStandPlotOldPoseRederivedOnLoadTest::RunTest(const FString& Parameters)
 	const FEntityInstanceId Id = Actor->Network->PlaceEntity(Placement);
 	if (!TestTrue(TEXT("the old stand is in the model"), Id.IsSet())) { return false; }
 
+	// A LEGACY MAP'S STAND STORES NO ENTRANCE (#450's leftover): PlaceEntity above stored one, as it does for every stand now, so it is cleared - a level
+	// saved before the field existed loads this way. The pose repair below reads the STORED edge, so what this measures is the repair's ORDER:
+	// EnsureStandFrontages migrates it first and RebindStandDefinitions then re-poses from it. Swapped, the rebind finds none, leaves the stand as it was and
+	// this goes red at the pose.
+	FRoadNetworkTestAccess(*Actor->Network).SetEntityFrontageForTest(Id, INDEX_NONE);
+	if (!TestEqual(TEXT("the premise: the legacy stand stores no entrance before the load"), Actor->Network->GetEntity(Id)->FrontageEdge, static_cast<int32>(INDEX_NONE))) { return false; }
+
 	// THE LOAD PATH - see RebindsAfterLevelLoad.
 	Actor->ReregisterAllComponents();
 
 	const FEntityInstance* Loaded = Actor->Network->GetEntity(Id);
 	if (!TestNotNull(TEXT("the stand is still there"), Loaded)) { return false; }
+	TestTrue(TEXT("the load migrated its entrance (before the rebind that reads it)"), Loaded->FrontageEdge != INDEX_NONE);
 	UEntityDefinition* BDefinition = Actor->ResolveStandDefinitionFor(EIcaoCode::B);
 	TestTrue(TEXT("rebound to Code B's definition"), Loaded->Definition.Get() == BDefinition && BDefinition != nullptr);
 

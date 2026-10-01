@@ -533,15 +533,50 @@ $AllowedCallers = @(
         ProdReason  = 'FApronDrawTool is the one client of the closing-polygon gesture (#450); a second one is the moment to fold or re-justify it'
     },
     @{
-        # THE FRONTAGE EDGE HAS THREE WRITERS AND NO MORE (#450, PR #491 review): the facade's PlaceEntityInPlot (the edge it was GIVEN, looked
-        # up in the outline it stores), URoadNetwork::PlaceEntity (copying the placement's onto the instance) and the load migration
-        # EnsureDepotFrontages; RoadEntity.h holds the two defaults. A writer anywhere else is a second opinion on where a plot faces - the
-        # heuristics this field replaced. Tests set Placement.FrontageEdge to say which edge a fixture means, and are exempt.
+        # THE FRONTAGE EDGE HAS A FEW WRITERS AND NO MORE (#450, PR #491 review; a stand's entrance too since #450's leftover): the facade's
+        # PlaceEntityInPlot and PlaceStandInPlot (the edge each was GIVEN, looked up in the outline it stores), URoadNetwork::PlaceEntity (copying the
+        # placement's onto the instance, and giving a stand that was given none the one StandBox::EntranceEdgeOf answer) and the load migrations
+        # EnsureDepotFrontages / EnsureStandFrontages; RoadEntity.h holds the two defaults. A writer anywhere else is a second opinion on where a
+        # plot faces - the heuristics this field replaced. Tests set Placement.FrontageEdge to say which edge a fixture means, and are exempt.
         Name        = 'FEntityInstance::FrontageEdge write'
         Pattern     = '\bFrontageEdge\s*=(?!=)'
         ProdAllowed = @('Public\Model\RoadEntity.h', 'Private\Model\RoadNetwork.cpp', 'Private\Present\RoadEditFacadeSurfaces.cpp')
         TestExempt  = $true
-        ProdReason  = 'FrontageEdge is written by PlaceEntityInPlot (the edge it was given), PlaceEntity (the copy) and EnsureDepotFrontages (the load migration) only (#450)'
+        ProdReason  = 'FrontageEdge is written by PlaceEntityInPlot / PlaceStandInPlot (the edge each was given), PlaceEntity (the copy, and the default for a stand given none) and EnsureDepotFrontages / EnsureStandFrontages (the load migrations) only (#450)'
+    },
+    @{
+        # RULE 79 (#490): A DEPOT IS NAMED BY ITS NUMBER, NOT ITS ENTITY INDEX. RoadSlot recycles a freed slot, so the index in "Fuel depot 1" or "to
+        # depot 1" named a different depot after a bulldoze. FEntityInstance::DepotNumber is issued by PlaceEntity from NextDepotNumber and
+        # backfilled by EnsureStandNumbers - and by no one else: a second writer is a second numbering that the card and the vehicle lines would not agree with.
+        Name        = 'FEntityInstance::DepotNumber write (rule 79)'
+        Pattern     = '\b(?:Next)?DepotNumber\s*=(?!=)|\bNextDepotNumber\s*\+\+|\+\+\s*NextDepotNumber'
+        ProdAllowed = @('Public\Model\RoadEntity.h', 'Public\Model\RoadNetwork.h', 'Private\Model\RoadNetwork.cpp')
+        TestExempt  = $true
+        ProdReason  = 'a depot is numbered by URoadNetwork::PlaceEntity (and the EnsureStandNumbers backfill) only - a second writer is a second numbering (#490)'
+    },
+    @{
+        # RULE 79 (#490), THE READ SIDE: the three job-board sentences that say where a service vehicle is ("to depot / refilling at depot / at depot")
+        # and the depot card's title once printed the entity index. OpsNames::DepotLabel is the one wording; the shape to keep out is a depot sentence
+        # built from an index. (A log line may still print Home.Index - a diagnostic names the slot - and is not matched: the sentences are the whole
+        # string literal, and the card's title is the Format call over a one-field index.)
+        Name        = 'depot named by its entity index in a player-facing line (rule 79)'
+        Pattern     = 'TEXT\("(?:to |refilling at |at )depot %d"\)|depot \{0\}"\)\.ToString\(\)\s*,\s*\{\s*\w+\.Index\b'
+        ProdAllowed = @()
+        TestExempt  = $true
+        ProdReason  = 'name the depot with OpsNames::DepotLabel (its DepotNumber) - the entity index is recycled by a delete, so it names a different depot afterwards (#490)'
+    },
+    @{
+        # RULE 80 (#450's leftover): THE STAND READERS READ THE STORED ENTRANCE, THEY DO NOT SEARCH. StandBox::EntranceEdgeOf is the old pose
+        # reader's rearmost-midpoint search, moved to the one writer that still needs it (URoadNetwork: PlaceEntity for a stand given no edge, and
+        # EnsureStandFrontages for one saved before the field). UStandDefinitionCache::PoseFromOutline and FStandMarkingBuilder::FrameFor read
+        # FEntityInstance::GetFrontage now; a reader that asks EntranceEdgeOf is searching again, and "the stand cache and the paint agree" is a
+        # comment again. BEST EFFORT, and it says so: a reader that re-typed the loop inline is not seen here - Airside.Model.StandFrontage.
+        # ReadersReadTheStoredEdge is the half that measures the read.
+        Name        = 'StandBox::EntranceEdgeOf callers (rule 80)'
+        Pattern     = '\bEntranceEdgeOf\s*\('
+        ProdAllowed = @('Public\Solve\StandBox.h', 'Private\Solve\StandBox.cpp', 'Private\Model\RoadNetwork.cpp')
+        TestExempt  = $true
+        ProdReason  = 'read FEntityInstance::GetFrontage, the entrance edge placement or the load migration stored; only URoadNetwork writes it, with this search (#450)'
     },
     @{
         # HOW A VEHICLE CAME IS WRITTEN WHERE IT IS MADE (#450/#487, PR #491 review): FServiceFleet::Create sets Origin for Add (Bought or
@@ -558,8 +593,8 @@ $AllowedCallers = @(
         # THE FRONTAGE IS STORED, NOT RECOVERED (#450). DepotKit::RecoverFrontage guessed it from the edge whose midpoint was nearest
         # Position; FEntityInstance::FrontageEdge holds the edge the facade was GIVEN. Nothing may bring the guess back under its old
         # name, tests included - a fixture says which edge it means (Placement.FrontageEdge) rather than leaving the solve to search.
-        # (The stand readers - StandDefinitionCache's rearmost midpoint, StandMarkingBuilder's rearmost corner - still search; #450
-        # left them, and this row does not cover their names.)
+        # (The stand readers - StandDefinitionCache's rearmost midpoint, StandMarkingBuilder's rearmost corner - read the stored entrance
+        # now, which rule 80's row 'StandBox::EntranceEdgeOf callers' keeps from searching again; this row covers the depot's name.)
         Name        = 'RecoverFrontage'
         Pattern     = '\bRecoverFrontage\s*\('
         ProdAllowed = @()
@@ -682,10 +717,11 @@ $AllowedCallers = @(
         # ONE REPAIR FUNCTION FOR BOTH LOADS (#426). The save-game load ran two of the four load-time repairs a level
         # gets, under a comment claiming it ran them all; ARoadNetworkActor::RepairLoadedNetwork is the one list now,
         # called by PostRegisterAllComponents and by URoadEditFacade::RestoreInPlace. A repair called from a second
-        # production site is a second list that will drift from the first. EnsureStand* are also URoadNetwork::PostLoad's
-        # own pair (RoadNetwork.cpp, the definition file), which a level's asset load runs first.
+        # production site is a second list that will drift from the first. EnsureStand* and EnsureDepotFrontages are also
+        # URoadNetwork::PostLoad's own list (RoadNetwork.cpp, the definition file), which a level's asset load runs first.
+        # (The two frontage migrations joined the row with #450's leftover: they are repairs of the same two loads.)
         Name        = 'load-time repairs'
-        Pattern     = '\b(RefreshResolvedAnchors|EnsureStandOutlines|EnsureStandNumbers|RepointTransientDefaultProfile)\s*\('
+        Pattern     = '\b(RefreshResolvedAnchors|EnsureStandOutlines|EnsureStandNumbers|EnsureDepotFrontages|EnsureStandFrontages|RepointTransientDefaultProfile)\s*\('
         ProdAllowed = @('Public\Entities\EntityDefinition.h', 'Private\Entities\EntityDefinition.cpp', 'Public\Model\RoadNetwork.h', 'Private\Model\RoadNetwork.cpp', 'Private\Present\RoadNetworkActor.cpp')
         TestExempt  = $true
         ProdReason  = 'a load-time repair runs from ARoadNetworkActor::RepairLoadedNetwork only - add it there, not beside a load'
@@ -4072,7 +4108,7 @@ if (-not (Test-Path $sunPathCpp) -or -not (Test-Path $sunDriverCpp)) {
 }
 $ranRules.Add('night-defined-once')
 
-# --- 68. TEXT IS NOT COMPARED TO A LITERAL, AND A STAND IS NOT PRINTED BY INDEX (#447) --------------------------------
+# --- 68. TEXT IS NOT COMPARED TO A LITERAL, AND A STAND OR A DEPOT IS NOT PRINTED BY INDEX (#447, #490) -----------------
 # Two shapes that shipped, each checked over STATEMENTS (comments and strings stripped, continuation lines JOINED to the statement's end - up to eight
 # lines, to `;`, `{`, `}` or a `:`, rule 58's joining) because BOTH were split across two lines and a line-by-line row could not see either:
 #   a. `.EqualTo(` then `NSLOCTEXT(`: the arrivals panel recovered "holding" by comparing the status's localised text against a copy of the word -
@@ -4082,12 +4118,20 @@ $ranRules.Add('night-defined-once')
 #      stand card and the painted sign say StandNumber; the depot card's backlog and the JobUnserviceable alert printed the index ("stand 0" beside a sign
 #      reading 4). OpsNames::StandLabel is the ops layer's one naming. OpsEventBus.cpp's event Describe strings are LOG text (beside the flight and agent
 #      ids, where the index is what a developer reads), and UE_LOG lines are not Printf/AsNumber/Format calls, so neither is player-facing text here.
+#   c. THE DEPOT TWIN OF b (#490): the depot card's title and the job board's "to depot / refilling at depot / at depot" lines printed the depot's entity index
+#      (`Fuel depot {0}` over `S.Index`; `Vehicle.Home.Index`), which a delete recycles into a different depot. OpsNames::DepotLabel is the one naming (the depot's
+#      DepotNumber). Flagged: `FString::Printf`, `FString::Format`, `FText::AsNumber` or `FText::Format` in a statement with `Home.Index` or `Depot.Index`, OR
+#      with a string literal naming a depot ("depot", any case) and `.Index` after it. The literal half is read off the statement with its STRINGS KEPT (the
+#      code-stripped statement the other halves read has them emptied). The card names the depot in a statement of its own (`const FString DepotName =
+#      OpsNames::DepotLabel(...)`) and formats that, so the fix does not trip the rule it is under. OpsEventBus.cpp's Describe lines are log text, as for b.
 # DOES NOT SEE: an index carried in a local first (`const int32 S = Job.Stand.Index;`) and printed from that, or a statement over eight lines - the
-# behaviour half is AirportOps.Model.StandLabel.AlertBacklogAndCardSayTheSameNumber. Test files are exempt. Mutation-checked with the EXACT two lines
+# behaviour half is AirportOps.Model.StandLabel.AlertBacklogAndCardSayTheSameNumber (stands) and AirportOps.Model.DepotLabel.VehicleLinesSayTheDepotsNumber (depots). Test files are exempt. Mutation-checked with the EXACT two lines
 # from 891ecb66 ArrivalsPanelWidget.cpp:130-131 (the PR body has the output).
 $textRuleTrees = @((Join-Path $Root 'Plugins\Airside\Source'), (Join-Path $Root 'Plugins\AirportOps\Source'), (Join-Path $Root 'Source\AirportMgr'))
 $textEqualTo  = '\.EqualTo\s*\(\s*NSLOCTEXT\s*\('
 $standPrinted = '(?:FString::Printf|FText::AsNumber|FText::Format)\b[^;{}]*\bStand\s*\.\s*Index\b'
+$depotPrinted = '(?:FString::Printf|FString::Format|FText::AsNumber|FText::Format)\b[^;{}]*\b(?:Home|Depot)\s*\.\s*Index\b'
+$depotLiteralIndexed = '(?i)(?:FString::Printf|FString::Format|FText::AsNumber|FText::Format)\b[^;{}]*"[^"]*\bdepot\b[^"]*"[^;]*\.\s*Index\b'
 $textRuleFiles = 0
 foreach ($textTree in $textRuleTrees) {
     foreach ($file in Get-Sources $textTree @('.cpp', '.h')) {
@@ -4095,17 +4139,21 @@ foreach ($textTree in $textRuleTrees) {
         $textRuleFiles++
         $lines = Get-Content -LiteralPath $file.FullName
         $inBlock = $false
+        $inBlockKeepingStrings = $false
         $statement = ''
+        $statementKeepingStrings = ''
         $statementStart = 0
         $statementLines = 0
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $trimmed = (Strip-ArchCode $lines[$i] ([ref]$inBlock)).Trim()
+            $keptStrings = (Strip-ArchComments $lines[$i] ([ref]$inBlockKeepingStrings)).Trim()
             $flush = $false
             if ($trimmed -eq '') {
                 $flush = $statement -ne ''
             } else {
                 if ($statement -eq '') { $statementStart = $i }
                 $statement += ' ' + $trimmed
+                $statementKeepingStrings += ' ' + $keptStrings
                 $statementLines++
                 $flush = ($trimmed -match '[;{}:]$') -or ($statementLines -ge 8)
             }
@@ -4116,7 +4164,11 @@ foreach ($textTree in $textRuleTrees) {
                 if ($statement -match $standPrinted -and $file.Name -ne 'OpsEventBus.cpp') {
                     $failures.Add("text-not-compared-or-indexed: $($file.FullName):$($statementStart + 1) prints a stand's entity index to the player - name it with OpsNames::StandLabel, the number on its sign (a delete recycles the index) (#447): $($statement.Trim())")
                 }
+                if (($statement -match $depotPrinted -or $statementKeepingStrings -match $depotLiteralIndexed) -and $file.Name -ne 'OpsEventBus.cpp') {
+                    $failures.Add("text-not-compared-or-indexed: $($file.FullName):$($statementStart + 1) prints a depot's entity index to the player - name it with OpsNames::DepotLabel, its DepotNumber (a delete recycles the index) (#490): $($statementKeepingStrings.Trim())")
+                }
                 $statement = ''
+                $statementKeepingStrings = ''
                 $statementLines = 0
             }
         }
@@ -4531,6 +4583,8 @@ $ranRules.Add('bus-reentry-guarded')
 #  (c) a listed file that is gone, or now fits the default, fails until its row goes, so the list cannot rot into a
 #      record of files that were once big.
 # Every line counts, a WHY comment included (rule 49's reason: a budget must not be gameable by deleting one).
+# RoadNetwork.cpp's figure was raised 2200 -> 2287 by #495 (#490/#450 load migrations: the depot number backfill, EnsureStandFrontages and the stand-entrance
+# default in PlaceEntity, each with its WHY comment) - the one raise, named in the row, that this rule's (a) asks for.
 # THE FIGURES ARE 2026-10-01's, measured after #427's extraction (JobBoard.cpp 1549 -> 1048, with #491's lines rebased in). The default is 800: on that
 # date the largest Model file under it was VehicleFit.cpp at 768, so no file was given room it had never had.
 # DOES NOT SEE: a responsibility added to a NEW file beside the old one (which is the extraction this wants, and review's to
@@ -4539,7 +4593,7 @@ $ranRules.Add('bus-reentry-guarded')
 $modelLineDefault = 800
 $modelLineSlack = 50
 $modelLineBudget = [ordered]@{
-    'Plugins\Airside\Source\Airside\Private\Model\RoadNetwork.cpp'            = 2200
+    'Plugins\Airside\Source\Airside\Private\Model\RoadNetwork.cpp'            = 2287   # raised from 2200 by #495: #490/#450 load migrations (depot backfill in EnsureStandNumbers, EnsureStandFrontages, the stand-entrance default in PlaceEntity)
     'Plugins\Airside\Source\Airside\Private\Model\GroundTraffic.cpp'          = 2121
     'Plugins\Airside\Source\Airside\Private\Model\TrafficClaims.cpp'          = 1898
     'Plugins\AirportOps\Source\AirportOps\Private\Model\FlightBoard.cpp'      = 1746

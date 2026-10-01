@@ -460,6 +460,11 @@ void URoadNetwork::CopyFrom(const URoadNetwork& Source)
 	// advances, so a copy that kept its own would let a restored network re-issue a number a
 	// deleted stand had already worn - see the field's comment on why numbers are never reissued.
 	NextStandNumber = Source.NextStandNumber;
+
+	// ITS TWIN, FOR THE SAME REASON (#490): NextDepotNumber only ever advances too, so a restored or ghost copy that kept its own would re-issue
+	// a number a bulldozed depot had already worn. Written beside NextStandNumber so the next counter added is not left out of one of them.
+	// ENFORCED BY: Airside.Model.CopyFromCoversEveryProperty (the counter), Airside.Model.DepotNumbers (a copy keeps each depot's own number)
+	NextDepotNumber = Source.NextDepotNumber;
 }
 
 void URoadNetwork::RestoreFrom(const URoadNetwork& Snapshot)
@@ -1296,6 +1301,13 @@ bool FRoadNetworkTestAccess::SetEntityOutlineForTest(FEntityInstanceId Entity, T
 		return false;
 	}
 	Found->Outline = MoveTemp(Outline);
+	// THE FRONTAGE FOLLOWS THE OUTLINE IT INDEXES (FEntityInstance::FrontageEdge): a stand's entrance is the one search's answer for the outline just
+	// written, or none for an outline of under three points. A DEPOT'S is left alone - nothing here can know which edge a drawn depot faced.
+	if (Found->IsStand())
+	{
+		Found->FrontageEdge = StandBox::EntranceEdgeOf(Found->Outline, Found->Position,
+			FVector2D(FMath::Cos(Found->Heading), FMath::Sin(Found->Heading)));
+	}
 	return true;
 }
 
@@ -1315,8 +1327,21 @@ void FRoadNetworkTestAccess::ClearStandNumbersForTest()
 	for (FEntityInstance& Instance : Network.Entities)
 	{
 		Instance.StandNumber = 0;
+		Instance.DepotNumber = 0;
 	}
 	Network.NextStandNumber = 1;
+	Network.NextDepotNumber = 1;
+}
+
+bool FRoadNetworkTestAccess::SetEntityFrontageForTest(FEntityInstanceId Entity, int32 FrontageEdge)
+{
+	FEntityInstance* Found = Network.GetEntityMutable(Entity);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	Found->FrontageEdge = FrontageEdge;
+	return true;
 }
 
 bool FRoadNetworkTestAccess::SetEntityPavementForTest(FEntityInstanceId Entity, EPavement Pavement)
@@ -1553,6 +1578,9 @@ void URoadNetwork::PostLoad()
 	EnsureStandOutlines();
 	EnsureStandNumbers();
 	EnsureDepotFrontages();
+	// AFTER EnsureStandOutlines, which gives a legacy stand the outline its entrance is an edge of.
+	// ENFORCED BY: Airside.Model.StandFrontage.MigrationStoresTheEntranceOnce (the PostLoad half's outline-less stand gets its box and then edge 0)
+	EnsureStandFrontages();
 }
 
 void URoadNetwork::Serialize(FArchive& Ar)
@@ -1722,37 +1750,77 @@ int32 URoadNetwork::EnsureDepotFrontages()
 	return Changed;
 }
 
-int32 URoadNetwork::EnsureStandNumbers()
+int32 URoadNetwork::EnsureStandFrontages()
 {
-	// PAST EVERY NUMBER ALREADY HELD, not merely the counter: a counter that somehow sits
-	// behind a live stand (hand-edited data, a half-migrated save) must not issue that
-	// stand's number a second time. The never-reuse rule outranks the counter's value.
-	int32 Next = FMath::Max(NextStandNumber, 1);
-	for (const FEntityInstance& Instance : Entities)
-	{
-		if (Instance.bAlive && Instance.IsStand())
-		{
-			Next = FMath::Max(Next, Instance.StandNumber + 1);
-		}
-	}
-
-	int32 Numbered = 0;
+	// A MIGRATION, NOT A READER (#450's leftover) - see the declaration, and EnsureDepotFrontages above for its sibling. The search survives HERE
+	// because it is the one fact a stand saved before FEntityInstance::FrontageEdge kept: the stop mark's facing and the outline. It is the rule the
+	// stand cache (rearmost midpoint) used to run on every load, run once, so the pose repair and the paint read what they always found.
+	int32 Changed = 0;
 	for (FEntityInstance& Instance : Entities)
 	{
-		if (Instance.bAlive && Instance.IsStand() && Instance.StandNumber == 0)
+		if (!Instance.bAlive || !Instance.IsStand() || !Instance.IsPlotted() || Instance.FrontageEdge != INDEX_NONE)
 		{
-			Instance.StandNumber = Next++;
-			++Numbered;
+			continue;
 		}
+		Instance.FrontageEdge = StandBox::EntranceEdgeOf(Instance.Outline, Instance.Position,
+			FVector2D(FMath::Cos(Instance.Heading), FMath::Sin(Instance.Heading)));
+		++Changed;
 	}
-	NextStandNumber = Next;
 
-	if (Numbered > 0)
+	if (Changed > 0)
 	{
 		UE_LOG(LogAirside, Log,
-			TEXT("EnsureStandNumbers: %d legacy stand(s) numbered; next stand is %d"), Numbered, NextStandNumber);
+			TEXT("EnsureStandFrontages: %d legacy drawn stand(s) given a stored entrance edge"), Changed);
 	}
-	return Numbered;
+	return Changed;
+}
+
+int32 URoadNetwork::EnsureStandNumbers()
+{
+	// ONE BACKFILL, TWO KINDS (#490): the stand's rule and the depot's are the same rule over a different predicate, number field and counter, so it is
+	// written once and run for each - a copy per kind is the shape that lets the second kind's never-reuse guard drift from the first's.
+	const auto Backfill = [this](bool (FEntityInstance::*IsKind)() const, int32 FEntityInstance::* Number, int32& Counter) -> int32
+	{
+		// PAST EVERY NUMBER ALREADY HELD, not merely the counter: a counter that somehow sits
+		// behind a live one (hand-edited data, a half-migrated save) must not issue that
+		// number a second time. The never-reuse rule outranks the counter's value.
+		int32 Next = FMath::Max(Counter, 1);
+		for (const FEntityInstance& Instance : Entities)
+		{
+			if (Instance.bAlive && (Instance.*IsKind)())
+			{
+				Next = FMath::Max(Next, Instance.*Number + 1);
+			}
+		}
+
+		int32 Numbered = 0;
+		for (FEntityInstance& Instance : Entities)
+		{
+			if (Instance.bAlive && (Instance.*IsKind)() && Instance.*Number == 0)
+			{
+				Instance.*Number = Next++;
+				++Numbered;
+			}
+		}
+		Counter = Next;
+		return Numbered;
+	};
+
+	const int32 Stands = Backfill(&FEntityInstance::IsStand, &FEntityInstance::StandNumber, NextStandNumber);
+	if (Stands > 0)
+	{
+		UE_LOG(LogAirside, Log,
+			TEXT("EnsureStandNumbers: %d legacy stand(s) numbered; next stand is %d"), Stands, NextStandNumber);
+	}
+
+	// THE DEPOTS, a level saved before 2026-10-01 (#490): every one loads at 0 and the counter at its default.
+	const int32 Depots = Backfill(&FEntityInstance::IsDepot, &FEntityInstance::DepotNumber, NextDepotNumber);
+	if (Depots > 0)
+	{
+		UE_LOG(LogAirside, Log,
+			TEXT("EnsureStandNumbers: %d legacy depot(s) numbered; next depot is %d"), Depots, NextDepotNumber);
+	}
+	return Stands + Depots;
 }
 
 FEntityInstanceId URoadNetwork::PlaceEntity(
@@ -1812,6 +1880,14 @@ FEntityInstanceId URoadNetwork::PlaceEntity(const FEntityPlacement& Placement, c
 		Instance.StandNumber = NextStandNumber++;
 	}
 
+	// A DEPOT'S NUMBER, ISSUED IN THE SAME BREATH FOR THE SAME REASON (#490): from its own saved counter, never reused, so "depot 3" names one
+	// depot for the life of the airport and not whichever one the recycled slot holds. A separate counter - the stand's is painted on the ground.
+	// ENFORCED BY: Airside.Model.DepotNumbers (point placement) and Airside.Entities.DepotNumberSurvivesUndoAndRedo (a plot-placed depot)
+	if (Instance.IsDepot())
+	{
+		Instance.DepotNumber = NextDepotNumber++;
+	}
+
 	// TASK 6 / RULING 6: a stand placed with no drawn plot (Placement.Outline empty) gets its
 	// Code C box RIGHT HERE, not only the next time EnsureStandOutlines runs at load. This is
 	// the legacy point path's own placement, not just PlaceStand's - the facade's PlaceEntity
@@ -1825,6 +1901,17 @@ FEntityInstanceId URoadNetwork::PlaceEntity(const FEntityPlacement& Placement, c
 	// explicitly instead, so this box matches the ghost preview and the drawn-stand commit
 	// path, which read the same resolved figure. See PlaceEntity's own header comment.
 	GiveStandOutlineIfMissing(Instance, CodeCEnvelope);
+
+	// A STAND THAT WAS GIVEN NO ENTRANCE GETS THE ONE SEARCH'S ANSWER, HERE AT THE DOOR (#450's leftover): the facade's PlaceStandInPlot states the edge it
+	// was GIVEN, but a point-placed stand (whose Code C box was just made above) and a fixture that hands in an outline say none, and the stand
+	// readers (UStandDefinitionCache::PoseFromOutline, FStandMarkingBuilder::FrameFor) read the stored edge and no longer search. After the box, which is what
+	// the entrance is an edge OF. A depot is not asked: its frontage is the gesture's to state, and with none it is unsolvable, as it always was.
+	// ENFORCED BY: Airside.Model.StandFrontage.StoredEdgeIsTodaysHeuristicAnswer (the point-placed and fixture stands)
+	if (Instance.IsStand() && Instance.IsPlotted() && Instance.FrontageEdge == INDEX_NONE)
+	{
+		Instance.FrontageEdge = StandBox::EntranceEdgeOf(Instance.Outline, Instance.Position,
+			FVector2D(FMath::Cos(Instance.Heading), FMath::Sin(Instance.Heading)));
+	}
 
 	// THE STARTER FLEET, AS STATED - never derived from the sheds since 2026-09-29 (facility-upgrades
 	// spec §6): a shed is a BAY the player fills by buying a vehicle (R2), so a count derived from the

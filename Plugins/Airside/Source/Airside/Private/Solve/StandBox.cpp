@@ -38,6 +38,31 @@ namespace StandBox
 		return Pose;
 	}
 
+	int32 EntranceEdgeOf(TArrayView<const FVector2D> Outline, const FVector2D& Position, const FVector2D& Facing)
+	{
+		if (Outline.Num() < 3)
+		{
+			return INDEX_NONE;
+		}
+		// MOVED, NOT REWRITTEN, from UStandDefinitionCache::PoseFromOutline (#450's leftover): the same loop over the same expression, so a stand
+		// stored through here answers exactly what the reader answered while it searched. The entrance is the edge whose midpoint lies
+		// furthest BEHIND the stop mark along the stand's facing, taken in the stored order, so a stand placed today re-derives exactly the
+		// A, B and Inward its commit used. Strict `<`: an exact tie keeps the first edge.
+		int32 Entrance = 0;
+		double Behind = TNumericLimits<double>::Max();
+		for (int32 Corner = 0; Corner < Outline.Num(); ++Corner)
+		{
+			const FVector2D Mid = 0.5 * (Outline[Corner] + Outline[(Corner + 1) % Outline.Num()]);
+			const double Along = FVector2D::DotProduct(Mid - Position, Facing);
+			if (Along < Behind)
+			{
+				Behind = Along;
+				Entrance = Corner;
+			}
+		}
+		return Entrance;
+	}
+
 	void BoxAt(const FStandPose& Pose, EIcaoCode Letter, const FLetterEnvelope& Envelope,
 		TArray<FVector2D>& OutCorners)
 	{

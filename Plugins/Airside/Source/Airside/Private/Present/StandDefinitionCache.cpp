@@ -21,32 +21,25 @@ namespace StandDefinitionCacheLocal
 	 * (URoadEditFacade::PlaceStandInPlot): StandBox::PoseFor off the entrance edge, inward by the
 	 * outline's own winding (PlotYard::InwardOf), at the fleet-resolved envelope.
 	 *
-	 * THE ENTRANCE EDGE IS FOUND, NOT ASSUMED TO BE Outline[0..1]. PlaceStandInPlot reverses a
-	 * clockwise outline before storing it, which puts the drawn FAR edge at 0->1 (see
-	 * StandMarkingBuilder.h's own note). The stand's facing survives any change of geometry, so
-	 * the entrance is the edge whose midpoint lies furthest BEHIND the current stop mark along it
-	 * - whatever rule placed that mark - and the edge is taken in the stored order, so a stand
-	 * placed today re-derives exactly the A, B and Inward its commit used.
+	 * THE ENTRANCE EDGE IS READ, NOT SEARCHED FOR (#450's leftover): FEntityInstance::FrontageEdge stores it, written by PlaceStandInPlot from the
+	 * edge it was GIVEN and by StandBox::EntranceEdgeOf for a stand given none (PlaceEntity, and EnsureStandFrontages for one saved before the field).
+	 * This used to run that search itself on every load - the edge whose midpoint lies furthest BEHIND the current stop mark along its facing, which
+	 * is how it found the entrance without assuming it was Outline[0..1] (PlaceStandInPlot reverses a clockwise outline before storing it, which puts the
+	 * drawn FAR edge at 0->1; see StandMarkingBuilder.h's own note). The stored edge is in the stored order, so a stand placed today re-derives exactly
+	 * the A, B and Inward its commit used. A SECOND SEARCH HERE would be the pose and the paint agreeing only while a comment said they did.
+	 * ENFORCED BY: Airside.Model.StandFrontage.ReadersReadTheStoredEdge, Check-Architecture rule 80 (nothing but URoadNetwork asks EntranceEdgeOf)
+	 *
+	 * UNSET when the stand stores no entrance (an outline the migration has not reached, or an index that names no edge): the caller leaves the stand as
+	 * it is and says so - a pose derived off a guessed edge would MOVE a stand the player placed, which is the one thing a repair must not do.
 	 */
-	StandBox::FStandPose PoseFromOutline(const FEntityInstance& Stand, EIcaoCode Letter)
+	TOptional<StandBox::FStandPose> PoseFromOutline(const FEntityInstance& Stand, EIcaoCode Letter)
 	{
-		const TArray<FVector2D>& Outline = Stand.Outline;
-		const FVector2D Facing(FMath::Cos(Stand.Heading), FMath::Sin(Stand.Heading));
-		int32 Entrance = 0;
-		double Behind = TNumericLimits<double>::Max();
-		for (int32 Corner = 0; Corner < Outline.Num(); ++Corner)
+		FVector2D A, B;
+		if (!Stand.GetFrontage(A, B))
 		{
-			const FVector2D Mid = 0.5 * (Outline[Corner] + Outline[(Corner + 1) % Outline.Num()]);
-			const double Along = FVector2D::DotProduct(Mid - Stand.Position, Facing);
-			if (Along < Behind)
-			{
-				Behind = Along;
-				Entrance = Corner;
-			}
+			return TOptional<StandBox::FStandPose>();
 		}
-		const FVector2D A = Outline[Entrance];
-		const FVector2D B = Outline[(Entrance + 1) % Outline.Num()];
-		return StandBox::PoseFor(A, B, PlotYard::InwardOf(Outline, A, B), Outline, Letter,
+		return StandBox::PoseFor(A, B, PlotYard::InwardOf(Stand.Outline, A, B), Stand.Outline, Letter,
 			UAirsideSettings::ResolveLetterEnvelope(Letter));
 	}
 
@@ -212,13 +205,31 @@ int32 UStandDefinitionCache::RebindStandDefinitions(URoadNetwork* Network)
 			Network->SetStandDesignWingspan(EntityId, Span);
 		}
 
-		const StandBox::FStandPose Pose = StandDefinitionCacheLocal::PoseFromOutline(Entity, *Letter);
-		if (!StandDefinitionCacheLocal::StandMatchesPose(*Network, EntityId, Entity, Pose, *Definition))
+		const TOptional<StandBox::FStandPose> Pose = StandDefinitionCacheLocal::PoseFromOutline(Entity, *Letter);
+		if (!Pose.IsSet())
+		{
+			// LEFT AS IT WAS, like a stand with no buildable definition above: the entrance is read off the STORED edge (PoseFromOutline), and one that
+			// is not there is the migration not having run - EnsureStandFrontages comes before this in both load paths - which is a bug to read in the log, not a
+			// reason to move a stand the player placed by a guess.
+			// ENFORCED BY: Airside.Model.StandFrontage.MigrationStoresTheEntranceOnce (the outline-less stand each load half gives a box and THEN an entrance),
+			// Airside.Present.StandPlot.OldPoseRederivedOnLoad (the migration before this rebind - swapped, the stand is not re-posed)
+			// ONCE, NOT PER STAND: this runs on every re-registration of the actor (an editor re-register, a PIE start) for every stand with no edge, so a
+			// level that missed the migration would print one line per stand per load; the first line says what is wrong, and the rest is the same sentence.
+			static bool bWarnedNoEntrance = false;
+			if (!bWarnedNoEntrance)
+			{
+				bWarnedNoEntrance = true;
+				UE_LOG(LogRoadMesh, Warning,
+					TEXT("RebindStandDefinitions: stand %d has an outline but no stored entrance edge (EnsureStandFrontages did not run?) - not re-posed. Logged once."), Index);
+			}
+			continue;
+		}
+		if (!StandDefinitionCacheLocal::StandMatchesPose(*Network, EntityId, Entity, *Pose, *Definition))
 		{
 			UE_LOG(LogRoadMesh, Log,
 				TEXT("RebindStandDefinitions: stand %d re-posed as Code %s off its outline - stop mark (%.0f, %.0f) -> (%.0f, %.0f)."),
-				Index, IcaoCode::ToLetter(*Letter), Entity.Position.X, Entity.Position.Y, Pose.Position.X, Pose.Position.Y);
-			Network->RePoseStand(EntityId, Pose.Position, RoadGeom::Bearing(Pose.Facing), Definition->Anchors);
+				Index, IcaoCode::ToLetter(*Letter), Entity.Position.X, Entity.Position.Y, Pose->Position.X, Pose->Position.Y);
+			Network->RePoseStand(EntityId, Pose->Position, RoadGeom::Bearing(Pose->Facing), Definition->Anchors);
 		}
 	}
 

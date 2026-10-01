@@ -54,7 +54,8 @@ namespace ServiceText
 	AIRPORTOPS_API const TCHAR* RefusalText(EServiceRefusal Why);
 
 	/** "to stand 3", "at depot 1" - the one phrase the vehicle card and the depot card share, so the
-	 *  two cannot describe the same vehicle two ways. The stand is named by its number through Network (OpsNames::StandLabel); null, for a graph-free test, names it by index. */
+	 *  two cannot describe the same vehicle two ways. The stand and the depot are named by their numbers through Network (OpsNames::StandLabel, OpsNames::DepotLabel, #490);
+	 *  null, for a graph-free test, names them by index. */
 	AIRPORTOPS_API FString VehicleDoing(const UJobBoard& Board, const FServiceVehicle& Vehicle, const URoadNetwork* Network);
 
 	/** "Bowser #7 · at depot 1 · 10,000 L" - the one line the depot card's backlog and its fleet rows share. The kind's
