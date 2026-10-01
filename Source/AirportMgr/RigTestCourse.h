@@ -475,15 +475,6 @@ public:
 		return PlanBetween(StopAt(false, FromStop), StopAt(false, ToStop), Slot, OutPlan, OutReason);
 	}
 
-	/**
-	 * What a cached plan is keyed on for its VEHICLE - forwards to RoutePlanCache::
-	 * VehicleIdentity (#301: lifted off this class into Airside/Model/RoutePlanCache.h, which
-	 * UJobBoard::DepotRoute now shares). Kept at this name: the test above and
-	 * RigTestCourseTest.cpp's own PlanCacheKnowsItsVehicle both call it as ARigTestCourse's.
-	 * ENFORCED BY: AirportMgr.RigCourse.PlanCacheKnowsItsVehicle
-	 */
-	static uint32 VehicleIdentity(const FVehicle& Vehicle);
-
 	/** ConnectNodes calls refused while the course was laid. */
 	int32 GetRefusedConnectsForTest() const { return RefusedConnects; }
 

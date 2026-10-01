@@ -87,41 +87,6 @@ bool FOfferInboxCountUpdatesEachRefreshTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FOfferInboxOneRowListTest,
-	"AirportMgr.UI.OfferInbox.OneRowList",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FOfferInboxOneRowListTest::RunTest(const FString& Parameters)
-{
-	// ISSUE #191: Rows used to have a hand-mirrored Offers array kept in step at every place
-	// either changed - CLAUDE.md's "lists that must agree are one list". GetOffers() now
-	// builds its raw-pointer view from Rows on demand, so RowsForTest() (the source of
-	// truth) and GetOffers() (what the list view and Accept/DeclineRow index into) can never
-	// disagree - there is exactly one list, not two a caller could forget to keep in sync.
-	URoadNetwork* Net = InboxNetwork();
-	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
-	USimClock* Clock = NewObject<USimClock>();
-	UFlightBoard* Board = NewObject<UFlightBoard>();
-	Board->Allocator = NewObject<UStandAllocator>();
-
-	Board->AddOffer(*Clock, InboxOffer(Clock->Now() + 600.0));
-	Board->AddOffer(*Clock, InboxOffer(Clock->Now() + 900.0));
-
-	UOfferInboxViewModel* Inbox = NewObject<UOfferInboxViewModel>();
-	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
-
-	TestEqual(TEXT("the list view's item count agrees with the one row list"),
-		Inbox->GetOffers().Num(), Inbox->RowsForTest().Num());
-
-	Inbox->Accept(Inbox->GetOffers()[0]);
-	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
-
-	TestEqual(TEXT("and still agrees once a row has left - nothing to fall out of step"),
-		Inbox->GetOffers().Num(), Inbox->RowsForTest().Num());
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FOfferInboxAcceptGoesThroughTheBoardTest,
 	"AirportMgr.UI.OfferInbox.AcceptGoesThroughTheBoard",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

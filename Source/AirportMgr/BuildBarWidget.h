@@ -193,7 +193,7 @@ public:
 
 	int32 ButtonCountForTest(EActionSection Section) const;
 	bool HasRootWidgetForTest() const;
-	/** Every tool entry is a UUiButton with a label - see AirportMgr.Actions.BarToolsAreUiButtons. */
+	/** Every tool entry is a UUiButton with a label - see AirportMgr.Actions.BarBuildsMenuActionsAsMenus. */
 	bool AllButtonsAreUiButtonsForTest() const;
 
 	// NativeTickForTest is the panel base's now (UAirportMgrPanelWidget) - used here so a headless
@@ -283,12 +283,12 @@ private:
 	 * it - not just controllers. AController::PostInitializeComponents is the call that reaches
 	 * UWorld::AddController (verified against the engine source, Actor.cpp/Controller.cpp), so a
 	 * controller spawned into this fixture never joins PlayerControllerList, and Controller()'s
-	 * GetFirstPlayerController() fallback - the mechanism FBarCachesStyleAcrossTicksTest's own
-	 * comment describes and relies on - returns null in every test that uses it, including that
-	 * one (confirmed with a temporary diagnostic UE_LOG, since removed). That test's assertion
-	 * (zero ResolveStyle calls) happens to hold either way, so it passed anyway; a construct-COUNT
-	 * assertion does not have that luxury, since RefreshState() returning early also reads as
-	 * "zero constructions" - the wrong reason for the right number.
+	 * GetFirstPlayerController() fallback - returns null in every test that does not register the
+	 * controller by hand with UWorld::AddController (FBarCachesStyleAcrossTicksTest does, since
+	 * 2026-10; it used to skip that, and its assertion (zero ResolveStyle calls) held either way, so
+	 * it passed on RefreshState's early return). A construct-COUNT assertion does not have that
+	 * luxury, since RefreshState() returning early also reads as "zero constructions" - the wrong
+	 * reason for the right number - which is why that test now asserts the count too.
 	 */
 	void RefreshStateFor(ARoadBuildController& C);
 

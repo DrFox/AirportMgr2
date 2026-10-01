@@ -844,26 +844,43 @@ bool FSelectionVerbsActOnTheirOwnersTest::RunTest(const FString& Parameters)
 }
 
 /**
- * CTRL CHORDS WAIT TOO (4b final review, Important 6): Ctrl+Z behind an open dialog would undo the
- * airport. Both key handlers ask the one predicate, so this test covers the chord handler, which a
- * headless test cannot drive (it polls WasInputKeyJustPressed).
+ * CTRL CHORDS WAIT TOO (4b final review, Important 6): Ctrl+Z behind an open dialog would undo the airport.
+ *
+ * BOTH KEY HANDLERS REACH ONE FUNCTION. OnCtrlActionKey polls WasInputKeyJustPressed, which a headless test cannot
+ * drive, and hands the key it found to RunActionForKey with Ctrl held; Check-Architecture's rule
+ * `chord-handler-shares-the-gate` pins that call (and that the handler runs nothing itself). This drives that shared
+ * handler with the real chord and asserts the EFFECT - an undoable edit survives Ctrl+Z under the modal and is undone
+ * once it closes. (2026-09-30 review: it used to assert only what KeyWaitsForModal returned, a predicate the chord handler
+ * could stop asking while this stayed green.)
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildActionsModalChordTest, "AirportMgr.Actions.ChordsWaitUnderModal",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FBuildActionsModalChordTest::RunTest(const FString& Parameters)
 {
-	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
 	ARoadBuildController* C = BuildActionsModalTest::SpawnWithSettings(TestWorld);
 	if (!TestNotNull(TEXT("a controller with Settings"), C)) { return false; }
+	C->SetTargetForTest(Actor);
 	const FBuildAction* Undo = FindAction(FName(TEXT("edit.undo")));
-	const FBuildAction* Settings = FindAction(SettingsActionId());
-	if (!TestTrue(TEXT("undo and settings are registered"), Undo != nullptr && Settings != nullptr)) { return false; }
-	TestTrue(TEXT("control: undo is a Ctrl chord"), Undo->bRequiresCtrl);
-	TestFalse(TEXT("no modal: undo runs"), C->KeyWaitsForModal(*Undo));
+	if (!TestNotNull(TEXT("undo is registered"), Undo)) { return false; }
+	TestTrue(TEXT("control: undo is a Ctrl chord on Z"), Undo->bRequiresCtrl && Undo->Key == EKeys::Z);
+
+	// AN EDIT TO UNDO, so "Ctrl+Z ran" is something this can see.
+	Actor->PlaceNode(FVector2D(0.0, 0.0));
+	if (!TestTrue(TEXT("setup: there is an edit to undo"), C->CanUndo())) { return false; }
+
 	C->ToggleSettings();
-	TestTrue(TEXT("under the modal: Ctrl+Z waits"), C->KeyWaitsForModal(*Undo));
-	TestFalse(TEXT("and Settings' own key does not"), C->KeyWaitsForModal(*Settings));
+	if (!TestTrue(TEXT("setup: Settings is open as a modal"), C->IsModalOpen())) { return false; }
+	C->OnActionKeyForTest(EKeys::Z, true);
+	TestTrue(TEXT("under the modal: Ctrl+Z waits - the edit is still there to undo"), C->CanUndo());
+
+	C->ToggleSettings();
+	if (!TestFalse(TEXT("setup: Settings closed again"), C->IsModalOpen())) { return false; }
+	C->OnActionKeyForTest(EKeys::Z, true);
+	TestFalse(TEXT("control: with no modal the same chord undoes the edit"), C->CanUndo());
 	return true;
 }
 

@@ -6,21 +6,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 /**
- * THE ENGINE MAKES OUR SETTINGS CLASS. GameUserSettingsClassName is a config line nothing else
- * checks: left out, the engine quietly makes a plain UGameUserSettings, Get() returns null, and
- * every remembered layout is written nowhere - with every host test still green, because they all
- * use a memory store on purpose.
- */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirportMgrUserSettingsClassTest, "AirportMgr.Settings.EngineMakesOurUserSettings",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FAirportMgrUserSettingsClassTest::RunTest(const FString& Parameters)
-{
-	TestNotNull(TEXT("GEngine's GameUserSettings is a UAirportMgrUserSettings"), UAirportMgrUserSettings::Get());
-	return true;
-}
-
-/**
  * THE REAL STORE ROUND-TRIPS through the settings object - on a key of the test's own, removed
  * afterwards, so the player's windows are never touched (FConfigToolPreferences' precedent).
  */
@@ -29,9 +14,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FUserSettingsLayoutStoreTest, "AirportMgr.Setti
 
 bool FUserSettingsLayoutStoreTest::RunTest(const FString& Parameters)
 {
+	// THE ENGINE MAKES OUR SETTINGS CLASS - this is that guard (it was a test of its own, AirportMgr.Settings.
+	// EngineMakesOurUserSettings, whose one assertion this is; GameSinkRevertRestoresACustomMix guards it too).
+	// GameUserSettingsClassName is a config line nothing else checks: left out, the engine quietly makes a plain
+	// UGameUserSettings, Get() returns null, and every remembered layout is written nowhere - with every host test
+	// still green, because they all use a memory store on purpose.
+	// ENFORCED BY: this check, and Config/DefaultEngine.ini's GameUserSettingsClassName line it guards.
 	if (UAirportMgrUserSettings::Get() == nullptr)
 	{
-		AddError(TEXT("no UAirportMgrUserSettings - see EngineMakesOurUserSettings"));
+		AddError(TEXT("GEngine's GameUserSettings is not a UAirportMgrUserSettings - GameUserSettingsClassName in DefaultEngine.ini names the class"));
 		return false;
 	}
 	const FName Key(TEXT("test.layout.roundtrip"));

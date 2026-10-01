@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "Components/Border.h"
 #include "Misc/AutomationTest.h"
 #include "NotificationCentre.h"
 #include "Testing/AirsideTestWorld.h"
@@ -28,39 +29,6 @@ namespace
 }
 
 /**
- * THE DEFECT IN SPEC SECTION 1, PINNED. The bar used to bind OnNotification to a single
- * UTextBlock, so a second notification in the same second REPLACED the first and the first
- * was never seen. Two entries must produce two rows.
- *
- * At the level of the COMPOSITION - spawn the widget and tick it - not of the model struct.
- * UNotificationCentre's own tests already prove it holds two entries; what this adds is that
- * the widget above it actually draws them, which is the half that was broken.
- */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FToastStackShowsEveryEntryTest,
-	"AirportMgr.UI.ToastsDoNotOverwriteEachOther",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FToastStackShowsEveryEntryTest::RunTest(const FString& Parameters)
-{
-	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
-	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
-
-	UToastStackWidget* Stack = MakeStack(TestWorld.World);
-	if (!TestNotNull(TEXT("the stack is created with no asset"), Stack)) { return false; }
-	if (!TestNotNull(TEXT("it owns a notification centre"), Stack->Centre())) { return false; }
-
-	Stack->Centre()->PostFeed(FText::FromString(TEXT("Saved 'quick'")));
-	Stack->Centre()->PostFeed(FText::FromString(TEXT("Arrival refused - runway too short")));
-
-	// One frame. Both must be on screen: the old single label would have shown only the last.
-	Stack->TickFeed(1.0f / 60.0f);
-	TestEqual(TEXT("both notifications are drawn, not just the last one"),
-		Stack->ToastCountForTest(), 2);
-	return true;
-}
-
-/**
  * The real-seconds rule, measured through the WIDGET rather than the model.
  *
  * UNotificationCentre::Advance takes real seconds by contract, so a test against the model
@@ -68,10 +36,15 @@ bool FToastStackShowsEveryEntryTest::RunTest(const FString& Parameters)
  * mistake lives. The plan for this work specified Advance(Delta * Multiplier(Speed)), which
  * at x32 would have given an eight-second toast a quarter of a second on screen. Half a real
  * second of frames must expire nothing, whatever the sim clock is doing.
+ *
+ * NAMED FOR WHAT IT MEASURES (2026-10 review): it was "ToastsSurviveAFastClock" and never set a clock. No clock reaches
+ * the widget - TickFeed takes real seconds and nothing else - so there is none to set. What it pins is that TickFeed's
+ * argument is taken as REAL seconds: scale it, as the plan's Advance(Delta * Multiplier(Speed)) would at x32, and half a
+ * second of frames expires the toast.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FToastStackRealSecondsTest,
-	"AirportMgr.UI.ToastsSurviveAFastClock",
+	"AirportMgr.UI.ToastLifetimeRunsOnRealSeconds",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FToastStackRealSecondsTest::RunTest(const FString& Parameters)
@@ -149,6 +122,10 @@ bool FToastCardRoundingTest::RunTest(const FString& Parameters)
  * Severity reaches the card. Spec section 6.1 lists Severity in the entry and the first
  * implementation dropped the field entirely, so every toast drew identically - a refusal
  * looked exactly like a save confirmation.
+ *
+ * READ OFF THE CARD'S OUTLINE, the drawn brush, not out of the model (2026-09-30 review): this test built
+ * no widget - it asserted the centre kept the severity it was given and that two style slots differ - so
+ * UToastStackWidget::ColourFor could have returned one slot for all three and it stayed green.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FToastSeverityTest,
@@ -157,24 +134,48 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FToastSeverityTest::RunTest(const FString& Parameters)
 {
-	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+
+	UToastStackWidget* Stack = MakeStack(TestWorld.World);
+	if (!TestNotNull(TEXT("the stack is created"), Stack)) { return false; }
+	const UUIStyle* Style = Stack->PanelStyleForTest();
+	if (!TestNotNull(TEXT("and resolved a style"), Style)) { return false; }
 
 	// Three severities, three DIFFERENT slots. Accent is not among them on purpose: it means
 	// the armed tool and nothing else, so a warning may never take it.
-	UNotificationCentre* Centre = NewObject<UNotificationCentre>(GetTransientPackage());
-	Centre->PostFeed(FText::FromString(TEXT("info")), ENotificationSeverity::Info);
-	Centre->PostFeed(FText::FromString(TEXT("good")), ENotificationSeverity::Success);
-	Centre->PostFeed(FText::FromString(TEXT("bad")), ENotificationSeverity::Warning);
+	Stack->Centre()->PostFeed(FText::FromString(TEXT("info")), ENotificationSeverity::Info);
+	Stack->Centre()->PostFeed(FText::FromString(TEXT("good")), ENotificationSeverity::Success);
+	Stack->Centre()->PostFeed(FText::FromString(TEXT("bad")), ENotificationSeverity::Warning);
+	Stack->TickFeed(1.0f / 60.0f);
+	if (!TestEqual(TEXT("three entries built three cards"), Stack->ToastCountForTest(), 3)) { return false; }
 
-	TestEqual(TEXT("severity is carried on the entry"), Centre->Entries().Num(), 3);
-	TestEqual(TEXT("info stays info"), Centre->Entries()[0].Severity, ENotificationSeverity::Info);
-	TestEqual(TEXT("success stays success"), Centre->Entries()[1].Severity, ENotificationSeverity::Success);
-	TestEqual(TEXT("warning stays warning"), Centre->Entries()[2].Severity, ENotificationSeverity::Warning);
+	// The outline is FLinearColor(slot.RGB, OutlineAlpha): compare the slot's RGB, not the alpha.
+	const auto OutlineOf = [Stack](int32 Index, FLinearColor& Out)
+	{
+		const UBorder* Card = Stack->NthToastForTest(Index);
+		if (Card == nullptr) { return false; }
+		Out = Card->Background.OutlineSettings.Color.GetSpecifiedColor();
+		return true;
+	};
+	const auto SameRgb = [](const FLinearColor& A, const FLinearColor& B)
+	{
+		return FMath::IsNearlyEqual(A.R, B.R, KINDA_SMALL_NUMBER) && FMath::IsNearlyEqual(A.G, B.G, KINDA_SMALL_NUMBER)
+			&& FMath::IsNearlyEqual(A.B, B.B, KINDA_SMALL_NUMBER);
+	};
+	FLinearColor Info = FLinearColor::Black, Success = FLinearColor::Black, Warning = FLinearColor::Black;
+	if (!TestTrue(TEXT("every card has a brush to read"), OutlineOf(0, Info) && OutlineOf(1, Success) && OutlineOf(2, Warning)))
+	{
+		return false;
+	}
 
-	TestTrue(TEXT("warning and success are different colours, or severity says nothing"),
-		!Style->Warning.Equals(Style->Positive));
-	TestTrue(TEXT("a warning never takes Accent, which means the armed tool"),
-		!Style->Warning.Equals(Style->Accent));
+	// THE PREMISE: the three slots differ, or "the card wears its slot" could not tell them apart.
+	TestFalse(TEXT("premise: warning and success are different colours, or severity says nothing"), SameRgb(Style->Warning, Style->Positive));
+	TestFalse(TEXT("premise: nor is info the warning colour"), SameRgb(Style->InkMuted, Style->Warning));
+	TestTrue(TEXT("an info card is drawn in InkMuted"), SameRgb(Info, Style->InkMuted));
+	TestTrue(TEXT("a success card is drawn in Positive"), SameRgb(Success, Style->Positive));
+	TestTrue(TEXT("a warning card is drawn in Warning"), SameRgb(Warning, Style->Warning));
+	TestFalse(TEXT("a warning never takes Accent, which means the armed tool"), SameRgb(Warning, Style->Accent));
 	return true;
 }
 

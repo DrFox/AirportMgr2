@@ -4388,6 +4388,130 @@ if (-not (Test-Path $runwayRowsCpp)) {
 }
 $ranRules.Add('foldable-panels-gate')
 
+# --- 94. THE EDITOR DESCRIBES A FRAME'S PREVIEW IN ONE PLACE, AND ONLY RENDER AND ITS SEAM ASK FOR IT (#462, #463) ------------
+# Render's tail and CachePreviewLabelsForTest were two hand-kept copies of "describe the preview, cache the labels", so a Render that cached nothing
+# left Airside.Editor.DrawHUDShowsRefusalLabels green (it never called Render), and the call-counting test Airside.Editor.RenderCachesLabelsOnce
+# (deleted 2026-10) counted only its own seam: DrawHUD calling BuildPreview a second time every frame - the doubled cost issue #304's review round 2
+# fixed - passed it. URoadBuildEditorTool::DescribeFrame is the one place now; Render and the seam both call it. In RoadBuildEditorTool.cpp, comments
+# and strings stripped (rule 34's stripper):
+# (a) BuildPreview( is called from DescribeFrame and from nowhere else - not DrawHUD, not Render, not the seam;
+# (b) DescribeFrame( is called from Render and from CachePreviewLabelsForTest and from nowhere else - a second describe THROUGH the one function
+#     (DrawHUD calling it) doubles every tool's preview cost every frame as surely as a second BuildPreview does, which (a) alone cannot see;
+# (c) Render and CachePreviewLabelsForTest each call DescribeFrame( - so the seam a test stands in for Render with IS Render's body;
+# (d) the half that stops it checking nothing: DescribeFrame exists and calls BuildPreview.
+# DOES NOT SEE: a describe reached through some other wrapper of BuildPreview (a new helper, called from DrawHUD, that calls DescribeFrame's
+# callee by another route) until the wrapper is named in (a)/(b). Airside.Editor.DrawHUDShowsRefusalLabels is the behaviour half (a label the tool
+# describes reaches the cache DrawHUD reads).
+$editorToolFile = Join-Path $Root 'Plugins\Airside\Source\AirsideEditor\Private\RoadBuildEditorTool.cpp'
+if (-not (Test-Path $editorToolFile)) {
+    $failures.Add("editor-preview-described-once: $editorToolFile is named by rule 94 but does not exist - update the rule, do not let it check nothing")
+} else {
+    $describeCallers = @('URoadBuildEditorTool::Render', 'URoadBuildEditorTool::CachePreviewLabelsForTest')
+    $lines = Get-Content -LiteralPath $editorToolFile
+    $inBlock = $false
+    $current = ''
+    $describeCallsIn = @{}
+    $buildPreviewInDescribe = 0
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        $def = Get-ArchDefinition $code
+        if ($null -ne $def) { $current = $def }
+        if ($code -match '\bBuildPreview\s*\(') {
+            if ($current -eq 'URoadBuildEditorTool::DescribeFrame') { $buildPreviewInDescribe++ }
+            else { $failures.Add("editor-preview-described-once: RoadBuildEditorTool.cpp:$($i + 1) calls BuildPreview( in $current - a frame's preview is described by URoadBuildEditorTool::DescribeFrame alone, which Render and the headless seam both call; a second call from DrawHUD (or a Render of its own) doubles every tool's preview cost every frame and leaves the seam a copy that can drift (#304 review round 2, #463): $($code.Trim())") }
+        }
+        if ($code -match '\bDescribeFrame\s*\(' -and $code -notmatch 'URoadBuildEditorTool::DescribeFrame\s*\(') {
+            if ($describeCallers -contains $current) { $describeCallsIn[$current] = 1 + [int]$describeCallsIn[$current] }
+            else { $failures.Add("editor-preview-described-once: RoadBuildEditorTool.cpp:$($i + 1) calls DescribeFrame( in $current - only Render and CachePreviewLabelsForTest describe a frame; a third caller (DrawHUD, say) describes it again and doubles every tool's preview cost every frame (#304 review round 2, #463): $($code.Trim())") }
+        }
+    }
+    foreach ($caller in $describeCallers) {
+        if ([int]$describeCallsIn[$caller] -lt 1) {
+            $failures.Add("editor-preview-described-once: $caller no longer calls DescribeFrame( - Render and the seam a test stands in for it with must share the one description, or the test measures a copy (#463)")
+        }
+    }
+    if ($buildPreviewInDescribe -lt 1) {
+        $failures.Add("editor-preview-described-once: URoadBuildEditorTool::DescribeFrame not found calling BuildPreview( in RoadBuildEditorTool.cpp - it moved or went; update rule 94, do not let it check nothing")
+    }
+}
+$ranRules.Add('editor-preview-described-once')
+
+# --- 95. THE CTRL-CHORD HANDLER HANDS ITS KEY TO THE ONE KEY HANDLER (#463) -----------------------------------------------
+# ARoadBuildController binds a plain key to OnActionKey and a Ctrl chord to OnCtrlActionKey, which polls WasInputKeyJustPressed - a call a headless
+# test cannot drive. Each handler once carried its own copy of the modal wait and the TryRun, and AirportMgr.Actions.ChordsWaitUnderModal asserted
+# only the predicate (KeyWaitsForModal) the chord handler could stop asking. RunActionForKey is the one handler now - the modal wait, the IsEnabled
+# gate and the log line - and the chord handler only finds WHICH key was pressed. In the game module's production sources, comments and strings
+# stripped:
+# (a) OnCtrlActionKey calls NOTHING but the key poll, the registry and RunActionForKey (an allow-list: BuildActions, IsValid,
+#     WasInputKeyJustPressed, RunActionForKey) - so TryRun, Execute, IsEnabled, a handler like OnUndo, or a second gate cannot be added beside the
+#     hand-off - and it does call RunActionForKey;
+# (b) the half that stops it checking nothing: RunActionForKey still calls KeyWaitsForModal( and TryRun(;
+# (c) KeyWaitsForModal( is called from RunActionForKey and from nowhere else, in every non-test .cpp under Source\AirportMgr - the one predicate has
+#     one caller (the declaration and the definition are not calls).
+# DOES NOT SEE: the poll itself (WasInputKeyJustPressed) picking the wrong key - nothing headless reaches it - or a run path spelled without a
+# call-shaped token. AirportMgr.Actions.ChordsWaitUnderModal drives RunActionForKey with the Ctrl chord and asserts the undo it would run does not
+# run under a modal.
+$controllerSourceFile = Join-Path $Root 'Source\AirportMgr\RoadBuildController.cpp'
+if (-not (Test-Path $controllerSourceFile)) {
+    $failures.Add("chord-handler-shares-the-gate: $controllerSourceFile is named by rule 95 but does not exist - update the rule, do not let it check nothing")
+} else {
+    $chordAllowedCalls = @('BuildActions', 'IsValid', 'WasInputKeyJustPressed', 'RunActionForKey')
+    $chordSkippedTokens = @('for', 'if', 'while', 'switch', 'return', 'sizeof', 'static_cast', 'TEXT')
+    $lines = Get-Content -LiteralPath $controllerSourceFile
+    $inBlock = $false
+    $current = ''
+    $chordRuns = 0
+    $gateWaits = 0
+    $gateRuns = 0
+    $chordSeen = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        $def = Get-ArchDefinition $code
+        if ($null -ne $def) { $current = $def }
+        if ($current -eq 'ARoadBuildController::OnCtrlActionKey') {
+            $chordSeen = $true
+            if ($code -match 'ARoadBuildController::OnCtrlActionKey\s*\(') { continue }
+            foreach ($call in [regex]::Matches($code, '\b(\w+)\s*\(')) {
+                $callee = $call.Groups[1].Value
+                if ($chordSkippedTokens -contains $callee) { continue }
+                if ($callee -eq 'RunActionForKey') { $chordRuns++ }
+                if ($chordAllowedCalls -notcontains $callee) {
+                    $failures.Add("chord-handler-shares-the-gate: RoadBuildController.cpp:$($i + 1) OnCtrlActionKey calls $callee( itself - the chord handler only finds which key was pressed and hands it to RunActionForKey, whose modal wait AirportMgr.Actions.ChordsWaitUnderModal drives; a run path or a gate of its own here is untested (#463): $($code.Trim())")
+                }
+            }
+        }
+        if ($current -eq 'ARoadBuildController::RunActionForKey') {
+            if ($code -match '\bKeyWaitsForModal\s*\(') { $gateWaits++ }
+            if ($code -match '\bTryRun\s*\(') { $gateRuns++ }
+        }
+    }
+    if (-not $chordSeen) {
+        $failures.Add("chord-handler-shares-the-gate: ARoadBuildController::OnCtrlActionKey not found in RoadBuildController.cpp - it moved or went; update rule 95, do not let it check nothing")
+    } elseif ($chordRuns -lt 1) {
+        $failures.Add("chord-handler-shares-the-gate: OnCtrlActionKey no longer calls RunActionForKey( - a Ctrl chord would run its action by some other road, past the modal wait the shared handler holds (#463)")
+    }
+    if ($gateWaits -lt 1 -or $gateRuns -lt 1) {
+        $failures.Add("chord-handler-shares-the-gate: RunActionForKey no longer calls KeyWaitsForModal( and TryRun( ($gateWaits, $gateRuns) - the one key handler lost its gate, or the rule names a function that moved (#463)")
+    }
+    foreach ($file in Get-Sources (Join-Path $Root 'Source\AirportMgr') @('.cpp')) {
+        if ($file.Name -like '*Test.cpp') { continue }
+        $lines = Get-Content -LiteralPath $file.FullName
+        $inBlock = $false
+        $current = ''
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            $def = Get-ArchDefinition $code
+            if ($null -ne $def) { $current = $def }
+            if ($code -match '\bKeyWaitsForModal\s*\(' -and $code -notmatch 'ARoadBuildController::KeyWaitsForModal\s*\(') {
+                if (-not ($file.FullName -eq $controllerSourceFile -and $current -eq 'ARoadBuildController::RunActionForKey')) {
+                    $failures.Add("chord-handler-shares-the-gate: $($file.Name):$($i + 1) calls KeyWaitsForModal( in $current - the modal wait has one caller, RunActionForKey, which both key handlers reach; a second caller is a second gate (#463): $($code.Trim())")
+                }
+            }
+        }
+    }
+}
+$ranRules.Add('chord-handler-shares-the-gate')
+
 # --- 62. A PUBLIC NON-UFUNCTION MEMBER OF ARoadNetworkActor HAS A PRODUCTION CALLER ---------------------------------------------
 # Issue #450, the half of rule 20 that issue named. Rule 20 matches `*ForTest(` only, so a member that is test-only under an ORDINARY
 # name escaped it: GetSegmentEnds had zero callers, and GetNewestAgent, GetApronSurfaceZ and GetStandDefinitions were called by tests

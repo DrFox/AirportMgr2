@@ -394,8 +394,15 @@ bool FAnimYardCameraStartsInFrontOfTheAircraftTest::RunTest(const FString& Param
 	// 5. THE VEHICLE ROW DOES NOT PULL THE SHOT. Its mark is 5000 uu the other side of the
 	// origin; a framing that averaged every subject would sit the camera between the two rows
 	// facing nothing, which is what the world-origin default already did.
-	TestTrue(TEXT("the ground-vehicle row does not drag the camera back towards the origin"),
-		Eye.X > RowX);
+	//
+	// MEASURED ON THE FOCUS the camera orbits, not on Eye.X (2026-09-30 review: the Eye.X assertion
+	// repeated step 1 and survived the vehicle filter being deleted - the eye is backed off by the
+	// fitted distance, which dwarfs a 2500 uu pull). The aircraft stand at X = RowX and the vehicle
+	// at -RowX, so a framing that counted the vehicle moves the focus off the row to X = 0.
+	const FVector2D Focus = Camera->ActiveRig().Focus;
+	TestEqual(TEXT("the shot is centred on the aircraft row (focus X), not dragged towards the vehicle's"),
+		Focus.X, RowX, 1.0);
+	TestEqual(TEXT("and on the middle of the row (focus Y)"), Focus.Y, 0.0, 1.0);
 
 	return true;
 }

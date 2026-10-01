@@ -28,8 +28,10 @@
  * WRITTEN RED FIRST: before `FViewportPreviewSink` collected labels and
  * `CollectPreviewLabelTextForTest` existed, this test could not compile - the exact shape "a list
  * nothing consumes" takes when the list in question is a virtual call's return value rather than
- * a table. `CachePreviewLabelsForTest` is review round 2's own seam - see
- * `Airside.Editor.RenderCachesLabelsOnce` for what actually counts the calls it stands in for.
+ * a table. `CachePreviewLabelsForTest` runs Render's OWN `DescribeFrame` with no PDI (2026-09-30 review: it
+ * used to be a hand-kept copy of Render's tail, so a Render that cached nothing left this test green - it
+ * never called Render). That `BuildPreview` runs once a frame and never from DrawHUD is lint rule
+ * `editor-preview-described-once`, which replaced the call-counting test that only counted its own seam.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRoadBuildEditorToolPreviewLabelTest,
@@ -103,14 +105,12 @@ bool FRoadBuildEditorToolPreviewLabelTest::RunTest(const FString& Parameters)
 
 	// STANDS IN FOR Render: the active tool the session actually picked (Runway, via
 	// RunwayIndex above), through the real GetActiveTool() rather than a spy - this test is
-	// about a real tool's real label reaching the editor, not about the call count
-	// Airside.Editor.RenderCachesLabelsOnce pins separately.
-	IBuildTool* ActiveTool = Tool->SessionForTest()->GetActiveTool();
-	if (!TestNotNull(TEXT("the runway tool is active"), ActiveTool))
+	// about a real tool's real label reaching the editor. The seam runs Render's own DescribeFrame.
+	if (!TestNotNull(TEXT("the runway tool is active"), Tool->SessionForTest()->GetActiveTool()))
 	{
 		return false;
 	}
-	Tool->CachePreviewLabelsForTest(*ActiveTool);
+	Tool->CachePreviewLabelsForTest();
 
 	const TArray<FString> Labels = Tool->CollectPreviewLabelTextForTest();
 	bool bFoundTooShort = false;

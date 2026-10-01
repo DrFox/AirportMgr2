@@ -12,6 +12,7 @@
 #include "Misc/Paths.h"
 #include "Model/AgentMotion.h"
 #include "Model/RoutePolicy.h"
+#include "Model/RoutePlanCache.h"
 #include "Model/RouteSearch.h"
 #include "Model/Vehicle.h"
 #include "Model/VehicleFit.h"
@@ -115,9 +116,6 @@ namespace RigCourseTest
 	 */
 	struct FClearanceProbe
 	{
-		/** Scales every link's width - 1 always, except in the RED run that proves this measures. */
-		double WidthScale = 1.0;
-
 		/** Per vehicle slot. */
 		FWorst Swept[2];
 		FWorst PerSide[2];
@@ -173,7 +171,7 @@ namespace RigCourseTest
 				const FVector2D N(-H.Y, H.X);
 				const FVector2D Front = Pose.Hitch + H * Link.BodyFront;
 				const FVector2D Rear = Pose.Axle - H * Link.BodyRear;
-				const double Half = 0.5 * Link.Width * WidthScale;
+				const double Half = 0.5 * Link.Width;
 				const double Length = FVector2D::Distance(Front, Rear);
 				const int32 Count = FMath::Max(1, FMath::CeilToInt32(Length / 50.0));
 				for (int32 I = 0; I <= Count; ++I)
@@ -561,12 +559,35 @@ namespace RigCourseTest
 		}
 	};
 
+	/**
+	 * THE RIG'S ROUTE LENGTH over the run, for CheckRouteStaysBounded: the longest the plan in progress ever was, and
+	 * what it was while no extension had been made (the first loop's own).
+	 */
+	struct FPlanLength
+	{
+		double Longest = 0.0;
+		double FirstLoop = 0.0;
+
+		void Observe(const ARoadNetworkActor& Actor, const ARigTestCourse& Course)
+		{
+			const FRigCourseRunner& Rig = Course.GetRunnerForTest(0);
+			const FRoadAgent* Agent = Rig.AgentId != 0 ? Actor.GetGroundTraffic()->FindAgent(Rig.AgentId) : nullptr;
+			if (Agent == nullptr) { return; }
+			Longest = FMath::Max(Longest, Agent->PlanInProgress().Length);
+			if (Rig.Extensions == 0)
+			{
+				FirstLoop = Agent->PlanInProgress().Length;
+			}
+		}
+	};
+
 	/** What a run watches, each optional. */
 	struct FObservers
 	{
 		FClearanceProbe* Probe = nullptr;
 		FContinuity* Continuity = nullptr;
 		FOverlap* Overlap = nullptr;
+		FPlanLength* PlanLength = nullptr;
 	};
 
 	/**
@@ -604,6 +625,10 @@ namespace RigCourseTest
 			if (Watch.Overlap != nullptr)
 			{
 				Watch.Overlap->Observe(Actor, Course, Ticks);
+			}
+			if (Watch.PlanLength != nullptr)
+			{
+				Watch.PlanLength->Observe(Actor, Course);
 			}
 		}
 		return Ticks;
@@ -675,6 +700,469 @@ namespace RigCourseTest
 		}
 		Test.TestTrue(FString::Printf(TEXT("%s: markers were checked against their waypoints - not vacuous (%d)"), Names[V], Checked), Checked >= 10);
 	}
+
+	/** The course's layout and its two vehicles' directions, before anything runs. False when a premise is missing and nothing after it means anything. */
+	bool CheckCourseLayout(FAutomationTestBase& Test, const ARigTestCourse& Course, const URoadNetwork& Net, int32& OutWidthStepLeg)
+	{
+		// THE LAYOUT: every feature at every tier, so one loop says which tier each vehicle fits.
+		Test.TestEqual(TEXT("every road the course asked for was laid - a refused segment would change the course silently"),
+			Course.GetRefusedConnectsForTest(), 0);
+		Test.TestEqual(TEXT("3 tiers x 5 features (straight, right 90, left 90, T both ways, dead end)"),
+			Course.FeatureCountForTest(), 15);
+		const TArray<FRigCourseWaypoint>& Waypoints = Course.GetWaypoints();
+		const int32 Legs = Course.LegCountForTest();
+		Test.TestEqual(TEXT("one leg per waypoint, the last wrapping to the first"), Legs, Waypoints.Num());
+		OutWidthStepLeg = INDEX_NONE;
+		for (int32 I = 0; I < Waypoints.Num(); ++I)
+		{
+			const FRoadNode* Node = Net.GetNode(Waypoints[I].Node);
+			Test.TestTrue(FString::Printf(TEXT("waypoint %d (%s) is a live node"), I, *Waypoints[I].Label),
+				Node != nullptr && Node->bAlive);
+			Test.TestTrue(FString::Printf(TEXT("and names a lane end in the derived graph (%s)"), *Waypoints[I].Label),
+				ARigTestCourse::ResolveWaypoint(Net, Waypoints[I]).IsSet());
+			// The reverse runner's stop: the same node along the road the forward leg leaves by.
+			Test.TestTrue(FString::Printf(TEXT("and, arrived the other way along Next, names a lane end too (%s)"), *Waypoints[I].Label),
+				ARigTestCourse::ResolveWaypoint(Net, Reversed(Waypoints[I])).IsSet());
+			if (Waypoints[I].Feature == ERigCourseFeature::WidthStep)
+			{
+				Test.TestEqual(TEXT("exactly one width-step feature"), OutWidthStepLeg, static_cast<int32>(INDEX_NONE));
+				OutWidthStepLeg = (I + Legs - 1) % Legs;   // the leg that ENDS at this waypoint
+			}
+		}
+		if (!Test.TestTrue(TEXT("the Narrow->Wide mid-straight step is on the course"), OutWidthStepLeg != INDEX_NONE)) { return false; }
+
+		// WHAT EACH VEHICLE SHOULD FIT, asked of the router independently of the course's driver,
+		// each in its OWN direction: forward leg L for the rig, and for the utility the same node
+		// pair driven the other way, from waypoint L + 1 to waypoint L.
+		const TArray<FVehicle>& Vehicles = Course.GetVehicles();
+		if (!Test.TestEqual(TEXT("two vehicles: the rig, then the utility + trailer"), Vehicles.Num(), 2)) { return false; }
+		Test.TestTrue(TEXT("both vehicles tow something - the course is for chains"),
+			Vehicles[0].HasTrailer() && Vehicles[1].HasTrailer());
+		Test.TestFalse(TEXT("the rig runs the course forwards"), Course.GetRunnerForTest(0).bReverse);
+		Test.TestTrue(TEXT("and the utility in reverse"), Course.GetRunnerForTest(1).bReverse);
+		return true;
+	}
+
+	/** What each leg's verdict should be, from the router alone (see the comments inside). False when the router leaves a vehicle stranded. */
+	bool ExpectedLegOutcomes(FAutomationTestBase& Test, const ARigTestCourse& Course, const URoadNetwork& Net,
+		TArray<bool> (&OutExpected)[2], TArray<ERigLegOutcome> (&OutOutcome)[2])
+	{
+		const TArray<FRigCourseWaypoint>& Waypoints = Course.GetWaypoints();
+		const int32 Legs = Course.LegCountForTest();
+		const TArray<FVehicle>& Vehicles = Course.GetVehicles();
+		for (int32 L = 0; L < Legs; ++L)
+		{
+			const FRigCourseWaypoint& A = Waypoints[L];
+			const FRigCourseWaypoint& B = Waypoints[(L + 1) % Legs];
+			OutExpected[0].Add(Fits(Net, A, B, Vehicles[0]));
+			OutExpected[1].Add(Fits(Net, Reversed(B), Reversed(A), Vehicles[1]));
+		}
+
+		// WHAT EACH LEG'S OUTCOME SHOULD BE, from the router alone: the look-ahead rule stated once
+		// here over Fits, not read back from the course. A vehicle drives a leg that fits into a stop
+		// it can leave; otherwise the leg is Refused (it does not fit) or Bypassed (it fits, but into
+		// a trap), and the vehicle routes from where it stands to the next stop it can reach AND
+		// leave, the legs in between judged on their own plans.
+		for (int32 V = 0; V < 2; ++V)
+		{
+			auto StopOf = [&Waypoints, Legs, V](int32 P)
+			{
+				P = ((P % Legs) + Legs) % Legs;
+				return V == 0 ? Waypoints[P] : Reversed(Waypoints[(Legs - P) % Legs]);
+			};
+			auto LegOf = [Legs, V](int32 P) { P = ((P % Legs) + Legs) % Legs; return V == 0 ? P : Legs - 1 - P; };
+			// MEMOIZED, NOT RE-SEARCHED (perf pass, 2026-09-27): Onward's look-ahead, the fallback's
+			// Stop scan and Own all re-ask Fits on (stop, later) pairs that recur constantly -
+			// Onward(Stop)'s own first candidate (Later = Stop+1) IS Own(Stop), and a course with
+			// several refused/bypassed legs in a row (this one has both) makes the fallback loop
+			// call Onward at O(Legs) candidate Stops, each rescanning up to O(Legs) Laters: O(Legs^2)
+			// Fits calls per vehicle in the worst case, many of them not a fresh fact - the network
+			// never changes across this block, so the same (A, B) pair always gets the same answer,
+			// and caching it changes nothing Fits returns, only how many times it is asked. MEASURED
+			// 2026-09-27 (see the PR body for the figures): Fits itself - a real RouteSearch::Find
+			// with a tow-fit body - still costs several ms a call, and the worst-case distinct-pair
+			// count is still O(Legs^2), so this cuts REPEATS, not the underlying cost; a further cut
+			// needs a cheaper Fits or a smaller distinct-pair bound, left as a follow-up. Keyed on
+			// P/Stop NORMALISED mod Legs, since Onward and the fallback both walk past Legs to wrap a
+			// lap - StopOf does the same normalisation, so two raw indices a lap apart name the same
+			// stop pair.
+			TMap<int64, bool> FitsCache;
+			auto FitsCached = [&](int32 A, int32 B)
+			{
+				const int32 NA = ((A % Legs) + Legs) % Legs;
+				const int32 NB = ((B % Legs) + Legs) % Legs;
+				const int64 Key = (static_cast<int64>(NA) << 32) | static_cast<uint32>(NB);
+				if (const bool* Found = FitsCache.Find(Key)) { return *Found; }
+				const bool Result = Fits(Net, StopOf(A), StopOf(B), Vehicles[V]);
+				FitsCache.Add(Key, Result);
+				return Result;
+			};
+			auto Onward = [&](int32 Stop)
+			{
+				for (int32 Later = Stop + 1; Later < Stop + Legs; ++Later)
+				{
+					if (FitsCached(Stop, Later)) { return true; }
+				}
+				return false;
+			};
+			auto Own = [&](int32 P) { return FitsCached(P, P + 1); };
+			OutOutcome[V].Init(ERigLegOutcome::NotRun, Legs);
+			for (int32 P = 0; P < Legs;)
+			{
+				if (Own(P) && Onward(P + 1))
+				{
+					OutOutcome[V][LegOf(P)] = ERigLegOutcome::Driven;
+					++P;
+					continue;
+				}
+				int32 Target = INDEX_NONE;
+				for (int32 Stop = P + 2; Stop <= Legs && Target == INDEX_NONE; ++Stop)
+				{
+					Target = (FitsCached(P, Stop) && Onward(Stop)) ? Stop : INDEX_NONE;
+				}
+				if (!Test.TestTrue(FString::Printf(TEXT("%s: the router leaves a way on from stop %d - no stranding is expected"), Names[V], P),
+					Target != INDEX_NONE)) { return false; }
+				for (int32 M = P; M < Target; ++M)
+				{
+					OutOutcome[V][LegOf(M)] = Own(M) ? ERigLegOutcome::Bypassed : ERigLegOutcome::Refused;
+				}
+				P = Target;
+			}
+			TArray<FString> Bypassed;
+			for (int32 L = 0; L < Legs; ++L)
+			{
+				if (OutOutcome[V][L] == ERigLegOutcome::Bypassed) { Bypassed.Add(FString::FromInt(L)); }
+			}
+			UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %s expected bypassed legs: %s"), Names[V],
+				Bypassed.Num() > 0 ? *FString::Join(Bypassed, TEXT(", ")) : TEXT("none"));
+		}
+		return true;
+	}
+
+	/** Every figure the default loop measured, to the log: the evidence the checks below are read against. */
+	void LogLoopSummary(const ARigTestCourse& Course, const FClearanceProbe& Probe, const FContinuity& Continuity, const FOverlap& Overlap, int32 Ticks)
+	{
+		const TArray<FRigCourseWaypoint>& Waypoints = Course.GetWaypoints();
+		const int32 Legs = Course.LegCountForTest();
+		// THE WHOLE-ROUTE TOW CHECK'S COST, counted: the course plans per loop and per look-ahead, never per frame.
+		UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %d route plan(s), worst %.1f ms, %.1f ms in all"),
+			Course.GetPlanCallsForTest(), Course.GetWorstPlanMsForTest(), Course.GetTotalPlanMsForTest());
+		// THE ROUTE PLANS DRIVE NO BEND (review of 75d3cbc0): the widening is traced on the course's
+		// Topology rebuild, before the loop, and the first cold plan is route search and its tow check.
+		UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %d bend widening trace(s) during the loop"),
+			FRoadNetworkSolver::WideningTraceCountForTest);
+		UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %d whole-route tow check(s) over the loop, %.1f ms in all"),
+			RouteSearch::TowCheckCountForTest(), RouteSearch::TowCheckSecondsForTest() * 1000.0);
+		UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: both loops took %d ticks (%.0f s sim); rig %d loop(s), utility %d; %d turn / %d lane tow point(s) probed"),
+			Ticks, Ticks * TickSeconds, Course.LoopsCompletedForTest(0), Course.LoopsCompletedForTest(1), Probe.TurnPoints, Probe.LanePoints);
+		for (int32 V = 0; V < 2; ++V)
+		{
+			UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: vehicle %d tow - swept worst %.0f uu over (%s); per-side worst %.0f uu (%s); lane worst %.0f uu (%s)"),
+				V, Probe.Swept[V].Excess, *Probe.Swept[V].Where, Probe.PerSide[V].Excess, *Probe.PerSide[V].Where,
+				Probe.Lane[V].Excess, *Probe.Lane[V].Where);
+			UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: vehicle %d chain - %d waypoint(s) passed, %d agent(s) dispatched, %d route extension(s), %d restart(s) from rest; worst axle move beyond the cab's in one tick %.2f uu (%s); a re-lay would have moved it up to %.1f uu (%s)"),
+				V, Continuity.Handovers[V], Course.GetRunnerForTest(V).Dispatches, Course.GetRunnerForTest(V).Extensions,
+				Course.GetRunnerForTest(V).Redirects, Continuity.Worst[V].Excess, *Continuity.Worst[V].Where,
+				Continuity.RelayWouldMove[V].Excess, *Continuity.RelayWouldMove[V].Where);
+		}
+		// THE LOOP SUMMARY PER VEHICLE, per leg: how far past its turn clearance each vehicle's tow
+		// reached (negative: that much to spare), with the leg's feature - which tier and which corner.
+		for (int32 V = 0; V < 2; ++V)
+		{
+			TArray<int32> LegsSeen;
+			Probe.PerSideByLeg[V].GetKeys(LegsSeen);
+			LegsSeen.Sort();
+			TArray<FString> Parts;
+			for (const int32 L : LegsSeen)
+			{
+				Parts.Add(FString::Printf(TEXT("%d (%s) %.0f"), L, *Waypoints[(L + 1) % Legs].Label, Probe.PerSideByLeg[V][L]));
+			}
+			UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %s per-side by leg, uu past the turn clearance: %s"), Names[V], *FString::Join(Parts, TEXT("; ")));
+		}
+		UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: vehicles overlapped on %d tick(s) in %d episode(s); worst penetration %.0f uu (%s)"),
+			Overlap.TicksOverlapping, Overlap.Episodes, Overlap.TicksOverlapping > 0 ? Overlap.Worst.Excess : 0.0, *Overlap.Worst.Where);
+	}
+
+	/** The loop's log and chain checks: no fold, no reverse, no timeout; one agent; the chain never re-laid; one splice per loop; no sharp join. */
+	void CheckChainIsContinuous(FAutomationTestBase& Test, const ARigTestCourse& Course, const FWarningSpy& Spy,
+		const FContinuity& Continuity, const TArray<ERigLegOutcome> (&Outcome)[2])
+	{
+		Test.TestEqual(TEXT("no tow jack-knifed - driving forwards within the lock never reaches the guard"),
+			Spy.Containing(TEXT("jack-knifed")), 0);
+		Test.TestEqual(TEXT("no leg entered Reversing - the course has no reverse legs"), Spy.Containing(TEXT("Reversing")), 0);
+		Test.TestEqual(TEXT("no leg timed out stuck"), Spy.Containing(TEXT("stuck")), 0);
+
+		// THE CHAIN IS CONTINUOUS: one agent per vehicle for the whole run, one route per loop joined
+		// onto the next before it runs out, its axles never jumping beyond what the cab moved. The
+		// look-ahead keeps the rig out of the dead ends it cannot turn in, so nothing is stranded.
+		for (int32 V = 0; V < 2; ++V)
+		{
+			Test.TestEqual(FString::Printf(TEXT("%s: never stranded - the look-ahead routes past every trap"), Names[V]),
+				Spy.Containing(*FString::Printf(TEXT("RigCourse: %s loop"), Names[V]), TEXT("stranded")), 0);
+			Test.TestEqual(FString::Printf(TEXT("%s: ONE agent drove the whole run - never one per leg, never a respawn"), Names[V]),
+				Course.GetRunnerForTest(V).Dispatches, 1);
+			int32 DrivenLegs = 0;
+			for (const ERigLegOutcome O : Outcome[V]) { DrivenLegs += O == ERigLegOutcome::Driven ? 1 : 0; }
+			Test.TestTrue(FString::Printf(TEXT("%s: waypoints were passed - the continuity check is not vacuous (%d)"), Names[V], Continuity.Handovers[V]),
+				Continuity.Handovers[V] >= DrivenLegs - 1);
+			Test.TestTrue(FString::Printf(TEXT("%s: no tow axle ever moved more than one sub-step (%.0f uu) beyond the cab in a tick (worst %.2f uu: %s) - the chain was never re-laid"),
+				Names[V], VehicleSweep::TraceStep, Continuity.Worst[V].Excess, *Continuity.Worst[V].Where),
+				Continuity.Worst[V].Excess <= VehicleSweep::TraceStep);
+			// ONE ROUTE, JOINED LOOP TO LOOP: exactly one splice per loop boundary crossed or about
+			// to be, and never a restart from rest.
+			const FRigCourseRunner& Runner = Course.GetRunnerForTest(V);
+			Test.TestTrue(FString::Printf(TEXT("%s: one route extension per loop boundary (%d extension(s), %d loop(s) done)"), Names[V], Runner.Extensions, Runner.LoopsCompleted),
+				Runner.Extensions >= Runner.LoopsCompleted && Runner.Extensions <= Runner.LoopsCompleted + 1);
+			Test.TestEqual(FString::Printf(TEXT("%s: never restarted from rest"), Names[V]), Runner.Redirects, 0);
+			// NO SHARP JOIN ANYWHERE. Until 2026-09-25 the width step's lane-offset jog started at the
+			// step node's lane end, where two legs are welded, and showed at that join (90 deg). The
+			// builder now tapers the width on an S (Airside.Build.WidthTaper.*), so a sharp join
+			// anywhere is the route being rougher than its legs.
+			TArray<FString> Where;
+			for (const int32 IntoLeg : Runner.SharpJoinLegs)
+			{
+				Where.Add(FString::FromInt(IntoLeg));
+			}
+			Test.TestEqual(FString::Printf(TEXT("%s: no sharp vertex at any join - the width step included (joins into legs: %s)"), Names[V],
+				Where.Num() > 0 ? *FString::Join(Where, TEXT(", ")) : TEXT("none")), Runner.SharpJoinLegs.Num(), 0);
+			UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %s sharp joins into legs: %s"), Names[V],
+				Where.Num() > 0 ? *FString::Join(Where, TEXT(", ")) : TEXT("none"));
+		}
+	}
+
+	/** The tow on the tarmac, measured on the agent as it drove (FClearanceProbe): swept width, lane, and the rig's pinned known gap. */
+	void CheckTowStaysOnTheTarmac(FAutomationTestBase& Test, const FClearanceProbe& Probe)
+	{
+		// THE TOW STAYED ON THE TARMAC. 10 uu is the builder's clearance march step (ClearanceStep):
+		// the measured clearance is short of the real edge by up to that much.
+		Test.TestTrue(TEXT("the probe measured turn samples and lane samples - it is not vacuous"),
+			Probe.TurnPoints > 0 && Probe.LanePoints > 0);
+		for (int32 V = 0; V < 2; ++V)
+		{
+			Test.TestTrue(FString::Printf(TEXT("vehicle %d: the driven tow's swept width fits the tarmac at every turn sample - VehicleFit's rule, held on the agent (worst %.0f uu: %s)"),
+				V, Probe.Swept[V].Excess, *Probe.Swept[V].Where), Probe.Swept[V].Excess <= 10.0);
+		}
+		Test.TestTrue(FString::Printf(TEXT("the utility's tow stays within the road's width on every lane (worst %.0f uu: %s)"),
+			Probe.Lane[1].Excess, *Probe.Lane[1].Where), Probe.Lane[1].Excess <= 10.0);
+		// PER SIDE, PINNED, NOT PASSED (measured 2026-09-25): the rig's trailer cuts 2-3.4 m past the
+		// INNER pavement edge on near-side (right) turns, while its swept width fits - VehicleFit
+		// admits by width because a real driver swings wide, and the agent does not swing: it holds
+		// its lane line. The utility's short trailer stays on. A decision for the spec, not this
+		// course; when the agent learns to swing wide (or VehicleFit asks per side) the rig's line
+		// here goes red and is to be flipped.
+		// BEND LANES (2026-09-25): a bend's lanes are now arcs about its inner fillet and a Wide bend's
+		// inside is widened to the rig's sweep - where its arms can hold it. On this course they cannot
+		// everywhere: the Wide lane's corners have a 30 m arm already cut to its allowance, so the
+		// widening is capped there (traced 231 -> 188 uu, AirportMgr.RigCourse.BendCensus), and the
+		// rig is not the design vehicle of Narrow or Standard at all. The worst is still a Narrow T.
+		Test.TestTrue(FString::Printf(TEXT("the utility's tow stays on the tarmac per side (worst %.0f uu: %s)"),
+			Probe.PerSide[1].Excess, *Probe.PerSide[1].Where), Probe.PerSide[1].Excess <= 10.0);
+		Test.TestTrue(FString::Printf(TEXT("KNOWN GAP: the rig's trailer cuts in past the inner edge on near-side turns (worst %.0f uu: %s)"),
+			Probe.PerSide[0].Excess, *Probe.PerSide[0].Where), Probe.PerSide[0].Excess > 10.0);
+		// AND NO WORSE THAN MEASURED: the floor above only says the gap is still there, so a
+		// regression that put the trailer further off the pavement would pass it. The ceiling is the
+		// measurement plus a little room: worst 309 uu at tier 0's T junction, out of the stem (leg 4),
+		// measured 2026-09-30 and again 2026-10-01 (355 on 2026-09-25, 342-358 before the bend-lane
+		// arcs and the Wide widening; the ceiling sat at 375 for five days after the figure fell, which
+		// is a regression of up to 66 uu the pin could not see). The run is deterministic at a fixed tick.
+		Test.TestTrue(FString::Printf(TEXT("KNOWN GAP, bounded: the rig's inner cut-in is no worse than the 309 uu measured 2026-09-30 (worst %.0f uu: %s)"),
+			Probe.PerSide[0].Excess, *Probe.PerSide[0].Where), Probe.PerSide[0].Excess <= 330.0);
+		// The same cut-in shows on the LANE just before a near-side corner (measured 164 uu at the
+		// east link's stub when every leg began with the chain laid straight; 261 uu at tier 1's
+		// entry stub once the chain carried across waypoints, 2026-09-25): the trailer leaves the
+		// road before the junction pavement begins. Bound it by the turn's own overrun - it is the
+		// approach to that cut, never a worse one.
+		Test.TestTrue(FString::Printf(TEXT("KNOWN GAP: the rig's lane overrun is the approach to that same cut-in, no worse (lane %.0f uu: %s)"),
+			Probe.Lane[0].Excess, *Probe.Lane[0].Where), Probe.Lane[0].Excess <= Probe.PerSide[0].Excess + 10.0);
+	}
+
+	/** Each leg's result against the router's verdicts, the width step's taper, the marker timing and the refusal reasons. False when the results are not one per leg. */
+	bool CheckLegResults(FAutomationTestBase& Test, const ARigTestCourse& Course, const URoadNetwork& Net, const FWarningSpy& Spy,
+		const TArray<ERigLegOutcome> (&Outcome)[2], const TArray<bool> (&Expected)[2], int32 WidthStepLeg)
+	{
+		const TArray<FRigCourseWaypoint>& Waypoints = Course.GetWaypoints();
+		const int32 Legs = Course.LegCountForTest();
+		const TArray<FVehicle>& Vehicles = Course.GetVehicles();
+		for (int32 V = 0; V < Vehicles.Num(); ++V)
+		{
+			// THE TAPER IS IN THE LEG THAT LEAVES THE STEP NODE. Forwards that is WidthStepLeg itself;
+			// in reverse the runner arrives at the step node BEFORE the taper, and the leg leaving it is
+			// the node pair of the forward leg one earlier - a reversed leg turns at its other end.
+			const int32 TaperLeg = V == 0 ? WidthStepLeg : (WidthStepLeg + Legs - 1) % Legs;
+			const TArray<FRigLegResult>& Results = Course.LastLoopResultsForTest(V);
+			if (!Test.TestEqual(TEXT("a result per leg"), Results.Num(), Legs)) { return false; }
+			int32 Refusals = 0;
+			for (int32 L = 0; L < Legs; ++L)
+			{
+				const FRigLegResult& R = Results[L];
+				const FString What = FString::Printf(TEXT("%s leg %d (%s%s)"), Names[V], L, *Waypoints[(L + 1) % Legs].Label,
+					V == 1 ? TEXT(", reversed") : TEXT(""));
+				Test.TestTrue(What + TEXT(" was driven, refused or bypassed"),
+					R.Outcome == ERigLegOutcome::Driven || R.Outcome == ERigLegOutcome::Refused || R.Outcome == ERigLegOutcome::Bypassed);
+				Test.TestEqual(What + TEXT(": the outcome the router's verdicts and the look-ahead rule give"),
+					static_cast<int32>(R.Outcome), static_cast<int32>(Outcome[V][L]));
+				Test.TestEqual(What + TEXT(": refused exactly when the router refuses it with this body, in this direction"),
+					R.Outcome == ERigLegOutcome::Refused, !Expected[V][L]);
+				Test.TestFalse(What + TEXT(" never reversed"), R.bReversed);
+				if (R.Outcome == ERigLegOutcome::Driven)
+				{
+					// The steered axle walks the line, so arrival is measured along it; the chassis
+					// origin then sits one wheelbase back from the lane end, and no further.
+					const double Wheelbase = Vehicles[V].Chassis.Wheelbase();
+					// THE MARKER FIRES ON THE TICK IT IS PASSED: at most one tick's travel past it (the
+					// speed it passed at, times the tick), never before it, never a tick late.
+					Test.TestTrue(FString::Printf(TEXT("%s: its marker fired within one tick's travel of the lane end (%.1f uu past, %.1f allowed)"),
+						*What, -R.DistanceLeft, R.PassSpeed * TickSeconds + 1.0),
+						R.DistanceLeft <= 1.0 && -R.DistanceLeft <= R.PassSpeed * TickSeconds + 1.0);
+					// AND THE BODY IS WHERE THAT SAYS: the steered axle is -DistanceLeft past the lane
+					// end, so the fixed axle is a wheelbase less that from it - to a fixed 20 uu, not a
+					// tolerance that grows with the overshoot.
+					const double Behind = FVector2D::Distance(R.EndPosition, R.GoalPosition);
+					Test.TestTrue(FString::Printf(TEXT("%s: and its fixed axle was a wheelbase behind the lane end, less the overshoot (%.1f vs %.1f uu)"),
+						*What, Behind, Wheelbase + R.DistanceLeft), FMath::Abs(Behind - (Wheelbase + R.DistanceLeft)) < 20.0);
+
+					// THE WIDTH STEP, FLIPPED (was pinned by controller ruling 5 as the builder defect:
+					// a 90 degree jog FSpeedProfile crawled; this line asserted it was there). The
+					// builder tapers it on an S since 2026-09-25, so NO leg has a sharp vertex, the
+					// width-step leg included, in either direction.
+					Test.TestEqual(What + (L == TaperLeg ? TEXT(": the width step tapers on an S - no sharp vertex") : TEXT(" has no sharp vertex")),
+						R.SharpVertexCount, 0);
+					// AND NEITHER VEHICLE CRAWLS THROUGH IT. The two legs either side of the step node
+					// (one ends at it, one leaves it) were passed at 39-44 uu/s on the jog - steering
+					// speed; on the S they pass at road speed. A quarter of the cap is far below any
+					// healthy pass on this course and far above a crawl.
+					if (L == WidthStepLeg || L == (WidthStepLeg + Legs - 1) % Legs)
+					{
+						const double Cap = Vehicles[V].Chassis.Ground.Taxi.SpeedCap;
+						UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %s passed at %.0f uu/s after %.1f s"), *What, R.PassSpeed, R.Elapsed);
+						Test.TestTrue(FString::Printf(TEXT("%s: passed at road speed, not a crawl (%.0f uu/s, floor %.0f)"), *What, R.PassSpeed, 0.25 * Cap),
+							R.PassSpeed >= 0.25 * Cap);
+					}
+				}
+				Refusals += R.Outcome == ERigLegOutcome::Refused ? 1 : 0;
+				// THE REASON IS THE TRAILER, NOT THE LOCK (2026-09-25): the dead ends were reshaped
+				// within the bowser footprint and every piece now clears the rig's lock; what refuses
+				// it is the whole-route tow check - the trailer folds going round. Said in the refusal.
+				if (V == 0 && R.Outcome == ERigLegOutcome::Refused)
+				{
+					Test.TestTrue(FString::Printf(TEXT("%s: refused because its trailer folds (%s)"), *What, *R.Reason),
+						R.Reason.Contains(TEXT("trailer folds at guideline node")));
+				}
+			}
+			// The width step's own expected outcome: DRIVEN, on the S, within the 3x allowance.
+			Test.TestEqual(FString::Printf(TEXT("%s drives the Narrow->Wide mid-straight step"), Names[V]),
+				static_cast<int32>(Results[TaperLeg].Outcome), static_cast<int32>(ERigLegOutcome::Driven));
+			// ONCE PER LOOP: counted in the loop these results are from, by the loop number in the line.
+			const int32 Loop = Course.LoopsCompletedForTest(V);
+			Test.TestEqual(FString::Printf(TEXT("%s: each refusal was logged once in loop %d"), Names[V], Loop),
+				Spy.Containing(*FString::Printf(TEXT("RigCourse: %s loop %d leg "), Names[V], Loop), TEXT("refused:")), Refusals);
+			// AND EACH BYPASS: the route-on branch's own line, once per bypassed leg per loop.
+			int32 Bypasses = 0;
+			for (const FRigLegResult& R : Results) { Bypasses += R.Outcome == ERigLegOutcome::Bypassed ? 1 : 0; }
+			Test.TestEqual(FString::Printf(TEXT("%s: each bypassed leg was logged once in loop %d"), Names[V], Loop),
+				Spy.Containing(*FString::Printf(TEXT("RigCourse: %s loop %d leg "), Names[V], Loop), TEXT("bypassed:")), Bypasses);
+			CheckMarkersAtWaypoints(Test, Course, Net, V);
+		}
+		return true;
+	}
+
+	// WAYPOINTS ARE NOT STOPS (spec §3 REVISED "one route per loop", 2026-09-25). The user saw the
+	// rig brake to a halt at every waypoint: each leg was its own route, and FSpeedProfile brakes to
+	// zero at a route's end. A job in the game drives one plan to a real destination; so does the
+	// course now, and this is what says so.
+	// (Folded into the one default-loop run, 2026-10: it used to run the identical fixture, Done condition and FContinuity observer as
+	// OneLoopHeadless a second time, 1.6 s for nothing the first run had not already watched.)
+	void CheckWaypointsAreNotStops(FAutomationTestBase& Test, const ARigTestCourse& Course, const URoadNetwork& Net, const FContinuity& Continuity)
+	{
+		const TArray<FRigCourseWaypoint>& Waypoints = Course.GetWaypoints();
+		const FVehicle& Rig = Course.GetVehicles()[0];
+		// EVERY WAYPOINT PASSED ON THE MOVE, AND AT THE PROFILE'S SPEED. Never above the profile's
+		// limit (as it stood a tick ago, the follower's speed being last tick's); and at EVERY
+		// waypoint no slower than that limit or the forward pass (FPass::Reach - what it can have
+		// accelerated to since the last slowdown), give or take a tick - unless traffic arbitration
+		// holds it within its braking distance. A vehicle braking for a route end it should have
+		// been joined past fails this; so did every waypoint of the per-leg course.
+		for (int32 V = 0; V < 2; ++V)
+		{
+			const FGroundRegime& Taxi = Course.GetVehicles()[V].Chassis.Ground.Taxi;
+			const double Tolerance = FMath::Max(Taxi.Accel, Taxi.Decel) * TickSeconds + 1.0;
+			Test.TestTrue(FString::Printf(TEXT("%s: waypoints were passed (%d)"), Names[V], Continuity.Passes[V].Num()),
+				Continuity.Passes[V].Num() >= 10);
+			for (const FContinuity::FPass& Pass : Continuity.Passes[V])
+			{
+				UE_LOG(LogTemp, Display, TEXT("RigCourse.WaypointsAreNotStops: %s at %s: %.0f uu/s, profile limit %.0f (a tick back %.0f), forward pass %.0f, cap %.0f%s"),
+					Names[V], *Pass.Where, Pass.Speed, Pass.Limit, Pass.LimitBehind, Pass.Reach, Pass.Cap,
+					Pass.bHeld ? TEXT(", held by traffic") : TEXT(""));
+				Test.TestTrue(FString::Printf(TEXT("%s at %s: moving through the waypoint (%.0f uu/s), not stopped at it"), Names[V], *Pass.Where, Pass.Speed),
+					Pass.Speed > 1.0);
+				const double Governing = FMath::Max(Pass.Limit, Pass.LimitBehind);
+				Test.TestTrue(FString::Printf(TEXT("%s at %s: never above the profile's limit (%.0f vs %.0f uu/s)"), Names[V], *Pass.Where, Pass.Speed, Governing),
+					Pass.Speed <= Governing + Tolerance);
+				if (!Pass.bHeld)
+				{
+					// The LOWER of the two limits: just past a crawl (a slow corner's apex) the limit a tick
+					// ahead is already rising and no vehicle has that acceleration in one tick.
+					const double Expected = FMath::Min3(Pass.Limit, Pass.LimitBehind, Pass.Reach);
+					Test.TestTrue(FString::Printf(TEXT("%s at %s: at the profile's speed (%.0f vs %.0f uu/s: limit %.0f, forward pass %.0f)"),
+						Names[V], *Pass.Where, Pass.Speed, Expected, FMath::Min(Pass.Limit, Pass.LimitBehind), Pass.Reach),
+						Pass.Speed >= Expected - Tolerance);
+				}
+			}
+		}
+
+		// LEG 0, THE STRAIGHT (80 m node to node, 68 m of lane between its junctions' cut-backs), AT
+		// THE NO-STOP TIME: from rest to the cap and on at it, derived
+		// from the rig's own figures - not rest-to-rest, which is what a leg that is its own route
+		// costs (measured 14.3 s for 68 m before this change).
+		FRoutePlan Leg0;
+		{
+			const FGuidelineNodeId Start = ARigTestCourse::ResolveWaypoint(Net, Waypoints[0]);
+			const FGuidelineNodeId Goal = ARigTestCourse::ResolveWaypoint(Net, Waypoints[1]);
+			FRouteQuery Query = FRouteQuery::For(ERouteErrand::PlayerIssued, Start, Goal, 0.0, ETraversalClass::GroundVehicle);
+			Query.WithVehicle(Rig);
+			Leg0 = RouteSearch::Find(Net, Query);
+		}
+		if (!Test.TestTrue(TEXT("leg 0 plans for the rig"), Leg0.IsValid())) { return; }
+		const FGroundRegime& Taxi = Rig.Chassis.Ground.Taxi;
+		const double Cap = Taxi.SpeedCap;
+		const double UpTo = Cap * Cap / (2.0 * Taxi.Accel);
+		const double Down = Cap * Cap / (2.0 * Taxi.Decel);
+		const double NoStop = Leg0.Length >= UpTo ? Cap / Taxi.Accel + (Leg0.Length - UpTo) / Cap : FMath::Sqrt(2.0 * Leg0.Length / Taxi.Accel);
+		// Rest to rest: a trapezium when the leg is long enough to reach the cap, else a triangle
+		// peaking at sqrt(2 L a d / (a + d)).
+		const double Peak = FMath::Sqrt(2.0 * Leg0.Length * Taxi.Accel * Taxi.Decel / (Taxi.Accel + Taxi.Decel));
+		const double RestToRest = Leg0.Length >= UpTo + Down
+			? Cap / Taxi.Accel + Cap / Taxi.Decel + (Leg0.Length - UpTo - Down) / Cap
+			: Peak / Taxi.Accel + Peak / Taxi.Decel;
+		const double Took = (Continuity.FirstPass[0] - Continuity.FirstSeen[0]) * TickSeconds;
+		UE_LOG(LogTemp, Display, TEXT("RigCourse.WaypointsAreNotStops: rig leg 0, %.0f m, took %.2f s; no-stop %.2f s, rest-to-rest %.2f s"),
+			Leg0.Length / 100.0, Took, NoStop, RestToRest);
+		Test.TestTrue(FString::Printf(TEXT("the rig's leg 0 took about the no-stop time (%.2f s vs %.2f s ideal) - not rest-to-rest (%.2f s)"), Took, NoStop, RestToRest),
+			Took <= NoStop * 1.1 + 0.1 && Took >= NoStop * 0.9);
+		Test.TestTrue(FString::Printf(TEXT("and clearly under rest-to-rest (%.2f s vs %.2f s)"), Took, RestToRest), Took < RestToRest - 1.0);
+	}
+
+	/**
+	 * THE ROUTE STAYS BOUNDED (review of ed81410c): each loop is spliced onto the live route, and
+	 * without trimming the driven history a course left running grows its plan - and every
+	 * per-tick walk over it - for ever. Read off the rig's plan over the default loop, ONE splice
+	 * in: the trimmed route is the first loop's plus the history kept behind the vehicle (1699 m
+	 * against 1615 m measured 2026-09-30), the untrimmed one is two loops (3230 m). It used to drive
+	 * THREE loops against `2*FirstLoop + 20000`, a bound one extension could not break; 1.25x separates
+	 * the two after the first splice, which this run already makes. THE TRIM ITSELF is also
+	 * Airside.Model.Traffic.ExtendRouteTrimsHistory.
+	 */
+	void CheckRouteStaysBounded(FAutomationTestBase& Test, const ARigTestCourse& Course, const FPlanLength& Length)
+	{
+		const FRigCourseRunner& Rig = Course.GetRunnerForTest(0);
+		Test.TestTrue(FString::Printf(TEXT("the rig's route was extended at the loop boundary, so the bound below is read off a SPLICED route (%d extension(s))"), Rig.Extensions),
+			Rig.Extensions >= 1);
+		Test.TestTrue(TEXT("the first loop's own route length was observed - the bound is not against zero"), Length.FirstLoop > 0.0);
+		UE_LOG(LogTemp, Display, TEXT("RigCourse.RouteStaysBounded: first loop's route %.0f m; longest route over the loop %.0f m"),
+			Length.FirstLoop / 100.0, Length.Longest / 100.0);
+		Test.TestTrue(FString::Printf(TEXT("the live route never grew past the first loop's plus the history kept (%.0f m vs %.0f m)"),
+			Length.Longest / 100.0, 1.25 * Length.FirstLoop / 100.0), Length.Longest <= 1.25 * Length.FirstLoop);
+	}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -695,130 +1183,14 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 	Course->BuildCourseForTest(*Actor);
 	const URoadNetwork& Net = *Actor->Network;
 
-	// THE LAYOUT: every feature at every tier, so one loop says which tier each vehicle fits.
-	TestEqual(TEXT("every road the course asked for was laid - a refused segment would change the course silently"),
-		Course->GetRefusedConnectsForTest(), 0);
-	TestEqual(TEXT("3 tiers x 5 features (straight, right 90, left 90, T both ways, dead end)"),
-		Course->FeatureCountForTest(), 15);
-	const TArray<FRigCourseWaypoint>& Waypoints = Course->GetWaypoints();
-	const int32 Legs = Course->LegCountForTest();
-	TestEqual(TEXT("one leg per waypoint, the last wrapping to the first"), Legs, Waypoints.Num());
 	int32 WidthStepLeg = INDEX_NONE;
-	for (int32 I = 0; I < Waypoints.Num(); ++I)
-	{
-		const FRoadNode* Node = Net.GetNode(Waypoints[I].Node);
-		TestTrue(FString::Printf(TEXT("waypoint %d (%s) is a live node"), I, *Waypoints[I].Label),
-			Node != nullptr && Node->bAlive);
-		TestTrue(FString::Printf(TEXT("and names a lane end in the derived graph (%s)"), *Waypoints[I].Label),
-			ARigTestCourse::ResolveWaypoint(Net, Waypoints[I]).IsSet());
-		// The reverse runner's stop: the same node along the road the forward leg leaves by.
-		TestTrue(FString::Printf(TEXT("and, arrived the other way along Next, names a lane end too (%s)"), *Waypoints[I].Label),
-			ARigTestCourse::ResolveWaypoint(Net, Reversed(Waypoints[I])).IsSet());
-		if (Waypoints[I].Feature == ERigCourseFeature::WidthStep)
-		{
-			TestEqual(TEXT("exactly one width-step feature"), WidthStepLeg, static_cast<int32>(INDEX_NONE));
-			WidthStepLeg = (I + Legs - 1) % Legs;   // the leg that ENDS at this waypoint
-		}
-	}
-	if (!TestTrue(TEXT("the Narrow->Wide mid-straight step is on the course"), WidthStepLeg != INDEX_NONE)) { return false; }
+	if (!CheckCourseLayout(*this, *Course, Net, WidthStepLeg)) { return false; }
 
-	// WHAT EACH VEHICLE SHOULD FIT, asked of the router independently of the course's driver,
-	// each in its OWN direction: forward leg L for the rig, and for the utility the same node
-	// pair driven the other way, from waypoint L + 1 to waypoint L.
-	const TArray<FVehicle>& Vehicles = Course->GetVehicles();
-	if (!TestEqual(TEXT("two vehicles: the rig, then the utility + trailer"), Vehicles.Num(), 2)) { return false; }
-	TestTrue(TEXT("both vehicles tow something - the course is for chains"),
-		Vehicles[0].HasTrailer() && Vehicles[1].HasTrailer());
-	TestFalse(TEXT("the rig runs the course forwards"), Course->GetRunnerForTest(0).bReverse);
-	TestTrue(TEXT("and the utility in reverse"), Course->GetRunnerForTest(1).bReverse);
+	// WHAT EACH VEHICLE SHOULD FIT, and what each leg's outcome should be, asked of the router
+	// independently of the course's driver (ExpectedLegOutcomes).
 	TArray<bool> Expected[2];
-	for (int32 L = 0; L < Legs; ++L)
-	{
-		const FRigCourseWaypoint& A = Waypoints[L];
-		const FRigCourseWaypoint& B = Waypoints[(L + 1) % Legs];
-		Expected[0].Add(Fits(Net, A, B, Vehicles[0]));
-		Expected[1].Add(Fits(Net, Reversed(B), Reversed(A), Vehicles[1]));
-	}
-
-	// WHAT EACH LEG'S OUTCOME SHOULD BE, from the router alone: the look-ahead rule stated once
-	// here over Fits, not read back from the course. A vehicle drives a leg that fits into a stop
-	// it can leave; otherwise the leg is Refused (it does not fit) or Bypassed (it fits, but into
-	// a trap), and the vehicle routes from where it stands to the next stop it can reach AND
-	// leave, the legs in between judged on their own plans.
 	TArray<ERigLegOutcome> Outcome[2];
-	for (int32 V = 0; V < 2; ++V)
-	{
-		auto StopOf = [&Waypoints, Legs, V](int32 P)
-		{
-			P = ((P % Legs) + Legs) % Legs;
-			return V == 0 ? Waypoints[P] : Reversed(Waypoints[(Legs - P) % Legs]);
-		};
-		auto LegOf = [Legs, V](int32 P) { P = ((P % Legs) + Legs) % Legs; return V == 0 ? P : Legs - 1 - P; };
-		// MEMOIZED, NOT RE-SEARCHED (perf pass, 2026-09-27): Onward's look-ahead, the fallback's
-		// Stop scan and Own all re-ask Fits on (stop, later) pairs that recur constantly -
-		// Onward(Stop)'s own first candidate (Later = Stop+1) IS Own(Stop), and a course with
-		// several refused/bypassed legs in a row (this one has both) makes the fallback loop
-		// call Onward at O(Legs) candidate Stops, each rescanning up to O(Legs) Laters: O(Legs^2)
-		// Fits calls per vehicle in the worst case, many of them not a fresh fact - the network
-		// never changes across this block, so the same (A, B) pair always gets the same answer,
-		// and caching it changes nothing Fits returns, only how many times it is asked. MEASURED
-		// 2026-09-27 (see the PR body for the figures): Fits itself - a real RouteSearch::Find
-		// with a tow-fit body - still costs several ms a call, and the worst-case distinct-pair
-		// count is still O(Legs^2), so this cuts REPEATS, not the underlying cost; a further cut
-		// needs a cheaper Fits or a smaller distinct-pair bound, left as a follow-up. Keyed on
-		// P/Stop NORMALISED mod Legs, since Onward and the fallback both walk past Legs to wrap a
-		// lap - StopOf does the same normalisation, so two raw indices a lap apart name the same
-		// stop pair.
-		TMap<int64, bool> FitsCache;
-		auto FitsCached = [&](int32 A, int32 B)
-		{
-			const int32 NA = ((A % Legs) + Legs) % Legs;
-			const int32 NB = ((B % Legs) + Legs) % Legs;
-			const int64 Key = (static_cast<int64>(NA) << 32) | static_cast<uint32>(NB);
-			if (const bool* Found = FitsCache.Find(Key)) { return *Found; }
-			const bool Result = Fits(Net, StopOf(A), StopOf(B), Vehicles[V]);
-			FitsCache.Add(Key, Result);
-			return Result;
-		};
-		auto Onward = [&](int32 Stop)
-		{
-			for (int32 Later = Stop + 1; Later < Stop + Legs; ++Later)
-			{
-				if (FitsCached(Stop, Later)) { return true; }
-			}
-			return false;
-		};
-		auto Own = [&](int32 P) { return FitsCached(P, P + 1); };
-		Outcome[V].Init(ERigLegOutcome::NotRun, Legs);
-		for (int32 P = 0; P < Legs;)
-		{
-			if (Own(P) && Onward(P + 1))
-			{
-				Outcome[V][LegOf(P)] = ERigLegOutcome::Driven;
-				++P;
-				continue;
-			}
-			int32 Target = INDEX_NONE;
-			for (int32 Stop = P + 2; Stop <= Legs && Target == INDEX_NONE; ++Stop)
-			{
-				Target = (FitsCached(P, Stop) && Onward(Stop)) ? Stop : INDEX_NONE;
-			}
-			if (!TestTrue(FString::Printf(TEXT("%s: the router leaves a way on from stop %d - no stranding is expected"), Names[V], P),
-				Target != INDEX_NONE)) { return false; }
-			for (int32 M = P; M < Target; ++M)
-			{
-				Outcome[V][LegOf(M)] = Own(M) ? ERigLegOutcome::Bypassed : ERigLegOutcome::Refused;
-			}
-			P = Target;
-		}
-		TArray<FString> Bypassed;
-		for (int32 L = 0; L < Legs; ++L)
-		{
-			if (Outcome[V][L] == ERigLegOutcome::Bypassed) { Bypassed.Add(FString::FromInt(L)); }
-		}
-		UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %s expected bypassed legs: %s"), Names[V],
-			Bypassed.Num() > 0 ? *FString::Join(Bypassed, TEXT(", ")) : TEXT("none"));
-	}
+	if (!ExpectedLegOutcomes(*this, *Course, Net, Expected, Outcome)) { return false; }
 
 	// BOTH VEHICLES AT ONCE until each has done one loop, at a fixed step, bounded so a hang -
 	// or a traffic deadlock between the two - fails rather than spins.
@@ -826,219 +1198,30 @@ bool FRigCourseOneLoopHeadlessTest::RunTest(const FString& Parameters)
 	FClearanceProbe Probe;
 	FContinuity Continuity;
 	FOverlap Overlap;
+	FPlanLength PlanLength;
 	FObservers Watch;
 	Watch.Probe = &Probe;
 	Watch.Continuity = &Continuity;
 	Watch.Overlap = &Overlap;
+	Watch.PlanLength = &PlanLength;
 	GLog->AddOutputDevice(&Spy);
 	RouteSearch::ResetTowCheckCountForTest();
 	FRoadNetworkSolver::ResetWideningTraceCountForTest();
 	const int32 Ticks = RunUntil(*Actor, *Course, MaxTicks, [Course]() { return Course->LoopsCompletedByAllForTest() >= 1; }, Watch);
-	// THE WHOLE-ROUTE TOW CHECK'S COST, counted: the course plans per loop and per look-ahead, never per frame.
-	UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %d route plan(s), worst %.1f ms, %.1f ms in all"),
-		Course->GetPlanCallsForTest(), Course->GetWorstPlanMsForTest(), Course->GetTotalPlanMsForTest());
-	// THE ROUTE PLANS DRIVE NO BEND (review of 75d3cbc0): the widening is traced on the course's
-	// Topology rebuild, before the loop, and the first cold plan is route search and its tow check.
-	UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %d bend widening trace(s) during the loop"),
-		FRoadNetworkSolver::WideningTraceCountForTest);
-	UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %d whole-route tow check(s) over the loop, %.1f ms in all"),
-		RouteSearch::TowCheckCountForTest(), RouteSearch::TowCheckSecondsForTest() * 1000.0);
 	GLog->RemoveOutputDevice(&Spy);
 	Probe.Finish();
-	UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: both loops took %d ticks (%.0f s sim); rig %d loop(s), utility %d; %d turn / %d lane tow point(s) probed"),
-		Ticks, Ticks * TickSeconds, Course->LoopsCompletedForTest(0), Course->LoopsCompletedForTest(1), Probe.TurnPoints, Probe.LanePoints);
-	for (int32 V = 0; V < 2; ++V)
-	{
-		UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: vehicle %d tow - swept worst %.0f uu over (%s); per-side worst %.0f uu (%s); lane worst %.0f uu (%s)"),
-			V, Probe.Swept[V].Excess, *Probe.Swept[V].Where, Probe.PerSide[V].Excess, *Probe.PerSide[V].Where,
-			Probe.Lane[V].Excess, *Probe.Lane[V].Where);
-		UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: vehicle %d chain - %d waypoint(s) passed, %d agent(s) dispatched, %d route extension(s), %d restart(s) from rest; worst axle move beyond the cab's in one tick %.2f uu (%s); a re-lay would have moved it up to %.1f uu (%s)"),
-			V, Continuity.Handovers[V], Course->GetRunnerForTest(V).Dispatches, Course->GetRunnerForTest(V).Extensions,
-			Course->GetRunnerForTest(V).Redirects, Continuity.Worst[V].Excess, *Continuity.Worst[V].Where,
-			Continuity.RelayWouldMove[V].Excess, *Continuity.RelayWouldMove[V].Where);
-	}
-	// THE LOOP SUMMARY PER VEHICLE, per leg: how far past its turn clearance each vehicle's tow
-	// reached (negative: that much to spare), with the leg's feature - which tier and which corner.
-	for (int32 V = 0; V < 2; ++V)
-	{
-		TArray<int32> LegsSeen;
-		Probe.PerSideByLeg[V].GetKeys(LegsSeen);
-		LegsSeen.Sort();
-		TArray<FString> Parts;
-		for (const int32 L : LegsSeen)
-		{
-			Parts.Add(FString::Printf(TEXT("%d (%s) %.0f"), L, *Waypoints[(L + 1) % Legs].Label, Probe.PerSideByLeg[V][L]));
-		}
-		UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %s per-side by leg, uu past the turn clearance: %s"), Names[V], *FString::Join(Parts, TEXT("; ")));
-	}
-	UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: vehicles overlapped on %d tick(s) in %d episode(s); worst penetration %.0f uu (%s)"),
-		Overlap.TicksOverlapping, Overlap.Episodes, Overlap.TicksOverlapping > 0 ? Overlap.Worst.Excess : 0.0, *Overlap.Worst.Where);
+	LogLoopSummary(*Course, Probe, Continuity, Overlap, Ticks);
 	if (!TestTrue(TEXT("both vehicles completed a loop within the tick bound - no hang, no deadlock between them"),
 		Course->LoopsCompletedByAllForTest() >= 1)) { return false; }
 
-	TestEqual(TEXT("no tow jack-knifed - driving forwards within the lock never reaches the guard"),
-		Spy.Containing(TEXT("jack-knifed")), 0);
-	TestEqual(TEXT("no leg entered Reversing - the course has no reverse legs"), Spy.Containing(TEXT("Reversing")), 0);
-	TestEqual(TEXT("no leg timed out stuck"), Spy.Containing(TEXT("stuck")), 0);
-
-	// THE CHAIN IS CONTINUOUS: one agent per vehicle for the whole run, one route per loop joined
-	// onto the next before it runs out, its axles never jumping beyond what the cab moved. The
-	// look-ahead keeps the rig out of the dead ends it cannot turn in, so nothing is stranded.
-	for (int32 V = 0; V < 2; ++V)
-	{
-		TestEqual(FString::Printf(TEXT("%s: never stranded - the look-ahead routes past every trap"), Names[V]),
-			Spy.Containing(*FString::Printf(TEXT("RigCourse: %s loop"), Names[V]), TEXT("stranded")), 0);
-		TestEqual(FString::Printf(TEXT("%s: ONE agent drove the whole run - never one per leg, never a respawn"), Names[V]),
-			Course->GetRunnerForTest(V).Dispatches, 1);
-		int32 DrivenLegs = 0;
-		for (const ERigLegOutcome O : Outcome[V]) { DrivenLegs += O == ERigLegOutcome::Driven ? 1 : 0; }
-		TestTrue(FString::Printf(TEXT("%s: waypoints were passed - the continuity check is not vacuous (%d)"), Names[V], Continuity.Handovers[V]),
-			Continuity.Handovers[V] >= DrivenLegs - 1);
-		TestTrue(FString::Printf(TEXT("%s: no tow axle ever moved more than one sub-step (%.0f uu) beyond the cab in a tick (worst %.2f uu: %s) - the chain was never re-laid"),
-			Names[V], VehicleSweep::TraceStep, Continuity.Worst[V].Excess, *Continuity.Worst[V].Where),
-			Continuity.Worst[V].Excess <= VehicleSweep::TraceStep);
-		// ONE ROUTE, JOINED LOOP TO LOOP: exactly one splice per loop boundary crossed or about
-		// to be, and never a restart from rest.
-		const FRigCourseRunner& Runner = Course->GetRunnerForTest(V);
-		TestTrue(FString::Printf(TEXT("%s: one route extension per loop boundary (%d extension(s), %d loop(s) done)"), Names[V], Runner.Extensions, Runner.LoopsCompleted),
-			Runner.Extensions >= Runner.LoopsCompleted && Runner.Extensions <= Runner.LoopsCompleted + 1);
-		TestEqual(FString::Printf(TEXT("%s: never restarted from rest"), Names[V]), Runner.Redirects, 0);
-		// NO SHARP JOIN ANYWHERE. Until 2026-09-25 the width step's lane-offset jog started at the
-		// step node's lane end, where two legs are welded, and showed at that join (90 deg). The
-		// builder now tapers the width on an S (Airside.Build.WidthTaper.*), so a sharp join
-		// anywhere is the route being rougher than its legs.
-		TArray<FString> Where;
-		for (const int32 IntoLeg : Runner.SharpJoinLegs)
-		{
-			Where.Add(FString::FromInt(IntoLeg));
-		}
-		TestEqual(FString::Printf(TEXT("%s: no sharp vertex at any join - the width step included (joins into legs: %s)"), Names[V],
-			Where.Num() > 0 ? *FString::Join(Where, TEXT(", ")) : TEXT("none")), Runner.SharpJoinLegs.Num(), 0);
-		UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %s sharp joins into legs: %s"), Names[V],
-			Where.Num() > 0 ? *FString::Join(Where, TEXT(", ")) : TEXT("none"));
-	}
-
-	// THE TOW STAYED ON THE TARMAC. 10 uu is the builder's clearance march step (ClearanceStep):
-	// the measured clearance is short of the real edge by up to that much.
-	TestTrue(TEXT("the probe measured turn samples and lane samples - it is not vacuous"),
-		Probe.TurnPoints > 0 && Probe.LanePoints > 0);
-	for (int32 V = 0; V < 2; ++V)
-	{
-		TestTrue(FString::Printf(TEXT("vehicle %d: the driven tow's swept width fits the tarmac at every turn sample - VehicleFit's rule, held on the agent (worst %.0f uu: %s)"),
-			V, Probe.Swept[V].Excess, *Probe.Swept[V].Where), Probe.Swept[V].Excess <= 10.0);
-	}
-	TestTrue(FString::Printf(TEXT("the utility's tow stays within the road's width on every lane (worst %.0f uu: %s)"),
-		Probe.Lane[1].Excess, *Probe.Lane[1].Where), Probe.Lane[1].Excess <= 10.0);
-	// PER SIDE, PINNED, NOT PASSED (measured 2026-09-25): the rig's trailer cuts 2-3.4 m past the
-	// INNER pavement edge on near-side (right) turns, while its swept width fits - VehicleFit
-	// admits by width because a real driver swings wide, and the agent does not swing: it holds
-	// its lane line. The utility's short trailer stays on. A decision for the spec, not this
-	// course; when the agent learns to swing wide (or VehicleFit asks per side) the rig's line
-	// here goes red and is to be flipped.
-	// BEND LANES (2026-09-25): a bend's lanes are now arcs about its inner fillet and a Wide bend's
-	// inside is widened to the rig's sweep - where its arms can hold it. On this course they cannot
-	// everywhere: the Wide lane's corners have a 30 m arm already cut to its allowance, so the
-	// widening is capped there (traced 231 -> 188 uu, AirportMgr.RigCourse.BendCensus), and the
-	// rig is not the design vehicle of Narrow or Standard at all. The worst is still a Narrow T.
-	TestTrue(FString::Printf(TEXT("the utility's tow stays on the tarmac per side (worst %.0f uu: %s)"),
-		Probe.PerSide[1].Excess, *Probe.PerSide[1].Where), Probe.PerSide[1].Excess <= 10.0);
-	TestTrue(FString::Printf(TEXT("KNOWN GAP: the rig's trailer cuts in past the inner edge on near-side turns (worst %.0f uu: %s)"),
-		Probe.PerSide[0].Excess, *Probe.PerSide[0].Where), Probe.PerSide[0].Excess > 10.0);
-	// AND NO WORSE THAN MEASURED: the floor above only says the gap is still there, so a
-	// regression that put the trailer further off the pavement would pass it. The ceiling is the
-	// measurement plus a little room: worst 355 uu at tier 0's T junction, out of the stem (leg 4),
-	// after the bend-lane arcs and the Wide widening (2026-09-25; 342-358 before them).
-	TestTrue(FString::Printf(TEXT("KNOWN GAP, bounded: the rig's inner cut-in is no worse than the 355 uu measured after the bend widening, 2026-09-25 (worst %.0f uu: %s)"),
-		Probe.PerSide[0].Excess, *Probe.PerSide[0].Where), Probe.PerSide[0].Excess <= 375.0);
-	// The same cut-in shows on the LANE just before a near-side corner (measured 164 uu at the
-	// east link's stub when every leg began with the chain laid straight; 261 uu at tier 1's
-	// entry stub once the chain carried across waypoints, 2026-09-25): the trailer leaves the
-	// road before the junction pavement begins. Bound it by the turn's own overrun - it is the
-	// approach to that cut, never a worse one.
-	TestTrue(FString::Printf(TEXT("KNOWN GAP: the rig's lane overrun is the approach to that same cut-in, no worse (lane %.0f uu: %s)"),
-		Probe.Lane[0].Excess, *Probe.Lane[0].Where), Probe.Lane[0].Excess <= Probe.PerSide[0].Excess + 10.0);
-
-	for (int32 V = 0; V < Vehicles.Num(); ++V)
-	{
-		// THE TAPER IS IN THE LEG THAT LEAVES THE STEP NODE. Forwards that is WidthStepLeg itself;
-		// in reverse the runner arrives at the step node BEFORE the taper, and the leg leaving it is
-		// the node pair of the forward leg one earlier - a reversed leg turns at its other end.
-		const int32 TaperLeg = V == 0 ? WidthStepLeg : (WidthStepLeg + Legs - 1) % Legs;
-		const TArray<FRigLegResult>& Results = Course->LastLoopResultsForTest(V);
-		if (!TestEqual(TEXT("a result per leg"), Results.Num(), Legs)) { return false; }
-		int32 Refusals = 0;
-		for (int32 L = 0; L < Legs; ++L)
-		{
-			const FRigLegResult& R = Results[L];
-			const FString What = FString::Printf(TEXT("%s leg %d (%s%s)"), Names[V], L, *Waypoints[(L + 1) % Legs].Label,
-				V == 1 ? TEXT(", reversed") : TEXT(""));
-			TestTrue(What + TEXT(" was driven, refused or bypassed"),
-				R.Outcome == ERigLegOutcome::Driven || R.Outcome == ERigLegOutcome::Refused || R.Outcome == ERigLegOutcome::Bypassed);
-			TestEqual(What + TEXT(": the outcome the router's verdicts and the look-ahead rule give"),
-				static_cast<int32>(R.Outcome), static_cast<int32>(Outcome[V][L]));
-			TestEqual(What + TEXT(": refused exactly when the router refuses it with this body, in this direction"),
-				R.Outcome == ERigLegOutcome::Refused, !Expected[V][L]);
-			TestFalse(What + TEXT(" never reversed"), R.bReversed);
-			if (R.Outcome == ERigLegOutcome::Driven)
-			{
-				// The steered axle walks the line, so arrival is measured along it; the chassis
-				// origin then sits one wheelbase back from the lane end, and no further.
-				const double Wheelbase = Vehicles[V].Chassis.Wheelbase();
-				// THE MARKER FIRES ON THE TICK IT IS PASSED: at most one tick's travel past it (the
-				// speed it passed at, times the tick), never before it, never a tick late.
-				TestTrue(FString::Printf(TEXT("%s: its marker fired within one tick's travel of the lane end (%.1f uu past, %.1f allowed)"),
-					*What, -R.DistanceLeft, R.PassSpeed * TickSeconds + 1.0),
-					R.DistanceLeft <= 1.0 && -R.DistanceLeft <= R.PassSpeed * TickSeconds + 1.0);
-				// AND THE BODY IS WHERE THAT SAYS: the steered axle is -DistanceLeft past the lane
-				// end, so the fixed axle is a wheelbase less that from it - to a fixed 20 uu, not a
-				// tolerance that grows with the overshoot.
-				const double Behind = FVector2D::Distance(R.EndPosition, R.GoalPosition);
-				TestTrue(FString::Printf(TEXT("%s: and its fixed axle was a wheelbase behind the lane end, less the overshoot (%.1f vs %.1f uu)"),
-					*What, Behind, Wheelbase + R.DistanceLeft), FMath::Abs(Behind - (Wheelbase + R.DistanceLeft)) < 20.0);
-
-				// THE WIDTH STEP, FLIPPED (was pinned by controller ruling 5 as the builder defect:
-				// a 90 degree jog FSpeedProfile crawled; this line asserted it was there). The
-				// builder tapers it on an S since 2026-09-25, so NO leg has a sharp vertex, the
-				// width-step leg included, in either direction.
-				TestEqual(What + (L == TaperLeg ? TEXT(": the width step tapers on an S - no sharp vertex") : TEXT(" has no sharp vertex")),
-					R.SharpVertexCount, 0);
-				// AND NEITHER VEHICLE CRAWLS THROUGH IT. The two legs either side of the step node
-				// (one ends at it, one leaves it) were passed at 39-44 uu/s on the jog - steering
-				// speed; on the S they pass at road speed. A quarter of the cap is far below any
-				// healthy pass on this course and far above a crawl.
-				if (L == WidthStepLeg || L == (WidthStepLeg + Legs - 1) % Legs)
-				{
-					const double Cap = Vehicles[V].Chassis.Ground.Taxi.SpeedCap;
-					UE_LOG(LogTemp, Display, TEXT("RigCourse.OneLoopHeadless: %s passed at %.0f uu/s after %.1f s"), *What, R.PassSpeed, R.Elapsed);
-					TestTrue(FString::Printf(TEXT("%s: passed at road speed, not a crawl (%.0f uu/s, floor %.0f)"), *What, R.PassSpeed, 0.25 * Cap),
-						R.PassSpeed >= 0.25 * Cap);
-				}
-			}
-			Refusals += R.Outcome == ERigLegOutcome::Refused ? 1 : 0;
-			// THE REASON IS THE TRAILER, NOT THE LOCK (2026-09-25): the dead ends were reshaped
-			// within the bowser footprint and every piece now clears the rig's lock; what refuses
-			// it is the whole-route tow check - the trailer folds going round. Said in the refusal.
-			if (V == 0 && R.Outcome == ERigLegOutcome::Refused)
-			{
-				TestTrue(FString::Printf(TEXT("%s: refused because its trailer folds (%s)"), *What, *R.Reason),
-					R.Reason.Contains(TEXT("trailer folds at guideline node")));
-			}
-		}
-		// The width step's own expected outcome: DRIVEN, on the S, within the 3x allowance.
-		TestEqual(FString::Printf(TEXT("%s drives the Narrow->Wide mid-straight step"), Names[V]),
-			static_cast<int32>(Results[TaperLeg].Outcome), static_cast<int32>(ERigLegOutcome::Driven));
-		// ONCE PER LOOP: counted in the loop these results are from, by the loop number in the line.
-		const int32 Loop = Course->LoopsCompletedForTest(V);
-		TestEqual(FString::Printf(TEXT("%s: each refusal was logged once in loop %d"), Names[V], Loop),
-			Spy.Containing(*FString::Printf(TEXT("RigCourse: %s loop %d leg "), Names[V], Loop), TEXT("refused:")), Refusals);
-		// AND EACH BYPASS: the route-on branch's own line, once per bypassed leg per loop.
-		int32 Bypasses = 0;
-		for (const FRigLegResult& R : Results) { Bypasses += R.Outcome == ERigLegOutcome::Bypassed ? 1 : 0; }
-		TestEqual(FString::Printf(TEXT("%s: each bypassed leg was logged once in loop %d"), Names[V], Loop),
-			Spy.Containing(*FString::Printf(TEXT("RigCourse: %s loop %d leg "), Names[V], Loop), TEXT("bypassed:")), Bypasses);
-		CheckMarkersAtWaypoints(*this, *Course, Net, V);
-	}
-	return true;
+	// EVERYTHING BELOW READS THE ONE RUN ABOVE (2026-10: WaypointsAreNotStops and RouteStaysBounded each simulated this
+	// same loop again - 1.6 s and 2.3 s - to watch what its observers already had). Each check is a named function so a
+	// failure says which claim broke, and so this body is not 358 lines (#138).
+	CheckChainIsContinuous(*this, *Course, Spy, Continuity, Outcome);
+	CheckTowStaysOnTheTarmac(*this, Probe);
+	CheckWaypointsAreNotStops(*this, *Course, Net, Continuity);
+	CheckRouteStaysBounded(*this, *Course, PlanLength);
+	return CheckLegResults(*this, *Course, Net, Spy, Outcome, Expected, WidthStepLeg);
 }
 
 // A REBUILD MID-LOOP KEEPS THE COURSE (2026-09-25). The user drew a road in PIE while both
@@ -1085,149 +1268,6 @@ bool FRigCourseRebuildKeepsTheCourseTest::RunTest(const FString& Parameters)
 	{
 		CheckMarkersAtWaypoints(*this, *Course, Net, V);
 	}
-	return true;
-}
-
-// WAYPOINTS ARE NOT STOPS (spec §3 REVISED "one route per loop", 2026-09-25). The user saw the
-// rig brake to a halt at every waypoint: each leg was its own route, and FSpeedProfile brakes to
-// zero at a route's end. A job in the game drives one plan to a real destination; so does the
-// course now, and this is what says so.
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FRigCourseWaypointsAreNotStopsTest,
-	"AirportMgr.RigCourse.WaypointsAreNotStops",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FRigCourseWaypointsAreNotStopsTest::RunTest(const FString& Parameters)
-{
-	using namespace RigCourseTest;
-
-	FAirsideTestWorld TestWorld;
-	ARoadNetworkActor* Actor = TestWorld.Actor;
-	if (!TestNotNull(TEXT("the network actor"), Actor)) { return false; }
-	ARigTestCourse* Course = TestWorld.World->SpawnActor<ARigTestCourse>();
-	if (!TestNotNull(TEXT("the course actor"), Course)) { return false; }
-	Course->BuildCourseForTest(*Actor);
-	const URoadNetwork& Net = *Actor->Network;
-	const TArray<FRigCourseWaypoint>& Waypoints = Course->GetWaypoints();
-	const FVehicle& Rig = Course->GetVehicles()[0];
-
-	FContinuity Continuity;
-	FObservers Watch;
-	Watch.Continuity = &Continuity;
-	RunUntil(*Actor, *Course, MaxTicks, [Course]() { return Course->LoopsCompletedByAllForTest() >= 1; }, Watch);
-	if (!TestTrue(TEXT("both vehicles completed a loop"), Course->LoopsCompletedByAllForTest() >= 1)) { return false; }
-
-	// EVERY WAYPOINT PASSED ON THE MOVE, AND AT THE PROFILE'S SPEED. Never above the profile's
-	// limit (as it stood a tick ago, the follower's speed being last tick's); and at EVERY
-	// waypoint no slower than that limit or the forward pass (FPass::Reach - what it can have
-	// accelerated to since the last slowdown), give or take a tick - unless traffic arbitration
-	// holds it within its braking distance. A vehicle braking for a route end it should have
-	// been joined past fails this; so did every waypoint of the per-leg course.
-	for (int32 V = 0; V < 2; ++V)
-	{
-		const FGroundRegime& Taxi = Course->GetVehicles()[V].Chassis.Ground.Taxi;
-		const double Tolerance = FMath::Max(Taxi.Accel, Taxi.Decel) * TickSeconds + 1.0;
-		TestTrue(FString::Printf(TEXT("%s: waypoints were passed (%d)"), Names[V], Continuity.Passes[V].Num()),
-			Continuity.Passes[V].Num() >= 10);
-		for (const FContinuity::FPass& Pass : Continuity.Passes[V])
-		{
-			UE_LOG(LogTemp, Display, TEXT("RigCourse.WaypointsAreNotStops: %s at %s: %.0f uu/s, profile limit %.0f (a tick back %.0f), forward pass %.0f, cap %.0f%s"),
-				Names[V], *Pass.Where, Pass.Speed, Pass.Limit, Pass.LimitBehind, Pass.Reach, Pass.Cap,
-				Pass.bHeld ? TEXT(", held by traffic") : TEXT(""));
-			TestTrue(FString::Printf(TEXT("%s at %s: moving through the waypoint (%.0f uu/s), not stopped at it"), Names[V], *Pass.Where, Pass.Speed),
-				Pass.Speed > 1.0);
-			const double Governing = FMath::Max(Pass.Limit, Pass.LimitBehind);
-			TestTrue(FString::Printf(TEXT("%s at %s: never above the profile's limit (%.0f vs %.0f uu/s)"), Names[V], *Pass.Where, Pass.Speed, Governing),
-				Pass.Speed <= Governing + Tolerance);
-			if (!Pass.bHeld)
-			{
-				// The LOWER of the two limits: just past a crawl (a slow corner's apex) the limit a tick
-				// ahead is already rising and no vehicle has that acceleration in one tick.
-				const double Expected = FMath::Min3(Pass.Limit, Pass.LimitBehind, Pass.Reach);
-				TestTrue(FString::Printf(TEXT("%s at %s: at the profile's speed (%.0f vs %.0f uu/s: limit %.0f, forward pass %.0f)"),
-					Names[V], *Pass.Where, Pass.Speed, Expected, FMath::Min(Pass.Limit, Pass.LimitBehind), Pass.Reach),
-					Pass.Speed >= Expected - Tolerance);
-			}
-		}
-	}
-
-	// LEG 0, THE STRAIGHT (80 m node to node, 68 m of lane between its junctions' cut-backs), AT
-	// THE NO-STOP TIME: from rest to the cap and on at it, derived
-	// from the rig's own figures - not rest-to-rest, which is what a leg that is its own route
-	// costs (measured 14.3 s for 68 m before this change).
-	FRoutePlan Leg0;
-	{
-		const FGuidelineNodeId Start = ARigTestCourse::ResolveWaypoint(Net, Waypoints[0]);
-		const FGuidelineNodeId Goal = ARigTestCourse::ResolveWaypoint(Net, Waypoints[1]);
-		FRouteQuery Query = FRouteQuery::For(ERouteErrand::PlayerIssued, Start, Goal, 0.0, ETraversalClass::GroundVehicle);
-		Query.WithVehicle(Rig);
-		Leg0 = RouteSearch::Find(Net, Query);
-	}
-	if (!TestTrue(TEXT("leg 0 plans for the rig"), Leg0.IsValid())) { return false; }
-	const FGroundRegime& Taxi = Rig.Chassis.Ground.Taxi;
-	const double Cap = Taxi.SpeedCap;
-	const double UpTo = Cap * Cap / (2.0 * Taxi.Accel);
-	const double Down = Cap * Cap / (2.0 * Taxi.Decel);
-	const double NoStop = Leg0.Length >= UpTo ? Cap / Taxi.Accel + (Leg0.Length - UpTo) / Cap : FMath::Sqrt(2.0 * Leg0.Length / Taxi.Accel);
-	// Rest to rest: a trapezium when the leg is long enough to reach the cap, else a triangle
-	// peaking at sqrt(2 L a d / (a + d)).
-	const double Peak = FMath::Sqrt(2.0 * Leg0.Length * Taxi.Accel * Taxi.Decel / (Taxi.Accel + Taxi.Decel));
-	const double RestToRest = Leg0.Length >= UpTo + Down
-		? Cap / Taxi.Accel + Cap / Taxi.Decel + (Leg0.Length - UpTo - Down) / Cap
-		: Peak / Taxi.Accel + Peak / Taxi.Decel;
-	const double Took = (Continuity.FirstPass[0] - Continuity.FirstSeen[0]) * TickSeconds;
-	UE_LOG(LogTemp, Display, TEXT("RigCourse.WaypointsAreNotStops: rig leg 0, %.0f m, took %.2f s; no-stop %.2f s, rest-to-rest %.2f s"),
-		Leg0.Length / 100.0, Took, NoStop, RestToRest);
-	TestTrue(FString::Printf(TEXT("the rig's leg 0 took about the no-stop time (%.2f s vs %.2f s ideal) - not rest-to-rest (%.2f s)"), Took, NoStop, RestToRest),
-		Took <= NoStop * 1.1 + 0.1 && Took >= NoStop * 0.9);
-	TestTrue(FString::Printf(TEXT("and clearly under rest-to-rest (%.2f s vs %.2f s)"), Took, RestToRest), Took < RestToRest - 1.0);
-	return true;
-}
-
-// THE ROUTE STAYS BOUNDED (review of ed81410c): each loop is spliced onto the live route, and
-// without trimming the driven history a course left running grows its plan - and every
-// per-tick walk over it - for ever. Three loops in, the route is no longer than two loops plus
-// the history kept behind the vehicle.
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FRigCourseRouteStaysBoundedTest,
-	"AirportMgr.RigCourse.RouteStaysBounded",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FRigCourseRouteStaysBoundedTest::RunTest(const FString& Parameters)
-{
-	using namespace RigCourseTest;
-
-	FAirsideTestWorld TestWorld;
-	ARoadNetworkActor* Actor = TestWorld.Actor;
-	if (!TestNotNull(TEXT("the network actor"), Actor)) { return false; }
-	ARigTestCourse* Course = TestWorld.World->SpawnActor<ARigTestCourse>();
-	if (!TestNotNull(TEXT("the course actor"), Course)) { return false; }
-	Course->BuildCourseForTest(*Actor);
-
-	double Longest = 0.0;
-	double FirstLoop = 0.0;
-	for (int32 Tick = 0; Tick < MaxTicks && Course->LoopsCompletedForTest(0) < 3; ++Tick)
-	{
-		Actor->Tick(static_cast<float>(TickSeconds));
-		Course->Tick(static_cast<float>(TickSeconds));
-		const FRigCourseRunner& Rig = Course->GetRunnerForTest(0);
-		const FRoadAgent* Agent = Rig.AgentId != 0 ? Actor->GetGroundTraffic()->FindAgent(Rig.AgentId) : nullptr;
-		if (Agent != nullptr)
-		{
-			Longest = FMath::Max(Longest, Agent->PlanInProgress().Length);
-			if (Rig.Extensions == 0)
-			{
-				FirstLoop = Agent->PlanInProgress().Length;
-			}
-		}
-	}
-	if (!TestEqual(TEXT("the rig drove three loops"), Course->LoopsCompletedForTest(0), 3)) { return false; }
-	const FRigCourseRunner& Rig = Course->GetRunnerForTest(0);
-	TestTrue(FString::Printf(TEXT("it was extended at every boundary (%d)"), Rig.Extensions), Rig.Extensions >= 3);
-	UE_LOG(LogTemp, Display, TEXT("RigCourse.RouteStaysBounded: first loop's route %.0f m; longest route over three loops %.0f m"),
-		FirstLoop / 100.0, Longest / 100.0);
-	TestTrue(FString::Printf(TEXT("the live route never grew past two loops plus the history kept (%.0f m vs %.0f m)"),
-		Longest / 100.0, (2.0 * FirstLoop + 20000.0) / 100.0), Longest <= 2.0 * FirstLoop + 20000.0);
 	return true;
 }
 
@@ -1293,22 +1333,15 @@ bool FRigCourseRanOutRestartsWithTheChainTest::RunTest(const FString& Parameters
 			TestTrue(FString::Printf(TEXT("across the first restart, link %d's axle moved %.2f uu - no more than the cab's %.2f plus a sub-step: the chain was not re-laid"),
 				I, Moved, CabMoved), Moved <= CabMoved + VehicleSweep::TraceStep);
 		}
+		// BY THE SAME AGENT: the restart went through RedirectAgent, not a retire and a fresh dispatch; and the
+		// restart was the fallback's - no extension was made, the test refused them all.
+		// (A second phase used to run the rig to its second loop to assert each LATER boundary was a restart too and
+		// that the chain never jumped across them - 0.55 s over what phase 1 already shows for the first: this restart,
+		// tick by tick. The two assertions below are what it kept of the rest.)
+		TestEqual(TEXT("by the SAME agent - one dispatch across the restart"), Course->GetRunnerForTest(0).Dispatches, 1);
+		TestEqual(TEXT("and no extension was made - the test refused them all, so this restart is the fallback's"),
+			Course->GetRunnerForTest(0).Extensions, 0);
 	}
-
-	FContinuity Continuity;
-	FObservers Watch;
-	Watch.Continuity = &Continuity;
-	RunUntil(*Actor, *Course, MaxTicks, [Course]() { return Course->LoopsCompletedForTest(0) >= 2; }, Watch);
-	if (!TestTrue(TEXT("the rig drove two loops"), Course->LoopsCompletedForTest(0) >= 2)) { return false; }
-	const FRigCourseRunner& Rig = Course->GetRunnerForTest(0);
-	TestEqual(TEXT("no extension was made - the test refused them all"), Rig.Extensions, 0);
-	// Each boundary CROSSED: the last loop counts as done on passing its end marker, a tick
-	// before its restart.
-	TestTrue(FString::Printf(TEXT("so each loop boundary crossed was a restart from rest (%d, %d loop(s))"), Rig.Redirects, Rig.LoopsCompleted),
-		Rig.Redirects >= FMath::Max(1, Rig.LoopsCompleted - 1));
-	TestEqual(TEXT("by the SAME agent - one dispatch for the whole run"), Rig.Dispatches, 1);
-	TestTrue(FString::Printf(TEXT("and its chain never jumped beyond the cab's own move (worst %.2f uu: %s)"),
-		Continuity.Worst[0].Excess, *Continuity.Worst[0].Where), Continuity.Worst[0].Excess <= VehicleSweep::TraceStep);
 	return true;
 }
 
@@ -1616,7 +1649,7 @@ bool FRigCoursePlanCacheKnowsItsVehicleTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("a different trailer in the same slot is planned afresh"), Course->GetPlanFindsForTest(), Before + 2);
 	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
 	TestNotEqual(TEXT("because the key is the vehicle's figures"),
-		ARigTestCourse::VehicleIdentity(Longer), ARigTestCourse::VehicleIdentity(Rig));
+		RoutePlanCache::VehicleIdentity(Longer), RoutePlanCache::VehicleIdentity(Rig));
 
 	// SAME EVERY OTHER FIGURE, DIFFERENT SteerLaw (PR #340 review): TightestFollowableRadius
 	// gates on EffectiveSteerLaw, not on any field varied above, so a vehicle identical
@@ -1629,7 +1662,7 @@ bool FRigCoursePlanCacheKnowsItsVehicleTest::RunTest(const FString& Parameters)
 	{
 		SteersDifferently.Chassis.SteerLaw = ESteerLaw::Pivot;
 		TestNotEqual(TEXT("SteerLaw alone changes the identity"),
-			ARigTestCourse::VehicleIdentity(SteersDifferently), ARigTestCourse::VehicleIdentity(Rig));
+			RoutePlanCache::VehicleIdentity(SteersDifferently), RoutePlanCache::VehicleIdentity(Rig));
 	}
 	return true;
 }

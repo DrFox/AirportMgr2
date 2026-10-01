@@ -10,6 +10,7 @@
 #include "OfferInboxWidget.h"
 #include "Testing/AirsideTestWorld.h"
 #include "ToastStackWidget.h"
+#include "UIStyle.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -33,10 +34,12 @@ bool FAirportMgrPanelWidgetSharedBaseTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
+	const int32 ResolvesBefore = UAirportMgrUISettings::ResolveCallCountForTest();
 	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
 	UInspectorWidget* Inspector = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
 	UOfferInboxWidget* Offers = CreateWidget<UOfferInboxWidget>(TestWorld.World, UOfferInboxWidget::StaticClass());
 	UToastStackWidget* Toasts = CreateWidget<UToastStackWidget>(TestWorld.World, UToastStackWidget::StaticClass());
+	const int32 ResolvesAfter = UAirportMgrUISettings::ResolveCallCountForTest();
 	if (!TestNotNull(TEXT("the bar builds with no asset"), Bar)
 		|| !TestNotNull(TEXT("the inspector builds with no asset"), Inspector)
 		|| !TestNotNull(TEXT("the offer inbox builds with no asset"), Offers)
@@ -56,6 +59,13 @@ bool FAirportMgrPanelWidgetSharedBaseTest::RunTest(const FString& Parameters)
 	// PANELSTYLE IS RESOLVED, and through the ONE path: all four hold the SAME style object,
 	// not four independent UAirsideSettings::ResolveStyle() calls that happen to agree today
 	// and could silently diverge tomorrow - see the class comment's own account of issue #187.
+	//
+	// COUNTED, NOT ONLY COMPARED (2026-09-30 review): pointer equality cannot tell one resolve from
+	// four - every call returns the same asset. One resolve per panel, all of them the base's
+	// Initialize, is what "one path" means; a subclass that asked ResolveStyle() again (as the bar
+	// did, twice a tick, before #187) reads as more.
+	TestEqual(TEXT("each of the four panels resolved the style exactly once, in the shared base's Initialize"),
+		ResolvesAfter - ResolvesBefore, 4);
 	if (TestNotNull(TEXT("the bar resolved a style"), Bar->PanelStyleForTest()))
 	{
 		TestEqual(TEXT("the inspector shares the bar's style object"),

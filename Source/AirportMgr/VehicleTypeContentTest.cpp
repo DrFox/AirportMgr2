@@ -303,11 +303,10 @@ bool FVehicleTypesFuelTruckAgreesWithDispatchTest::RunTest(const FString& Parame
 	// what stops the two drifting while it is open. Delete it the day ResolveDefaultVehicle
 	// reads the type.
 	const FResolvedAgentView View = UAirsideSettings::ResolveVehicleView();
-	if (View.Mesh == nullptr)
-	{
-		AddInfo(TEXT("no rigged vehicle configured; nothing to agree with"));
-		return true;
-	}
+	// A MISSING RIGGED VEHICLE FAILS (2026-09-30 review): it used to AddInfo and pass, a green run that compared
+	// nothing. DA_AirsideContent is committed content and names the dispatched truck's mesh.
+	if (!TestTrue(TEXT("a rigged vehicle is configured - without it there is nothing for the typed truck to agree with"),
+		View.Mesh != nullptr)) { return false; }
 
 	const UVehicleType* Truck = nullptr;
 	for (const UVehicleType* Type : EveryVehicleType())

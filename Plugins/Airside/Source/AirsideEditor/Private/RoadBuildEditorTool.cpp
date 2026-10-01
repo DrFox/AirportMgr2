@@ -783,7 +783,25 @@ void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 		: 0.012 * 2.0 * FMath::Tan(FMath::DegreesToRadians(Camera.HorizontalFOVDegrees * 0.5f));
 	const double FixedRadius = Camera.bIsOrthographic ? ViewWorldWidth * 0.012 : 0.0;
 
-	FViewportPreviewSink Sink(PDI, Target->SurfaceZ, Camera.Position, PerDistance, FixedRadius);
+	// ONE FUNCTION DESCRIBES THE FRAME, and the headless seam calls the same one (see
+	// DescribeFrame): the seam used to be a hand-kept copy of the tail of this function, so a Render
+	// that cached nothing left Airside.Editor.DrawHUDShowsRefusalLabels green (review 2026-09-30).
+	DescribeFrame(*Tool, PDI, Camera.Position, PerDistance, FixedRadius);
+}
+
+void URoadBuildEditorTool::DescribeFrame(IBuildTool& Tool, FPrimitiveDrawInterface* PDI,
+	const FVector& CameraPosition, double PerDistance, double FixedRadius)
+{
+	if (Target == nullptr)
+	{
+		PendingLabels.Reset();
+		return;
+	}
+
+	// PDI MAY BE NULL (issue #304): CachePreviewLabelsForTest runs this with none, purely so a
+	// headless test collects the labels a real Render would - FViewportPreviewSink's Marker/Line/
+	// CrossMark null-guard it, and Label collects either way.
+	FViewportPreviewSink Sink(PDI, Target->SurfaceZ, CameraPosition, PerDistance, FixedRadius);
 
 	// The COMMITTED graph first, then the tool's intent on top. The runtime HUD does this
 	// in ARoadBuildHUD::DrawNodes/DrawStands; in the editor nothing did, so existing nodes
@@ -799,15 +817,17 @@ void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 	// of every tool's preview every frame for text this Sink was going to describe anyway.
 	// FViewportPreviewSink::Label collects regardless of whether PDI is real, so the one call
 	// Render already makes (to draw markers/lines with a real PDI) is also the one that fills
-	// the cache DrawHUD reads - see CollectPreviewLabelTextForTest for how a headless test
-	// drives the identical single call without a live PDI.
+	// the cache DrawHUD reads. THE CLAIM "BuildPreview RUNS ONCE A FRAME, FROM HERE" is enforced
+	// by Check-Architecture rule 'editor-preview-described-once', which reads every function in this
+	// file - BuildPreview( only here, DescribeFrame( only from Render and the seam - where the test
+	// that used to count it (Airside.Editor.RenderCachesLabelsOnce) only ever counted its own seam.
 	if (bHoverValid)
 	{
 		// ONE CONTEXT FOR BOTH, so the grid drawn is the grid the ghost is landing on. The grid
 		// first, under the gesture - see GridOverlay; the PIE HUD makes the same two calls.
 		const FToolContext HoverContext = MakeHoverContext();
 		GridOverlay::Describe(HoverContext, Sink);
-		Tool->BuildPreview(HoverContext, Sink);
+		Tool.BuildPreview(HoverContext, Sink);
 		PendingLabels = Sink.CollectedLabels();
 	}
 	else
@@ -816,31 +836,20 @@ void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 	}
 }
 
-void URoadBuildEditorTool::CachePreviewLabelsForTest(IBuildTool& ActiveTool)
+void URoadBuildEditorTool::CachePreviewLabelsForTest()
 {
-	// STANDS IN FOR Render's OWN CACHING (see that function's own comment on PendingLabels),
-	// same precedent as SetViewCentreDistanceForTest/HoverFrameContextForTest: a real
-	// IToolsContextRenderAPI/FPrimitiveDrawInterface needs a live viewport this headless harness
-	// does not have.
-	//
-	// TAKES ActiveTool EXPLICITLY, not Sess().GetActiveTool() - no production IBuildTool exposes
-	// a call count, so Airside.Editor.RenderCachesLabelsOnce passes a counting spy here instead,
-	// to measure that THIS is the only place BuildPreview runs and that reading the cache
-	// afterwards (CollectPreviewLabelTextForTest, standing in for DrawHUD) costs nothing further.
-	//
-	// NO PDI: PDI-dependent drawing does not matter for labels - FViewportPreviewSink's Marker/
-	// Line/CrossMark already null-guard it, so the SAME single BuildPreview call collects the
-	// SAME labels a real Render call would, whatever else it also draws.
-	if (!bHoverValid)
+	// STANDS IN FOR Render (same precedent as SetViewCentreDistanceForTest/HoverFrameContextForTest:
+	// a real IToolsContextRenderAPI/FPrimitiveDrawInterface needs a live viewport this headless
+	// harness does not have) BY CALLING RENDER'S OWN DescribeFrame - not a second copy of its tail.
+	// NO PDI: PDI-dependent drawing does not matter for labels, so the SAME single BuildPreview call
+	// collects the SAME labels a real Render call would, whatever else it also draws.
+	IBuildTool* Tool = Sess().GetActiveTool();
+	if (Tool == nullptr)
 	{
 		PendingLabels.Reset();
 		return;
 	}
-
-	FViewportPreviewSink Sink(nullptr, Target != nullptr ? Target->SurfaceZ : 0.0,
-		FVector::ZeroVector, 0.0, 0.0);
-	ActiveTool.BuildPreview(MakeHoverContext(), Sink);
-	PendingLabels = Sink.CollectedLabels();
+	DescribeFrame(*Tool, nullptr, FVector::ZeroVector, 0.0, 0.0);
 }
 
 TArray<FString> URoadBuildEditorTool::CollectPreviewLabelTextForTest() const
@@ -868,8 +877,8 @@ void URoadBuildEditorTool::DrawHUD(FCanvas* Canvas, IToolsContextRenderAPI* Rend
 	// in the editor while the runtime HUD had always shown them. Before #304,
 	// FViewportPreviewSink::Label was "deliberately nothing" for the identical reason and every
 	// refusal reason a tool describes - "too short: %.0f m", WhyStandRefused, every guide
-	// description - existed only in PIE; see Render's own comment on PendingLabels, which this
-	// function only READS - it does not run BuildPreview a second time.
+	// description - existed only in PIE; see DescribeFrame's own comment on PendingLabels, which this
+	// function only READS - it does not run BuildPreview a second time (rule 'editor-preview-described-once').
 	IBuildTool* Tool = Sess().GetActiveTool();
 	const FSceneView* SceneView = RenderAPI != nullptr ? RenderAPI->GetSceneView() : nullptr;
 	if (Tool == nullptr || Target == nullptr || Canvas == nullptr || SceneView == nullptr || !bHoverValid)
@@ -910,8 +919,9 @@ void URoadBuildEditorTool::DrawHUD(FCanvas* Canvas, IToolsContextRenderAPI* Rend
 	// RE-COLLECTED: review round 2 of issue #304 found this function running a SECOND,
 	// independent Tool->BuildPreview here to gather them, discarding what Render's own call had
 	// already produced into its Sink - doubling every tool's preview cost every frame for text
-	// Render's Sink was going to describe anyway. See Render's own comment on PendingLabels;
-	// Airside.Editor.RenderCachesLabelsOnce is what actually counts the calls.
+	// Render's Sink was going to describe anyway. See DescribeFrame's own comment on PendingLabels.
+	// ENFORCED BY: Check-Architecture rule 'editor-preview-described-once' (BuildPreview( is called from DescribeFrame alone, and DescribeFrame( from
+	// Render and the headless seam alone - so DrawHUD asks for no description of its own)
 	if (Lines.Num() == 0 && PendingLabels.Num() == 0)
 	{
 		return;

@@ -790,11 +790,10 @@ void ARoadBuildController::OnCtrlActionKey()
 	{
 		if (Action.bRequiresCtrl && Action.Key.IsValid() && WasInputKeyJustPressed(Action.Key))
 		{
-			if (KeyWaitsForModal(Action))
-			{
-				return;   // RunActionForKey's reason: keys wait under a modal
-			}
-			Action.TryRun(*this, TEXT("Key"));
+			// THE PLAIN KEY'S HANDLER, with the Ctrl the chord binding already matched: the modal wait,
+			// the IsEnabled gate and the log line are RunActionForKey's, so this poll is the only thing
+			// the two handlers do differently (and the only thing a headless test cannot reach).
+			RunActionForKey(Action.Key, /*bCtrl=*/true);
 			return;
 		}
 	}
@@ -1045,8 +1044,15 @@ bool ARoadBuildController::IsModalOpen() const
 
 bool ARoadBuildController::KeyWaitsForModal(const FBuildAction& Action) const
 {
-	// ONE PREDICATE for both key handlers - the chord handler polls WasInputKeyJustPressed, which a
-	// headless test cannot drive, so this is what AirportMgr.Actions.ChordsWaitUnderModal tests.
+	// ONE PREDICATE, AND ONE CALLER: RunActionForKey. The chord handler (OnCtrlActionKey) polls
+	// WasInputKeyJustPressed, which a headless test cannot drive, so it hands the key it found to
+	// RunActionForKey rather than gating and running the action itself - a second copy of this
+	// check beside the one KeysIgnoredUnderModal drives is how "Ctrl+Z behind an open dialog undoes
+	// the airport" came back untested (the 2026-09-30 review found ChordsWaitUnderModal asserting
+	// this predicate and nothing that called it).
+	// ENFORCED BY: AirportMgr.Actions.ChordsWaitUnderModal (the shared handler, driven with a Ctrl chord);
+	// Check-Architecture rule 'chord-handler-shares-the-gate' ((c) this predicate is called from RunActionForKey alone in every non-test
+	// .cpp of the game module; (a) OnCtrlActionKey calls nothing but the key poll, the registry and RunActionForKey)
 	return IsModalOpen() && Action.Id != SettingsActionId();
 }
 
