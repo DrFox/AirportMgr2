@@ -55,8 +55,13 @@ namespace
 	 * An east-west service road through the origin, long enough to anchor anywhere on - turned
 	 * RoadDegrees anticlockwise about the origin when a test needs the frontage OFF the world
 	 * axes (PlotGuideEndsWithTheGesture does: it needs two guides a few degrees apart).
+	 *
+	 * NOT CALLED LayServiceRoad, as it was: PlotPlaceToolTest.cpp has a function of that name in
+	 * ITS anonymous namespace, and this module is a unity build - once both files sit in one chunk
+	 * the two are the same function with two bodies (C2084). The adaptive build hid it while this
+	 * file was compiled on its own.
 	 */
-	void LayServiceRoad(ARoadNetworkActor* Actor, double RoadDegrees = 0.0)
+	void LayGuideRoad(ARoadNetworkActor* Actor, double RoadDegrees = 0.0)
 	{
 		IRoadEditTarget* Target = Actor;
 		const double Radians = FMath::DegreesToRadians(RoadDegrees);
@@ -108,7 +113,7 @@ namespace
 
 	/**
 	 * Selects the depot tool and pins its frontage - the anchor, then the far end - on the road
-	 * LayServiceRoad laid. Callable again on a world whose gesture was put down, which is what
+	 * LayGuideRoad laid. Callable again on a world whose gesture was put down, which is what
 	 * a SECOND gesture on the same session is (the session's held guide outlives the tool).
 	 * Frontage is refilled; Tool is the freshly selected one.
 	 *
@@ -139,7 +144,7 @@ namespace
 	bool StartGesture(FDepotGesture& Out, double RoadDegrees = 0.0)
 	{
 		if (Out.TestWorld.World == nullptr || Out.TestWorld.Actor == nullptr) { return false; }
-		LayServiceRoad(Out.TestWorld.Actor, RoadDegrees);
+		LayGuideRoad(Out.TestWorld.Actor, RoadDegrees);
 
 		Out.Tunables = Out.TestWorld.Actor->MakeTunables(10000.0);
 		return PinFrontage(Out);
