@@ -958,24 +958,20 @@ public:
 	const FResolvedAnchor* FindResolvedAnchor(FEntityInstanceId Entity, FName AnchorId) const;
 
 	/**
-	 * Ids of an entity's anchors serving a role, in definition order.
+	 * The first anchor id of an entity serving a role, in definition order, or NAME_None.
 	 *
 	 * Role is a CATEGORY, not an identity - a stand has two belt loaders - so this answers
-	 * "where can baggage be worked" and the caller picks. Only ids the instance actually
-	 * resolved are returned, by construction: this reads FResolvedAnchor::Role, captured at
-	 * placement, rather than filtering the definition's own anchors and checking each one
-	 * against ResolvedAnchors - so a definition edited after placement cannot hand back an
-	 * id that leads nowhere.
-	 */
-	TArray<FName> GetAnchorIdsForRole(FEntityInstanceId Entity, EServiceRole Role) const;
-
-	/**
-	 * The first anchor id for a role, or NAME_None - what UJobBoard::ServiceAnchorOf actually
-	 * needs every tick and GetAnchorIdsForRole above never was (issue #190): that heap-
-	 * allocates a TArray<FName> BY VALUE for a caller that reads element 0 and stops, once
-	 * per waiting aircraft per tick for as long as the fleet stays saturated. Same ordering
-	 * rule as GetAnchorIdsForRole - only ids the instance actually resolved, in definition
-	 * order - so the two agree on which id "first" means.
+	 * "where can baggage be worked" and the caller takes the first. Only ids the instance
+	 * actually resolved are considered, by construction: this reads FResolvedAnchor::Role,
+	 * captured at placement, rather than filtering the definition's own anchors and checking
+	 * each one against ResolvedAnchors - so a definition edited after placement cannot hand
+	 * back an id that leads nowhere.
+	 *
+	 * ONE ID, NOT A LIST (issue #190, #462): UJobBoard::ServiceAnchorOf needs this every tick,
+	 * and an array form heap-allocates a TArray<FName> BY VALUE for a caller that reads element
+	 * 0 and stops, once per waiting aircraft per tick for as long as the fleet stays saturated.
+	 * That array form (GetAnchorIdsForRole) was deleted when this one was production's only
+	 * reader and only tests still asked for the whole list.
 	 */
 	FName FirstAnchorIdForRole(FEntityInstanceId Entity, EServiceRole Role) const;
 

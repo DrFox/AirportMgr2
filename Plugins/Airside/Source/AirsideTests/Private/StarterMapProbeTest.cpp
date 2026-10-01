@@ -109,7 +109,10 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 			}
 
 			++StandsTotal;
-			for (const FName FuelId : Net->GetAnchorIdsForRole(Id, EServiceRole::Fuel))
+			// THE FIRST FUEL ANCHOR, which is the one a fuel job is sent to (UJobBoard::ServiceAnchorOf asks
+			// the same query). The role query used to answer the whole list here, so a stand with a second
+			// hydrant would have logged both and now logs the first.
+			if (const FName FuelId = Net->FirstAnchorIdForRole(Id, EServiceRole::Fuel); !FuelId.IsNone())
 			{
 				const FResolvedAnchor* Anchor = Net->FindResolvedAnchor(Id, FuelId);
 

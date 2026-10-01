@@ -132,12 +132,6 @@ public:
 	 * a thing dug into the concrete; a service point is a place on an airframe. Both are
 	 * an id, a local pose and a role, so both use FEntityAnchor - and the id is the only
 	 * way either should be addressed.
-	 *
-	 * SO AN ID MUST BE NON-EMPTY AND UNIQUE: one that names two points sends a belt loader to the refuel
-	 * panel and reports success. A HasUsableServiceIds check once asserted that for the authoring
-	 * commandlet; it had no production caller and only one test read it, so it went in #462
-	 * (2026-10-01). Bring it back with this array's first real reader, which is what makes a duplicate
-	 * a bug rather than a typo.
 	 */
 	UPROPERTY(EditAnywhere) TArray<FEntityAnchor> ServicePoints;
 
@@ -260,6 +254,16 @@ public:
 
 	/** The footprint as plan-view line segments in LOCAL space; pairs of points. */
 	static void BuildFootprintLines(const FEntityFootprint& Footprint, TArray<FVector2D>& OutSegments);
+
+	/**
+	 * Every service point carries a non-empty id and no two share one.
+	 *
+	 * Exposed to script because the authoring commandlet runs the same check the model
+	 * does - an id that names two points sends a belt loader to the refuel panel and
+	 * reports success, and catching that at authoring time is cheaper than in a sim.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Airside")
+	static bool HasUsableServiceIds(const UAircraftType* Type);
 
 	/** An A320-200 with sharklets - the Code C workhorse. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")

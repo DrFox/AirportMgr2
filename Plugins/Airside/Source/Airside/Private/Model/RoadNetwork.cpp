@@ -1941,7 +1941,7 @@ FEntityInstanceId URoadNetwork::PlaceEntity(const FEntityPlacement& Placement, c
 		Resolved.Node = AddGuidelineNode(World, /*bDerived=*/false);
 
 		// Captured rather than left on the definition - see FResolvedAnchor's comment.
-		// GetAnchorWorldHeading and GetAnchorIdsForRole read these back instead of
+		// GetAnchorWorldHeading and FirstAnchorIdForRole read these back instead of
 		// Definition->Anchors, which is the whole reason this struct grew them.
 		Resolved.LocalHeading = Anchor.LocalHeading;
 		Resolved.Role = Anchor.Role;
@@ -2071,34 +2071,12 @@ const FGuidelineNode* URoadNetwork::GetAnchorNode(FEntityInstanceId Entity, FNam
 	return Resolved != nullptr ? GetGuidelineNode(Resolved->Node) : nullptr;
 }
 
-TArray<FName> URoadNetwork::GetAnchorIdsForRole(FEntityInstanceId Entity, EServiceRole Role) const
+FName URoadNetwork::FirstAnchorIdForRole(FEntityInstanceId Entity, EServiceRole Role) const
 {
-	TArray<FName> Found;
-
-	const FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
-	if (Instance == nullptr)
-	{
-		return Found;
-	}
-
 	// Reads FResolvedAnchor::Role rather than filtering the definition's own anchors and
 	// checking each one against ResolvedAnchors - ResolvedAnchors already holds only ids
 	// this INSTANCE actually resolved, so iterating it directly cannot hand back an id a
 	// definition edited after placement would leave leading nowhere.
-	for (const FResolvedAnchor& Resolved : Instance->ResolvedAnchors)
-	{
-		if (Resolved.Role == Role)
-		{
-			Found.Add(Resolved.Id);
-		}
-	}
-	return Found;
-}
-
-FName URoadNetwork::FirstAnchorIdForRole(FEntityInstanceId Entity, EServiceRole Role) const
-{
-	// SAME WALK AS GetAnchorIdsForRole, stopping at the first match instead of collecting
-	// every one - see that function's own comment on why ResolvedAnchors is read directly.
 	const FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
 	if (Instance == nullptr)
 	{

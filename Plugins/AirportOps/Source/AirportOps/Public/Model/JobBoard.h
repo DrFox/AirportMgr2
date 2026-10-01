@@ -886,7 +886,7 @@ private:
 	FServiceVehicle* FindVehicleMutable(int32 VehicleId);
 
 	/** The stand's anchor node for Role, or unset. By ROLE and then by ID, never by index - see
-	 *  URoadNetwork::GetAnchorIdsForRole. */
+	 *  URoadNetwork::FirstAnchorIdForRole. */
 	static FGuidelineNodeId ServiceAnchorOf(const URoadNetwork& Network, FEntityInstanceId Stand, EServiceRole Role);
 
 	/** Home's pose node, or unset if the depot is gone. */

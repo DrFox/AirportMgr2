@@ -165,7 +165,7 @@ struct AIRSIDE_API FEntityAnchor
  * Entities layer - see the top of this file), and once placement is over there is no
  * UEntityDefinition left to read them back from without breaking that rule. So the two
  * fields placement actually needs afterwards - GetAnchorWorldHeading's heading,
- * GetAnchorIdsForRole's role - are captured here rather than looked up live. The trade is
+ * FirstAnchorIdForRole's role - are captured here rather than looked up live. The trade is
  * the one FEntityInstance's own header already accepts for Node: an anchor edited on the
  * asset after a stand is placed is not picked up by instances already placed from it.
  */

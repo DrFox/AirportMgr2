@@ -286,7 +286,7 @@ FGuidelineNodeId UJobBoard::ServiceAnchorOf(const URoadNetwork& Network, FEntity
 	// BY ROLE, THEN BY ID, AND THE FIRST ONE ONLY (issue #190). Role is a category - a stand may one
 	// day have two hydrants - so this answers "where can the service be worked" and takes the first;
 	// never by array position, which is the invariant FResolvedAnchor exists to remove.
-	// FirstAnchorIdForRole, not GetAnchorIdsForRole: this runs for every bid of every job, and
+	// FirstAnchorIdForRole, not a list of the role's anchors: this runs for every bid of every job, and
 	// building a whole TArray<FName> just to read element 0 was the busy-wait's own share of the
 	// allocation #190 found.
 	const FName AnchorId = Network.FirstAnchorIdForRole(Stand, Role);
