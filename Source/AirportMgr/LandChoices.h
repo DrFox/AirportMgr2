@@ -16,7 +16,10 @@ class URoadNetwork;
  *    runway changes nothing; a pan onto another does.
  *  - the graph: EditRevision (segments and nodes, a drag included) and GuidelineRevision (facts, use, the derived
  *    graph - through the facade, whose Topology notify rebuilds it).
- *  - the traffic's OccupancyRevision: a stand held or freed moves NoFreeStand, which the plan reports.
+ *  - the traffic's OccupancyRevision: a stand held or freed moves NoFreeStand, which the plan reports. AND ITS
+ *    StandHoldChangeCount (#497 re-review): a body the per-tick claim pass rolls onto a stand's pose, or off it, moves no
+ *    OccupancyRevision, yet the plan reads exactly that (IsHeld on the pose) - dated by the revision alone, a row stayed
+ *    admitted while an aircraft sat on the only stand, and the click it offered was refused.
  *  - the network object: a clear or a load is a new one, counting from zero - a weak pointer, so a recycled address
  *    is not mistaken for the old network.
  *  - whether the airport admits arrivals (UAirport::AdmitsArrivals) - the gate every quote ends with - and whether
@@ -33,6 +36,9 @@ struct FLandChoicesKey
 	uint32 EditRevision = 0;
 	uint32 GuidelineRevision = 0;
 	uint32 OccupancyRevision = 0;
+	/** UGroundTraffic::StandHoldChangeCount - OccupancyRevision's blind spot, a body on or off a pose. Occupancy, for
+	 *  SameButOccupancy: the occupancy-only re-quote answers it. ENFORCED BY: AirportMgr.UI.LandPanelRequotesWhenABodyTakesTheStand */
+	uint32 StandChurn = 0;
 	/** ArrivalPlanner::FirstLandingRunway(Near)'s index, INDEX_NONE with no landing runway. */
 	int32 FirstRunway = INDEX_NONE;
 	bool bAdmits = true;
@@ -41,16 +47,19 @@ struct FLandChoicesKey
 	bool operator==(const FLandChoicesKey& Other) const
 	{
 		return Network == Other.Network && EditRevision == Other.EditRevision && GuidelineRevision == Other.GuidelineRevision
-			&& OccupancyRevision == Other.OccupancyRevision && FirstRunway == Other.FirstRunway && bAdmits == Other.bAdmits
+			&& OccupancyRevision == Other.OccupancyRevision && StandChurn == Other.StandChurn && FirstRunway == Other.FirstRunway
+			&& bAdmits == Other.bAdmits
 			&& bQuotes == Other.bQuotes;
 	}
 	bool operator!=(const FLandChoicesKey& Other) const { return !(*this == Other); }
 
-	/** Equal in everything but OccupancyRevision - the one change LandChoices::RequoteForOccupancy answers (#471). */
+	/** Equal in everything but occupancy - OccupancyRevision and StandChurn, the one change LandChoices::RequoteForOccupancy
+	 *  answers (#471): a body on a stand is an occupancy change like a hold, and clears on its own like one. */
 	bool SameButOccupancy(const FLandChoicesKey& Other) const
 	{
 		FLandChoicesKey Aligned = Other;
 		Aligned.OccupancyRevision = OccupancyRevision;
+		Aligned.StandChurn = StandChurn;
 		return *this == Aligned;
 	}
 };
@@ -109,7 +118,8 @@ namespace LandChoices
 	 * admitted type planned in ~0.1 ms on a 30-stand line. What this does not bound: rows refused NoFreeStand on a full
 	 * field are failing searches too, and are re-quoted - the planner's reachable-stand search is the cost to cut there.
 	 * AFTER THE #497 REVIEW the planner asks for an admitted stand before searching from any exit, and a whole re-quote there
-	 * measured 78-125 ms - still above a frame, so the panel keeps its rows per runway (ULandAircraftPanelWidget::
+	 * measured 60-114 ms (2026-10-01, the cost test's two scale-field variants; runs that day read up to 125 ms - the one figure
+	 * the panel widget and its test quote) - still above a frame, so the panel keeps its rows per runway (ULandAircraftPanelWidget::
 	 * JudgedByRunway) and a camera pan back onto a judged runway quotes nothing. A first open and an edit still pay it.
 	 * ENFORCED BY: AirportMgr.UI.LandPanelRequotesOnlyWhatOccupancyCanChange, AirportMgr.UI.LandPanelCostOnAScaleField;
 	 * AirportMgr.UI.LandPanelBuildsOnlyOnChange for "every edit moves another field" (one step per field)

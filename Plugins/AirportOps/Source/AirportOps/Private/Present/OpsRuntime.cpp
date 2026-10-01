@@ -16,6 +16,7 @@
 #include "Model/OpsAlerts.h"
 #include "Model/ArrivalSequencer.h"
 #include "Model/Flight.h"
+#include "Model/FlightBilling.h"
 #include "Model/FlightBoard.h"
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
@@ -485,6 +486,17 @@ void UOpsRuntime::WireBus()
 			FlightBoard->OnAgentPhase(*Target->Network, *Clock, E);
 		}
 	});
+	// BILLING, A REACTION TO THE PHASE (#442 item 4): the landing fee, the parking clock and the parking fee, posted by FlightBilling
+	// when a flight ENTERS Landing, Turnaround or TaxiOut - which the board's TransitionTo announces for every change. It was the tail of
+	// UFlightBoard::OnAgentPhase, inline, after every agent event; the board no longer knows money. SIM, not Reaction: it writes state
+	// (the ledger, and the flight's paid flags) - and what reads it (the alerts' overdrawn check, through FMoneyPostedEvent; the bar's
+	// balance after Tick) reads it settled. A ROUND LATER than inline, in the same drain: Landing is entered in the "ArrivalQueue" pass
+	// and Turnaround/TaxiOut in the handler above, both inside Tick's drain - so Tick still returns with the fee posted.
+	// ENFORCED BY: AirportOps.Present.Bus.BillingIsWired (red with this line gone), AirportOps.Model.FlightFees.BilledOnTheBusARoundLater
+	Bus.Subscribe<FFlightPhaseChangedEvent>(EOpsTier::Sim, TEXT("Billing"), [this](const FFlightPhaseChangedEvent& E)
+	{
+		FlightBilling::OnFlightPhaseChanged(*FlightBoard, E);
+	});
 
 	// THE ARRIVAL QUEUE, as a pass (ops batch 3 §5) - see RunArrivalQueue. After the job board's pass and before the
 	// alerts' (the alerts pass declares After this one), so a dispatch and the alerts that read it land in the same round. Every
@@ -498,7 +510,7 @@ void UOpsRuntime::WireBus()
 	Bus.Subscribe<FStandsFreedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FStandsFreedEvent&) { Bus.MarkDirty(TEXT("ArrivalQueue")); });
 	// AN ACCEPT: a zero-lead accept (key 7's AcceptImmediate) is due at once, and the queue re-reserves.
 	Bus.Subscribe<FOfferAcceptedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FOfferAcceptedEvent&) { Bus.MarkDirty(TEXT("ArrivalQueue")); });
-	// A FLIGHT JOINS THE QUEUE - its ETA came (UFlightBoard::Enqueue).
+	// A FLIGHT JOINS THE QUEUE - its ETA came (FArrivalQueue::Enqueue, UFlightBoard's until #442 item 4).
 	Bus.Subscribe<FFlightInboundEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FFlightInboundEvent&) { Bus.MarkDirty(TEXT("ArrivalQueue")); });
 	// THE PLAYER BUILT OR DELETED something: a new stand, exit or runway may be the one a flight was refused for.
 	Bus.Subscribe<FNetworkChangedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FNetworkChangedEvent&) { Bus.MarkDirty(TEXT("ArrivalQueue")); });
@@ -833,7 +845,7 @@ void UOpsRuntime::RunArrivalQueue(const FPassRun& Run)
 	}
 	if (Result.bRetry)
 	{
-		// A DISPATCH REFUSED in a same-frame race (UFlightBoard::DispatchNow): retried next frame, never dropped - and a RETRY
+		// A DISPATCH REFUSED in a same-frame race (FArrivalQueue::DispatchNow): retried next frame, never dropped - and a RETRY
 		// (EPassCause::Retry, the default of MarkDirtyNextDrain), review M1: the tail of a run something asked for, not the net's own find.
 		// ENFORCED BY: AirportOps.Present.ArrivalQueue.RetryStaysCovered
 		Bus.MarkDirtyNextDrain(TEXT("ArrivalQueue"));
@@ -1723,7 +1735,7 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// EVERY PASS ONCE after a load - the one catch-up, since nothing that happened before the load
 	// is an event any more (spec 2026-09-29 §4). No passes exist until stage 3; the rule is here first.
 	// THE ARRIVAL QUEUE'S among them. DemoteRestoredMidFlight (#404) set a flight Inbound directly until #426, so this
-	// run was all that dispatched a re-queued flight; it goes through UFlightBoard::Enqueue now, whose FlightInbound
+	// run was all that dispatched a re-queued flight; it goes through FArrivalQueue::Enqueue now, whose FlightInbound
 	// wakes the pass too - this stays the catch-up for everything that is true of the loaded airport and was never an event.
 	Bus.MarkAllDirty();
 

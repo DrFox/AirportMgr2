@@ -173,6 +173,11 @@ namespace FlightPhase
 
 	/** Landing or taxiing in: on the field, not yet at a stand. A load re-queues these (their aeroplane was not saved). */
 	inline bool IsArriving(EFlightPhase Phase) { return StageOf(Phase) == EFlightStage::OnTheWayIn; }
+
+	/** "TaxiIn", not "EFlightPhase::TaxiIn": a log line a grep for "restored mid-TaxiIn" finds (review M9). HERE SINCE #442 item 4,
+	 *  which split FlightBoard.cpp - the one file that spelled it (FlightBoardText::PhaseName) - so the board and the arrival queue
+	 *  log a phase with one spelling rather than a copy each. */
+	inline FString Name(EFlightPhase Phase) { return StaticEnum<EFlightPhase>()->GetNameStringByValue(static_cast<int64>(Phase)); }
 }
 
 /**

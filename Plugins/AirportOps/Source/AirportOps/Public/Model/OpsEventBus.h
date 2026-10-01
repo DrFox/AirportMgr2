@@ -453,9 +453,9 @@ struct AIRPORTOPS_API FPushGroundFreedEvent
 };
 
 /**
- * A flight came due and joined the arrival queue - UFlightBoard::Enqueue, its one site (a Clock.At callback, or the
- * load's RearmSchedules for one already overdue). The queue pass hears it; before PR D the queue was ticked every
- * frame and needed no word.
+ * A flight came due and joined the arrival queue - FArrivalQueue::Enqueue (UFlightBoard's until #442 item 4), its one site (a
+ * Clock.At callback, or the load's RearmSchedules for one already overdue). The queue pass hears it; before PR D the queue was
+ * ticked every frame and needed no word.
  * ENFORCED BY: AirportOps.Model.FlightBoard.EnqueuePublishesInbound
  */
 struct AIRPORTOPS_API FFlightInboundEvent
@@ -463,6 +463,32 @@ struct AIRPORTOPS_API FFlightInboundEvent
 	int32 FlightId = 0;
 	FName AirlineId;
 	static const TCHAR* EventName() { return TEXT("FlightInbound"); }
+	FString Describe() const;
+};
+
+/**
+ * A flight changed phase - published by UFlightBoard::TransitionTo, the one writer of a flight's phase, for EVERY change it makes
+ * and for nothing else (a "change" to the phase the flight is already in is not one, and says nothing) (#442 item 4). What the
+ * billing reaction hears ("Billing", FlightBilling::OnFlightPhaseChanged): the money UFlightBoard::OnAgentPhase used to post inline
+ * is a Sim-tier reaction to the phase now, a round later in the same drain.
+ *
+ * GENERIC, BESIDE THE SPECIFIC ONES, NOT INSTEAD OF THEM: FFlightInboundEvent, FFlightAirborneEvent and FFlightCancelledEvent carry
+ * what their listeners need (the airline, the lateness, the reason) and keep their own rules - a load's cancel publishes no
+ * FFlightCancelledEvent, so the roster never scores it. This carries only the change, so a listener that cares about a phase
+ * (billing: Landing, Turnaround, TaxiOut) needs no event of its own per phase. A LOAD'S CHANGES ARE PUBLISHED TOO - the re-queue's
+ * Inbound, the retire's Departed, the closed airport's Cancelled - and enter none of the phases billing reacts to.
+ *
+ * At IS THE GAME TIME THE CHANGE WAS DATED (the transition's FTransitionCause::At), so a fee priced a round later is priced and
+ * dated exactly as it was inline - not by whatever the clock reads when the event is heard.
+ * ENFORCED BY: AirportOps.Model.FlightBoard.EveryChangeIsPublishedOnce, AirportOps.Present.Bus.BillingIsWired
+ */
+struct AIRPORTOPS_API FFlightPhaseChangedEvent
+{
+	int32 FlightId = 0;
+	EFlightPhase From = EFlightPhase::Offered;
+	EFlightPhase To = EFlightPhase::Offered;
+	double At = 0.0;
+	static const TCHAR* EventName() { return TEXT("FlightPhaseChanged"); }
 	FString Describe() const;
 };
 
@@ -493,7 +519,8 @@ using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChanged
 	FNetworkChangedEvent, FAlertRaisedEvent, FAlertClearedEvent, FAlertsResetEvent, FBuildRefusedEvent, FLandRefusedEvent,
 	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent, FOfferAcceptedEvent,
 	FTurnaroundEndedEvent, FAirportStatusChangedEvent, FFlightCancelledEvent, FRunwayFreedEvent, FStandsFreedEvent,
-	FFlightInboundEvent, FPushGroundFreedEvent, FModulesRefundedEvent, FAlertChangedEvent, FAirlineAdmissionChangedEvent>;
+	FFlightInboundEvent, FPushGroundFreedEvent, FModulesRefundedEvent, FAlertChangedEvent, FAirlineAdmissionChangedEvent,
+	FFlightPhaseChangedEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec

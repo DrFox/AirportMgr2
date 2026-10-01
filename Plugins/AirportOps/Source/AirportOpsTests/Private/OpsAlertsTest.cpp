@@ -363,7 +363,7 @@ bool FOpsAlertsFixedAirportTest::RunTest(const FString&)
 	// THE RUNWAY IS BUSY, then the player REBUILDS THE EXIT - really: the whole derivation a rebuild runs, with the anchor links the graph-only
 	// Derive above dropped, so the planner itself now says the field can take the flight (PRECONDITION below). The queue does not ask a flight
 	// about its clearance while its runway is held; the alert pass can read only what the queue has judged - and since #445 the queue re-dates
-	// every unarrived flight on a graph change (UFlightBoard::JudgeUnarrived), so the alert clears because the judgement is fresh and says None.
+	// every unarrived flight on a graph change (FArrivalQueue::JudgeUnarrived), so the alert clears because the judgement is fresh and says None.
 	for (const FTrafficResource& Surface : F.Airport.Net->RunwaySurfaces(F.Airport.ThresholdSegment))
 	{
 		FTrafficClaim Claim;
@@ -738,7 +738,7 @@ bool FOpsAlertsBusyRunwayEditTest::RunTest(const FString&)
 	// #445 REVIEW, the #442 review's follow-up: ClearanceFor is asked only once the runway is found free, so a holding flight behind a BUSY runway was never
 	// re-judged after an edit - its cached verdict went stale, UnlandableWhy read None, the alert cleared, and it was raised again (a fresh toast) when the
 	// runway freed. Every unrelated road drawn while the runway was busy did it. The queue re-dates its unarrived flights on a graph change whatever the
-	// runway is doing (UFlightBoard::JudgeUnarrived), so the alert stands.
+	// runway is doing (FArrivalQueue::JudgeUnarrived), so the alert stands.
 	FAlertsField F;
 	if (!TestTrue(TEXT("a field"), F.Build())) { return false; }
 	UFlight* Coming = NewObject<UFlight>(GetTransientPackage());

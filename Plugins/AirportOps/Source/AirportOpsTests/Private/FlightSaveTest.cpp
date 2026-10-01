@@ -6,6 +6,7 @@
 #include "Model/OpsEventBus.h"
 #include "OpsSaveTestHelpers.h"
 #include "Model/Flight.h"
+#include "Model/FlightBilling.h"
 #include "Model/FlightBoard.h"
 #include "Model/JobBoard.h"
 #include "Model/GroundTraffic.h"
@@ -219,6 +220,12 @@ bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
 	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("FlightBoard"), [&](const FAgentPhaseEvent& E)
 	{
 		LiveBoard->OnAgentPhase(*Net, *LiveClock, E);
+	});
+	// THE BILLING REACTION, on whichever board is live (#442 item 4): the landing fee this test counts is posted there now, a round
+	// after the change - as UOpsRuntime::WireBus subscribes it.
+	Bus.Subscribe<FFlightPhaseChangedEvent>(EOpsTier::Sim, TEXT("Billing"), [&](const FFlightPhaseChangedEvent& E)
+	{
+		FlightBilling::OnFlightPhaseChanged(*LiveBoard, E);
 	});
 	Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Reaction, TEXT("test"), [&Scored](const FFlightAirborneEvent&) { ++Scored; });
 	Bus.Subscribe<FFlightCancelledEvent>(EOpsTier::Reaction, TEXT("test"), [&Scored](const FFlightCancelledEvent&) { ++Scored; });
@@ -466,6 +473,7 @@ bool FFlightUnchargedLandingTest::RunTest(const FString& Parameters)
 	ULedger* Ledger = NewObject<ULedger>(GetTransientPackage());
 	Ledger->Clock = Rig.Clock;
 	Rig.Board->Ledger = Ledger;
+	FOpsTestBilling Billing(*Rig.Board);   // the reaction that charges the landing (#442 item 4), drained below
 	UGroundTraffic* Traffic = Rig.Traffic;
 	URoadNetwork* Net = Rig.Field.Net;
 	Rig.Board->Dispatcher = [Traffic, Net](const FVector2D& Near, const FAirframe& Frame)
@@ -481,9 +489,12 @@ bool FFlightUnchargedLandingTest::RunTest(const FString& Parameters)
 	Rig.Clock->Advance(1.0);
 	Rig.Board->TickQueue(*Traffic, *Net, *Rig.Clock);
 	if (!TestEqual(TEXT("it lands again"), Flight->GetPhase(), EFlightPhase::Landing)) { return false; }
-	// THE ARRIVING THE BUS WOULD DELIVER, twice: the second is the "more than one phase maps to Landing" case.
+	Billing.Bus.Drain();
+	// THE ARRIVING THE BUS WOULD DELIVER, twice: the second is the "more than one phase maps to Landing" case. Neither changes the
+	// phase, so neither is billed since #442 item 4 - the landing was, once, on entering it; they stay to show a repeat charges nothing.
 	Rig.Board->OnAgentPhase(*Net, *Rig.Clock, OpsTestTransition(Flight->AgentId, EAgentPhase::Gone, EAgentPhase::Arriving, EAgentEvent::Dispatched));
 	Rig.Board->OnAgentPhase(*Net, *Rig.Clock, OpsTestTransition(Flight->AgentId, EAgentPhase::Gone, EAgentPhase::Arriving, EAgentEvent::Dispatched));
+	Billing.Bus.Drain();
 	const int32 Rows = Ledger->Entries().FilterByPredicate([](const FLedgerEntry& E) { return E.Category == ELedgerCategory::LandingFee; }).Num();
 	TestEqual(TEXT("saved uncharged, it is charged exactly once when it lands"), Rows, 1);
 	return true;

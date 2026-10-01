@@ -8,6 +8,7 @@
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
 #include "Model/LandingRun.h"
+#include "Model/Ledger.h"
 #include "Model/OpsEventBus.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RouteSearch.h"
@@ -682,6 +683,118 @@ bool FArrivalQueueClosedTest::RunTest(const FString&)
 	Rig.Runtime->SetAirportClosed(false);
 	for (int32 Tick = 0; Tick < 10 && Holding->GetPhase() == EFlightPhase::Inbound; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
 	TestEqual(TEXT("opened: it lands"), Holding->GetPhase(), EFlightPhase::Landing);
+	return true;
+}
+
+namespace ArrivalQueuePassTest
+{
+	/** An offer for Field, accepted through the board's own door, or null if refused. Fee and lead the caller's. */
+	UFlight* AcceptOnto(FRig& Rig, const FTestAirport& Field, double Lead, double LandingFee)
+	{
+		UFlightBoard* Board = Rig.Runtime->GetFlightBoard();
+		UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+		Flight->Id = Board->TakeNextId();
+		Flight->Airframe = Rig.Airframe;
+		Flight->AirlineId = TEXT("Cumbria");
+		Flight->OfferWindowSeconds = 60.0;
+		Flight->OfferSecondsLeft = 60.0;
+		Flight->LeadTimeSeconds = Lead;
+		Flight->RunwayPreference = Field.Threshold;
+		Flight->LandingFee = LandingFee;
+		Board->AddOffer(*Rig.Runtime->GetClock(), Flight);
+		return Board->Accept(*Rig.Model, *Rig.Net, *Rig.Runtime->GetClock(), *Flight) ? Flight : nullptr;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalQueueBillingWiredTest, "AirportOps.Present.Bus.BillingIsWired",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalQueueBillingWiredTest::RunTest(const FString&)
+{
+	// #442 ITEM 4: BILLING IS ONE LINE IN UOpsRuntime::WireBus now - "Billing", Sim, on FFlightPhaseChangedEvent - and every model test
+	// wires its own on a bare bus, so only a test through the runtime goes red without it. Asserted by name and by its effect: a flight
+	// the "ArrivalQueue" pass lands is charged its landing fee BY THE SAME Tick - a round after the dispatch, in the drain that made it -
+	// so whatever reads the ledger later in the frame reads it paid: the bar's balance (ULedger::Balance, gated on Revision) and a build
+	// quote's affordability (ULedger::CanPay, the one rule CanAfford prices through).
+	FTestAirport Field;
+	FRig Rig;
+	if (!TestTrue(TEXT("an attached runtime"), Rig.Attach([&](URoadNetwork& Net) { Field = FTestAirport::Build(Rig.Airframe, FTestAirportOptions(), &Net); })))
+	{
+		return false;
+	}
+	TestTrue(TEXT("the runtime subscribes the billing reaction to every flight phase change"),
+		Rig.Runtime->GetBus().SubscribersOf(FOpsEvent::IndexOfType<FFlightPhaseChangedEvent>()).Contains(FName(TEXT("Billing"))));
+	for (int32 Tick = 0; Tick < 5; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
+
+	ULedger* Ledger = Rig.Runtime->GetLedger();
+	UFlight* Flight = ArrivalQueuePassTest::AcceptOnto(Rig, Field, /*Lead*/ 0.0, /*LandingFee*/ 500.0);
+	if (!TestNotNull(TEXT("accepted"), Flight) || !TestNotNull(TEXT("a ledger"), Ledger)) { return false; }
+	const double Before = Ledger->Balance();
+	const int32 RevisionBefore = Ledger->Revision();
+	if (!TestFalse(TEXT("PRECONDITION: a quote priced at the balance plus the fee is not affordable yet"), Ledger->CanPay(Before + 500.0))) { return false; }
+	for (int32 Tick = 0; Tick < 60 && Flight->GetPhase() != EFlightPhase::Landing; ++Tick)
+	{
+		Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
+	}
+	if (!TestEqual(TEXT("PRECONDITION: the queue pass landed it"), Flight->GetPhase(), EFlightPhase::Landing)) { return false; }
+	// NO MORE TICKS: what follows is what a reader later in the SAME frame sees.
+	TestEqual(TEXT("the Tick that landed it charged its landing fee"), Ledger->Balance(), Before + 500.0, 1e-6);
+	TestTrue(TEXT("and marked it paid"), Flight->bLandingFeePaid);
+	TestTrue(TEXT("the ledger's revision moved, so the bar's balance re-reads this frame"), Ledger->Revision() != RevisionBefore);
+	TestTrue(TEXT("and a quote priced at the new balance is affordable this frame"), Ledger->CanPay(Before + 500.0));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalQueueOwnersWiredTest, "AirportOps.Present.FlightBoardOwnersAreWired",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalQueueOwnersWiredTest::RunTest(const FString&)
+{
+	// #442 ITEM 4 SPLIT UFlightBoard INTO THE REGISTRY AND TWO OWNERS, FOfferInbox and FArrivalQueue, keeping every public name as a
+	// FORWARDER - and a forwarder that reached nothing would still compile. THROUGH THE RUNTIME, one flight's arrival from its offer:
+	// the runtime's Tick drains the countdown (TickOffers -> FOfferInbox), the verdict reads admitted (VerdictFor), the accept holds a
+	// stand and arms the arrival (TryAccept -> FOfferInbox; the Accepted row -> FArrivalQueue::Schedule), the ETA queues it (the clock
+	// callback -> FArrivalQueue::Enqueue, seen through Queue), and the "ArrivalQueue" pass lands it (TickQueue -> FArrivalQueue::Tick,
+	// DispatchNow). Each step names the forwarder whose owner must have done it.
+	FTestAirport Field;
+	FRig Rig;
+	if (!TestTrue(TEXT("an attached runtime"), Rig.Attach([&](URoadNetwork& Net) { Field = FTestAirport::Build(Rig.Airframe, FTestAirportOptions(), &Net); })))
+	{
+		return false;
+	}
+	UFlightBoard* Board = Rig.Runtime->GetFlightBoard();
+	USimClock* Clock = Rig.Runtime->GetClock();
+	for (int32 Tick = 0; Tick < 5; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
+
+	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+	Flight->Id = Board->TakeNextId();
+	Flight->Airframe = Rig.Airframe;
+	Flight->OfferWindowSeconds = 60.0;
+	Flight->OfferSecondsLeft = 60.0;
+	Flight->LeadTimeSeconds = 2.0;
+	Flight->RunwayPreference = Field.Threshold;
+	Board->AddOffer(*Clock, Flight);
+	Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
+	TestTrue(TEXT("TickOffers: the runtime's Tick drained the offer's countdown"), Flight->OfferSecondsLeft < 60.0);
+	TestTrue(TEXT("TickOffers: and judged it acceptable on the way (what a lapse is classified by)"), Flight->bWasEverAcceptable);
+	TestEqual(TEXT("VerdictFor: admitted"), Board->VerdictFor(*Rig.Model, *Rig.Net, *Flight).Why, EArrivalRefusal::None);
+	TestEqual(TEXT("QuoteFor: the same yes, through the gate"), Board->QuoteFor(*Rig.Model, *Rig.Net, *Flight).Why, EArrivalRefusal::None);
+
+	const FArrivalQuote Accepted = Board->TryAccept(*Rig.Model, *Rig.Net, *Clock, *Flight);
+	if (!TestTrue(FString::Printf(TEXT("TryAccept: accepted ('%s')"), *Accepted.Sentence), Accepted.IsAccepted())) { return false; }
+	TestTrue(TEXT("TryAccept: onto the stand its plan taxis to, held"), Flight->Stand == Accepted.Stand && Accepted.Stand.IsSet());
+	TestEqual(TEXT("Queue: nobody holds before the ETA"), Board->Queue().Num(), 0);
+
+	// THE ETA, by the runtime's own clock - Schedule armed it - then the pass, on the FlightInbound it publishes.
+	int32 HeldFrames = 0;
+	for (int32 Tick = 0; Tick < 300 && Flight->GetPhase() != EFlightPhase::Landing; ++Tick)
+	{
+		Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
+		HeldFrames += Board->Queue().Contains(Flight) ? 1 : 0;
+	}
+	TestEqual(TEXT("Schedule, Enqueue, TickQueue: armed, queued at its ETA and landed by the pass"), Flight->GetPhase(), EFlightPhase::Landing);
+	TestTrue(TEXT("TickQueue: through the board's forwarder, the pass's one call"), Rig.QueueRuns() > 0);
+	TestTrue(TEXT("DispatchNow: as the aircraft the dispatch made"), Flight->AgentId != INDEX_NONE && Rig.Model->FindAgent(Flight->AgentId) != nullptr);
+	TestEqual(TEXT("Queue: and it left the queue"), Board->Queue().Num(), 0);
+	AddInfo(FString::Printf(TEXT("frames it was seen holding: %d"), HeldFrames));
 	return true;
 }
 

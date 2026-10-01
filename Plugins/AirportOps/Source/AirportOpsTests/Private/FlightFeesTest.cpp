@@ -240,6 +240,9 @@ bool FParkingAtTheOffersRateTest::RunTest(const FString& Parameters)
 	// THE BOARD HAS THE LEVER WIRED, as UOpsRuntime's constructor wires it: what the old PostParkingFee asked at departure.
 	Board->Pricing = Pricing;
 	Board->Allocator = NewObject<UStandAllocator>(GetTransientPackage());
+	// BILLING IS A REACTION TO THE PHASE (#442 item 4): the runtime's "Billing" subscription on this test's own bus, drained after
+	// each change as the runtime's Tick drains it.
+	FOpsTestBilling Billing(*Board);
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	Flight->AgentId = 5;
 	Board->AddOffer(*Clock, Flight);
@@ -255,6 +258,7 @@ bool FParkingAtTheOffersRateTest::RunTest(const FString& Parameters)
 	Flight->ParkedAt = 1000.0;
 	Clock->StartAtHour((1000.0 + 7200.0) / 3600.0);
 	Board->OnAgentPhase(*Field.Net, *Clock, OpsTestTransition(5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing, EAgentEvent::PushedBack));
+	Billing.Bus.Drain();
 	if (!TestEqual(TEXT("taxiing out"), Flight->GetPhase(), EFlightPhase::TaxiOut)) { return false; }
 	TestEqual(TEXT("parking is billed at the OFFER's rate: 2 h at 120, not at the lever's 180"), Ledger->Balance(), 240.0, 1e-3);
 	TestEqual(TEXT("and recorded on the flight"), Flight->ParkingFee, 240.0, 1e-3);
@@ -275,6 +279,7 @@ bool FParkingBilledOncePerFlightTest::RunTest(const FString& Parameters)
 	Ledger->Open(0.0);
 	UFlightBoard* Board = NewObject<UFlightBoard>(GetTransientPackage());
 	Board->Ledger = Ledger;
+	FOpsTestBilling Billing(*Board);   // the reaction that posts the fee (#442 item 4), drained after each change
 	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 
@@ -289,6 +294,7 @@ bool FParkingBilledOncePerFlightTest::RunTest(const FString& Parameters)
 
 	Clock->StartAtHour((1000.0 + 7200.0) / 3600.0);
 	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing, EAgentEvent::PushedBack));
+	Billing.Bus.Drain();
 	if (!TestEqual(TEXT("taxiing out"), Flight->GetPhase(), EFlightPhase::TaxiOut)) { return false; }
 	if (!TestEqual(TEXT("parking posted on entering TaxiOut: 2 h at 120"), Ledger->Balance(), 240.0, 1e-3)) { return false; }
 	TestTrue(TEXT("and the flight knows it was billed"), Flight->bParkingFeePaid);
@@ -296,9 +302,11 @@ bool FParkingBilledOncePerFlightTest::RunTest(const FString& Parameters)
 	// IT PARKS AGAIN (a Parked event reaches Turnaround from any phase that has reached the stand), an hour later, and pushes back out.
 	Clock->StartAtHour((1000.0 + 10800.0) / 3600.0);
 	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked));
+	Billing.Bus.Drain();
 	if (!TestEqual(TEXT("PRECONDITION: back on the stand"), Flight->GetPhase(), EFlightPhase::Turnaround)) { return false; }
 	Clock->StartAtHour((1000.0 + 14400.0) / 3600.0);
 	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Parked, EAgentPhase::Taxiing, EAgentEvent::DepartOrdered));
+	Billing.Bus.Drain();
 	if (!TestEqual(TEXT("PRECONDITION: taxiing out again - a second ENTRY"), Flight->GetPhase(), EFlightPhase::TaxiOut)) { return false; }
 	TestEqual(TEXT("and the flight is billed ONCE: the balance is unchanged"), Ledger->Balance(), 240.0, 1e-3);
 	int32 ParkingRows = 0;
@@ -324,6 +332,7 @@ bool FParkingBilledOnceAcrossARedirectTest::RunTest(const FString& Parameters)
 	Ledger->Open(0.0);
 	UFlightBoard* Board = NewObject<UFlightBoard>(GetTransientPackage());
 	Board->Ledger = Ledger;
+	FOpsTestBilling Billing(*Board);   // the reaction that posts the fee (#442 item 4), drained after each change
 	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 
@@ -338,12 +347,14 @@ bool FParkingBilledOnceAcrossARedirectTest::RunTest(const FString& Parameters)
 
 	Clock->StartAtHour((1000.0 + 7200.0) / 3600.0);
 	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing, EAgentEvent::PushedBack));
+	Billing.Bus.Drain();
 	if (!TestEqual(TEXT("taxiing out"), Flight->GetPhase(), EFlightPhase::TaxiOut)) { return false; }
 	if (!TestEqual(TEXT("parking posted on entering TaxiOut: 2 h at 120"), Ledger->Balance(), 240.0, 1e-3)) { return false; }
 
 	// A REDIRECT WHILE TAXIING OUT, an hour later: the flight stays TaxiOut, and nothing more is owed.
 	Clock->StartAtHour((1000.0 + 10800.0) / 3600.0);
 	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Taxiing, EAgentEvent::Redirected));
+	Billing.Bus.Drain();
 	TestEqual(TEXT("still taxiing out"), Flight->GetPhase(), EFlightPhase::TaxiOut);
 	TestEqual(TEXT("and the parking fee was not posted a second time"), Ledger->Balance(), 240.0, 1e-3);
 	int32 ParkingRows = 0;
@@ -352,6 +363,53 @@ bool FParkingBilledOnceAcrossARedirectTest::RunTest(const FString& Parameters)
 		ParkingRows += Row.Category == ELedgerCategory::ParkingFee ? 1 : 0;
 	}
 	TestEqual(TEXT("one parking row in the ledger"), ParkingRows, 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBilledOnTheBusARoundLaterTest,
+	"AirportOps.Model.FlightFees.BilledOnTheBusARoundLater",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBilledOnTheBusARoundLaterTest::RunTest(const FString& Parameters)
+{
+	// #442 ITEM 4 MOVED WHEN MONEY POSTS: billing is a Sim-tier reaction to FFlightPhaseChangedEvent, so a fee is posted when the
+	// change is HEARD - a round later, in the drain that made it - not inside the agent event that made it, as UFlightBoard::
+	// OnAgentPhase posted it. Pinned both ways: the change alone posts nothing, and the drain posts the fee priced and dated AS OF THE
+	// CHANGE even with the clock moved on before it (the event carries At). The runtime's Tick drains inside the frame, so a reader
+	// later in the frame still sees it: AirportOps.Present.Bus.BillingIsWired is that half.
+	ULedger* Ledger = NewObject<ULedger>(GetTransientPackage());
+	Ledger->Open(0.0);
+	UFlightBoard* Board = NewObject<UFlightBoard>(GetTransientPackage());
+	Board->Ledger = Ledger;
+	FOpsTestBilling Billing(*Board);
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+
+	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+	Flight->Id = 1;
+	Flight->AirlineName = FText::FromString(TEXT("Test Air"));
+	Flight->ParkingRatePerHour = 120.0;
+	Flight->AgentId = 5;
+	Flight->SetPhaseForTest(EFlightPhase::Manoeuvring);
+	Flight->ParkedAt = 1000.0;
+	Board->AddOffer(*Clock, Flight);
+
+	Clock->StartAtHour((1000.0 + 7200.0) / 3600.0);
+	const int32 RowsBefore = Ledger->Entries().Num();
+	Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing, EAgentEvent::PushedBack));
+	if (!TestEqual(TEXT("PRECONDITION: the flight entered TaxiOut"), Flight->GetPhase(), EFlightPhase::TaxiOut)) { return false; }
+	TestEqual(TEXT("the change itself posts nothing - billing is the bus's reaction, not the board's"), Ledger->Entries().Num(), RowsBefore);
+	TestFalse(TEXT("and the flight is not billed yet"), Flight->bParkingFeePaid);
+
+	// AN HOUR PASSES BEFORE THE DRAIN - and the stay must not grow with it.
+	Clock->StartAtHour((1000.0 + 10800.0) / 3600.0);
+	Billing.Bus.Drain();
+	TestEqual(TEXT("the drain posts the parking fee: 2 h at 120, priced as of the change, not the hour since"), Ledger->Balance(), 240.0, 1e-3);
+	if (TestEqual(TEXT("one parking row"), Ledger->Entries().Num(), RowsBefore + 1))
+	{
+		TestEqual(TEXT("dated the change, not the drain"), Ledger->Entries().Last().At, 1000.0 + 7200.0, 1e-3);
+	}
 	return true;
 }
 

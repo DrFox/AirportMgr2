@@ -207,6 +207,10 @@ namespace DeparturePlanner
 		// IN METRES (#497 review), as RunwayAdmission::Describe - the NotAdmitted branch below already hands it its figures, and a
 		// departure's sentence reached the inspector and the log in uu beside it. What the strip HAS rounds down, what the
 		// aircraft NEEDS rounds up (RunwayAdmission::HaveMetres), so "available" can never print at or above "needed" when short.
+		// THAT IS A REFUSAL'S RULE, AND ONLY A REFUSAL'S (#497 re-review): the None branch reports a plan that PASSED, where no
+		// tie can mislead, and floor/ceil there printed a 1999.6 m strip as 1999 and a 1800.2 m need as 1801 - figures the
+		// strip and the aircraft do not have. It rounds to nearest, as its entry offset and taxi length always did.
+		// ENFORCED BY: Airside.Model.DeparturePlanner.SuccessLineRoundsToNearest
 		switch (Plan.Why)
 		{
 		case EDepartureRefusal::NoRunway:      return TEXT("Departure refused: not on a runway.");
@@ -223,8 +227,8 @@ namespace DeparturePlanner
 		case EDepartureRefusal::None:
 			return FString::Printf(TEXT("Departure: %s entry %.0f m past the threshold, %.0f m available of %.0f, %.0f needed, taxiing %.0f m."),
 				Plan.bBacktrack ? TEXT("backtrack to the") : TEXT("intersection"),
-				FMath::RoundToDouble(Plan.EntryOffset / 100.0), RunwayAdmission::HaveMetres(Plan.Available),
-				RunwayAdmission::HaveMetres(Plan.End.Length), RunwayAdmission::NeedMetres(Plan.Needed), FMath::RoundToDouble(Plan.Route.Length / 100.0));
+				FMath::RoundToDouble(Plan.EntryOffset / 100.0), FMath::RoundToDouble(Plan.Available / 100.0),
+				FMath::RoundToDouble(Plan.End.Length / 100.0), FMath::RoundToDouble(Plan.Needed / 100.0), FMath::RoundToDouble(Plan.Route.Length / 100.0));
 		}
 		return TEXT("Departure: unknown");
 	}

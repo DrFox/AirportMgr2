@@ -119,7 +119,8 @@ void ULandAircraftPanelWidget::RefreshFor(const ARoadBuildController* C, const U
 
 	// THE ROWS FOR THE RUNWAY THE PLANNER ASKS FIRST FROM HERE (#497 review) - kept per runway, so a pan back onto one judged on
 	// this very graph and traffic quotes NOTHING. Measured on #256's scale field (AirportMgr.UI.LandPanelCostOnAScaleField):
-	// a whole re-quote is still 78-125 ms after the planner stopped searching from every exit when no stand was admitted, and
+	// a whole re-quote is still 60-114 ms (2026-10-01; LandChoices::RequoteForOccupancy's figure) after the planner stopped searching
+	// from every exit when no stand was admitted, and
 	// a pan between two runways paid it every time the first runway changed.
 	FJudgedRows& Judged = JudgedByRunway.FindOrAdd(Key.FirstRunway);
 	if (Judged.bValid && Judged.Key == Key)

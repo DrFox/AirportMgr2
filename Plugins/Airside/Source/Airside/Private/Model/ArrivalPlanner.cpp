@@ -314,7 +314,9 @@ namespace ArrivalPlanner
 		 * REACH ALONE - NO OCCUPANCY (#497 review): both refusals it words are PERMANENT (only an edit clears them), so their
 		 * sentence must not move with a held stand - it did, and LandChoices::RequoteForOccupancy, which skips a permanent row
 		 * on an occupancy change, left the old wording standing. "Would reach a stand" is a fact about pavement.
-		 * ENFORCED BY: AirportMgr.UI.LandPanelGatedWordingMatchesAFreshBuild
+		 * ENFORCED BY: AirportMgr.UI.LandPanelOtherEndWordingIgnoresAHeldStand (the only stand the other end reaches HELD while the
+		 * row is judged - red with this asked with occupancy; it named LandPanelGatedWordingMatchesAFreshBuild until the #497
+		 * re-review, whose field never asks the other end)
 		 */
 		bool OtherEndServes(const URoadNetwork& Network, const FRunwayEnd& End, double SlowedBy, const FAirframe& Airframe)
 		{
@@ -564,6 +566,10 @@ namespace ArrivalPlanner
 		//     explores the whole graph - measured 13-21 ms a type on #256's scale field (AirportMgr.UI.LandPanelCostOnAScaleField),
 		//     the Land panel's hitch. The answer is the same as when it was asked last: a stand refusal speaks only when nothing was
 		//     reachable, which with nothing admitted is every time.
+		//     ENFORCED BY: Airside.Model.ArrivalPlanner.NoStandBigEnough, Airside.Model.ArrivalPlanner.NoStandPavedEnough,
+		//     Airside.Model.ArrivalRefusedWhenOnlyStandInStrip - each refusal, as this early-out now gives it. NoStandServiceable has no
+		//     planner test to name: StandAdmission::Judge's service hook refuses no role on any pavement today (PavementAdmitsRole,
+		//     2026-10-01), so no field can reach it - a hook given a refusal is the commit that owes this list its test.
 		//     Four refusals for four fixes: every stand too small means draw a bigger one; every
 		//     stand paved too weakly means pave one; every stand serviceable-blocked means fix
 		//     the service, not the stand; no stand reachable at all means build a taxiway; every

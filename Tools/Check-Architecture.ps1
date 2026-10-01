@@ -146,6 +146,8 @@
           its own subset of the change's side effects - see the rule.
       58. EFlightPhase is grouped only in Flight.h (#442): `Accepted || Inbound`, `>= Turnaround` and their kin were
           re-spelled at a dozen sites, each a place a new phase would be missed - see the rule.
+      96. The flight board's two owners, FOfferInbox and FArrivalQueue (#442 item 4), reach the board - their friend - only
+          for what they were let in for: no write of its flight lists, indices or id counter, no publish, no money - see the rule.
 
     Rule 4 above is now a data table (issue #255) rather than one hard-coded Piper check,
     so "the only caller of X is Y" claims live as ROWS an author can add to, instead of prose
@@ -754,6 +756,27 @@ $AllowedCallers = @(
         ProdAllowed = @('Public\Model\FlightBoard.h', 'Private\Model\FlightBoard.cpp')
         TestExempt  = $true
         ProdReason  = 'call UFlightBoard::RestoreAfterLoad, which owns the order these steps are each correct only in'
+    },
+    @{
+        # BILLING IS A REACTION (#442 item 4): FlightBilling::OnFlightPhaseChanged is the "Billing" subscription's body, and the
+        # subscription is UOpsRuntime::WireBus's. A production call from anywhere else - the board, an owner, a pass - is billing
+        # called by the thing that changes the phase again, the shape the issue took apart (and a fee posted twice: once inline,
+        # once by the reaction). Tests call it through their own bare bus, as WireBus does.
+        Name        = 'FlightBilling reaction'
+        Pattern     = '\bFlightBilling::OnFlightPhaseChanged\s*\('
+        ProdAllowed = @('Public\Model\FlightBilling.h', 'Private\Model\FlightBilling.cpp', 'Private\Present\OpsRuntime.cpp')
+        TestExempt  = $true
+        ProdReason  = 'a flight is billed by the "Billing" bus subscription (UOpsRuntime::WireBus) reacting to FFlightPhaseChangedEvent - change the phase through UFlightBoard::TransitionTo and let it publish (#442)'
+    },
+    @{
+        # A LANDING OR PARKING FEE IS POSTED BY FlightBilling ALONE (#442 item 4): the two Ledger->Post calls that name these categories
+        # live in FlightBilling.cpp. One posted anywhere else is a second biller - the board's OnAgentPhase was one until this moved.
+        # DOES NOT SEE a Post whose category sits on a later line than its `Post(` - FlightBilling's own two keep them on one.
+        Name        = 'landing and parking fees posted outside FlightBilling'
+        Pattern     = '\bPost\s*\(.*ELedgerCategory::(?:LandingFee|ParkingFee)\b'
+        ProdAllowed = @('Private\Model\FlightBilling.cpp')
+        TestExempt  = $true
+        ProdReason  = 'post a flight fee through FlightBilling (PostLandingFee, PostParkingFee) - billing is one owner, reacting to the phase (#442)'
     },
     @{
         # ONE DOOR FOR A LOAD (#426): OpsSave::Restore writes INTO the live network, and only the facade's
@@ -4860,12 +4883,12 @@ $modelLineBudget = [ordered]@{
     # 2026-10-01: the claim arbiter, one algorithm (Run and its windows, crossings and ranking - 13 functions, long ones);
     # splitting it would scatter one invariant across files.
     'Plugins\Airside\Source\Airside\Private\Model\TrafficClaims.cpp'          = 1898
-    # 2026-10-01: a flight's lifecycle - offers, quotes, accept, the arrival queue, cancels, restore, fees (50 member
-    # definitions); one class's state machine, not yet split. RAISED 1746 -> 1779 the same day by #497: UFlightBoard::Rehold
-    # (every re-hold a plan's stand) and the queue pass's call into the stand-hold rule - the rule itself went to
-    # UStandAllocator::Reconcile; #442 item 4's UArrivalQueue is where the queue's share belongs. AND 1779 -> 1803 by the #497
-    # review: a failed re-hold dated (FReholdMiss) and a failed dispatch's re-hold clearing its copy.
-    'Plugins\AirportOps\Source\AirportOps\Private\Model\FlightBoard.cpp'      = 1803
+    # 2026-10-01: the flight registry and the one transition owner - the save, the indices, TransitionTo and every door that names a
+    # transition (the cancels, OnAgentPhase's mapping, the load's steps) and the quote both owners ask. LOWERED 1803 -> 1112 the same
+    # day by #442 item 4: the offers went to FOfferInbox (OfferInbox.cpp), the arrival queue, its clearances, the dispatch and every
+    # re-hold to FArrivalQueue (ArrivalQueue.cpp), billing to FlightBilling.cpp as a bus reaction; what is left of the size is the
+    # save's by-value restore, TransitionTo's rows and the load's four steps, each with its reasons - no further cut named.
+    'Plugins\AirportOps\Source\AirportOps\Private\Model\FlightBoard.cpp'      = 1112
     # 2026-10-01: one agent's follower - engine, gear, taxi, tow, pushback and reverse legs (32 member definitions); one
     # struct's motion, not yet split. RAISED 1583 -> 1610 the same day by #444: the wait's one door (WaitFor/EndWait, in place
     # of three flag mutators and a bare write) and the exhaustive-switch reasons on DescribeMotion and Advance (a phase added is
@@ -4888,8 +4911,10 @@ $modelLineBudget = [ordered]@{
     'Plugins\AirportOps\Source\AirportOps\Private\Model\JobBoard.cpp'         = 1048
     # 2026-10-01: the ArrivalPlanner namespace - runway, exit and stand choice for one arrival; one planner, not yet split.
     # RAISED 943 -> 957 the same day by the #497 review: WhyEveryStandRefused asked before the exits' searches (the Land panel's
-    # hitch) and the wording helpers asked reach without occupancy, each with its reason.
-    'Plugins\Airside\Source\Airside\Private\Model\ArrivalPlanner.cpp'         = 957
+    # hitch) and the wording helpers asked reach without occupancy, each with its reason. RAISED 957 -> 963 by the #497 re-review
+    # (#442 item 4's PR): six comment lines, the ENFORCED BY the review asked for on OtherEndServes (re-pointed at the test that
+    # holds the other end's stand) and on the early-out's "ChooseStand only routes to admitted stands" - no code.
+    'Plugins\Airside\Source\Airside\Private\Model\ArrivalPlanner.cpp'         = 963
 }
 $modelLineFiles = @()
 foreach ($pluginDir in (Get-ChildItem -LiteralPath (Join-Path $Root 'Plugins') -Directory)) {
@@ -4943,7 +4968,9 @@ $ranRules.Add('model-line-budget')
 # argument (`*Rig.Net`), passed both. Now each production ops and game file's code (comments and strings stripped) is JOINED
 # into statements the way rule 58 joins them (to `;`, `{`, `}` or `:`, at most eight lines); every `.Hold(` / `->Hold(` call's
 # arguments are split at bracket depth 0; and a call of FOUR - FTestTwoRunways::Hold takes three - must be in FlightBoard.cpp
-# with a last argument of `Quote.Stand` or `Plan.Stand`. Tests are exempt: they hold a fixture's stand by hand.
+# with a last argument of `Quote.Stand` or `Plan.Stand`. Tests are exempt: they hold a fixture's stand by hand. THE BOARD'S TWO OWNERS
+# COUNT AS THE BOARD (#442 item 4): TryAccept moved to OfferInbox.cpp and Rehold to ArrivalQueue.cpp, each still holding a plan's stand
+# - so the file list is the board's three files, not FlightBoard.cpp alone; the argument check is unchanged.
 # DOES NOT SEE: a Hold reached through a member pointer, a plan's stand copied into a local of another name first (or any other
 # stand put in a local NAMED Plan), a template argument list with a comma inside it, a statement longer than eight lines.
 # Mutation-checked 2026-10-01: a call outside the board, a call wrapped over two lines with a dotted argument, and a by-size
@@ -4990,7 +5017,7 @@ foreach ($holdTree in $holdTrees) {
                 }
                 if ($holdArgs.Count -ne 4) { continue }
                 $holdCallsSeen++
-                if ($file.Name -ne 'FlightBoard.cpp') {
+                if (@('FlightBoard.cpp', 'OfferInbox.cpp', 'ArrivalQueue.cpp') -notcontains $file.Name) {
                     $failures.Add("stand-hold-is-a-plans-stand: $($file.FullName):$($holdStart + 1) calls UStandAllocator::Hold outside UFlightBoard - hold through TryAccept or Rehold, which hold the stand a plan taxis to (#471): $($holdStatement.Trim())")
                 }
                 elseif ($holdArgs[3] -notmatch '^(Quote|Plan)\.Stand$') {
@@ -5135,6 +5162,67 @@ if ($reachSeen -eq 0) {
     $failures.Add("turnaround-began-once: rule 78(c) found no reach through a UJobBoard receiver ($($beganReceivers -join ', ')) in Turnarounds.cpp or .h - the board is no longer passed by reference, so the rule checks nothing; update it")
 }
 $ranRules.Add('turnaround-began-once')
+
+# --- 96. THE FLIGHT BOARD'S OWNERS REACH WHAT THEY WERE LET IN FOR (#442 item 4) ----------------------------------------------
+# UFlightBoard carried seven jobs in 1803 + 954 lines; #442 item 4 took two owners out - FOfferInbox (the offers: countdown, verdicts,
+# lapse, accept, decline) and FArrivalQueue (the arrivals: the clock's handles, the queue, the clearances, the dispatch, every re-hold)
+# - in FTurnarounds' shape (rule 78(c)): value components the board holds, handed the board per call, and FRIENDS of it, because a
+# lapse, an accept, an enqueue and a dispatch are phase changes and TransitionTo is private. A friend sees everything, so what each
+# may touch is held here, the way 78(c) holds FTurnarounds: every `R.X` / `R->X` in OfferInbox.{h,cpp} and ArrivalQueue.{h,cpp},
+# where R is `Board` or any name the four files declare as a `UFlightBoard&` / `UFlightBoard*` (a renamed parameter, the clock
+# callback's BoardPtr), names a member of $ownerBoardReach - the one writer (TransitionTo), the one revision (RevisionCount), the
+# shared quote (PlanQuote, Gated), the registry READ (Flights, FindById, AddOffer, Revision, PendingOfferCount), the load's helpers the queue's re-arm
+# owes the board (DisarmEveryArrival, RebuildIndices) and the board's wiring - AND Flights is never mutated through R (`R.Flights.Add(`,
+# `.Remove`, `.Reset`... or an assignment). The SHAPE removed is a second owner of the registry or of the money: History, ById, ByAgent,
+# NextFlightId, OfferedCount, MoveToHistory, Ledger and Bus are the board's (the money is FlightBilling's reaction, the publishes
+# TransitionTo's rows).
+# WHAT NO REGEX SEES: a receiver reached through `auto&`, a member pointer, or a lambda's init-capture of another name - which is why
+# the queue's clock callback captures a NAMED `UFlightBoard* const BoardPtr`. MUTATION-CHECKED 2026-10-01 (the PR body has the output):
+# `Board.History.Add(` in OfferInbox.cpp, `BoardPtr->ById.Remove(` in ArrivalQueue.cpp, and `Board.Ledger` read in OfferInbox.cpp each FAIL.
+# The rule fails when it finds no reach at all (the board is no longer handed in, so it checks nothing).
+$ownerBoardReach = @('TransitionTo', 'RevisionCount', 'PlanQuote', 'Gated', 'Flights', 'FindById', 'AddOffer', 'Revision', 'PendingOfferCount',
+    'DisarmEveryArrival', 'RebuildIndices', 'Allocator', 'Sequencer', 'Dispatcher', 'AdmitsArrivals', 'Fuel')
+$ownerFiles = @((Join-Path $ops 'Public\Model\OfferInbox.h'), (Join-Path $ops 'Private\Model\OfferInbox.cpp'),
+    (Join-Path $ops 'Public\Model\ArrivalQueue.h'), (Join-Path $ops 'Private\Model\ArrivalQueue.cpp'))
+$ownerCode = @{}
+foreach ($ownerFile in $ownerFiles) {
+    if (-not (Test-Path $ownerFile)) {
+        $failures.Add("flight-board-owners-reach: $ownerFile is named by rule 96 but does not exist - update the rule, do not let it check nothing")
+        continue
+    }
+    $inBlock = $false
+    $ownerCode[$ownerFile] = @(Get-Content -LiteralPath $ownerFile | ForEach-Object { Strip-ArchCode $_ ([ref]$inBlock) })
+}
+$ownerReceivers = @('Board')
+foreach ($code in $ownerCode.Values) {
+    foreach ($line in $code) {
+        foreach ($m in [regex]::Matches($line, '\bUFlightBoard\s*(?:\*\s*const\s*|[&*]\s*)(\w+)')) {
+            if ($ownerReceivers -notcontains $m.Groups[1].Value) { $ownerReceivers += $m.Groups[1].Value }
+        }
+    }
+}
+$ownerReceiverPattern = '\b(' + (($ownerReceivers | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\s*(?:\.|->)\s*(\w+)'
+$ownerFlightsWrite = '\b(?:' + (($ownerReceivers | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\s*(?:\.|->)\s*Flights\s*(?:\.\s*(?:Add\w*|Remove\w*|Reset|Empty|Insert\w*|Emplace\w*|Append|Pop|Push|Sort\w*|Swap\w*|SetNum\w*)\s*\(|=(?!=)|\[)'
+$ownerReachSeen = 0
+foreach ($ownerFile in $ownerCode.Keys) {
+    $code = $ownerCode[$ownerFile]
+    $short = Split-Path $ownerFile -Leaf
+    for ($i = 0; $i -lt $code.Count; $i++) {
+        if ($code[$i] -match $ownerFlightsWrite) {
+            $failures.Add("flight-board-owners-reach: ${short}:$($i + 1) mutates the board's Flights - the registry is the board's (AddOffer in, TransitionTo's terminal rows out), its owners only read it (#442): $($code[$i].Trim())")
+        }
+        foreach ($m in [regex]::Matches($code[$i], $ownerReceiverPattern)) {
+            $ownerReachSeen++
+            if ($ownerBoardReach -notcontains $m.Groups[2].Value) {
+                $failures.Add("flight-board-owners-reach: ${short}:$($i + 1) reaches $($m.Groups[1].Value).$($m.Groups[2].Value) - the flight board's owners are its friends for TransitionTo, RevisionCount, the quote and reading the registry; History, the indices, the ids, the money and the bus stay the board's (#442): $($code[$i].Trim())")
+            }
+        }
+    }
+}
+if ($ownerReachSeen -eq 0) {
+    $failures.Add("flight-board-owners-reach: rule 96 found no reach through a UFlightBoard receiver ($($ownerReceivers -join ', ')) in the owners' files - the board is no longer passed by reference, so the rule checks nothing; update it")
+}
+$ranRules.Add('flight-board-owners-reach')
 
 # --- 87. A PRESENT-LAYER RELAY OF THE TRAFFIC MODEL ADDS BEHAVIOUR, OR IS NOT THERE (#445 item 6) --------------------------
 # UAirsideTraffic re-declared five of UGroundTraffic's delegates and re-broadcast each from a one-line handler. Four added

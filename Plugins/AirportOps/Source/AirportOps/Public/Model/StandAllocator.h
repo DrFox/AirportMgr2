@@ -19,7 +19,7 @@ class URoadNetwork;
  * the held stand and the one parked on can differ and who reconciles them.
  *
  * EVERY HOLD IS A PLAN'S STAND (#431, #471): UFlightBoard::TryAccept holds the stand its accept's plan taxis to, and
- * UFlightBoard::Rehold - every re-hold: the queue's, a load's, a failed dispatch's, a hold an edit lost - holds the
+ * FArrivalQueue::Rehold - every re-hold: the queue's, a load's, a failed dispatch's, a hold an edit lost - holds the
  * stand a fresh plan taxis to. There was a Reserve here, the smallest admitted unheld stand, REACH-BLIND: it held a
  * stand nothing could taxi to while the flight waited NoFreeStand for the one it could, and the queue spec's ruling 2
  * ("every queued flight has somewhere to go") held by size only. It went with its last caller. Smallest-fit is still
@@ -90,7 +90,7 @@ public:
 	 *  - A flight with no stand is re-held - Inbound (the queue's rule since review I1: it is next to land) and Accepted
 	 *    alike (#497 review: one whose re-hold found nothing was not asked again until its ETA).
 	 *  - An Inbound flight with a GONE stand is re-held too. On an Accepted flight a gone stand is LEFT - the HeldStandLost
-	 *    alert's evidence (see Reapply) - until its ETA puts it in the queue. Rehold is the BOARD's (UFlightBoard::Rehold): the stand a fresh plan taxis the flight to - this class
+	 *    alert's evidence (see Reapply) - until its ETA puts it in the queue. Rehold is the BOARD's (FArrivalQueue::Rehold): the stand a fresh plan taxis the flight to - this class
 	 * holds, a plan chooses. Returns how many flights gave a lost stand up, so the board can bump the revision its rows read.
 	 *
 	 * PATTERN: RECONCILIATION AGAINST A SYSTEM OF RECORD - the board observes the table, rather than Airside announcing which
@@ -98,7 +98,7 @@ public:
 	 * part - a dispatch's goal claim outranking a hold, a rebuild dropping a hold whose stand's pose moved, Reapply's
 	 * refusal, whatever comes next - and asking the table catches each by one test, with no delegate across the plugin
 	 * line. The edit IS still announced, once: FNetworkChangedEvent dirties the queue pass, which runs this (through
-	 * UFlightBoard::ReconcileStandHolds) after its closed exit and before its paused one, so a paused edit is reconciled
+	 * FArrivalQueue::ReconcileStandHolds) after its closed exit and before its paused one, so a paused edit is reconciled
 	 * too. NOT #442's first option (Airside restores holds from a list the board hands it, UFlight::Stand a read of the
 	 * table): UFlight::Stand has a second job - once parked it names the stand the aeroplane is on, which no hold records -
 	 * and a gone stand, the HeldStandLost alert's evidence, is one the table can no longer hold at all.

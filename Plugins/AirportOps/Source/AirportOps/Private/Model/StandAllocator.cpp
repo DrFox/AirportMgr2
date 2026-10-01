@@ -9,7 +9,7 @@
 #include "Model/TrafficOccupancy.h"
 
 // NO Reserve (#471): the smallest admitted unheld stand, chosen here with no reach check, was every re-hold's choice
-// until each re-hold went through a plan (UFlightBoard::Rehold) - see this class's header. Its ranking (IcaoCode::
+// until each re-hold went through a plan (FArrivalQueue::Rehold) - see this class's header. Its ranking (IcaoCode::
 // StandRank, strict less-than so the first-found stand won a letter tie) went with it: ranking is ChooseStand's, which
 // ranks the same way over the stands it can reach. What it ASKED of a stand stayed - Hold below asks it of every stand.
 
