@@ -606,7 +606,8 @@ int32 ARoadNetworkActor::RepairLoadedNetwork(ELoadedFrom From)
 	// AND THE STANDS' ENTRANCES (#450's leftover), AFTER THE OUTLINES above - the entrance is an edge of the outline a legacy stand was just given - and
 	// BEFORE RebindStandDefinitions below, whose pose repair reads the stored edge instead of searching. The same reason as the depots': a save
 	// game's load is Serialize alone, so a save written before a stand stored its entrance needs the migration the level's PostLoad runs.
-	// ENFORCED BY: Airside.Model.StandFrontage.MigrationStoresTheEntranceOnce (the save-game path)
+	// ENFORCED BY: Airside.Model.StandFrontage.MigrationStoresTheEntranceOnce (AFTER the outlines: the save-game half's outline-less stand gets its box and then
+	// edge 0), Airside.Present.StandPlot.OldPoseRederivedOnLoad (BEFORE the rebind: the legacy stand's entrance is migrated and then read, or it is not re-posed)
 	const int32 Entranced = Network->EnsureStandFrontages();
 
 	// THE DEFINITIONS NEXT, before anything below reads one: a D/E/F stand's definition is

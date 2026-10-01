@@ -189,6 +189,8 @@ bool FStandMarkingBuilder::FrameFor(const FEntityInstance& Entity, const FLetter
 	// A STAND WITH NO STORED ENTRANCE (an outline the migration has not reached) falls back to the floor figure its migrated
 	// box was built with - Code C's floor for an unknown letter, the figure a stand nobody drew has always been painted
 	// from - rather than losing its paint, and says so once: EnsureStandFrontages runs before any rebuild in both load paths.
+	// ENFORCED BY: Airside.Model.StandFrontage.MigrationStoresTheEntranceOnce (both load paths store it, after the outlines), Airside.Present.StandPlot.OldPoseRederivedOnLoad
+	// (the migration ahead of what reads it)
 	double Behind = -StandBox::EntranceSetback(DepthLetter, GlyphLetter.IsSet()
 		? Envelopes[DepthLetter] : IcaoCode::FloorEnvelopeForLetter(DepthLetter));
 	FVector2D EntranceA, EntranceB;

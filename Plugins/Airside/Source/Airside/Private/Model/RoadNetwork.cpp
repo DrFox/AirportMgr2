@@ -1579,6 +1579,7 @@ void URoadNetwork::PostLoad()
 	EnsureStandNumbers();
 	EnsureDepotFrontages();
 	// AFTER EnsureStandOutlines, which gives a legacy stand the outline its entrance is an edge of.
+	// ENFORCED BY: Airside.Model.StandFrontage.MigrationStoresTheEntranceOnce (the PostLoad half's outline-less stand gets its box and then edge 0)
 	EnsureStandFrontages();
 }
 

@@ -4108,7 +4108,7 @@ if (-not (Test-Path $sunPathCpp) -or -not (Test-Path $sunDriverCpp)) {
 }
 $ranRules.Add('night-defined-once')
 
-# --- 68. TEXT IS NOT COMPARED TO A LITERAL, AND A STAND IS NOT PRINTED BY INDEX (#447) --------------------------------
+# --- 68. TEXT IS NOT COMPARED TO A LITERAL, AND A STAND OR A DEPOT IS NOT PRINTED BY INDEX (#447, #490) -----------------
 # Two shapes that shipped, each checked over STATEMENTS (comments and strings stripped, continuation lines JOINED to the statement's end - up to eight
 # lines, to `;`, `{`, `}` or a `:`, rule 58's joining) because BOTH were split across two lines and a line-by-line row could not see either:
 #   a. `.EqualTo(` then `NSLOCTEXT(`: the arrivals panel recovered "holding" by comparing the status's localised text against a copy of the word -
@@ -4118,12 +4118,20 @@ $ranRules.Add('night-defined-once')
 #      stand card and the painted sign say StandNumber; the depot card's backlog and the JobUnserviceable alert printed the index ("stand 0" beside a sign
 #      reading 4). OpsNames::StandLabel is the ops layer's one naming. OpsEventBus.cpp's event Describe strings are LOG text (beside the flight and agent
 #      ids, where the index is what a developer reads), and UE_LOG lines are not Printf/AsNumber/Format calls, so neither is player-facing text here.
+#   c. THE DEPOT TWIN OF b (#490): the depot card's title and the job board's "to depot / refilling at depot / at depot" lines printed the depot's entity index
+#      (`Fuel depot {0}` over `S.Index`; `Vehicle.Home.Index`), which a delete recycles into a different depot. OpsNames::DepotLabel is the one naming (the depot's
+#      DepotNumber). Flagged: `FString::Printf`, `FString::Format`, `FText::AsNumber` or `FText::Format` in a statement with `Home.Index` or `Depot.Index`, OR
+#      with a string literal naming a depot ("depot", any case) and `.Index` after it. The literal half is read off the statement with its STRINGS KEPT (the
+#      code-stripped statement the other halves read has them emptied). The card names the depot in a statement of its own (`const FString DepotName =
+#      OpsNames::DepotLabel(...)`) and formats that, so the fix does not trip the rule it is under. OpsEventBus.cpp's Describe lines are log text, as for b.
 # DOES NOT SEE: an index carried in a local first (`const int32 S = Job.Stand.Index;`) and printed from that, or a statement over eight lines - the
-# behaviour half is AirportOps.Model.StandLabel.AlertBacklogAndCardSayTheSameNumber. Test files are exempt. Mutation-checked with the EXACT two lines
+# behaviour half is AirportOps.Model.StandLabel.AlertBacklogAndCardSayTheSameNumber (stands) and AirportOps.Model.DepotLabel.VehicleLinesSayTheDepotsNumber (depots). Test files are exempt. Mutation-checked with the EXACT two lines
 # from 891ecb66 ArrivalsPanelWidget.cpp:130-131 (the PR body has the output).
 $textRuleTrees = @((Join-Path $Root 'Plugins\Airside\Source'), (Join-Path $Root 'Plugins\AirportOps\Source'), (Join-Path $Root 'Source\AirportMgr'))
 $textEqualTo  = '\.EqualTo\s*\(\s*NSLOCTEXT\s*\('
 $standPrinted = '(?:FString::Printf|FText::AsNumber|FText::Format)\b[^;{}]*\bStand\s*\.\s*Index\b'
+$depotPrinted = '(?:FString::Printf|FString::Format|FText::AsNumber|FText::Format)\b[^;{}]*\b(?:Home|Depot)\s*\.\s*Index\b'
+$depotLiteralIndexed = '(?i)(?:FString::Printf|FString::Format|FText::AsNumber|FText::Format)\b[^;{}]*"[^"]*\bdepot\b[^"]*"[^;]*\.\s*Index\b'
 $textRuleFiles = 0
 foreach ($textTree in $textRuleTrees) {
     foreach ($file in Get-Sources $textTree @('.cpp', '.h')) {
@@ -4131,17 +4139,21 @@ foreach ($textTree in $textRuleTrees) {
         $textRuleFiles++
         $lines = Get-Content -LiteralPath $file.FullName
         $inBlock = $false
+        $inBlockKeepingStrings = $false
         $statement = ''
+        $statementKeepingStrings = ''
         $statementStart = 0
         $statementLines = 0
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $trimmed = (Strip-ArchCode $lines[$i] ([ref]$inBlock)).Trim()
+            $keptStrings = (Strip-ArchComments $lines[$i] ([ref]$inBlockKeepingStrings)).Trim()
             $flush = $false
             if ($trimmed -eq '') {
                 $flush = $statement -ne ''
             } else {
                 if ($statement -eq '') { $statementStart = $i }
                 $statement += ' ' + $trimmed
+                $statementKeepingStrings += ' ' + $keptStrings
                 $statementLines++
                 $flush = ($trimmed -match '[;{}:]$') -or ($statementLines -ge 8)
             }
@@ -4152,7 +4164,11 @@ foreach ($textTree in $textRuleTrees) {
                 if ($statement -match $standPrinted -and $file.Name -ne 'OpsEventBus.cpp') {
                     $failures.Add("text-not-compared-or-indexed: $($file.FullName):$($statementStart + 1) prints a stand's entity index to the player - name it with OpsNames::StandLabel, the number on its sign (a delete recycles the index) (#447): $($statement.Trim())")
                 }
+                if (($statement -match $depotPrinted -or $statementKeepingStrings -match $depotLiteralIndexed) -and $file.Name -ne 'OpsEventBus.cpp') {
+                    $failures.Add("text-not-compared-or-indexed: $($file.FullName):$($statementStart + 1) prints a depot's entity index to the player - name it with OpsNames::DepotLabel, its DepotNumber (a delete recycles the index) (#490): $($statementKeepingStrings.Trim())")
+                }
                 $statement = ''
+                $statementKeepingStrings = ''
                 $statementLines = 0
             }
         }

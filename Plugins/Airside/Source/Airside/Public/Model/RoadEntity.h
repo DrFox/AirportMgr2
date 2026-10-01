@@ -487,7 +487,8 @@ struct AIRSIDE_API FEntityPlacement
 	/** The drawn plot, world space, implicitly closed. Empty for an ordinary plop. */
 	TArray<FVector2D> Outline;
 
-	/** Which edge of Outline is the frontage - see FEntityInstance::FrontageEdge. INDEX_NONE for a plop and a stand. */
+	/** Which edge of Outline is the frontage - see FEntityInstance::FrontageEdge. A depot's: the facade states it (INDEX_NONE for a plop).
+	 *  A stand's entrance when the facade was given one; INDEX_NONE = PlaceEntity derives it (StandBox::EntranceEdgeOf). */
 	int32 FrontageEdge = INDEX_NONE;
 
 	/** What fills the bays, in bay order. Empty for an ordinary plop. */

@@ -211,8 +211,17 @@ int32 UStandDefinitionCache::RebindStandDefinitions(URoadNetwork* Network)
 			// LEFT AS IT WAS, like a stand with no buildable definition above: the entrance is read off the STORED edge (PoseFromOutline), and one that
 			// is not there is the migration not having run - EnsureStandFrontages comes before this in both load paths - which is a bug to read in the log, not a
 			// reason to move a stand the player placed by a guess.
-			UE_LOG(LogRoadMesh, Warning,
-				TEXT("RebindStandDefinitions: stand %d has an outline but no stored entrance edge (EnsureStandFrontages did not run?) - not re-posed."), Index);
+			// ENFORCED BY: Airside.Model.StandFrontage.MigrationStoresTheEntranceOnce (the outline-less stand each load half gives a box and THEN an entrance),
+			// Airside.Present.StandPlot.OldPoseRederivedOnLoad (the migration before this rebind - swapped, the stand is not re-posed)
+			// ONCE, NOT PER STAND: this runs on every re-registration of the actor (an editor re-register, a PIE start) for every stand with no edge, so a
+			// level that missed the migration would print one line per stand per load; the first line says what is wrong, and the rest is the same sentence.
+			static bool bWarnedNoEntrance = false;
+			if (!bWarnedNoEntrance)
+			{
+				bWarnedNoEntrance = true;
+				UE_LOG(LogRoadMesh, Warning,
+					TEXT("RebindStandDefinitions: stand %d has an outline but no stored entrance edge (EnsureStandFrontages did not run?) - not re-posed. Logged once."), Index);
+			}
 			continue;
 		}
 		if (!StandDefinitionCacheLocal::StandMatchesPose(*Network, EntityId, Entity, *Pose, *Definition))

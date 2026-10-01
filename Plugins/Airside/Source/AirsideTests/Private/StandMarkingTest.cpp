@@ -1340,6 +1340,25 @@ namespace StandFrontageTest
 		return Net.PlaceEntity(Placement);
 	}
 
+	/** Alive, a stand, and drawn - one line, both names (Check-Architecture's is-plotted-not-depot rule: IsPlotted() alone does not say "depot"). */
+	bool IsDrawnStand(const URoadNetwork& Net, FEntityInstanceId Id)
+	{
+		const FEntityInstance* Entity = Net.GetEntity(Id);
+		return Entity != nullptr && (Entity->IsStand() && Entity->IsPlotted());
+	}
+
+	/** A stand as a level saved before stands had outlines holds it: placed, then its outline and its entrance cleared. EnsureStandOutlines gives it a Code C
+	 *  box on load, and the entrance is an edge OF that box - so the frontage migration has to run AFTER the outline one, in PostLoad and in
+	 *  RepairLoadedNetwork both. Run the other way round it finds no outline, stores nothing, and the box arrives with no entrance. */
+	FEntityInstanceId PlaceOutlinelessLegacyStand(URoadNetwork& Net, UEntityDefinition* Definition, const FVector2D& Position, double Heading)
+	{
+		const FEntityInstanceId Id = PlaceBoxStand(Net, Definition, EIcaoCode::C, Position, Heading, 0.0);
+		FRoadNetworkTestAccess Access(Net);
+		Access.SetEntityOutlineForTest(Id, TArray<FVector2D>());
+		Access.SetEntityFrontageForTest(Id, INDEX_NONE);
+		return Id;
+	}
+
 	/** PlaceBoxStand with the outline listed the OTHER way round (the facade reverses a clockwise outline, which puts the drawn far edge at 0 -> 1),
 	 *  so the entrance is NOT edge 0 and a migration that stored 0 by default cannot pass. The frontage is cleared: a level as saved before it was stored. */
 	FEntityInstanceId PlaceLegacyReversedStand(URoadNetwork& Net, UEntityDefinition* Definition, const FVector2D& Position, double Heading)
@@ -1609,8 +1628,14 @@ bool FStandFrontageMigrationTest::RunTest(const FString& Parameters)
 	// THE LEVEL'S LOAD: PostLoad runs it. (Unwired, an authored map's stands load with no entrance: no pose repair, floor-figure paint.)
 	URoadNetwork* Loaded = NewObject<URoadNetwork>(GetTransientPackage());
 	const FEntityInstanceId LoadedStand = PlaceLegacyReversedStand(*Loaded, StandDef, FVector2D(0.0, 0.0), FMath::DegreesToRadians(30.0));
+	const FEntityInstanceId LoadedBare = PlaceOutlinelessLegacyStand(*Loaded, StandDef, FVector2D(20000.0, 0.0), FMath::DegreesToRadians(30.0));
+	if (!TestFalse(TEXT("the premise: the outline-less legacy stand has no outline before the load"), IsDrawnStand(*Loaded, LoadedBare))) { return false; }
 	Loaded->PostLoad();
 	TestEqual(TEXT("PostLoad stores the legacy stand's entrance"), Loaded->GetEntity(LoadedStand)->FrontageEdge, Expected);
+	// THE ORDER, held by a stand that has no outline until the load gives it one: EnsureStandOutlines first (the Code C box), THEN the entrance - edge 0, BoxAt's own.
+	// EnsureStandFrontages ahead of it sees no outline, stores nothing, and the box arrives with INDEX_NONE (the migration test's other order, mutation-checked).
+	TestTrue(TEXT("PostLoad gave the outline-less stand its box"), IsDrawnStand(*Loaded, LoadedBare));
+	TestEqual(TEXT("and THEN its entrance: edge 0 of the box (frontages after outlines in PostLoad)"), Loaded->GetEntity(LoadedBare)->FrontageEdge, 0);
 
 	// A SAVE GAME'S LOAD, which is Serialize alone: the actor's repair runs the migration too.
 	FAirsideTestWorld TestWorld;
@@ -1618,8 +1643,62 @@ bool FStandFrontageMigrationTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
 	Actor->ClearNetwork();
 	const FEntityInstanceId SavedStand = PlaceLegacyReversedStand(*Actor->Network, StandDef, FVector2D(0.0, 0.0), FMath::DegreesToRadians(30.0));
+	const FEntityInstanceId SavedBare = PlaceOutlinelessLegacyStand(*Actor->Network, StandDef, FVector2D(20000.0, 0.0), FMath::DegreesToRadians(30.0));
+	if (!TestFalse(TEXT("the premise: the outline-less legacy stand has no outline before the repair"), IsDrawnStand(*Actor->Network, SavedBare))) { return false; }
 	Actor->RepairLoadedNetwork(ELoadedFrom::SaveGame);
 	TestEqual(TEXT("RepairLoadedNetwork stores the legacy stand's entrance for a save game"), Actor->Network->GetEntity(SavedStand)->FrontageEdge, Expected);
+	// THE SAME ORDER ON THE SAVE-GAME PATH, which is its own list (RepairLoadedNetwork, not PostLoad): the box first, then its entrance.
+	TestTrue(TEXT("the repair gave the outline-less stand its box"), IsDrawnStand(*Actor->Network, SavedBare));
+	TestEqual(TEXT("and THEN its entrance: edge 0 of the box (frontages after outlines in the repair)"), Actor->Network->GetEntity(SavedBare)->FrontageEdge, 0);
+	return true;
+}
+
+/**
+ * A STAND'S ENTRANCE MUST BE AN EDGE OF ITS OUTLINE, OR THE PLACEMENT IS REFUSED - the depot's own rule (PlaceEntityInPlot refuses a frontage that is
+ * not an edge), so a stand's plot and a depot's agree. Asked with a pair that is not an edge of the rectangle (a corner and a point off the outline, and
+ * two corners that are diagonal), nothing is placed and nothing is charged; asked with the real entrance it places as before. Without the refusal the
+ * placement would have gone through and PlaceEntity would have stored a searched edge - a guess about which side the stand faces, that the stored
+ * entrance exists to remove.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandFrontageRefusesNonEdgeTest,
+	"Airside.Model.StandFrontage.RefusesAnEntranceThatIsNotAnEdge",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandFrontageRefusesNonEdgeTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+	IRoadEditTarget* Target = Actor;
+
+	const double Width = IcaoCode::StandWidthForLetter(EIcaoCode::C);
+	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+	const TArray<FVector2D> Rect = { FVector2D(0.0, 5000.0), FVector2D(Width, 5000.0), FVector2D(Width, 5000.0 + Depth), FVector2D(0.0, 5000.0 + Depth) };
+	const auto LiveStands = [Actor]
+	{
+		int32 Count = 0;
+		for (const FEntityInstance& Entity : Actor->Network->GetEntities()) { Count += (Entity.bAlive && Entity.IsStand()) ? 1 : 0; }
+		return Count;
+	};
+	const int32 Before = LiveStands();
+
+	TestEqual(TEXT("a corner and a point off the outline: refused"),
+		Target->PlaceStandInPlot(Rect, Rect[0], FVector2D(Width * 0.5, 5000.0), EPavement::Tarmac), static_cast<int32>(INDEX_NONE));
+	TestEqual(TEXT("two corners that are diagonal, not an edge: refused"),
+		Target->PlaceStandInPlot(Rect, Rect[0], Rect[2], EPavement::Tarmac), static_cast<int32>(INDEX_NONE));
+	TestEqual(TEXT("the right edge named the wrong way round for the outline's winding: refused (given, not searched for)"),
+		Target->PlaceStandInPlot(Rect, Rect[1], Rect[0], EPavement::Tarmac), static_cast<int32>(INDEX_NONE));
+	TestEqual(TEXT("nothing was placed by any of them"), LiveStands(), Before);
+
+	const int32 Placed = Target->PlaceStandInPlot(Rect, Rect[0], Rect[1], EPavement::Tarmac);
+	if (TestTrue(TEXT("the real entrance places"), Placed != INDEX_NONE))
+	{
+		TestEqual(TEXT("and stores that edge"), Actor->Network->GetEntities()[Placed].FrontageEdge, 0);
+	}
 	return true;
 }
 
