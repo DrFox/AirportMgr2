@@ -5,6 +5,7 @@
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
+#include "Model/InspectFacts.h"
 #include "Model/OpsEventBus.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
@@ -330,6 +331,66 @@ bool FAgentRescueRefusalsTest::RunTest(const FString& Parameters)
 	}
 	TestFalse(TEXT("an unknown agent is refused"),
 		Field.Rescue->CanUnstick(*Field.Traffic, 9999, EUnstickAction::Despawn).bAllowed);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAgentRescueHeldPushTest,
+	"AirportOps.Model.AgentRescue.HeldPushRefusalMatchesTheCard",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAgentRescueHeldPushTest::RunTest(const FString& Parameters)
+{
+	// A HELD PUSH'S UNSTICK SAYS WHAT ITS CARD SAYS (#501 review). A push that ended where its taxi out cannot begin holds
+	// for a way to the runway, and its card reads "No way to the runway - waiting"; Replan refused it with "Coming off its
+	// stand - wait for it to finish", which it was not doing. Mid-push the old sentence stands; held, the card's words.
+	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	FTestAirportOptions Options;
+	Options.StandCount = 2;
+	const FTestAirport Air = FTestAirport::Build(Airframe, Options);
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	UAgentRescue* Rescue = NewObject<UAgentRescue>(GetTransientPackage());
+	const int32 Id = Traffic->DispatchArrival(*Air.Net, Air.Threshold - FVector2D(1000.0, 0.0), Airframe, 0.0);
+	if (!TestTrue(TEXT("an arrival is admitted"), Id > 0)) { return false; }
+	for (int32 Tick = 0; Tick < 20 * 900 && Traffic->FindAgent(Id)->Phase != EAgentPhase::Parked; ++Tick)
+	{
+		Traffic->Advance(0.05, Air.Net);
+	}
+	if (!TestEqual(TEXT("parked"), Traffic->FindAgent(Id)->Phase, EAgentPhase::Parked)) { return false; }
+	if (!TestEqual(TEXT("it departs"), Traffic->DepartAgent(Id, *Air.Net), EDepartureRefusal::None)) { return false; }
+	for (int32 Tick = 0; Tick < 30; ++Tick) { Traffic->Advance(1.0 / 30.0, Air.Net); }
+	if (!TestTrue(TEXT("pushing back, not holding"), Traffic->FindAgent(Id)->Phase == EAgentPhase::Manoeuvring
+		&& !Traffic->FindAgent(Id)->IsHoldingForTaxiOut())) { return false; }
+	const FString Pushing = Rescue->CanUnstick(*Traffic, Id, EUnstickAction::Replan).Why.ToString();
+	TestTrue(FString::Printf(TEXT("mid-push, Replan says it is coming off its stand ('%s')"), *Pushing),
+		Pushing.StartsWith(TEXT("Coming off its stand")));
+
+	// THE RUNWAY'S LINES GO MID-PUSH (Airside.Model.Traffic.HeldTaxiOut.MidPushRunwayLossHolds' edit): it holds at the push's end.
+	TArray<FGuidelineNodeId> OnRunway;
+	for (int32 Index = 0; Index < Air.Net->GetGuidelineNodes().Num(); ++Index)
+	{
+		const FGuidelineNode& Node = Air.Net->GetGuidelineNodes()[Index];
+		if (Node.bAlive && FMath::Abs(Node.Position.Y) <= 3000.0)
+		{
+			OnRunway.Add(Air.Net->GuidelineNodeIdAt(Index));
+		}
+	}
+	for (const FGuidelineNodeId Node : OnRunway) { Air.Net->RemoveGuidelineNode(Node); }
+	Traffic->OnGraphRebuilt(*Air.Net);
+	for (int32 Tick = 0; Tick < 30 * 300 && !Traffic->FindAgent(Id)->IsHoldingForTaxiOut(); ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Air.Net);
+	}
+	const FRoadAgent* Held = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("its push ran out and it holds, still manoeuvring"),
+		Held->IsHoldingForTaxiOut() && Held->Phase == EAgentPhase::Manoeuvring)) { return false; }
+
+	const FUnstickVerdict Verdict = Rescue->CanUnstick(*Traffic, Id, EUnstickAction::Replan);
+	const FString Card = InspectFacts::StatusOf(*Held);
+	TestFalse(TEXT("Replan is refused - the retry is what moves it, once a line reaches it"), Verdict.bAllowed);
+	TestTrue(FString::Printf(TEXT("in the card's words (card '%s', refusal '%s')"), *Card, *Verdict.Why.ToString()),
+		Card.StartsWith(TEXT("No way to the runway")) && Verdict.Why.ToString().StartsWith(TEXT("No way to the runway")));
 	return true;
 }
 

@@ -34,6 +34,72 @@ bool FPushbackRun::Start(const FRoutePlan& InPlan, double InPushSpeed, double In
 	return true;
 }
 
+bool FPushbackRun::Rejoin(const FRoutePlan& Route, double Along, const FVector2D& From)
+{
+	FVector2D OnLine = FVector2D::ZeroVector;
+	double Tangent = 0.0;
+	if (!Route.IsDrivable() || Route.Steps.Num() == 0 || Along < 0.0 || Along > Route.Length
+		|| !GuidelineGeom::PointAtDistance(Route.Polyline, Along, OnLine, Tangent))
+	{
+		return false;
+	}
+
+	// ON THE LINE ALREADY - a lead-in shortened along its own axis, a split: the new route is walked from the projection.
+	const double Offset = FVector2D::Distance(From, OnLine);
+	if (Offset < 1.0)
+	{
+		Plan = Route;
+		Travelled = Along;
+		return true;
+	}
+
+	// THE JOIN MEETS THE LINE AHEAD, not square across: JoinLead offsets ahead bounds the body's swing at atan(1/4), 14
+	// degrees, where a square join would turn it through 90 and back - the heading IS the line's tangent turned about (see
+	// the header), so a kink in the line is a kink in the pose. WITHIN THE FIRST STEP, so every step's end is still a
+	// vertex of the line it names and only the first step's span grows by the leg, as UGroundTraffic's held taxi out's
+	// join grows its first.
+	constexpr double JoinLead = 4.0;
+	const double JoinTo = FMath::Min(Along + JoinLead * Offset, Route.Steps[0].EndDistance);
+	FVector2D JoinAt = FVector2D::ZeroVector;
+	if (!GuidelineGeom::PointAtDistance(Route.Polyline, JoinTo, JoinAt, Tangent))
+	{
+		return false;
+	}
+	// THE FIRST VERTEX PAST THE JOIN, by the arc length PointAtDistance and every EndDistance were measured with.
+	int32 Keep = Route.Polyline.Num();
+	double Walked = 0.0;
+	for (int32 Index = 1; Index < Route.Polyline.Num(); ++Index)
+	{
+		Walked += FVector2D::Distance(Route.Polyline[Index - 1], Route.Polyline[Index]);
+		if (Walked > JoinTo + UE_KINDA_SMALL_NUMBER)
+		{
+			Keep = Index;
+			break;
+		}
+	}
+
+	const double Leg = FVector2D::Distance(From, JoinAt);
+	FRoutePlan Joined = Route;
+	Joined.Polyline.Reset();
+	Joined.Polyline.Add(From);
+	Joined.Polyline.Add(JoinAt);
+	for (int32 Index = Keep; Index < Route.Polyline.Num(); ++Index)
+	{
+		Joined.Polyline.Add(Route.Polyline[Index]);
+	}
+	for (FRouteStep& Step : Joined.Steps)
+	{
+		// The first step may end AT the join (JoinTo clamped to it): its end is then the join's own vertex.
+		const bool bEndsAtJoin = Step.EndDistance <= JoinTo + UE_KINDA_SMALL_NUMBER;
+		Step.EndVertex = bEndsAtJoin ? 1 : Step.EndVertex - Keep + 2;
+		Step.EndDistance = bEndsAtJoin ? Leg : Leg + (Step.EndDistance - JoinTo);
+	}
+	Joined.Length = GuidelineGeom::PolylineLength(Joined.Polyline);
+	Plan = Joined;
+	Travelled = 0.0;
+	return true;
+}
+
 bool FPushbackRun::Advance(double DeltaSeconds, double StopWithin, bool bHasThrust,
 	FVector2D& OutPosition, double& OutHeading)
 {
@@ -42,6 +108,7 @@ bool FPushbackRun::Advance(double DeltaSeconds, double StopWithin, bool bHasThru
 		// AT REST, said here because a push can now be over with speed on it: the trapezoid below ends at exactly zero,
 		// but a plan a rebuild killed or cut short behind Travelled ends the push mid-motion, and DescribeMotion reads
 		// this as the ground speed of an aeroplane that is standing still.
+		// ENFORCED BY: Airside.Model.PushbackOnDeletedGroundStops (at rest)
 		Speed = 0.0;
 		return false;
 	}

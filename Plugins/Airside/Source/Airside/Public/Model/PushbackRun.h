@@ -82,6 +82,17 @@ struct AIRSIDE_API FPushbackRun
 		FVector2D& OutPosition, double& OutHeading);
 
 	/**
+	 * ONTO A LIVE LINE UNDER IT, after a rebuild moved the one it was on (#498 review; the rebuild's RejoinPush). Route
+	 * runs from the start of that edge to the push's end, and Along is how far along it the aeroplane's projection is. The
+	 * push carries on FROM WHERE IT STANDS, Speed kept as the follower's Replace keeps it: a line a few metres off is met
+	 * by a straight join leg that reaches it AHEAD, never by a hop - a push has no steering to hide a sideways jump, and
+	 * PushbackStrandedTaxiOutReplans measures every frame for one. On the line already (a node moved along it), no join.
+	 * False, and NOTHING touched, for a route that is not drivable or an Along off it.
+	 * ENFORCED BY: Airside.Model.PushbackJunctionMovedBehindItCompletes (a join), Airside.Model.PushbackLeadInMovedAlongItCompletes (none)
+	 */
+	bool Rejoin(const FRoutePlan& Route, double Along, const FVector2D& From);
+
+	/**
 	 * True once the manoeuvre has run the length of its route - OR ITS ROUTE DIED UNDER IT: a rebuild that strands a push
 	 * (the ground under it deleted) marks the plan Unreachable, and this went on playing it, pushing the aeroplane along a
 	 * line that no longer existed (#498's probe). Over is over: Advance ends it where it stands, and the handover holds it
