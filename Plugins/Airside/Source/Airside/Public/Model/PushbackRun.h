@@ -81,6 +81,14 @@ struct AIRSIDE_API FPushbackRun
 	bool Advance(double DeltaSeconds, double StopWithin, bool bHasThrust,
 		FVector2D& OutPosition, double& OutHeading);
 
-	/** True once the manoeuvre has run the length of its route. */
-	bool HasArrived() const { return Plan.IsRunBy(Travelled); }
+	/**
+	 * True once the manoeuvre has run the length of its route - OR ITS ROUTE DIED UNDER IT: a rebuild that strands a push
+	 * (the ground under it deleted) marks the plan Unreachable, and this went on playing it, pushing the aeroplane along a
+	 * line that no longer existed (#498's probe). Over is over: Advance ends it where it stands, and the handover holds it
+	 * there for a way to the runway, as it holds a push cut short. THE STRAND'S OWN MARKER, as the Reversing arm reads it
+	 * (#455), not FRouteFollower's !IsDrivable: Start refuses a plan that is not drivable, so a running push's plan stops
+	 * being one only by that marker, and a hand-built push in a unit test need not be a whole route to be a live one.
+	 * ENFORCED BY: Airside.Model.PushbackOnDeletedGroundStops
+	 */
+	bool HasArrived() const { return Plan.Result == ERouteResult::Unreachable || Plan.IsRunBy(Travelled); }
 };

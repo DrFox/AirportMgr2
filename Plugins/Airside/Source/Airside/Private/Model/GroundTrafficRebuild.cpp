@@ -355,12 +355,19 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 			// being pushed off its stand leaves it exactly the dead handles a taxiing agent
 			// would have, and the taxi out would then start on them.
 			//
-			// NOT REPLANNED, only re-pointed - see ReplanAt above for why a push has no
-			// alternative to replan TO. If the rebuild truncates the plan shorter than the
-			// push needed, FPushbackRun::HasArrived clamps to the new length and the
-			// manoeuvre ends early rather than never.
+			// RE-ROUTED TO ITS OWN END OR NOWHERE - see ReplanAt above for why a push has no other
+			// place to go. This said "NOT REPLANNED, only re-pointed", which was not true: a step
+			// that does not re-resolve is replanned by ReResolvePlan to Agent.GoalNode, and during a
+			// push that is the runway entry DepartAgent gave the taxi out, so a deleted push end had
+			// the aeroplane pushed backwards up the taxiway onto the runway (#498's probe). Pointed
+			// at the push's own end first, a dead end fails that search and the push is cut back to
+			// its last live node or, when none survives, stranded; FPushbackRun::HasArrived then ends
+			// it early, where it stands, rather than never. A live end is still searched to - the one
+			// re-route a push gets, and the taxi out still begins where it arrives.
+			// ENFORCED BY: Airside.Model.PushbackEndGoneStopsShortOfTheRunway, Airside.Model.PushbackOnDeletedGroundStops
 			Plan = &Agent.Pushback.Plan;
 			FromStep = CurrentStep(Agent.Pushback.Plan, Agent.Pushback.Travelled);
+			Agent.SetGoalFrom(Agent.Pushback.Plan);
 		}
 		else if (Agent.Phase == EAgentPhase::Arriving && Agent.TaxiInPlan.Steps.Num() > 0)
 		{
@@ -975,7 +982,15 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	// to re-resolve; without the Taxiing conjunct that step's failure strands or rejoins the reverse away)
 	const bool bDriving = (&Plan == &Agent.Follower.Plan) && Agent.Phase == EAgentPhase::Taxiing;
 
-	auto Strand = [&Agent, &Plan, bDriving, &Occupancy](const TCHAR* Why)
+	// WHICH PLAN, BY NAME, in the three lines this writes - asked by address, as bDriving is. A push's and a taxi out's
+	// replans both printed "taxi-in" (#498's probe), which sent the reader of a log to the wrong one of four routes. The
+	// push BY PHASE: a manoeuvring agent's plan that is not its taxi out is its push (OnGraphRebuilt's Manoeuvring arm),
+	// and its address would be a fifth that agent-plan-address counts as a writer.
+	// ENFORCED BY: Airside.Model.PushbackEndGoneStopsShortOfTheRunway (the push's line), Airside.Model.Traffic.HeldTaxiOut.MidPushRunwayLossHolds (the taxi out's)
+	const TCHAR* const Route = &Plan == &Agent.TaxiInPlan ? TEXT("taxi-in") : &Plan == &Agent.TaxiOutPlan ? TEXT("taxi-out")
+		: Agent.Phase == EAgentPhase::Manoeuvring ? TEXT("push") : TEXT("route");
+
+	auto Strand = [&Agent, &Plan, bDriving, &Occupancy, Route](const TCHAR* Why)
 	{
 		// THE GROUND UNDER THE AGENT IS GONE. There is no line left to put it on and no node
 		// to search from, so the plan is marked unreachable - which is what FClaimPass::Run
@@ -1024,8 +1039,8 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 			? FString::Printf(TEXT(" - and it is on runway segment %d, which it holds until it is retired"),
 				Agent.GetCrossingRunway().Index)
 			: FString();
-		UE_LOG(LogAirsideTraffic, Warning, TEXT("Agent %d stranded by the rebuild: %s%s"),
-			Agent.Id, Why, *Held);
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("Agent %d's %s stranded by the rebuild: %s%s"),
+			Agent.Id, Route, Why, *Held);
 
 		// A STRANDED TAXI-IN STILL HAS A PLACE: the exit node the landing hands over at, which
 		// Plan.Start was re-pointed to when it could be - a live goal for anything that asks it.
@@ -1370,8 +1385,8 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 			Agent.SetGoal(Plan.Steps.Num() > 0 ? Plan.Steps.Last().To : Agent.GoalNode);
 
 			UE_LOG(LogAirsideTraffic, Log,
-				TEXT("Agent %d taxi-in replanned by the rebuild at step %d: %.0f uu"),
-				Agent.Id, Failed, Plan.Length);
+				TEXT("Agent %d's %s replanned by the rebuild at step %d: %.0f uu"),
+				Agent.Id, Route, Failed, Plan.Length);
 			return EReResolve::Replanned;
 		}
 	}
@@ -1423,8 +1438,8 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	}
 
 	UE_LOG(LogAirsideTraffic, Log,
-		TEXT("Agent %d truncated by the rebuild: %d of %d steps survive, %.0f uu to the last live node"),
-		Agent.Id, Failed, WasSteps, Plan.Length);
+		TEXT("Agent %d's %s truncated by the rebuild: %d of %d steps survive, %.0f uu to the last live node"),
+		Agent.Id, Route, Failed, WasSteps, Plan.Length);
 	return EReResolve::Truncated;
 }
 

@@ -469,6 +469,8 @@ bool FHeldTaxiOutMidPushRunwayLossTest::RunTest(const FString&)
 	TestTrue(TEXT("its taxi out is marked to be planned again where the push ends"), Rebuilt->IsWaitingFor(EAgentWait::ForTaxiOutRoute));
 	TestFalse(TEXT("no replan line: the taxi out was not re-routed to the goal the push's re-resolve left"),
 		Spy.CapturedLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("replanned by the rebuild")); }));
+	TestTrue(TEXT("and the rebuild's line names the taxi out, not a taxi-in"),
+		Spy.CapturedLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("'s taxi-out truncated by the rebuild")); }));
 	const double EndsFromPushEnd = FVector2D::Distance(Rebuilt->TaxiOutPlan.Polyline.Last(), PushEnd);
 	TestTrue(FString::Printf(TEXT("its taxi out is not extended back to the push's end (ends %.0f uu from it, %.0f uu long, was %.0f)"),
 		EndsFromPushEnd, Rebuilt->TaxiOutPlan.Length, TaxiOutWas),

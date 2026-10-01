@@ -39,6 +39,10 @@ bool FPushbackRun::Advance(double DeltaSeconds, double StopWithin, bool bHasThru
 {
 	if (HasArrived())
 	{
+		// AT REST, said here because a push can now be over with speed on it: the trapezoid below ends at exactly zero,
+		// but a plan a rebuild killed or cut short behind Travelled ends the push mid-motion, and DescribeMotion reads
+		// this as the ground speed of an aeroplane that is standing still.
+		Speed = 0.0;
 		return false;
 	}
 
