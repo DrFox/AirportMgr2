@@ -186,6 +186,18 @@ D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat AirportMgrEditor Win64 Developm
   `-NoHotReloadFromIDE` - safe, because it writes only its own `Binaries/` and
   `Intermediate/`, which the open editor never loaded. Never use the flag on the checkout
   the editor has open. Pass `-Project` to the test script from a worktree.
+- **Take a warm worktree, never a fresh one: `./Tools/Use-Slot.ps1 -Branch feature/x`.** A
+  fresh `git worktree add` compiles every module and PCH (~4 min, 2026-09-27), and all
+  builds on this machine queue on ONE UBT mutex, so parallel sessions' cold builds stack
+  up. A reused slot recompiles only what the switch touched (5-10 s warm, 2026-09-30).
+  The script picks a clean, unclaimed pool worktree with no open PR and no editor on it,
+  or grows the pool. `-List` shows why each slot is busy. Slot names no longer match
+  branches.
+- **Full suite once per branch tip, not again at merge.** Iterate with `-Filter` or MCP
+  `RunTestsByFilter`; run the full script after the last rebase, before `gh pr create`. At
+  merge, `git merge-base --is-ancestor origin/main HEAD` true means the squash-merge tree IS
+  the tested tree: merge, then only an incremental build of the main checkout. False means
+  main moved - rebase, re-test, then merge.
 - **A commit has been built.** The tree once sat uncompilable for a session because a
   header changed in one breath and its .cpp in another. If a full build is impossible
   (editor open, no worktree), the commit message says "unbuilt".
