@@ -346,4 +346,68 @@ bool FArrivalsFoldedComposesNothingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalsAcceptingOneFlightComposesOnlyTheNewRowTest, "AirportMgr.UI.Arrivals.AcceptingOneFlightComposesOnlyTheNewRow",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalsAcceptingOneFlightComposesOnlyTheNewRowTest::RunTest(const FString& Parameters)
+{
+	// #446: a NewObject per row on every board revision threw away each row's memo, so ACCEPTING ONE FLIGHT recomposed every sentence on the board.
+	// A flight that stays keeps its row object now, and with it its key - so a board change composes what CHANGED. The clock is held still, so a
+	// compose here is not "a minute passed": it is only ever the new row, or a row whose queue place moved.
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = NewObject<UFlightBoard>();
+	UFlight* Coming = Flight(TEXT("CU 1"), EFlightPhase::Accepted);
+	Coming->ArrivesAt = 3600.0;
+	Coming->ContractSeconds = 5400.0;
+	UFlight* Later = Flight(TEXT("CU 2"), EFlightPhase::Accepted);
+	Later->ArrivesAt = 7200.0;
+	Later->ContractSeconds = 5400.0;
+	UFlight* Held = Flight(TEXT("CU 3"), EFlightPhase::Inbound);
+	Held->HoldingSince = 5.0;
+	Held->ContractSeconds = 3600.0;
+	UFlight* OnStand = Flight(TEXT("CU 4"), EFlightPhase::Turnaround);
+	OnStand->ContractSeconds = 3600.0;
+	for (UFlight* Each : { Coming, Later, Held, OnStand }) { Board->AddOffer(*Clock, Each); }
+
+	UArrivalsViewModel* Arrivals = NewObject<UArrivalsViewModel>();
+	Arrivals->Refresh(*Board, *Clock);
+	TMap<const UFlight*, UArrivalRowViewModel*> Before;
+	for (UArrivalRowViewModel* Row : Arrivals->GetRows()) { Before.Add(Row->Flight.Get(), Row); }
+	if (!TestEqual(TEXT("setup: a row a flight"), Before.Num(), 4)) { return false; }
+	const int32 Composed = Arrivals->ComposeCountForTest();
+	TestEqual(TEXT("setup: each composed once"), Composed, 4);
+
+	auto KeptTheirObjects = [&](const TCHAR* Case)
+	{
+		int32 Same = 0;
+		for (UArrivalRowViewModel* Row : Arrivals->GetRows())
+		{
+			UArrivalRowViewModel* Was = Before.FindRef(Row->Flight.Get());
+			Same += (Was != nullptr && Was == Row) ? 1 : 0;
+		}
+		TestEqual(*FString::Printf(TEXT("%s: every flight that was on the board still has THE SAME row object"), Case), Same, 4);
+	};
+
+	// ACCEPT ONE MORE, the clock where it was: the new row composes, nothing else does.
+	UFlight* Arriving = Flight(TEXT("CU 5"), EFlightPhase::Accepted);
+	Arriving->ArrivesAt = 5400.0;
+	Arriving->ContractSeconds = 5400.0;
+	Board->AddOffer(*Clock, Arriving);
+	Arrivals->Refresh(*Board, *Clock);
+	TestEqual(TEXT("five rows"), Arrivals->GetCount(), 5);
+	TestEqual(TEXT("accepting one flight composes exactly once - the new row, not the four that were there"), Arrivals->ComposeCountForTest() - Composed, 1);
+	KeptTheirObjects(TEXT("after the accept"));
+
+	// A NEW HOLDER AHEAD IN THE QUEUE: it composes, and so does the one it moved down (its title carries "#2" now) - and no other row.
+	const int32 AfterAccept = Arrivals->ComposeCountForTest();
+	UFlight* Ahead = Flight(TEXT("CU 6"), EFlightPhase::Inbound);
+	Ahead->HoldingSince = 1.0;
+	Ahead->ContractSeconds = 3600.0;
+	Board->AddOffer(*Clock, Ahead);
+	Arrivals->Refresh(*Board, *Clock);
+	TestEqual(TEXT("a flight that joins the queue ahead composes itself and the holder it renumbered - two rows, not six"),
+		Arrivals->ComposeCountForTest() - AfterAccept, 2);
+	KeptTheirObjects(TEXT("after the queue changed"));
+	return true;
+}
+
 #endif

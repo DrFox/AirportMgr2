@@ -34,7 +34,8 @@ struct FOfferMoodKey
 /**
  * EVERY INPUT of the sentences a flight fixes at the offer - who is asking, what it pays, what it wants, the contract - which used to be
  * composed again every tick for every row (about a dozen FText::Format a row). They move only if the flight's own figures or the pricing
- * that words the fee do, and this key is those.
+ * that words the fee do, and this key is those. The callsign, the airline's name and the type are not figures but the flight's IDENTITY - fixed
+ * at the offer - so they ride on the Flight pointer: a row bound to another flight differs in the key and recomposes them.
  */
 struct FOfferFixedKey
 {

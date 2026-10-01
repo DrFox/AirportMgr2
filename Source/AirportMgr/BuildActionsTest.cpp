@@ -1323,27 +1323,27 @@ bool FRunwayRowsDescribeOncePerFrameTest::RunTest(const FString& Parameters)
 	Selected.Id = Segment;
 	C->SelectForTest(Selected);
 
-	++GFrameCounter;   // a frame of its own: the per-frame cache is keyed on the engine's frame counter, which a headless test never advances
+	C->RetireFrameCachesForTest();   // a frame of its own: the per-frame answers turn over with the frame, which a headless test never advances
 	const int32 Start = InspectFacts::DescribeRunwayCountForTest();
 	Bar->RefreshStateForTest(*C);
 	TestEqual(TEXT("one bar tick with a runway selected describes it ONCE, not once per IsEnabled and DynamicLabel of two rows"),
 		InspectFacts::DescribeRunwayCountForTest() - Start, 1);
 	Bar->RefreshStateForTest(*C);
 	TestEqual(TEXT("a second tick in the same frame describes nothing more"), InspectFacts::DescribeRunwayCountForTest() - Start, 1);
-	++GFrameCounter;
+	C->RetireFrameCachesForTest();   // the next frame
 	Bar->RefreshStateForTest(*C);
 	TestEqual(TEXT("the next frame describes again, once - the answer is per frame, not for ever"), InspectFacts::DescribeRunwayCountForTest() - Start, 2);
 
 	// NO RUNWAY SELECTED: nothing to describe, however many rows ask.
 	C->SelectForTest(FSelection());
-	++GFrameCounter;
+	C->RetireFrameCachesForTest();   // the next frame
 	Bar->RefreshStateForTest(*C);
 	TestEqual(TEXT("with nothing selected the bar describes no runway"), InspectFacts::DescribeRunwayCountForTest() - Start, 2);
 
 	// A FLIP RETIRES THE FRAME'S ANSWER: the verb changes the network, the next reader in the SAME frame must see the flip - or the second
 	// runway verb would act on the end that was in use before the first.
 	C->SelectForTest(Selected);
-	++GFrameCounter;
+	C->RetireFrameCachesForTest();   // the next frame
 	FRunwayCardFacts Before;
 	if (!TestTrue(TEXT("setup: the selected runway describes"), C->SelectedRunwayFactsThisFrame(Before))) { return false; }
 	const FBuildAction* Flip = FindAction(FName(TEXT("selection.runway_in_use")));

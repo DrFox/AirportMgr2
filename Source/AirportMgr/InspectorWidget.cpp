@@ -237,7 +237,12 @@ void UInspectorWidget::OpenUnstickMenu()
 	{
 		++UnstickOpens;
 		UnstickMenu->Open();
+		return;
 	}
+	// SAID, NOT SWALLOWED: "Unstick did nothing" must have a line to grep. The press is spent, not kept for the next card (see above).
+	UE_LOG(LogInspector, Log, TEXT("Unstick menu: press spent - %s"),
+		UnstickMenu == nullptr ? TEXT("this inspector has no popup")
+		: !IsShown() ? TEXT("the inspector is closed") : TEXT("no agent card is showing"));
 }
 
 void UInspectorWidget::ShowFollowing(bool bFollowing)

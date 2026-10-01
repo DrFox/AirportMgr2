@@ -1391,9 +1391,15 @@ bool FInspectorUnstickRowOpensTheMenuTest::RunTest(const FString& Parameters)
 	FBuildActionContext Ctx(*C);
 	TestTrue(TEXT("the context carries the HUD layer the row reaches the inspector through"), Ctx.Hud == C->GetHud());
 
-	// NOTHING SELECTED: the popup has no agent card to open on, so the request is spent - and is not kept for the next card.
+	// NOTHING SELECTED: the popup has no agent card to open on, so the request is spent - and is not kept for the next card. SAID: "Unstick did
+	// nothing" must have a line to grep.
+	FLogLineSpy Spent(FName(TEXT("LogInspector")));
+	GLog->AddOutputDevice(&Spent);
 	Row->Execute(Ctx);
+	GLog->RemoveOutputDevice(&Spent);
 	TestEqual(TEXT("with nothing shown the row opens nothing"), Panel->UnstickOpenCountForTest(), 0);
+	TestEqual(TEXT("and says the press was spent"), Spent.Count, 1);
+	if (Spent.CapturedLines.Num() > 0) { TestTrue(TEXT("naming it so"), Spent.CapturedLines[0].Contains(TEXT("press spent"))); }
 
 	FSelection Sel;
 	Sel.Kind = ESelectionKind::Aircraft;
@@ -1408,10 +1414,14 @@ bool FInspectorUnstickRowOpensTheMenuTest::RunTest(const FString& Parameters)
 	Row->Execute(Ctx);
 	TestEqual(TEXT("and each press asks once"), Panel->UnstickOpenCountForTest(), 2);
 
-	// A CONTEXT WITH NO HUD (a controller with none) does nothing rather than crash.
+	// A HUD LAYER WITH NO INSPECTOR does nothing rather than crash - and says the press was spent.
 	C->GetHud()->Inspector = nullptr;
+	FLogLineSpy NoInspector(FName(TEXT("LogRoadBuild")));
+	GLog->AddOutputDevice(&NoInspector);
 	Row->Execute(Ctx);
+	GLog->RemoveOutputDevice(&NoInspector);
 	TestEqual(TEXT("no inspector, nothing to open"), Panel->UnstickOpenCountForTest(), 2);
+	TestEqual(TEXT("and the press is said to be spent"), NoInspector.Count, 1);
 	return true;
 }
 

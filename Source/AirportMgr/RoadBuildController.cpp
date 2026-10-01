@@ -63,12 +63,17 @@ ARoadBuildController::ARoadBuildController()
 	Session.OnSelectionChanged().AddUObject(this, &ARoadBuildController::OnSelectionChanged);
 }
 
+void ARoadBuildController::RetireFrameCaches()
+{
+	SelectedAgentFactsCache = TFrameValue<TOptional<FAgentFacts>>();
+	SelectedRunwayFactsCache = TFrameValue<TOptional<FRunwayCardFacts>>();
+}
+
 void ARoadBuildController::OnSelectionChanged(const FSelection& Old, const FSelection& New)
 {
 	// BOTH FACTS CACHES DESCRIBE THE SELECTION THAT HAS GONE: a frame's answer for the old aircraft or runway must not be handed out for the
 	// new one (a test, or an alert's Go, selects between two reads in one frame).
-	SelectedAgentFactsCache = TFrameValue<TOptional<FAgentFacts>>();
-	SelectedRunwayFactsCache = TFrameValue<TOptional<FRunwayCardFacts>>();
+	RetireFrameCaches();
 	UE_LOG(LogRoadBuild, Verbose, TEXT("Selection: kind %d id %d -> kind %d id %d"), static_cast<int32>(Old.Kind), Old.Id, static_cast<int32>(New.Kind), New.Id);
 	// THE INSPECTOR, through the HUD layer that owns it (a direct call, the way this controller already reaches the window toggles) - it
 	// resets what a new card resets, instead of comparing the selection it was handed every tick with the last.

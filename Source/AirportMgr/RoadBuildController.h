@@ -513,6 +513,12 @@ public:
 	bool SelectedRunwayFactsThisFrame(FRunwayCardFacts& Out) const;
 
 	/**
+	 * Retires the per-frame answers (SelectedAgentFactsThisFrame, SelectedRunwayFactsThisFrame) - what the NEXT FRAME does by itself. A headless test
+	 * never advances the engine's frame counter, so "this tick, then the next" is this call between them, not a bump of a global the engine owns.
+	 */
+	void RetireFrameCachesForTest() { RetireFrameCaches(); }
+
+	/**
 	 * THE selection->depot WALK, written once (ruling C4 of the facility-upgrades plan): the live fuel
 	 * depot a Stand-kind selection names on InTarget's network, else unset. STATIC over (target,
 	 * selection) rather than a member reading this controller's own, so a headless test and the ghost
@@ -951,6 +957,9 @@ private:
 	 * ENFORCED BY: Check-Architecture rule 47's 'OnSelectionChanged' row (the editor must stay free of an inspector and a HUD layer, or must subscribe)
 	 */
 	void OnSelectionChanged(const FSelection& Old, const FSelection& New);
+
+	/** Drops both per-frame answers: the selection or the network under them has moved (OnSelectionChanged), or a test says the frame has turned. */
+	void RetireFrameCaches();
 
 	// ChosenVehicleType, ArmedSellVehicle and OpsRuntimeOverride WERE HERE until #448. The first two were the inspector's card state
 	// parked on the PlayerController because a BuildActions row could not carry an argument (FBuildAction::TryRunWith carries it

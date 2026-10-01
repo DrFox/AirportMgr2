@@ -225,6 +225,45 @@ function Get-Sources([string] $Dir, [string[]] $Ext) {
     Get-ChildItem -Path $Dir -Recurse -File | Where-Object { $Ext -contains $_.Extension }
 }
 
+# COMMENTS STRIPPED, STRING LITERALS KEPT (Strip-ArchComments) - what rule 4 decides "is this line a comment" with, and rule 60(b), whose pass names are
+# strings (Strip-ArchCode, rule 34's, blanks every string literal, so a pattern that names a string - `%02d:%02d`, TEXT("FleetSeed") - needs this one).
+# Character-wise, so a `//` inside a string is not a comment and a `"` inside a comment does not open one; InBlock carries an open /* ... */ across lines.
+# A `'"'` char literal would confuse it - none in the files the rules read today, and a rule that reads a stripped file fails rather than passes if the
+# thing it looks for is gone. Defined HERE, before rule 4, not beside rule 60 where it first lived: a PowerShell function exists only once its
+# definition has run, and rule 4 is the earlier reader.
+function Strip-ArchComments([string] $Line, [ref] $InBlock) {
+    $out = New-Object System.Text.StringBuilder
+    $inString = $false
+    $i = 0
+    while ($i -lt $Line.Length) {
+        if ($InBlock.Value) {
+            $end = $Line.IndexOf('*/', $i)
+            if ($end -lt 0) { return $out.ToString() }
+            $i = $end + 2
+            $InBlock.Value = $false
+            continue
+        }
+        $c = $Line[$i]
+        if ($inString) {
+            [void]$out.Append($c)
+            if ($c -eq '\' -and $i + 1 -lt $Line.Length) { $i++; [void]$out.Append($Line[$i]) }
+            elseif ($c -eq '"') { $inString = $false }
+            $i++
+            continue
+        }
+        if ($c -eq '"') { $inString = $true; [void]$out.Append($c); $i++; continue }
+        if ($c -eq '/' -and $i + 1 -lt $Line.Length) {
+            $next = $Line[$i + 1]
+            if ($next -eq '/') { return $out.ToString() }
+            if ($next -eq '*') { $InBlock.Value = $true; $i += 2; continue }
+        }
+        [void]$out.Append($c)
+        $i++
+    }
+    return $out.ToString()
+}
+
+
 # --- 1. Include direction -----------------------------------------------------------------
 # Layer -> regex of forbidden include prefixes, applied inside EACH module. Solve/ is
 # handled separately as an allow-list.
@@ -358,7 +397,8 @@ $ranRules.Add('doc comments')
 # exemption: a scripted scenario sets up state, it does not enforce production discipline on
 # itself). Comment lines are excluded (the same exemption rules 5-8 give a WHY comment that
 # NAMES the banned shape rather than being it) - RoadEditTarget.h, RunwayTool.h, PlotPresenter.h
-# and RoadNetworkActor.h all discuss these symbols by name in exactly that way.
+# and RoadNetworkActor.h all discuss these symbols by name in exactly that way. "Comment" means removed by Strip-ArchComments, not "starts with `*`" (#446's review:
+# that test threw away a code line starting with a dereference, `*Context.Selection = X;`, as if it were a doc-comment continuation).
 # Issue #291: every entry below names enough of its PATH to be unambiguous (checked with
 # Test-AllowedPathSuffix, not bare-name equality) - 'Private\Entities\AircraftType.cpp', not
 # 'AircraftType.cpp'. Confirmed by grep that each is still the file's real current location
@@ -1060,6 +1100,8 @@ $AllowedCallers = @(
         ProdReason  = "ask ARoadBuildController::SelectedRunwayFactsThisFrame - one describe a frame for every bar row that needs the selected runway's facts (#446); the runway card's own call is InspectorNetworkCards.cpp's, gated by its key"
     }
 )
+# EACH FILE'S COMMENT-STRIPPED LINES, made once and only for a file some row's raw pattern hits (Strip-ArchComments, with the helpers at the top).
+$arch4Code = @{}
 foreach ($row in $AllowedCallers) {
     foreach ($tree in $trees) {
         foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
@@ -1077,7 +1119,16 @@ foreach ($row in $AllowedCallers) {
             if ($inTests -and $row.TestExempt) { continue }
             $hits = Select-String -Path $file.FullName -Pattern $row.Pattern
             foreach ($h in $hits) {
-                if ($h.Line.Trim() -match '^(//|/\*|\*)') { continue }
+                # A COMMENT IS DECIDED FROM COMMENT-STRIPPED CODE, NOT FROM A LEADING `*` (#446's review). This used to skip every line whose trimmed text starts
+                # with `//`, `/*` or `*` - and a dereference WRITE, `*Context.Selection = InSelection;`, starts with `*`, so a row aimed at it could never fire (nor
+                # could #492's `*Slot = ...` row). The raw hit is now confirmed against the same line with comments removed (block comments tracked across
+                # lines, string literals kept): a match inside a comment, leading or trailing, is dropped; a code line that merely starts with `*` is judged.
+                if (-not $arch4Code.ContainsKey($file.FullName)) {
+                    $arch4InBlock = $false
+                    $arch4Code[$file.FullName] = @(Get-Content -LiteralPath $file.FullName | ForEach-Object { Strip-ArchComments $_ ([ref]$arch4InBlock) })
+                }
+                $arch4Lines = $arch4Code[$file.FullName]
+                if ($h.LineNumber -gt $arch4Lines.Count -or $arch4Lines[$h.LineNumber - 1] -notmatch $row.Pattern) { continue }
                 $reason = if ($inTests -and $row.TestReason) { $row.TestReason } else { $row.ProdReason }
                 $failures.Add("allowed-callers: $($file.FullName):$($h.LineNumber) $($row.Name) - ${reason}: $($h.Line.Trim())")
             }
@@ -3454,6 +3505,7 @@ $controllerPublicAllowList = @(
     'QuickLoad',
     'QuickSave',
     'ResolveSnap',
+    'RetireFrameCachesForTest',
     'RevealedDepotFor',
     'SelectActiveVariant',
     'SelectAndFocus',
@@ -3610,40 +3662,8 @@ $ranRules.Add('input-read-once')
 # containers to the fleet's door and this rule keeps the ONE loop's caller, but a new loop through the public Add is not a
 # container write. Pinned from the other side by AirportOps.Present.Fleet.PlacedDepotIsSeededByTheAnnouncement, which goes
 # red when the pass is not woken by the announcement.
-# COMMENTS STRIPPED, STRING LITERALS KEPT: rule 60(b) matches pass names, which are strings. Character-wise, so a `//` inside a
-# string is not a comment and a `"` inside a comment does not open one. A `'"'` char literal would confuse it - none in
-# OpsRuntime.cpp, and the rule fails rather than passing if the pass it looks for is gone.
-function Strip-ArchComments([string] $Line, [ref] $InBlock) {
-    $out = New-Object System.Text.StringBuilder
-    $inString = $false
-    $i = 0
-    while ($i -lt $Line.Length) {
-        if ($InBlock.Value) {
-            $end = $Line.IndexOf('*/', $i)
-            if ($end -lt 0) { return $out.ToString() }
-            $i = $end + 2
-            $InBlock.Value = $false
-            continue
-        }
-        $c = $Line[$i]
-        if ($inString) {
-            [void]$out.Append($c)
-            if ($c -eq '\' -and $i + 1 -lt $Line.Length) { $i++; [void]$out.Append($Line[$i]) }
-            elseif ($c -eq '"') { $inString = $false }
-            $i++
-            continue
-        }
-        if ($c -eq '"') { $inString = $true; [void]$out.Append($c); $i++; continue }
-        if ($c -eq '/' -and $i + 1 -lt $Line.Length) {
-            $next = $Line[$i + 1]
-            if ($next -eq '/') { return $out.ToString() }
-            if ($next -eq '*') { $InBlock.Value = $true; $i += 2; continue }
-        }
-        [void]$out.Append($c)
-        $i++
-    }
-    return $out.ToString()
-}
+# COMMENTS STRIPPED, STRING LITERALS KEPT: rule 60(b) matches pass names, which are strings - Strip-ArchComments, with the helpers at the
+# top of this file since #446's review (rule 4 needs it too).
 # THE TEXT OF ONE CALL: from the `(` at OpenIndex to its matching `)` (string-aware, so a paren in a literal is not counted).
 # Empty when the parens never balance.
 function Get-ArchCallSpan([string] $Text, [int] $OpenIndex) {
@@ -4108,7 +4128,7 @@ $selectionSites = @(
     @{ Path = (Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Tool\SelectTool.cpp'); Needs = '\bSetSelection\s*\('; What = 'the Select tool writing the selection through Context.SetSelection(...)' },
     @{ Path = (Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Tool\SelectTool.cpp'); Needs = '\bClearSelection\s*\('; What = 'the Select tool clearing the selection through Context.ClearSelection()' },
     @{ Path = (Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Tool\BuildSession.cpp'); Needs = '\bWriteSelection\s*\('; What = "the session writing its selection through WriteSelection" },
-    @{ Path = (Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Tool\BuildSession.cpp'); Needs = '\bContext\s*\.\s*OnSelectionChanged\s*='; What = 'MakeContext handing every context the session announcement (Context.OnSelectionChanged = ...)' },
+    @{ Path = (Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Tool\BuildSession.cpp'); Needs = '\bContext\s*\.\s*BindSelection\s*\('; What = 'MakeContext binding every context to the session selection and its announcement (Context.BindSelection(...))' },
     @{ Path = (Join-Path $Root 'Source\AirportMgr\RoadBuildController.cpp'); Needs = '\bSession\s*\.\s*OnSelectionChanged\s*\(\s*\)\s*\.\s*AddUObject\s*\('; What = "the controller subscribing to the session's selection event" }
 )
 foreach ($site in $selectionSites) {

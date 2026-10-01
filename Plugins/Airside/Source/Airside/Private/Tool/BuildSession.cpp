@@ -398,8 +398,7 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	FToolContext Context;
 	Context.Target = Target;
 	Context.HoverAgent = Input.HoverAgent;
-	Context.Selection = &Selection;
-	Context.OnSelectionChanged = &SelectionChanged;
+	Context.BindSelection(Selection, &SelectionChanged);
 	Context.Limits = Tunables.Limits;
 	Context.Envelopes = Tunables.Envelopes;
 	Context.ServiceRoadHalfWidth = Tunables.ServiceRoadHalfWidth;

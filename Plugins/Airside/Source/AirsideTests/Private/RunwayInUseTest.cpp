@@ -464,7 +464,7 @@ bool FRunwayInUsePresentTest::RunTest(const FString& Parameters)
 	C.SnapRadius = 400.0;
 	FRoadSnapResult NoSnap; NoSnap.Position = FVector2D(1000.0, 500.0);
 	C.SetCursor(NoSnap.Position, NoSnap);
-	C.Selection = &Sel;
+	C.BindSelection(Sel);
 	Tool.OnClick(C);
 	if (!TestTrue(TEXT("a click on the strip selects the runway"), Sel.Kind == ESelectionKind::Runway)) { return false; }
 

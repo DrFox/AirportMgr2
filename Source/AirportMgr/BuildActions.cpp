@@ -124,6 +124,7 @@ namespace
 		 * bar asks this in IsEnabled and in DynamicLabel for both runway rows every tick - four InspectFacts::DescribeRunway calls while a
 		 * runway was selected - and the controller answers all four from one (ARoadBuildController::SelectedRunwayFactsThisFrame). The verbs
 		 * below read through it too: the cache is retired by the very network change a flip makes, so a second verb in the frame sees the first's flip.
+		 * ENFORCED BY: AirportMgr.Actions.RunwayRowsDescribeOncePerFrame (one describe a tick, and the flip visible in the same frame)
 		 */
 		bool SelectedRunway(const FBuildActionContext& Ctx, FRunwayCardFacts& Out)
 		{

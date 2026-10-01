@@ -16,7 +16,7 @@
  * camera. Aircraft beats stand: a parked aircraft covers its stand and the smaller target
  * should win, or the stand would be the only thing selectable once an aircraft is on it.
  *
- * Stateless apart from what it writes to Context.Selection: the selection belongs to the
+ * Stateless apart from what it writes through Context.SetSelection: the selection belongs to the
  * session so the panel can read it after this tool has been deactivated by a build tool
  * (which clears it) or reactivated (which does not).
  */
@@ -54,7 +54,7 @@ public:
 
 private:
 	/**
-	 * The session's own selection - FToolContext::Selection, which always points at
+	 * The session's own selection - FToolContext::CurrentSelection, which always points at
 	 * FBuildSession::Selection - captured the first time a context carries one.
 	 *
 	 * NOT A SNAPSHOT, AND THAT IS THE POINT. IsIdle() takes no context (IBuildTool's contract,

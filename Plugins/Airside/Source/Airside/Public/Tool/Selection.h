@@ -78,7 +78,8 @@ struct FSelection
 /**
  * The selection changed: what it was, and what it is now. Fired by SelectionDoor::Write after the new value is in place, so a subscriber
  * that reads the session's selection sees the new one. Native, not a dynamic delegate: FBuildSession is not a UObject, and its
- * subscribers (the controller, the inspector) bind by UObject weak pointer, which this supports.
+ * subscriber is the controller (ARoadBuildController::OnSelectionChanged, which forwards to the inspector), bound by UObject weak pointer,
+ * which this supports. The inspector does not subscribe itself.
  */
 DECLARE_MULTICAST_DELEGATE_TwoParams(FOnSelectionChanged, const FSelection& /*Old*/, const FSelection& /*New*/);
 

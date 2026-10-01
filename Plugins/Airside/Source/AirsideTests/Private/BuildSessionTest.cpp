@@ -368,7 +368,7 @@ bool FBuildSessionSelectionChangedTest::RunTest(const FString& Parameters)
 	// THE TOOLS WRITE THROUGH THE CONTEXT MakeContext HANDS THEM: an unwired door would write the selection and announce nothing - the
 	// very silence this seam replaces - with every assertion above still green.
 	const FToolContext Context = Session.MakeContext(nullptr, FVector2D::ZeroVector, FBuildSessionTunables());
-	TestTrue(TEXT("the context's door is the session's own announcement"), Context.OnSelectionChanged == &Session.OnSelectionChanged());
+	TestTrue(TEXT("the context's door is the session's own announcement"), Context.SelectionAnnouncement() == &Session.OnSelectionChanged());
 	FSelectTool Select;
 	FToolContext Click = Context;
 	Click.HoverAgent = 7;
@@ -418,18 +418,18 @@ bool FBuildSessionContextsShareTheDoorTest::RunTest(const FString& Parameters)
 	const FBuildSessionTunables Tunables;
 	const FBuildInputState Input;
 	const FToolContext Frame = Session.GetFrameContext(TestWorld.Actor, FVector2D(10.0, 20.0), Tunables, Input);
-	TestTrue(TEXT("a frame context carries the session's selection"), Frame.Selection == &Session.GetSelection());
-	TestTrue(TEXT("and its announcement"), Frame.OnSelectionChanged == &Session.OnSelectionChanged());
+	TestTrue(TEXT("a frame context carries the session's selection"), Frame.CurrentSelection() == &Session.GetSelection());
+	TestTrue(TEXT("and its announcement"), Frame.SelectionAnnouncement() == &Session.OnSelectionChanged());
 	TestTrue(TEXT("a write through it is heard"), Frame.SetSelection(FSelectTool::MakeSelection(TestWorld.Actor->GetNetwork(), ESelectionKind::Aircraft, 5)));
 	TestEqual(TEXT("once"), Spy.Count, 1);
 
 	const FToolContext Fresh = Session.MakeContext(TestWorld.Actor, FVector2D::ZeroVector, Tunables, Input);
-	TestTrue(TEXT("a fresh context carries it too"), Fresh.OnSelectionChanged == &Session.OnSelectionChanged());
+	TestTrue(TEXT("a fresh context carries it too"), Fresh.SelectionAnnouncement() == &Session.OnSelectionChanged());
 
 	// A TEST'S OWN CONTEXT, with a bare FSelection and no session, still writes - and has nobody to tell.
 	FSelection Bare;
 	FToolContext Loose;
-	Loose.Selection = &Bare;
+	Loose.BindSelection(Bare);
 	TestTrue(TEXT("a context with no announcement still writes the selection"), Loose.SetSelection(FSelectTool::MakeSelection(nullptr, ESelectionKind::Aircraft, 6)));
 	TestEqual(TEXT("into the FSelection it points at"), Bare.Id, 6);
 	FToolContext Nowhere;
@@ -467,6 +467,14 @@ bool FBuildSessionStaleSelectionDropTest::RunTest(const FString& Parameters)
 	if (!TestEqual(TEXT("setup: the stand is selected, with its slot's generation"), Session.GetSelection().Generation, Stand.Generation)) { return false; }
 	const FToolContext Context = Session.MakeContext(Actor, FVector2D::ZeroVector, FBuildSessionTunables());
 
+	// AN UNDO THAT TOUCHED NOTHING SELECTED, through a REAL restore: snapshot with the stand in it, make an edit that has nothing to do with it, and
+	// restore the snapshot - what the undo of that edit does. The slot map keeps the stand's slot AND its generation, so the selection stays.
+	URoadNetwork* WithStand = DuplicateObject<URoadNetwork>(&Net, GetTransientPackage());
+	if (!TestNotNull(TEXT("setup: a snapshot taken with the stand in it"), WithStand)) { return false; }
+	const FRoadNodeId Unrelated = Net.AddNode(FVector2D(30000.0, 30000.0));
+	if (!TestTrue(TEXT("setup: an unrelated edit"), Net.GetNode(Unrelated) != nullptr)) { return false; }
+	Net.RestoreFrom(*WithStand);
+	if (!TestTrue(TEXT("setup: the restore took the unrelated edit back"), Net.GetNode(Unrelated) == nullptr)) { return false; }
 	Session.OnNetworkReplaced(Context, ENetworkReplace::Adopted);
 	TestTrue(TEXT("an Adopted replacement that touched nothing selected leaves the selection"), Session.GetSelection().IsSet());
 	TestEqual(TEXT("and announces nothing"), Spy.Count, 1);

@@ -145,5 +145,7 @@ void UBuildHudLayer::OpenUnstickMenu()
 	if (Inspector != nullptr)
 	{
 		Inspector->OpenUnstickMenu();
+		return;
 	}
+	UE_LOG(LogRoadBuild, Log, TEXT("Unstick menu: press spent - the HUD layer has no inspector"));
 }

@@ -85,7 +85,7 @@ namespace
 		FRoadSnapResult NoSnap; NoSnap.Position = Cursor;
 		C.SetCursor(Cursor, NoSnap);
 		C.HoverAgent = HoverAgent;
-		C.Selection = &Selection;
+		C.BindSelection(Selection);
 		return C;
 	}
 }

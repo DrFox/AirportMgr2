@@ -937,7 +937,7 @@ bool FEditorSelectionAnnouncesTest::RunTest(const FString& Parameters)
 
 	const FToolContext Context = Mode->GetSession().GetFrameContext(nullptr, FVector2D::ZeroVector, FBuildSessionTunables(), FBuildInputState());
 	TestTrue(TEXT("the context the editor's tools get carries the session's announcement"),
-		Context.OnSelectionChanged == &Mode->GetSession().OnSelectionChanged());
+		Context.SelectionAnnouncement() == &Mode->GetSession().OnSelectionChanged());
 	FSelection Wanted;
 	Wanted.Kind = ESelectionKind::Aircraft;
 	Wanted.Id = 4;
