@@ -103,10 +103,13 @@ public:
 	 * The near field is now held sharp by r.DOF.Kernel.MaxForegroundRadius=0 in
 	 * DefaultEngine.ini and the fixed MiniatureSharpDistance focus - NOT by weakening this.
 	 * 0.003 was tried in between and was invisible ("there doesn't seem to be any on it
-	 * again").
+	 * again") - from the steep far camera, before the 2026-10-01 reversal.
+	 *
+	 * 0.004 since 2026-10-01: at 0.01 the reversed close-zoom lens was "too much blur, just
+	 * want a little bit". Unjudged in PIE; tune this instance before the code.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|View|Miniature focus", meta = (ClampMin = "0.0", ClampMax = "0.1"))
-	double MiniatureBlurAtInfinity = 0.01;
+	double MiniatureBlurAtInfinity = 0.004;
 
 	/** Aperture; shapes the bokeh only. */
 	UPROPERTY(EditAnywhere, Category = "Airside|View|Miniature focus", meta = (ClampMin = "1.0", ClampMax = "32.0"))
