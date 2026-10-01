@@ -68,7 +68,7 @@ void UStandAllocator::Reapply(UGroundTraffic& Traffic, const URoadNetwork& Netwo
 			// KEPT, NOT CLEARED (a deviation from review ruling I1, which said clear it): the dead
 			// Stand IS the HeldStandLost alert's evidence (UOpsAlerts reads HeldStandIsGone), and
 			// every stand deletion reaches here through a rebuild - clearing it would silence that
-			// alert in play. UFlightBoard::ReconcileStandHolds re-holds an Inbound flight a live one
+			// alert in play. Reconcile (below) re-holds an Inbound flight a live one
 			// instead, which overwrites it and clears the alert by the same test.
 			// ENFORCED BY: AirportOps.Model.Alerts.HeldStandLostRaisesAndClears, AirportOps.Model.FlightSave.RequeueOffADeadStandReserves
 			UE_LOG(LogAirportOps, Warning,
@@ -83,7 +83,7 @@ void UStandAllocator::Reapply(UGroundTraffic& Traffic, const URoadNetwork& Netwo
 		// hold - SAID HERE, AND LEFT (#442): this used to clear it on the spot, while an edit's
 		// refusal (Airside's rebuild) only warned and kept it, so one conflict had two outcomes
 		// by which door it came through. Both now leave the board's copy as it is, and
-		// UFlightBoard::ReconcileStandHolds - which RestoreStandHolds runs straight after this -
+		// Reconcile (below) - which UFlightBoard::RestoreStandHolds runs straight after this -
 		// finds it with HoldIsLost, gives it up and re-holds, as it does after an edit.
 		// ENFORCED BY: AirportOps.Model.FlightSave.RequeueDoesNotTakeAnAcceptedStand
 		if (!Traffic.HoldStand(Flight->HolderId(), Network.GetEntity(Flight->Stand)->PoseNode))
@@ -103,6 +103,45 @@ bool UStandAllocator::HeldStandIsGone(const UFlight& Flight, const URoadNetwork&
 	}
 	const FEntityInstance* Stand = Network.GetEntity(Flight.Stand);
 	return Stand == nullptr || !Stand->PoseNode.IsSet();
+}
+
+int32 UStandAllocator::Reconcile(const UGroundTraffic& Traffic, const URoadNetwork& Network, TConstArrayView<UFlight*> InOrder,
+	TFunctionRef<bool(UFlight&)> Rehold)
+{
+	int32 GivenUp = 0;
+	for (UFlight* Each : InOrder)
+	{
+		if (Each == nullptr || !Each->IsUnarrived())
+		{
+			continue;
+		}
+		// THE COPY SAYS A STAND THE RECORD DOES NOT (see the header): given up, said, and re-held at once.
+		if (HoldIsLost(*Each, Traffic, Network))
+		{
+			const FEntityInstanceId Lost = Each->Stand;
+			Each->Stand = FEntityInstanceId();
+			++GivenUp;
+			// TWO LINES, not one with the outcome formatted in: a stand's index is for the log, never a string a player
+			// could be shown (Check-Architecture's text-not-compared-or-indexed, #447).
+			if (Rehold(*Each))
+			{
+				UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) no longer holds stand %d - another holder has it; stand %d held instead"),
+					Each->Id, *Each->Callsign, Lost.Index, Each->Stand.Index);
+			}
+			else
+			{
+				UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) no longer holds stand %d - another holder has it; no reachable stand is free, so it holds none until one frees"),
+					Each->Id, *Each->Callsign, Lost.Index);
+			}
+			continue;
+		}
+		if (Each->GetPhase() == EFlightPhase::Inbound && (!Each->Stand.IsSet() || HeldStandIsGone(*Each, Network)) && Rehold(*Each))
+		{
+			UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) holding: stand %d held again"),
+				Each->Id, *Each->Callsign, Each->Stand.Index);
+		}
+	}
+	return GivenUp;
 }
 
 bool UStandAllocator::HoldIsLost(const UFlight& Flight, const UGroundTraffic& Traffic, const URoadNetwork& Network)

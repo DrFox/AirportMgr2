@@ -4742,14 +4742,16 @@ $modelLineBudget = [ordered]@{
     # 2026-10-01: the traffic Mediator - dispatch, Announce, goals, depart, holds, Advance and the freed diff. #429 and #436
     # took route changes and transitions to one door each; the rebuild half already lives in GroundTrafficRebuild.cpp.
     # LOWERED 2121 -> 1954 the same day by #444: the retry pass and its two arms went to GroundTrafficWaiters.cpp (one
-    # responsibility).
-    'Plugins\Airside\Source\Airside\Private\Model\GroundTraffic.cpp'          = 1954
+    # responsibility). RAISED 1954 -> 1955 the same day by #497: the refusal's sentence handed to OnArrivalRefused (#471).
+    'Plugins\Airside\Source\Airside\Private\Model\GroundTraffic.cpp'          = 1955
     # 2026-10-01: the claim arbiter, one algorithm (Run and its windows, crossings and ranking - 13 functions, long ones);
     # splitting it would scatter one invariant across files.
     'Plugins\Airside\Source\Airside\Private\Model\TrafficClaims.cpp'          = 1898
     # 2026-10-01: a flight's lifecycle - offers, quotes, accept, the arrival queue, cancels, restore, fees (50 member
-    # definitions); one class's state machine, not yet split.
-    'Plugins\AirportOps\Source\AirportOps\Private\Model\FlightBoard.cpp'      = 1746
+    # definitions); one class's state machine, not yet split. RAISED 1746 -> 1779 the same day by #497: UFlightBoard::Rehold
+    # (every re-hold a plan's stand) and the queue pass's call into the stand-hold rule - the rule itself went to
+    # UStandAllocator::Reconcile; #442 item 4's UArrivalQueue is where the queue's share belongs.
+    'Plugins\AirportOps\Source\AirportOps\Private\Model\FlightBoard.cpp'      = 1779
     # 2026-10-01: one agent's follower - engine, gear, taxi, tow, pushback and reverse legs (32 member definitions); one
     # struct's motion, not yet split. RAISED 1583 -> 1610 the same day by #444: the wait's one door (WaitFor/EndWait, in place
     # of three flag mutators and a bare write) and the exhaustive-switch reasons on DescribeMotion and Advance (a phase added is
@@ -4758,8 +4760,8 @@ $modelLineBudget = [ordered]@{
     'Plugins\Airside\Source\Airside\Private\Model\RoadAgent.cpp'              = 1610
     # 2026-10-01: re-resolution after a graph rebuild (splice, re-resolve, rescue) - already the extraction out of
     # GroundTraffic.cpp; 7 functions, each long. RAISED 1582 -> 1589 the same day by #444: the retarget branch's guard for a
-    # held departure, with its reason and its test.
-    'Plugins\Airside\Source\Airside\Private\Model\GroundTrafficRebuild.cpp'   = 1589
+    # held departure, with its reason and its test. RAISED 1589 -> 1591 by #497: who settles a refused re-hold (#442).
+    'Plugins\Airside\Source\Airside\Private\Model\GroundTrafficRebuild.cpp'   = 1591
     # 2026-10-01: the route search (A* over the guideline graph, plan building, run description) - one algorithm.
     'Plugins\Airside\Source\Airside\Private\Model\RouteSearch.cpp'            = 1191
     # 2026-10-01: what #427 left of UJobBoard - the jobs, the vehicles' lifecycle and Step's one sequence; bidding and

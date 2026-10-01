@@ -875,24 +875,10 @@ private:
 	bool Rehold(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight);
 
 	/**
-	 * THE ONE CONFLICT RULE FOR A FLIGHT'S STAND (#442): the occupancy table is the record of what a flight holds, and
-	 * UFlight::Stand is the board's saved copy of it; this brings the copy back to the record, over InOrder in that order.
-	 *  - A flight whose copy names a live stand the table does not hold for it (UStandAllocator::HoldIsLost - its hold was
-	 *    refused when re-made, by Airside's rebuild on an edit or by Reapply on a load) GIVES IT UP and is re-held at
-	 *    once, whatever its phase: the accept promised it a stand, and the next accept must not take the last one first.
-	 *  - An Inbound flight with no stand, or a gone one, is re-held (the queue's rule since review I1): it is next to land.
-	 * A gone stand on an Accepted flight is LEFT - the HeldStandLost alert's evidence (see UStandAllocator::Reapply) -
-	 * until its ETA puts it in the queue.
-	 *
-	 * PATTERN: RECONCILIATION AGAINST A SYSTEM OF RECORD - the board observes the table, rather than Airside announcing
-	 * which hold failed (the issue's second option, a delegate per refusal). The refusal is one of several ways the copy
-	 * and the record part - a rebuild that drops a hold whose stand's pose moved, Reapply's refusal, whatever comes next -
-	 * and asking the table catches each by the same test, with no new delegate across the plugin line. The edit IS still
-	 * announced, once: FNetworkChangedEvent dirties the queue pass, which runs this after its closed exit and before its
-	 * paused one, so a paused edit is reconciled too. NOT the issue's first option (Airside restores holds from a list the
-	 * board hands it, UFlight::Stand a read of the table): UFlight::Stand has a second job - once parked it names the
-	 * stand the aeroplane is on, which no hold records - and the dead-stand evidence the HeldStandLost alert reads is a
-	 * stand the table can no longer hold at all.
+	 * THE BOARD'S DOOR ONTO THE ONE CONFLICT RULE (#442) - UStandAllocator::Reconcile, which states the rule and the pattern
+	 * (the occupancy table is the record of a flight's hold, UFlight::Stand the saved copy brought back to it) - with
+	 * Rehold as its re-hold and a revision bump when a copy changed. From TickQueue (after its closed exit, before its
+	 * paused one: a paused edit is reconciled too) and RestoreStandHolds; InOrder is who wins a contested stand.
 	 * ENFORCED BY: AirportOps.Present.RuntimeEdit.RefusedReholdAgreesWithTheTable, AirportOps.Model.FlightSave.RequeueDoesNotTakeAnAcceptedStand
 	 */
 	void ReconcileStandHolds(UGroundTraffic& Traffic, const URoadNetwork& Network, TConstArrayView<UFlight*> InOrder);

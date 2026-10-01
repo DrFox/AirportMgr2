@@ -881,10 +881,8 @@ namespace ArrivalPlanner
 		// Exactly the three refusal branches DispatchArrival used to choose between inline,
 		// moved here so the actor logs from the plan it acted on rather than re-deriving why.
 		//
-		// Only the branches that have FIGURES are spelled out here; the rest defer to the
-		// reason-only overload above, which is the one source for that wording.
-		// THE FIGURES IN METRES (#471) - a player reads this sentence on the Land panel and in a toast; see
-		// RunwayAdmission::Describe, which the NotAdmitted branch hands the rest to, for the same rule.
+		// Only the branches that have FIGURES are spelled out here, IN METRES (#471: a player reads them - see RunwayAdmission::
+		// Describe); the rest defer to the reason-only overload above, which is the one source for that wording.
 		switch (Plan.Why)
 		{
 		case EArrivalRefusal::RunwayTooShort:

@@ -29,7 +29,7 @@ class URoadNetwork;
  * THE TABLE IS THE RECORD (#442): a hold is a claim in FTrafficOccupancy under the flight's negative holder id, and
  * UFlight::Stand is the board's saved copy of it. The two are re-made apart - Airside's rebuild re-makes the claims on
  * an edit, Reapply re-makes them from UFlight::Stand on a load - and ONE routine reconciles the copy to the record
- * after either: UFlightBoard::ReconcileStandHolds, through HoldIsLost below.
+ * after either: Reconcile below, through HoldIsLost.
  */
 UCLASS()
 class AIRPORTOPS_API UStandAllocator : public UObject
@@ -57,7 +57,7 @@ public:
 	/**
 	 * True when Flight names a LIVE stand that the occupancy table does not hold for it - its hold was refused when it
 	 * was re-made (another holder had the stand) or dropped some other way. THE ONE TEST of "UFlight::Stand says one
-	 * thing and the table another" (#442): the board's ReconcileStandHolds asks it after an edit and after a load alike,
+	 * thing and the table another" (#442): Reconcile asks it after an edit and after a load alike,
 	 * whichever routine re-made the claims. False for no stand, and for a gone one: that is HeldStandIsGone's case, kept
 	 * named for the HeldStandLost alert.
 	 * ENFORCED BY: AirportOps.Present.RuntimeEdit.RefusedReholdAgreesWithTheTable (an edit), AirportOps.Model.FlightSave.RequeueDoesNotTakeAnAcceptedStand (a load)
@@ -75,8 +75,34 @@ public:
 	 * AN EDIT DOES NOT COME HERE: Airside's own rebuild re-makes the claims it dropped (UGroundTraffic::OnGraphRebuilt,
 	 * since PR D's review I1) - this comment used to say that NOTHING re-made them and every edit cost every accepted
 	 * flight its stand, which stopped being true then. A REFUSAL IS NOT HANDLED HERE EITHER (#442): it is warned and left,
-	 * and the board's ReconcileStandHolds, run straight after, gives it the one treatment an edit's refusal gets.
+	 * and Reconcile, which UFlightBoard::RestoreStandHolds runs straight after, gives it the one treatment an edit's refusal gets.
 	 */
 	void Reapply(UGroundTraffic& Traffic, const URoadNetwork& Network,
 		const TArray<UFlight*>& Held);
+
+	/**
+	 * THE ONE CONFLICT RULE FOR A FLIGHT'S STAND (#442): bring each Accepted or Inbound flight's copy (UFlight::Stand) back
+	 * to the record (the occupancy table), over InOrder in that order - the earlier wins a stand two of them want.
+	 *  - A flight whose copy names a live stand the table does not hold for it (HoldIsLost - its hold was refused when it
+	 *    was re-made, by Airside's rebuild on an edit or by Reapply on a load) GIVES IT UP and is re-held at once, whatever
+	 *    its phase: the accept promised it a stand, and the next accept must not take the last one first.
+	 *  - An Inbound flight with no stand, or a gone one, is re-held (the queue's rule since review I1): it is next to land.
+	 * A gone stand on an Accepted flight is LEFT - the HeldStandLost alert's evidence (see Reapply) - until its ETA puts it
+	 * in the queue. Rehold is the BOARD's (UFlightBoard::Rehold): the stand a fresh plan taxis the flight to - this class
+	 * holds, a plan chooses. Returns how many flights gave a lost stand up, so the board can bump the revision its rows read.
+	 *
+	 * PATTERN: RECONCILIATION AGAINST A SYSTEM OF RECORD - the board observes the table, rather than Airside announcing which
+	 * hold failed (#442's other option, a delegate per refusal). A refusal is one of several ways the copy and the record
+	 * part - a dispatch's goal claim outranking a hold, a rebuild dropping a hold whose stand's pose moved, Reapply's
+	 * refusal, whatever comes next - and asking the table catches each by one test, with no delegate across the plugin
+	 * line. The edit IS still announced, once: FNetworkChangedEvent dirties the queue pass, which runs this (through
+	 * UFlightBoard::ReconcileStandHolds) after its closed exit and before its paused one, so a paused edit is reconciled
+	 * too. NOT #442's first option (Airside restores holds from a list the board hands it, UFlight::Stand a read of the
+	 * table): UFlight::Stand has a second job - once parked it names the stand the aeroplane is on, which no hold records -
+	 * and a gone stand, the HeldStandLost alert's evidence, is one the table can no longer hold at all.
+	 * ENFORCED BY: AirportOps.Present.RuntimeEdit.RefusedReholdAgreesWithTheTable, AirportOps.Model.FlightSave.RequeueDoesNotTakeAnAcceptedStand,
+	 * AirportOps.Model.ArrivalQueue.DeadStandReservesWhenOneFrees
+	 */
+	int32 Reconcile(const UGroundTraffic& Traffic, const URoadNetwork& Network, TConstArrayView<UFlight*> InOrder,
+		TFunctionRef<bool(UFlight&)> Rehold);
 };
