@@ -50,7 +50,12 @@ LEVEL = "/Game/Maps/M_Test"
 # 2026-10-01: 1.75 -> 1.0 for the brighter Portscape-style look. NOTE it barely moves the
 # frame (mean ~10% brighter); the white balance below did most of the brightening, which is
 # not yet explained - measure before trusting either knob to set brightness alone.
-LOCK_EXPOSURE_EV100 = 1.0
+#
+# 2026-10-01 (later): 1.0 -> 1.75 BACK, owner: "washed out, difficult to tell the taxiway from the
+# grass" (samples/colours.png). Measured in PIE on M_Test_Small, one view, one knob at a time:
+# this one DID move the frame - grass #C4D894 -> #A8C06C - contradicting "barely moves" above;
+# with the white balance below it took nearly all of the wash. Kept the rest of the Portscape pass.
+LOCK_EXPOSURE_EV100 = 1.75
 
 # Spec section 4.2. Slice G turns this pair into the noon point of a curve.
 SUN_PITCH = -42.0
@@ -151,11 +156,16 @@ FOG_INSCATTERING = (0.2, 0.28, 0.42)
 # re-picked to warm beige at the same time, so the concrete-not-dirt argument above was
 # deliberately traded for warmth. M_Test had been saved at 5200, NOT 5600 - the maps had
 # already drifted from this constant.
-WHITE_TEMP_KELVIN = 6000.0
+#
+# 2026-10-01 (later): 6000 -> 5600 BACK with the exposure above, for the same report; owner
+# judged the pair "a lot better than the old" in PIE on slot2's maps.
+WHITE_TEMP_KELVIN = 5600.0
 
 # Sky light, the shadow fill. Engine default 1.0 left the shade side of everything dark
 # against Portscape's lifted shadows; 1.6 set live 2026-10-01.
-SKY_LIGHT_INTENSITY = 1.6
+# 1.6 -> 1.0 BACK the same evening with the exposure: it lifted the shade toward the grass's
+# own green and flattened the frame - about 3% of the brightness alone, measured in PIE.
+SKY_LIGHT_INTENSITY = 1.0
 
 # Sky atmosphere. Less Mie (engine 0.003996) clears the milky haze from the sky dome, and a
 # blue-leaning luminance factor deepens it toward the clear pale blue of the reference.
