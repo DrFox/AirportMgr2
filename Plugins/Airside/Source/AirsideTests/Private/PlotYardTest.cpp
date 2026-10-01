@@ -6,6 +6,15 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+// THESE TESTS RUN ON Reserve, THE ONLY SAMPLER (#462). They used to run on PlotYard::LayOut, which took
+// a caller's footprint list and had no production caller after the presenter and the tool moved to Reserve
+// on 2026-09-20 - so what they measured was shared FYardSpace code reached through an entry point nobody
+// shipped. LayOut and FYard are deleted; the five tests that were LayOut's alone (RoomForMore, DroppedCount,
+// determinism, non-overlap, gate corridor) went with them, the last three because PlotReserveTest has
+// the same claim on Reserve (IsDeterministic, NeverOverlaps, LeavesTheGateClear). What nothing on Reserve
+// measured - containment, the clearance GAP, the back-fence shed's pose on awkward plots, seed variation
+// - lives here.
+
 namespace
 {
 	/** An axis-aligned rectangle, CCW, with its SOUTH edge (y = 0) as the frontage. */
@@ -45,14 +54,25 @@ namespace
 		return F;
 	}
 
-	/** 16 m x 16 m. Big enough to actually compete with a phantom tank for room. */
-	PlotYard::FFootprint Hangar()
+	/**
+	 * One kit of one module per stand, weight 1: Reserve's FIRST pass gives each kit one bay, largest
+	 * first, so Stands[0] of a shed-led mix is the back-fence shed and the rest is the fill cycle.
+	 * RunCap 1 and no end caps, so a stand's footprint on the ground IS the module's own - what
+	 * StandCorners is handed below.
+	 */
+	PlotYard::FKitSpec YardKit(const PlotYard::FFootprint& Footprint)
 	{
-		PlotYard::FFootprint F;
-		F.LengthUu = 1600.0;
-		F.WidthUu = 1600.0;
-		F.bAgainstTheBackFence = false;
-		return F;
+		PlotYard::FKitSpec Kit;
+		Kit.Footprint = Footprint;
+		Kit.ReserveWeight = 1;
+		Kit.RunCap = 1;
+		return Kit;
+	}
+
+	/** Shed, tank, pump - the depot's own mix, shed first by area. */
+	TArray<PlotYard::FKitSpec> DepotMix()
+	{
+		return { YardKit(Shed()), YardKit(Tank()), YardKit(Pump()) };
 	}
 
 	// StandsOverlap USED TO BE DEFINED HERE, by separating axis, as a private copy.
@@ -108,43 +128,59 @@ bool FPlotYardStandsTheShedAtTheBackTest::RunTest(const FString& Parameters)
 	const FVector2D FrontageB(2400.0, 0.0);
 	const FVector2D Gate(1200.0, 0.0);
 
-	const PlotYard::FFootprint Footprints[] = { Shed() };
+	// THE SHED IS STANDS[0]: Reserve's first pass takes the kits largest-area first, one bay each,
+	// and the first stand of a back-fence kit is the one that takes the gate's ray (PlaceOne's
+	// bTakesTheRay). Stands after it are the fill cycle's sheds, sampled like anything else, so
+	// only Stands[0] is asserted to be AT the back.
+	const TArray<PlotYard::FKitSpec> Kits = { YardKit(Shed()) };
 
-	const PlotYard::FYard Yard = PlotYard::LayOut(
-		Outline, FrontageA, FrontageB, Gate, Footprints, /*Seed=*/1234, Shed());
+	const PlotYard::FReservation Reservation =
+		PlotYard::Reserve(Outline, FrontageA, FrontageB, Gate, Kits, /*Seed=*/1234);
 
-	if (!TestEqual(TEXT("one footprint in, one stand out"), Yard.Stands.Num(), 1))
+	if (!TestTrue(TEXT("the shed was placed"), Reservation.Stands.Num() > 0))
 	{
 		return false;
 	}
-	TestTrue(TEXT("the shed was placed"), Yard.Stands[0].bPlaced);
+	// (No bPlaced assertion: Reserve returns only stands it placed, so it was true by construction.)
+	const PlotYard::FReservedStand& First = Reservation.Stands[0];
 
 	// SQUARE TO THE FRONTAGE, not jittered. The truck drives out of the shed, so its heading
 	// is functional - the one module that may not be turned for looks. Interior is +Y here,
 	// so the inward bearing is +90 degrees.
-	TestEqual(TEXT("the shed faces away from the road, square"),
-		Yard.Stands[0].Heading, UE_DOUBLE_HALF_PI);
+	TestEqual(TEXT("the shed faces away from the road, square"), First.Heading, UE_DOUBLE_HALF_PI);
 
 	// AND IT STANDS AT THE BACK. It stood in the gateway until 2026-09-17 - a depot whose
 	// only way in is blocked by the building you drive out of. The plot is 16 m deep and the
 	// shed 8 m long, so its centre belongs at 12 m: hard against the back fence.
-	TestTrue(*FString::Printf(TEXT("the shed is against the back fence, got y %.0f"),
-		Yard.Stands[0].Centre.Y),
-		FMath::IsNearlyEqual(Yard.Stands[0].Centre.Y, 1200.0, 1.0));
+	TestTrue(*FString::Printf(TEXT("the shed is against the back fence, got y %.0f"), First.Centre.Y),
+		FMath::IsNearlyEqual(First.Centre.Y, 1200.0, 1.0));
 
 	// NOT IN THE GATEWAY, stated as its own claim: "deep in the yard" and "clear of the gate"
 	// are different facts, and it was the second that failed.
 	TestTrue(TEXT("and well clear of the gate it used to block"),
-		FVector2D::Distance(Yard.Stands[0].Centre, Gate) > PlotYard::GateCorridorUu);
+		FVector2D::Distance(First.Centre, Gate) > PlotYard::GateCorridorUu);
 
-	// A PLOT TOO SHALLOW still gets it wholly inside the fence rather than hanging across
-	// the road - the clamp, which no other case reaches.
-	const PlotYard::FYard Shallow = PlotYard::LayOut(
-		YardRect(2400.0, 600.0), FrontageA, FrontageB, Gate, Footprints, 1234, Shed());
-	if (TestEqual(TEXT("still one stand"), Shallow.Stands.Num(), 1))
+	// A PLOT TOO SHALLOW for the shed's own pose (800 long, 600 deep) never reserves one hanging across
+	// the road - the case no other plot reaches. This asserted the CLAMPED POSE of the shed LayOut
+	// handed back DROPPED (centre y >= 400, "off the road"); Reserve returns only what it placed, so a
+	// dropped shed has no pose to read and what is left to measure is the promise a reservation makes -
+	// every stand it does list is wholly inside the fence. (#462: LayOut and that assertion went together.)
+	const TArray<FVector2D> ShallowOutline = YardRect(2400.0, 600.0);
+	const PlotYard::FReservation Shallow = PlotYard::Reserve(
+		ShallowOutline, FrontageA, FrontageB, Gate, Kits, 1234);
+	if (TestTrue(TEXT("a shallow plot still reserves something to check"), Shallow.Stands.Num() > 0))
 	{
-		TestTrue(TEXT("a shallow plot keeps the shed off the road"),
-			Shallow.Stands[0].Centre.Y >= 400.0 - 1.0);
+		for (const PlotYard::FReservedStand& Stand : Shallow.Stands)
+		{
+			TArray<FVector2D> ShallowCorners;
+			PlotYard::StandCorners(Stand, Shed(), ShallowCorners);
+			for (const FVector2D& Corner : ShallowCorners)
+			{
+				TestTrue(*FString::Printf(
+					TEXT("a shallow plot keeps every shed off the road: corner (%.0f, %.0f) is inside"), Corner.X, Corner.Y),
+					RoadGeom::PointInPolygon(ShallowOutline, Corner));
+			}
+		}
 	}
 
 	// AND A SLANTED BACK FENCE KEEPS IT IN, which a rectangle cannot test: with the back edge
@@ -159,17 +195,26 @@ bool FPlotYardStandsTheShedAtTheBackTest::RunTest(const FString& Parameters)
 		FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0),
 		FVector2D(2400.0, 1000.0), FVector2D(0.0, 2400.0) };
 
-	const PlotYard::FYard Slanted = PlotYard::LayOut(
-		Wedge, FrontageA, FrontageB, Gate, Footprints, /*Seed=*/1234, Shed());
-	if (!TestEqual(TEXT("one stand on the wedge"), Slanted.Stands.Num(), 1)) { return false; }
+	const PlotYard::FReservation Slanted = PlotYard::Reserve(
+		Wedge, FrontageA, FrontageB, Gate, Kits, /*Seed=*/1234);
 
 	// PLACED, ASSERTED - not skipped. The wedge is 17 m deep above the gate and the shed is
-	// 8 m, so there is room; guarding the corner checks behind bPlaced would let this pass
+	// 8 m, so there is room; guarding the corner checks behind a placement would let this pass
 	// on a solver that simply gave up, which is the vacuous shape it is meant to catch.
-	if (!TestTrue(TEXT("the shed stands on the wedge"), Slanted.Stands[0].bPlaced))
+	if (!TestTrue(TEXT("the shed stands on the wedge"), Slanted.Stands.Num() > 0))
 	{
 		return false;
 	}
+
+	// STANDS[0] MUST BE THE RAY'S POSE, NOT A SAMPLED SHED (#462 review). On Reserve a back-fence scan that gives up on the
+	// slanted edge falls through to the fill sampler, which places a shed SOMEWHERE in the wedge - and y > 800 below is likely
+	// for a sampled one - so the corner and depth assertions alone stay green when the very scan they name has failed. The ray's
+	// pose is decided, not sampled: heading exactly square to the frontage (a sampled heading carries up to 0.21 rad of
+	// jitter) and a centre on the gate's own X.
+	TestEqual(TEXT("the wedge's first shed is the ray's: square to the frontage, not a jittered sampled heading"),
+		Slanted.Stands[0].Heading, UE_DOUBLE_HALF_PI);
+	TestTrue(*FString::Printf(TEXT("and it stands on the gate's ray (x %.0f against the gate's %.0f)"),
+		Slanted.Stands[0].Centre.X, Gate.X), FMath::Abs(Slanted.Stands[0].Centre.X - Gate.X) < 1.0);
 
 	TArray<FVector2D> Corners;
 	PlotYard::StandCorners(Slanted.Stands[0], Shed(), Corners);
@@ -256,100 +301,61 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FPlotYardKeepsModulesInsideThePlotTest::RunTest(const FString& Parameters)
 {
-	const TArray<FVector2D> Outline = YardRect(2400.0, 1600.0);
-	const PlotYard::FFootprint Footprints[] = { Shed(), Tank(), Pump() };
+	const TArray<PlotYard::FKitSpec> Kits = DepotMix();
+
+	// TWO PLOTS, THE SECOND A WEDGE (#462). On a RECTANGLE the sampler's own bounding-box draw already keeps every centre inside, so
+	// the containment test beside it never decides anything - deleting it left this green - and the whole claim is only measured by
+	// an outline whose edges are not axis-aligned: this one runs 24 m deep at its left corner and 10 m at its right, the shape the
+	// four-point gesture makes ordinary (see Airside.Solve.PlotYardStandsTheShedAtTheBack's wedge).
+	struct FPlot { const TCHAR* Name; TArray<FVector2D> Outline; };
+	const FPlot Plots[] = {
+		{ TEXT("rectangle"), YardRect(2400.0, 1600.0) },
+		{ TEXT("wedge"), { FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0), FVector2D(2400.0, 1000.0), FVector2D(0.0, 2400.0) } } };
 
 	// SEVERAL SEEDS, not one. A sampler that happens to keep everything inside on seed 1234
 	// and hangs a tank over the fence on 1235 is exactly the bug this guards, and a
 	// single-seed test would ship it.
-	for (int32 Seed = 1; Seed <= 8; ++Seed)
+	int32 Checked = 0;
+	for (const FPlot& Plot : Plots)
 	{
-		const PlotYard::FYard Yard = PlotYard::LayOut(
-			Outline, FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0), FVector2D(1200.0, 0.0),
-			Footprints, Seed, Tank());
-
-		for (int32 Index = 0; Index < Yard.Stands.Num(); ++Index)
+		const TArray<FVector2D>& Outline = Plot.Outline;
+		for (int32 Seed = 1; Seed <= 8; ++Seed)
 		{
-			if (!Yard.Stands[Index].bPlaced)
+			const PlotYard::FReservation Reservation = PlotYard::Reserve(
+				Outline, FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0), FVector2D(1200.0, 0.0),
+				Kits, Seed);
+
+			for (int32 Index = 0; Index < Reservation.Stands.Num(); ++Index)
 			{
-				continue;
-			}
-
-			TArray<FVector2D> Corners;
-			PlotYard::StandCorners(Yard.Stands[Index], Footprints[Index], Corners);
-			for (const FVector2D& Corner : Corners)
-			{
-				// EVERY CORNER, not the centre. A centre-only test accepts a module hanging
-				// out of the plot and the player watches a tank stand on the grass.
-				TestTrue(*FString::Printf(
-					TEXT("seed %d: module %d corner (%.0f, %.0f) is inside the plot"),
-					Seed, Index, Corner.X, Corner.Y),
-					RoadGeom::PointInPolygon(Outline, Corner));
-			}
-		}
-	}
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FPlotYardDoesNotOverlapModulesTest,
-	"Airside.Solve.PlotYardDoesNotOverlapModules",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FPlotYardDoesNotOverlapModulesTest::RunTest(const FString& Parameters)
-{
-	// TIGHT, BUT NOT SO TIGHT NOTHING FITS: on a large plot a naive sampler passes by luck,
-	// and on too small a one there is no pair left to compare.
-	//
-	// It was 8 m x 16 m until 2026-09-17, when the shed moved from the gateway to the back
-	// fence. The shed then took the back, the gate corridor took the front, and on a plot
-	// only 8 m wide the strips either side of the corridor are too narrow for anything -
-	// one module stood and this test's own guard caught it.
-	const TArray<FVector2D> Outline = YardRect(1600.0, 2000.0);
-	const PlotYard::FFootprint Footprints[] = { Shed(), Tank(), Pump() };
-
-	for (int32 Seed = 1; Seed <= 8; ++Seed)
-	{
-		const PlotYard::FYard Yard = PlotYard::LayOut(
-			Outline, FVector2D(0.0, 0.0), FVector2D(1600.0, 0.0), FVector2D(800.0, 0.0),
-			Footprints, Seed, Tank());
-
-		// AT LEAST TWO STANDING, or the loops below compare nothing and this test goes
-		// green for the wrong reason. A tight plot is the right shape to catch collisions
-		// and the wrong shape to trust blindly - some modules ARE expected to drop here,
-		// which is exactly how a vacuous pass would hide.
-		int32 Placed = 0;
-		for (const PlotYard::FStand& Stand : Yard.Stands)
-		{
-			if (Stand.bPlaced) { ++Placed; }
-		}
-		TestTrue(*FString::Printf(
-			TEXT("seed %d: at least two modules stand, so there is a pair to compare"), Seed),
-			Placed >= 2);
-
-		for (int32 A = 0; A < Yard.Stands.Num(); ++A)
-		{
-			for (int32 B = A + 1; B < Yard.Stands.Num(); ++B)
-			{
-				if (!Yard.Stands[A].bPlaced || !Yard.Stands[B].bPlaced)
+				const PlotYard::FReservedStand& Stand = Reservation.Stands[Index];
+				TArray<FVector2D> Corners;
+				PlotYard::StandCorners(Stand, Kits[Stand.KitIndex].Footprint, Corners);
+				for (const FVector2D& Corner : Corners)
 				{
-					continue;
+					// EVERY CORNER, not the centre. A centre-only test accepts a module hanging
+					// out of the plot and the player watches a tank stand on the grass.
+					TestTrue(*FString::Printf(
+						TEXT("%s plot, seed %d: module %d corner (%.0f, %.0f) is inside the plot"),
+						Plot.Name, Seed, Index, Corner.X, Corner.Y),
+						RoadGeom::PointInPolygon(Outline, Corner));
+					++Checked;
 				}
-				// TWO MODULES IN ONE SPACE is the one failure that cannot be argued as
-				// styling - it is a mesh through a mesh, and no camera angle hides it.
-				TestFalse(*FString::Printf(TEXT("seed %d: module %d and %d do not intersect"),
-					Seed, A, B),
-					PlotYard::StandsOverlap(Yard.Stands[A], Footprints[A],
-						Yard.Stands[B], Footprints[B]));
 			}
 		}
 	}
+	// A FLOOR, NOT A COUNT: a Reserve that returned nothing would pass every loop above.
+	TestTrue(*FString::Printf(TEXT("corners were actually checked (%d)"), Checked), Checked >= 2 * 8 * 3 * 4);
 	return true;
 }
 
 /**
- * Every pair of stands lands at least ClearanceUu apart - measured, not merely
+ * No two stands overlap, and every pair lands at least ClearanceUu apart - measured, not merely
  * non-overlapping, which two modules that TOUCH already satisfy and read as one building.
+ *
+ * ONE TEST, WHERE THERE WERE TWO (#462): DoesNotOverlapModules asserted the overlap half of what
+ * this measures on the same tight plot, so the gap loop below carries both. The overlap test
+ * stays in front of the gap one because MinGapBetweenQuads is only meaningful for DISJOINT quads
+ * - two crossing quads read a gap from their vertices and could slip past it.
  *
  * PlaceAgainstTheBackFence stored UNPADDED corners in Taken until issue #193, so a back-fence
  * shed's gap to whatever the sampler stood beside it was half of ClearanceUu - and grep
@@ -362,34 +368,49 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FPlotYardKeepsClearanceBetweenEveryPairTest::RunTest(const FString& Parameters)
 {
-	// THE SAME TIGHT PLOT FPlotYardDoesNotOverlapModulesTest uses: small enough that stands
+	// TIGHT, BUT NOT SO TIGHT NOTHING FITS: on a large plot a naive sampler passes by luck,
+	// and on too small a one there is no pair left to compare. Small enough that stands
 	// pack close together, so a shrunk clearance shows up as a measured gap rather than acres
 	// of empty space either way.
+	//
+	// It was 8 m x 16 m until 2026-09-17, when the shed moved from the gateway to the back
+	// fence. The shed then took the back, the gate corridor took the front, and on a plot
+	// only 8 m wide the strips either side of the corridor are too narrow for anything -
+	// one module stood and this test's own guard caught it.
 	const TArray<FVector2D> Outline = YardRect(1600.0, 2000.0);
-	const PlotYard::FFootprint Footprints[] = { Shed(), Tank(), Pump() };
+	const TArray<PlotYard::FKitSpec> Kits = DepotMix();
 
+	int32 Pairs = 0;
 	for (int32 Seed = 1; Seed <= 8; ++Seed)
 	{
-		const PlotYard::FYard Yard = PlotYard::LayOut(
+		const PlotYard::FReservation Reservation = PlotYard::Reserve(
 			Outline, FVector2D(0.0, 0.0), FVector2D(1600.0, 0.0), FVector2D(800.0, 0.0),
-			Footprints, Seed, Tank());
+			Kits, Seed);
+
+		// AT LEAST TWO STANDING, or the loops below compare nothing and this test goes
+		// green for the wrong reason.
+		TestTrue(*FString::Printf(
+			TEXT("seed %d: at least two modules stand, so there is a pair to compare"), Seed),
+			Reservation.Stands.Num() >= 2);
 
 		TArray<TArray<FVector2D>> Corners;
-		Corners.SetNum(Yard.Stands.Num());
-		for (int32 Index = 0; Index < Yard.Stands.Num(); ++Index)
+		Corners.SetNum(Reservation.Stands.Num());
+		for (int32 Index = 0; Index < Reservation.Stands.Num(); ++Index)
 		{
-			if (Yard.Stands[Index].bPlaced)
-			{
-				PlotYard::StandCorners(Yard.Stands[Index], Footprints[Index], Corners[Index]);
-			}
+			PlotYard::StandCorners(Reservation.Stands[Index],
+				Kits[Reservation.Stands[Index].KitIndex].Footprint, Corners[Index]);
 		}
 
-		for (int32 A = 0; A < Yard.Stands.Num(); ++A)
+		for (int32 A = 0; A < Reservation.Stands.Num(); ++A)
 		{
-			if (!Yard.Stands[A].bPlaced) { continue; }
-			for (int32 B = A + 1; B < Yard.Stands.Num(); ++B)
+			for (int32 B = A + 1; B < Reservation.Stands.Num(); ++B)
 			{
-				if (!Yard.Stands[B].bPlaced) { continue; }
+				++Pairs;
+				// TWO MODULES IN ONE SPACE is the one failure that cannot be argued as
+				// styling - it is a mesh through a mesh, and no camera angle hides it.
+				TestFalse(*FString::Printf(TEXT("seed %d: stand %d and %d do not intersect"), Seed, A, B),
+					PlotYard::StandsOverlap(Reservation.Stands[A], Kits[Reservation.Stands[A].KitIndex].Footprint,
+						Reservation.Stands[B], Kits[Reservation.Stands[B].KitIndex].Footprint));
 
 				// A ONE-UNIT TOLERANCE for CornerInsetUu, which pulls every corner in by 1 uu
 				// and so trims a hair off the true footprint on both sides of the gap.
@@ -401,171 +422,7 @@ bool FPlotYardKeepsClearanceBetweenEveryPairTest::RunTest(const FString& Paramet
 			}
 		}
 	}
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FPlotYardLeavesTheGateClearTest,
-	"Airside.Solve.PlotYardLeavesTheGateClear",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FPlotYardLeavesTheGateClearTest::RunTest(const FString& Parameters)
-{
-	const TArray<FVector2D> Outline = YardRect(2400.0, 1600.0);
-	const FVector2D Gate(1200.0, 0.0);
-
-	// NO SHED in this mix, so nothing is entitled to sit on the gate and every stand here
-	// is one the sampler chose. With a shed present the shed IS on the gate by design, and
-	// the test would be asserting the opposite of the rule it means to check.
-	const PlotYard::FFootprint Footprints[] = { Tank(), Pump(), Pump() };
-
-	for (int32 Seed = 1; Seed <= 8; ++Seed)
-	{
-		const PlotYard::FYard Yard = PlotYard::LayOut(
-			Outline, FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0), Gate,
-			Footprints, Seed, Tank());
-
-		// EVERY ONE OF THEM PLACED. A plot this size has room for three small modules, so a
-		// solver that placed nothing would otherwise slip past every loop below.
-		TestEqual(*FString::Printf(TEXT("seed %d: all three modules found a spot"), Seed),
-			Yard.DroppedCount(), 0);
-
-		for (int32 Index = 0; Index < Yard.Stands.Num(); ++Index)
-		{
-			if (!Yard.Stands[Index].bPlaced)
-			{
-				continue;
-			}
-			TArray<FVector2D> Corners;
-			PlotYard::StandCorners(Yard.Stands[Index], Footprints[Index], Corners);
-			for (const FVector2D& Corner : Corners)
-			{
-				// The gate mouth: one truck length deep from the frontage, +Y here. BOUNDED
-				// IN DEPTH on purpose - a lane running the whole yard would cut the plot in
-				// two, and the truck only needs room to get off the pad and turn.
-				const bool bInLane =
-					FMath::Abs(Corner.X - Gate.X) < PlotYard::GateCorridorUu * 0.5
-					&& Corner.Y >= 0.0 && Corner.Y <= PlotYard::GateCorridorUu;
-				TestFalse(*FString::Printf(
-					TEXT("seed %d: module %d keeps out of the truck's way"), Seed, Index),
-					bInLane);
-			}
-		}
-	}
-	return true;
-}
-
-/**
- * ROOM TO GROW IS COUNTED, and counted as more than nothing.
- *
- * THE GAP THIS FILLS: DropsWhatWillNotFit asserts RoomForMore is ZERO on a tiny plot, and
- * IsDeterministic only compares one run's figure against another's. Both pass if the count
- * is always zero - which is exactly what it was, on every plot, until this test said so.
- */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FPlotYardCountsRoomToGrowTest,
-	"Airside.Solve.PlotYardCountsRoomToGrow",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FPlotYardCountsRoomToGrowTest::RunTest(const FString& Parameters)
-{
-	// 24 m x 24 m and EMPTY: nothing placed, nothing in the way, so a solver that cannot
-	// count room here cannot count it anywhere.
-	const TArray<FVector2D> Outline = YardRect(2400.0, 2400.0);
-
-	const PlotYard::FYard Bare = PlotYard::LayOut(
-		Outline, FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0), FVector2D(1200.0, 0.0),
-		TArrayView<const PlotYard::FFootprint>(), /*Seed=*/11, Tank());
-
-	TestEqual(TEXT("no footprints in, no stands out"), Bare.Stands.Num(), 0);
-	TestTrue(*FString::Printf(
-		TEXT("an empty 24 m yard has room for several tanks, got %d"), Bare.RoomForMore),
-		Bare.RoomForMore > 1);
-
-	// THE SAME PLOT WITH A DEPOT IN IT still has room, and less of it. Filling a yard must
-	// REDUCE what is left rather than leaving the figure untouched, which is how a count
-	// that ignores what is standing would look.
-	const PlotYard::FFootprint Footprints[] = { Shed(), Tank(), Pump() };
-	const PlotYard::FYard Filled = PlotYard::LayOut(
-		Outline, FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0), FVector2D(1200.0, 0.0),
-		Footprints, /*Seed=*/11, Tank());
-
-	TestEqual(TEXT("the mix all fits in a yard this size"), Filled.DroppedCount(), 0);
-	TestTrue(*FString::Printf(TEXT("and there is still room to grow, got %d"),
-		Filled.RoomForMore), Filled.RoomForMore > 0);
-
-	// WHAT IS STANDING REDUCES WHAT IS LEFT - shown with something big enough to actually
-	// compete for the space. The depot's own mix does NOT reduce it at this size (both come
-	// back 4): the shed hugs the back fence and the tank and pump tuck into slack a 6 m
-	// phantom could never have used, so "filling a yard leaves less room" is simply false
-	// here. Asserting it anyway passed until the shed moved, and would have gone on passing
-	// as <= while proving nothing.
-	const PlotYard::FFootprint Big[] = { Hangar() };
-	const PlotYard::FYard Blocked = PlotYard::LayOut(
-		Outline, FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0), FVector2D(1200.0, 0.0),
-		Big, /*Seed=*/11, Tank());
-
-	TestEqual(TEXT("the hangar stands"), Blocked.DroppedCount(), 0);
-	TestTrue(*FString::Printf(TEXT("a 16 m hangar eats the room: blocked %d, bare %d"),
-		Blocked.RoomForMore, Bare.RoomForMore), Blocked.RoomForMore < Bare.RoomForMore);
-
-	// A SHAPE THE GESTURE CAN ACTUALLY MAKE. This was 12 m wide until 2026-09-17 and the
-	// gesture's minimum frontage is 15 m, so it was testing a plot no player could draw -
-	// and once the shed moved to the back fence a plot that narrow had no usable middle at
-	// all, which is how the staleness surfaced.
-	const TArray<FVector2D> Drawn20 = YardRect(2000.0, 2400.0);
-	const PlotYard::FYard Drawn = PlotYard::LayOut(
-		Drawn20, FVector2D(0.0, 0.0), FVector2D(2000.0, 0.0), FVector2D(1000.0, 0.0),
-		Footprints, /*Seed=*/11, Tank());
-
-	TestEqual(TEXT("the mix fits a 20 m x 24 m plot"), Drawn.DroppedCount(), 0);
-	TestTrue(*FString::Printf(
-		TEXT("and it has room for another tank, got %d"), Drawn.RoomForMore),
-		Drawn.RoomForMore > 0);
-
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FPlotYardIsDeterministicTest,
-	"Airside.Solve.PlotYardIsDeterministic",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FPlotYardIsDeterministicTest::RunTest(const FString& Parameters)
-{
-	const TArray<FVector2D> Outline = YardRect(2400.0, 1600.0);
-	const PlotYard::FFootprint Footprints[] = { Shed(), Tank(), Pump() };
-
-	auto Lay = [&]()
-	{
-		return PlotYard::LayOut(Outline, FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0),
-			FVector2D(1200.0, 0.0), Footprints, /*Seed=*/4242, Tank());
-	};
-
-	const PlotYard::FYard First = Lay();
-	const PlotYard::FYard Second = Lay();
-
-	if (!TestEqual(TEXT("both lay out the same number of stands"),
-		First.Stands.Num(), Second.Stands.Num()))
-	{
-		return false;
-	}
-
-	for (int32 Index = 0; Index < First.Stands.Num(); ++Index)
-	{
-		// BITWISE, not nearly. UPlotPresenter::RebuildFrom clears and rebuilds on every
-		// graph change, so "close enough" is a yard that shivers every time the player lays
-		// a road somewhere else on the airport - and nothing on screen would explain why.
-		TestTrue(*FString::Printf(TEXT("stand %d lands on exactly the same spot"), Index),
-			First.Stands[Index].Centre == Second.Stands[Index].Centre);
-		TestTrue(*FString::Printf(TEXT("stand %d takes exactly the same heading"), Index),
-			First.Stands[Index].Heading == Second.Stands[Index].Heading);
-		TestEqual(*FString::Printf(TEXT("stand %d agrees about being placed"), Index),
-			First.Stands[Index].bPlaced, Second.Stands[Index].bPlaced);
-	}
-	TestEqual(TEXT("and both agree how much room is left"),
-		First.RoomForMore, Second.RoomForMore);
-
+	TestTrue(*FString::Printf(TEXT("pairs were actually measured (%d)"), Pairs), Pairs >= 8);
 	return true;
 }
 
@@ -577,29 +434,31 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FPlotYardVariesWithSeedTest::RunTest(const FString& Parameters)
 {
 	const TArray<FVector2D> Outline = YardRect(2400.0, 1600.0);
-	const PlotYard::FFootprint Footprints[] = { Shed(), Tank(), Pump() };
+	const TArray<PlotYard::FKitSpec> Kits = DepotMix();
 
 	auto LaySeeded = [&](int32 Seed)
 	{
-		return PlotYard::LayOut(Outline, FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0),
-			FVector2D(1200.0, 0.0), Footprints, Seed, Tank());
+		return PlotYard::Reserve(Outline, FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0),
+			FVector2D(1200.0, 0.0), Kits, Seed);
 	};
 
-	const PlotYard::FYard A = LaySeeded(1);
-	const PlotYard::FYard B = LaySeeded(2);
+	const PlotYard::FReservation A = LaySeeded(1);
+	const PlotYard::FReservation B = LaySeeded(2);
+	if (!TestTrue(TEXT("both seeds reserve something, shed first"),
+		A.Stands.Num() > 0 && B.Stands.Num() > 0 && A.Stands[0].KitIndex == 0 && B.Stands[0].KitIndex == 0))
+	{
+		return false;
+	}
 
 	// WITHOUT THIS, a solver that ignored the seed entirely - or one that quietly placed
 	// everything on a grid again - would pass every other test in this file. Two depots
-	// looking identical IS the complaint this whole feature answers.
-	bool bAnyDifference = false;
-	for (int32 Index = 0; Index < A.Stands.Num() && Index < B.Stands.Num(); ++Index)
+	// looking identical IS the complaint this whole feature answers. A different COUNT is a
+	// difference too: the two reservations are not the same depot.
+	bool bAnyDifference = A.Stands.Num() != B.Stands.Num();
+	for (int32 Index = 0; Index < A.Stands.Num() && Index < B.Stands.Num() && !bAnyDifference; ++Index)
 	{
-		if (A.Stands[Index].Centre != B.Stands[Index].Centre
-			|| A.Stands[Index].Heading != B.Stands[Index].Heading)
-		{
-			bAnyDifference = true;
-			break;
-		}
+		bAnyDifference = A.Stands[Index].Centre != B.Stands[Index].Centre
+			|| A.Stands[Index].Heading != B.Stands[Index].Heading;
 	}
 	TestTrue(TEXT("two seeds lay out two different yards"), bAnyDifference);
 
@@ -612,36 +471,34 @@ bool FPlotYardVariesWithSeedTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * THE SHED STILL STANDS ON A PLOT TOO SMALL FOR THE MIX (#462 review: the other claim of the deleted
+ * PlotYardDropsWhatWillNotFit, which asserted it through LayOut's dropped-stand list).
+ *
+ * One bay wide and one row deep: the shed alone fills it. THE SHED IS NOT ONE OF THE THINGS LOST. Its pose is decided rather
+ * than sampled, so a plot too small loses the things that were looking for space - never the one the truck needs. Reserve lists
+ * only what it placed, so "dropped" reads as a kit with no stand: the tank, which cannot fit beside a shed that fills the plot.
+ */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FPlotYardDropsWhatWillNotFitTest,
-	"Airside.Solve.PlotYardDropsWhatWillNotFit",
+	FPlotYardKeepsTheShedOnATinyPlotTest,
+	"Airside.Solve.PlotYardKeepsTheShedOnATinyPlot",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FPlotYardDropsWhatWillNotFitTest::RunTest(const FString& Parameters)
+bool FPlotYardKeepsTheShedOnATinyPlotTest::RunTest(const FString& Parameters)
 {
-	// One bay wide and one row deep: the shed alone fills it.
-	const TArray<FVector2D> Outline = YardRect(400.0, 800.0);
-	const PlotYard::FFootprint Footprints[] = { Shed(), Tank(), Pump() };
+	const TArray<PlotYard::FKitSpec> Kits = DepotMix();   // shed (kit 0), tank (kit 1), pump (kit 2)
 
-	const PlotYard::FYard Yard = PlotYard::LayOut(
-		Outline, FVector2D(0.0, 0.0), FVector2D(400.0, 0.0), FVector2D(200.0, 0.0),
-		Footprints, /*Seed=*/7, Tank());
+	const PlotYard::FReservation Reservation = PlotYard::Reserve(
+		YardRect(400.0, 800.0), FVector2D(0.0, 0.0), FVector2D(400.0, 0.0), FVector2D(200.0, 0.0), Kits, /*Seed=*/7);
 
-	// ONE ENTRY PER FOOTPRINT, IN ORDER, even for the ones that did not fit. A compacted
-	// array would re-associate a pump's stand with a tank, and the depot would draw the
-	// wrong box in the wrong place with nothing to say so.
-	if (!TestEqual(TEXT("three footprints in, three stands out"), Yard.Stands.Num(), 3))
+	TestTrue(TEXT("the shed still stands on a one-bay plot"), Reservation.CeilingFor(0) >= 1);
+	TestEqual(TEXT("and it is the ray's: the first stand reserved, square to the frontage"),
+		Reservation.Stands.Num() > 0 ? Reservation.Stands[0].KitIndex : INDEX_NONE, 0);
+	if (Reservation.Stands.Num() > 0)
 	{
-		return false;
+		TestEqual(TEXT("with the decided heading, not a sampled one"), Reservation.Stands[0].Heading, UE_DOUBLE_HALF_PI);
 	}
-	TestTrue(TEXT("something had to be dropped from a one-bay plot"), Yard.DroppedCount() > 0);
-
-	// THE SHED IS NOT ONE OF THEM. Its pose is decided rather than sampled, so a plot too
-	// small loses the things that were looking for space - never the one the truck needs.
-	TestTrue(TEXT("but the shed still stands"), Yard.Stands[0].bPlaced);
-
-	TestEqual(TEXT("and there is no room for more"), Yard.RoomForMore, 0);
-
+	TestEqual(TEXT("and something had to be lost from a one-bay plot: the tank has no stand"), Reservation.CeilingFor(1), 0);
 	return true;
 }
 

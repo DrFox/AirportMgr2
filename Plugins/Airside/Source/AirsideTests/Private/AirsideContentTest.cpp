@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "AirsideTestFixtures.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Content/AirsideContent.h"
@@ -229,31 +230,6 @@ bool FEveryPlaceableEntityResolvesFromContentTest::RunTest(const FString& Parame
 }
 
 /**
- * The project's content set names a whole fence kit, and the fabric is masked and two-sided.
- *
- * AGAINST THE REAL DA_AirsideContent, not a NewObject: the failure this guards is the one a
- * build_*.py writes nothing and reports success, and only the saved asset can show it. A
- * translucent fabric would sort wrongly; a one-sided one vanishes from inside the plot.
- */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAirsideContentFenceKitResolvesTest,
-	"Airside.Content.FenceKitResolves",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FAirsideContentFenceKitResolvesTest::RunTest(const FString& Parameters)
-{
-	const FFenceKit Kit = UAirsideSettings::ResolveFenceKit();
-	TestNotNull(TEXT("the line post is authored"), Kit.LinePost);
-	TestNotNull(TEXT("the heavy post is authored"), Kit.HeavyPost);
-	if (!TestNotNull(TEXT("the fabric material is authored"), Kit.Fabric)) { return false; }
-	TestEqual(TEXT("the fabric is Masked, per the asset README"),
-		Kit.Fabric->GetBlendMode(), EBlendMode::BLEND_Masked);
-	TestTrue(TEXT("and two-sided"), Kit.Fabric->IsTwoSided());
-	return true;
-}
-
-
-/**
  * The fence's distance fade is WIRED: the fabric and both posts' materials read one parameter
  * collection, the posts are masked (an opaque post cannot fade), and the collection's figures
  * are ordered so the fade can happen at all.
@@ -265,6 +241,10 @@ bool FAirsideContentFenceKitResolvesTest::RunTest(const FString& Parameters)
  *
  * NAMES, not a count, per CLAUDE.md "lists that must agree": the script's FADE list is the
  * other half of this one, and a parameter it renamed would otherwise read as 0 in HLSL.
+ *
+ * ALSO THE KIT'S SHAPE (#462, merge M26, from Airside.Content.FenceKitResolves): against the REAL DA_AirsideContent, not a
+ * NewObject - the failure this guards is the one where a build_*.py writes nothing and reports success, and only the saved
+ * asset can show it. A translucent fabric would sort wrongly; a one-sided one vanishes from inside the plot.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FAirsideContentFenceFadeWiredTest,
@@ -280,6 +260,9 @@ bool FAirsideContentFenceFadeWiredTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+
+	TestEqual(TEXT("the fabric is Masked, per the asset README"), Kit.Fabric->GetBlendMode(), EBlendMode::BLEND_Masked);
+	TestTrue(TEXT("and two-sided"), Kit.Fabric->IsTwoSided());
 
 	auto CollectionOf = [this](const UMaterialInterface* Material, const TCHAR* What)
 		-> const UMaterialParameterCollection*
@@ -561,6 +544,30 @@ bool FRoadProfilesOfferTarmacAndGrassTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+namespace
+{
+	/**
+	 * Compare two FAirframes property by property, by reflection, and say which one differs. A field
+	 * added to FAirframe next month is compared without anyone adding it here - the whole point of
+	 * walking the struct rather than naming fields (#449). Returns how many properties were compared,
+	 * so a caller can floor it and a struct that stopped reflecting anything cannot pass vacuously.
+	 */
+	int32 CompareEveryAirframeProperty(FAutomationTestBase& Test, const TCHAR* Who,
+		const FAirframe& Actual, const FAirframe& Expected)
+	{
+		int32 Compared = 0;
+		for (TFieldIterator<FProperty> It(FAirframe::StaticStruct()); It; ++It)
+		{
+			++Compared;
+			Test.TestTrue(FString::Printf(TEXT("%s: FAirframe::%s is the Meridian's own"), Who, *It->GetName()),
+				It->Identical_InContainer(&Actual, &Expected));
+		}
+		// A FLOOR, NOT A COUNT: 14 on 2026-09-30, and a field added later is compared without this changing.
+		Test.TestTrue(FString::Printf(TEXT("%s: every property was compared (%d)"), Who, Compared), Compared >= 14);
+		return Compared;
+	}
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDefaultAirframeIsTheMeridiansOwnTest,
 	"Airside.Content.DefaultAirframeIsTheMeridiansOwn",
@@ -571,34 +578,64 @@ bool FDefaultAirframeIsTheMeridiansOwnTest::RunTest(const FString& Parameters)
 	// #449: THE CONTENT-LESS DEFAULT IS THE MERIDIAN READ THE WAY AN ASSET IS READ - BuildPiperMeridian, then
 	// UAircraftType::Airframe() - on EVERY property of FAirframe, walked by reflection so a field added next month is
 	// compared without anyone adding it here. The hand copy this replaced set 8 of 20 and drove on the wrong steer law.
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	if (Content != nullptr && !Content->DefaultAircraft.IsNull())
-	{
-		// A CONTENT DEFAULT WINS, and is the same mapping by construction (Airframe() of that asset) - but then this is
-		// not the fallback, and the comparison below would be against the wrong aeroplane.
-		AddInfo(TEXT("The content set names a DefaultAircraft; the fallback is not what ResolveDefaultAirframe returns"));
-		return true;
-	}
-
+	//
+	// AGAINST THE FALLBACK ITSELF (#479), not through ResolveDefaultAirframe: this used to compare the resolver and
+	// return early - AddInfo, pass - when the content set named a DefaultAircraft, so the day #30 authored
+	// DA_PiperMeridian it would have gone vacuous without a line changing. ContentlessDefaultAirframe is the branch
+	// ResolveDefaultAirframe falls back to, public for exactly this, so the pin holds whatever content is present.
 	UAircraftType* Meridian = NewObject<UAircraftType>(GetTransientPackage());
 	UAircraftType::BuildPiperMeridian(Meridian);
 	const FAirframe Expected = Meridian->Airframe();
-	const FAirframe Resolved = UAirsideSettings::ResolveDefaultAirframe();
+	const FAirframe Fallback = UAirsideSettings::ContentlessDefaultAirframe();
 
-	int32 Compared = 0;
-	for (TFieldIterator<FProperty> It(FAirframe::StaticStruct()); It; ++It)
-	{
-		++Compared;
-		TestTrue(FString::Printf(TEXT("FAirframe::%s is the Meridian's own"), *It->GetName()),
-			It->Identical_InContainer(&Resolved, &Expected));
-	}
-	// A FLOOR, NOT A COUNT: 14 on 2026-09-30, and a field added later is compared without this changing.
-	TestTrue(FString::Printf(TEXT("every property was compared (%d)"), Compared), Compared >= 14);
+	CompareEveryAirframeProperty(*this, TEXT("the content-less fallback"), Fallback, Expected);
 
 	// THE TWO FIGURES THE HAND COPY GOT WRONG, named so a failure says what a fleet test would feel.
 	TestEqual(TEXT("it steers like every modelled aeroplane - RollingSteer, not the FChassis default Pivot"),
-		Resolved.Chassis.SteerLaw, ESteerLaw::RollingSteer);
-	TestEqual(TEXT("with the Meridian's measured wheelbase"), Resolved.Chassis.FixedAxleX, -237.8, 1e-9);
+		Fallback.Chassis.SteerLaw, ESteerLaw::RollingSteer);
+	TestEqual(TEXT("with the Meridian's measured wheelbase"), Fallback.Chassis.FixedAxleX, -237.8, 1e-9);
+
+	// THE DOOR: with no DefaultAircraft named, ResolveDefaultAirframe IS the fallback. When the content set DOES name
+	// one it wins by design and is the same mapping by construction (Airframe() of that asset), so there is nothing
+	// to compare - but the comparison above no longer depends on which of the two worlds this run is in.
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	if (Content != nullptr && !Content->DefaultAircraft.IsNull())
+	{
+		AddInfo(TEXT("The content set names a DefaultAircraft; ResolveDefaultAirframe returns that asset's airframe, not the fallback"));
+	}
+	else
+	{
+		CompareEveryAirframeProperty(*this, TEXT("ResolveDefaultAirframe with no DefaultAircraft"),
+			UAirsideSettings::ResolveDefaultAirframe(), Expected);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFixturePiperIsTheMeridiansOwnTest,
+	"Airside.Content.FixturePiperIsTheMeridiansOwn",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFixturePiperIsTheMeridiansOwnTest::RunTest(const FString& Parameters)
+{
+	// #479: TestAirframes::Piper() WAS A HAND COPY OF THE MERIDIAN, AND A WRONG ONE - the same drift #449 removed from
+	// production, left behind in the fixture 122 call sites lean on. It set the four performance structs and nothing
+	// else: the FChassis default Pivot steer law where every modelled aeroplane rolls on its mains, no wheelbase, a
+	// steered final turn, no body centre, no wingspan or TypeCode. Every traffic test that took it measured a vehicle no
+	// flight in the game is (#477 found six measuring the nose where the body centre was meant).
+	//
+	// AGAINST THE FALLBACK, NOT ResolveDefaultAirframe: the fixture must stay the Meridian whatever DefaultAircraft a
+	// content set names (a content change should not silently change what 122 call sites measure), so it is pinned to the
+	// content-less branch directly. Every property, by reflection, so a field added to FAirframe is compared without
+	// anyone remembering this file.
+	const FAirframe Fixture = TestAirframes::Piper();
+	const FAirframe Fallback = UAirsideSettings::ContentlessDefaultAirframe();
+	CompareEveryAirframeProperty(*this, TEXT("TestAirframes::Piper()"), Fixture, Fallback);
+
+	// THE TWO FIGURES, named, so a red run says what a fleet test would feel (the same two the pin above names).
+	TestEqual(TEXT("the fixture steers like every modelled aeroplane - RollingSteer, not the FChassis default Pivot"),
+		Fixture.Chassis.SteerLaw, ESteerLaw::RollingSteer);
+	TestEqual(TEXT("with the Meridian's measured wheelbase"), Fixture.Chassis.FixedAxleX, -237.8, 1e-9);
 	return true;
 }
 

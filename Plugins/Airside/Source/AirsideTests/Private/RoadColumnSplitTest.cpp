@@ -102,6 +102,9 @@ bool FRoadColumnAndLabelAgreeTest::RunTest(const FString& Parameters)
 			continue;
 		}
 
+		// A SERVICE ROAD IS NOT A TAXIWAY, and a label that called it one would be the kind of wrong that survives
+		// review because each reader assumes the other's definition. (Airside.Tool.RoadNamingSaysWhatARoadAdmits
+		// asserted exactly these two words on exactly this lay and was deleted by #462; this is where they live.)
 		TestEqual(*FString::Printf(TEXT("segment %d is named for what it admits"), Index),
 			RoadNaming::Describe(*Actor->Network, Id), Expected[Index].Key);
 		TestEqual(*FString::Printf(TEXT("and segment %d lands in the column that word names"), Index),

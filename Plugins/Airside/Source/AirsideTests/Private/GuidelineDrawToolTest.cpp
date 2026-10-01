@@ -250,19 +250,37 @@ bool FGuidelineDrawToolTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("ctrl-click removes the hand-authored link"),
 			CountHandEdges(*Actor->Network), 0);
 
-		// On a derived edge, in the middle of the left road.
-		const int32 DerivedBefore = Actor->Network->GetGuidelineEdges().Num();
+		// On a derived edge, in the middle of the left road. EVERY DERIVED EDGE ALIVE BEFORE THE CLICK is remembered by slot and
+		// generation, because the click names ONE of them and the claim is about THAT edge (#463). This counted the derived
+		// edges alive afterwards, which stays above zero whichever one the click took - the road has others - and the
+		// count it took beforehand was discarded unread. A slot reused by an immediate re-derive is a new generation, so it
+		// does not read as "still alive".
+		struct FDerivedBefore { int32 Index; int32 Generation; };
+		TArray<FDerivedBefore> Before;
+		{
+			const TArray<FGuidelineEdge>& Edges = Actor->Network->GetGuidelineEdges();
+			for (int32 Index = 0; Index < Edges.Num(); ++Index)
+			{
+				if (Edges[Index].bAlive && Edges[Index].bDerived) { Before.Add({ Index, Edges[Index].Generation }); }
+			}
+		}
+		if (!TestTrue(TEXT("there are derived edges to try to remove"), Before.Num() > 0)) { return false; }
+
 		FToolContext OnDerived = LinkContextAt(Actor, FVector2D(3000.0, 0.0));
 		OnDerived.bRemoveModifier = true;
 		Tool.OnClick(OnDerived);
 
-		int32 AliveDerived = 0;
-		for (const FGuidelineEdge& Edge : Actor->Network->GetGuidelineEdges())
+		int32 Gone = 0;
 		{
-			AliveDerived += (Edge.bAlive && Edge.bDerived) ? 1 : 0;
+			const TArray<FGuidelineEdge>& Edges = Actor->Network->GetGuidelineEdges();
+			for (const FDerivedBefore& Was : Before)
+			{
+				const bool bStillThere = Edges.IsValidIndex(Was.Index) && Edges[Was.Index].bAlive
+					&& Edges[Was.Index].Generation == Was.Generation;
+				Gone += bStillThere ? 0 : 1;
+			}
 		}
-		TestTrue(TEXT("a derived edge is not removable by hand"), AliveDerived > 0);
-		(void)DerivedBefore;
+		TestEqual(TEXT("a derived edge is not removable by hand: the one clicked is still there, and so is every other"), Gone, 0);
 	}
 
 	// 8. The preview says what the gesture would do: the node under the cursor lights up,

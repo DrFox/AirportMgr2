@@ -264,9 +264,6 @@ namespace BendProbe
 		double Outer = 0.0;
 		FVector2D InnerAt = FVector2D::ZeroVector;
 		bool bTraced = false;
-		/** Every body point off the tarmac on the inside, and how far off: where the pavement falls short. */
-		TArray<FVector2D> InnerPoints;
-		TArray<double> InnerDepths;
 	};
 
 	/**
@@ -311,8 +308,6 @@ namespace BendProbe
 			if (Side > 0.0)
 			{
 				if (Off > Out.Inner) { Out.Inner = Off; Out.InnerAt = P; }
-				Out.InnerPoints.Add(P);
-				Out.InnerDepths.Add(Off);
 			}
 			else
 			{

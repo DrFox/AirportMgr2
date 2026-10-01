@@ -144,8 +144,7 @@ bool FGraphOverlayTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	const int32 ExpectedAnchors = Network.GetEntities()[0].ResolvedAnchors.Num();
-	if (!TestTrue(TEXT("the stand resolved several anchors"), ExpectedAnchors >= 4))
+	if (!TestTrue(TEXT("the stand resolved several anchors"), Network.GetEntities()[0].ResolvedAnchors.Num() >= 4))
 	{
 		return false;
 	}
@@ -154,42 +153,23 @@ bool FGraphOverlayTest::RunTest(const FString& Parameters)
 	//    than a number typed here - see CountNodeStyles.
 	{
 		FGraphSink Sink;
-		GraphOverlay::Describe(Network, Sink);
+		GraphOverlay::DescribeNodes(Network, Sink);
 
 		TestEqual(TEXT("one marker per stub node"), Sink.CountMarkers(EPreviewStyle::NodeStub), ExpectedStub);
 		TestEqual(TEXT("one marker per through node"), Sink.CountMarkers(EPreviewStyle::NodeThrough), ExpectedThrough);
 		TestEqual(TEXT("one marker per junction node"), Sink.CountMarkers(EPreviewStyle::NodeJunction), ExpectedJunction);
 	}
 
-	// 2. A placed stand gets ONE ServiceAnchor marker per resolved anchor and its design
-	//    aircraft's footprint (Snap lines, from StandPreview::DescribeBody) - and nothing
-	//    else since 2026-09-27: the stop mark and pose ring left for the painted stop bar,
-	//    and the fixtures, their Heal lines and the service-point Pending rings left because
-	//    all three sat concentric with the anchor ring and read as one target of three
-	//    circles (user report). Missing the footprint would mean GraphOverlay stopped calling
-	//    DescribeBody, the duplication issue #95 was filed against.
-	{
-		FGraphSink Sink;
-		GraphOverlay::Describe(Network, Sink);
-
-		TestEqual(TEXT("no StandPose ring - the painted stop bar shows the stop now"),
-			Sink.CountMarkers(EPreviewStyle::StandPose), 0);
-		TestEqual(TEXT("one ServiceAnchor marker per resolved anchor"),
-			Sink.CountMarkers(EPreviewStyle::ServiceAnchor), ExpectedAnchors);
-		TestEqual(TEXT("no fixture Snap markers - concentric with the anchor ring"),
-			Sink.CountMarkers(EPreviewStyle::Snap), 0);
-		TestEqual(TEXT("no Heal lines to the fixtures"), Sink.CountLines(EPreviewStyle::Heal), 0);
-		TestEqual(TEXT("no Pending at all - neither the stop mark nor the service points"),
-			Sink.CountMarkers(EPreviewStyle::Pending), 0);
-		TestTrue(TEXT("StandPreview::DescribeBody still drew the design aircraft's footprint"),
-			Sink.CountLines(EPreviewStyle::Snap) > 0);
-	}
+	// (The stand half of what this section 2 used to assert - one ServiceAnchor per resolved anchor, the
+	// design aircraft's footprint, and nothing else since 2026-09-27: no stop mark, pose ring, fixture
+	// marks, Heal lines or service-point rings - is Airside.Tool.StandOverlayMarkers' now, measured by
+	// position, which the per-style counts here could not see (#462, merge M17).)
 
 	// 3. DescribeNodes/DescribeStands stay INDEPENDENT - ARoadBuildHUD gates them on
 	//    separate bDrawNodes/bDrawStands flags, so a caller asking for only one must get
-	//    none of the other's styles. A single combined function (what Describe itself is)
-	//    would force the two to rise and fall together, which is exactly the coupling
-	//    issue #95's reviewer rejected.
+	//    none of the other's styles. A single combined function (what Describe itself was,
+	//    deleted by #462) would force the two to rise and fall together, which is exactly the
+	//    coupling issue #95's reviewer rejected.
 	{
 		FGraphSink NodesOnly;
 		GraphOverlay::DescribeNodes(Network, NodesOnly);
@@ -219,12 +199,12 @@ bool FGraphOverlayTest::RunTest(const FString& Parameters)
 	//    overlay.
 	{
 		FGraphSink Before;
-		GraphOverlay::Describe(Network, Before);
+		GraphOverlay::DescribeNodes(Network, Before);
 
 		Network.RemoveNode(Fixture.Stub);
 
 		FGraphSink After;
-		GraphOverlay::Describe(Network, After);
+		GraphOverlay::DescribeNodes(Network, After);
 
 		TestEqual(TEXT("removing the stub node leaves no NodeStub marker"),
 			After.CountMarkers(EPreviewStyle::NodeStub), 0);
@@ -381,6 +361,18 @@ bool FStandOverlayMarkersTest::RunTest(const FString& Parameters)
 			*Anchor.Id.ToString()), Sink.MarkersNear(Node->Position), 1);
 	}
 	TestEqual(TEXT("and every marker drawn is one of those anchor rings"), Sink.Markers.Num(), Anchors);
+
+	// THE STYLE OF THOSE RINGS, which the position count above cannot see (merged in from
+	// Airside.Tool.GraphOverlay's old section 2, #462): the marker at each anchor must be the
+	// ServiceAnchor style, not a Pending or Snap ring that happens to land in the same place. Together
+	// with the count above this also pins "no StandPose ring and no Pending at all" - every marker
+	// drawn is a ServiceAnchor.
+	int32 ServiceAnchors = 0;
+	for (const TPair<FVector2D, EPreviewStyle>& Marker : Sink.Markers)
+	{
+		if (Marker.Value == EPreviewStyle::ServiceAnchor) { ++ServiceAnchors; }
+	}
+	TestEqual(TEXT("every anchor ring is the ServiceAnchor style - one per resolved anchor"), ServiceAnchors, Anchors);
 	return true;
 }
 

@@ -189,6 +189,7 @@ bool FGearWithoutATruckNeverTiltsTest::RunTest(const FString& Parameters)
 	FGearPerformance Gear;
 	Gear.TravelSeconds = 4.0;
 	Gear.TruckTiltSeconds = 0.0;
+	Gear.DoorSeconds = 0.0;   // the default, said aloud: the door assertions below are about exactly this input
 
 	TestEqual(TEXT("with no truck and no doors the cycle is the travel alone"),
 		Gear.CycleSeconds(), 4.0);
@@ -199,6 +200,14 @@ bool FGearWithoutATruckNeverTiltsTest::RunTest(const FString& Parameters)
 		Gear.FractionsAt(0.0, true).GearDownFraction, 1.0);
 	TestEqual(TEXT("and is half way up at the half way point"),
 		Gear.FractionsAt(2.0, true).GearDownFraction, 0.5);
+
+	// THE DOORS ARE THE SAME CASE, ON THE SAME INPUTS (Travel 4, DoorSeconds and TruckTiltSeconds both 0) - merged in from
+	// Airside.Model.GearWithoutDoorsStillTravels, deleted by #462. DoorSeconds = 0 means "no bay doors", not "instant
+	// doors": the door fraction stays at its OPEN bind-pose value, which asks the animgraph to rotate nothing, and
+	// division by DoorSeconds is the hazard this guards - a NaN fraction shows up as a bone transform that makes the whole
+	// aeroplane vanish. (The rest of that test's four assertions were these three.)
+	TestEqual(TEXT("and with no doors the door fraction never leaves its bind-pose value, mid-travel"),
+		Gear.FractionsAt(2.0, true).BayDoorOpenFraction, 1.0);
 
 	// DIVISION BY TruckTiltSeconds IS THE HAZARD and this is what proves it is guarded: a NaN
 	// fraction does not show up as a stuck bogie, it shows up as a bone transform that makes
@@ -272,37 +281,6 @@ bool FGearExtendMirrorsRetractTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("and the doors part way"), DoorMidTravel > 0);
 	TestTrue(TEXT("and the TRUCK part way - without this the mirror above proves nothing"),
 		TruckMidTravel > 0);
-
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FGearWithoutDoorsStillTravelsTest,
-	"Airside.Model.GearWithoutDoorsStillTravels",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FGearWithoutDoorsStillTravelsTest::RunTest(const FString& Parameters)
-{
-	// DoorSeconds = 0 means "no bay doors", not "instant doors". An airframe whose mains sit
-	// behind a fixed fairing - which is every main gear in this fleet - still retracts.
-	FGearPerformance Gear;
-	Gear.TravelSeconds = 4.0;
-	Gear.DoorSeconds = 0.0;
-
-	TestEqual(TEXT("with no doors the cycle is the travel alone"), Gear.CycleSeconds(), 4.0);
-
-	FGearPose Pose = Gear.FractionsAt(2.0, true);
-	TestEqual(TEXT("the gear is half way up at the half way point"), Pose.GearDownFraction, 0.5);
-	// OPEN, WHICH IS THE BIND POSE. An airframe with no bay doors has no door bones either,
-	// so the only safe value is the one that asks the animgraph to rotate nothing.
-	TestEqual(TEXT("and the door fraction never leaves its bind-pose value"),
-		Pose.BayDoorOpenFraction, 1.0);
-
-	// DIVISION BY DoorSeconds IS THE HAZARD HERE and this is what proves it is guarded: a
-	// NaN fraction does not show up as a stuck door, it shows up as a bone transform that
-	// makes the whole aeroplane vanish.
-	Pose = Gear.FractionsAt(0.0, true);
-	TestEqual(TEXT("and the first frame is a number, not a NaN"), Pose.GearDownFraction, 1.0);
 
 	return true;
 }

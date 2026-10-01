@@ -107,9 +107,9 @@ namespace
 /**
  * A reservation contains only what it placed, and the ceilings are what it placed.
  *
- * "NEVER DROPS" IS NOT THE CLAIM LayOut MAKES. LayOut is handed a list it must try to honour
- * and reports what it could not fit; Reserve decides the list itself, so a dropped stand is
- * not a refusal, it is a bug. Every ghosted slot the player is shown is a promise that the
+ * "NEVER DROPS" WAS NOT THE CLAIM THE OLD LayOut MADE (deleted by #462). It was handed a list it
+ * had to try to honour and reported what it could not fit; Reserve decides the list itself, so a
+ * dropped stand is not a refusal, it is a bug. Every ghosted slot the player is shown is a promise that the
  * module fits there, and this test is what makes the promise true.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -138,8 +138,8 @@ bool FPlotReserveNeverDropsTest::RunTest(const FString& Parameters)
 	}
 
 	// The ceilings are DERIVED from the stands, never counted alongside them: a second count
-	// is a second thing to keep in agreement, for the same reason FYard::DroppedCount is
-	// derived rather than stored.
+	// is a second thing to keep in agreement, for the same reason the deleted FYard::DroppedCount
+	// was derived rather than stored.
 	int32 Total = 0;
 	for (int32 Kit = 0; Kit < Specs.Num(); ++Kit)
 	{
@@ -176,6 +176,7 @@ bool FPlotReserveNeverOverlapsTest::RunTest(const FString& Parameters)
 	const TArray<FVector2D> Outline = ReserveRect(3200.0, 2400.0);
 	const TArray<PlotYard::FKitSpec> Specs = DepotSpecs();
 
+	int32 Pairs = 0;
 	for (int32 Seed = 0; Seed < 8; ++Seed)
 	{
 		const PlotYard::FReservation Reservation = PlotYard::Reserve(
@@ -192,9 +193,12 @@ bool FPlotReserveNeverOverlapsTest::RunTest(const FString& Parameters)
 				TestTrue(*FString::Printf(
 					TEXT("seed %d: stands %d and %d do not overlap"), Seed, A, B),
 					bSeparated);
+				++Pairs;
 			}
 		}
 	}
+	// COUNTED, NOT ASSUMED (#463): a Reserve that returned nothing for every seed would pass every loop above.
+	TestTrue(*FString::Printf(TEXT("pairs were actually compared across the seeds (%d)"), Pairs), Pairs >= 8);
 
 	return true;
 }
@@ -330,6 +334,7 @@ bool FPlotReserveLeavesTheGateClearTest::RunTest(const FString& Parameters)
 	const FVector2D Inward(0.0, 1.0);
 	const FVector2D Across(1.0, 0.0);
 
+	int32 CornersChecked = 0;
 	for (int32 Seed = 0; Seed < 8; ++Seed)
 	{
 		const PlotYard::FReservation Reservation = PlotYard::Reserve(
@@ -338,7 +343,7 @@ bool FPlotReserveLeavesTheGateClearTest::RunTest(const FString& Parameters)
 		TArray<FVector2D> Corners;
 		for (const PlotYard::FReservedStand& Stand : Reservation.Stands)
 		{
-			// THE SHED IS EXEMPT, exactly as it is under LayOut: it stands ON the gate's ray
+			// THE SHED IS EXEMPT, exactly as it was under the deleted LayOut: it stands ON the gate's ray
 			// by construction, pushed as deep as the plot allows, and the corridor rule is
 			// what the SAMPLER obeys. Asserting it here would be asserting that the back
 			// fence is more than one truck length from the road, which is a claim about the
@@ -359,9 +364,12 @@ bool FPlotReserveLeavesTheGateClearTest::RunTest(const FString& Parameters)
 						< PlotYard::GateCorridorUu * 0.5;
 				TestFalse(*FString::Printf(TEXT("seed %d keeps the gate clear"), Seed),
 					bInCorridor);
+				++CornersChecked;
 			}
 		}
 	}
+	// COUNTED, NOT ASSUMED (#463): over 8 seeds a Reserve that placed no sampled stand would check nothing and pass.
+	TestTrue(*FString::Printf(TEXT("corners were actually checked against the corridor (%d)"), CornersChecked), CornersChecked >= 8);
 
 	return true;
 }

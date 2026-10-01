@@ -314,7 +314,8 @@ bool FProximityLinkFinder::Find(const URoadNetwork& Network, const FPendingLink&
 // What it really bought, a road drawn PARALLEL to a lane being measured side to side rather
 // than corner to corner, is not lost: the four declared entries ARE the corners, and
 // FAnchorLink::Gather gives each point of road to the entry nearest it. The measurement itself
-// survives as GuidelineGeom::NearestBetweenPolylines, which the clearance tests still use.
+// (GuidelineGeom::NearestBetweenPolylines) was kept for a while "for the clearance tests", and
+// only those tests ever ran it - #462 deleted it.
 
 FLinkHit FindSiblingLane(const URoadNetwork& Network, const FPendingLink& Link,
 	const TSet<FGuidelineNodeId>& AnchorNodes, FRoadSegmentId Segment, int32 JoinedIndex)

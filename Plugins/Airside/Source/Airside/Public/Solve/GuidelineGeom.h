@@ -121,20 +121,6 @@ namespace GuidelineGeom
 		const FVector2D& Query, int32& OutIndex, double& OutFraction);
 
 	/**
-	 * Closest approach between two already-sampled polylines, with the span index and
-	 * fraction of the closest point on EACH.
-	 *
-	 * BOTH DIRECTIONS ARE TRIED - every vertex of A against B, then every vertex of B against
-	 * A - because the closest pair of points on two segments contains an endpoint of one of
-	 * them only when they are not parallel. A service road drawn ALONGSIDE a row of stands is
-	 * parallel to the lane it has to join, and a one-directional search would measure the
-	 * corner rather than the side.
-	 */
-	AIRSIDE_API double NearestBetweenPolylines(
-		const TArray<FVector2D>& A, const TArray<FVector2D>& B,
-		int32& OutAIndex, double& OutAFraction, int32& OutBIndex, double& OutBFraction);
-
-	/**
 	 * The heading a follower is given AT a vertex, arriving at it and leaving it.
 	 *
 	 * The same function PointAtDistance interpolates between, exposed rather than reimplemented

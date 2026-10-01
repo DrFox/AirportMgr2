@@ -145,6 +145,21 @@ public:
 	 */
 	static FAirframe ResolveDefaultAirframe();
 
+	/**
+	 * ResolveDefaultAirframe's content-less branch ALONE: the Meridian read the way an asset is read
+	 * (BuildPiperMeridian, then Airframe()), whatever content set is configured. ResolveDefaultAirframe
+	 * returns this when no DefaultAircraft is named.
+	 *
+	 * PUBLIC SO A TEST CAN COMPARE AGAINST IT DIRECTLY (#479). Airside.Content.DefaultAirframeIsTheMeridiansOwn
+	 * used to compare ResolveDefaultAirframe() with the Meridian and skip when the content set named a
+	 * DefaultAircraft - so the day #30 authored DA_PiperMeridian it would have gone vacuous, passing on
+	 * AddInfo. The fixture TestAirframes::Piper() is pinned to this the same way, because it must stay the
+	 * fallback whatever content a project ships.
+	 * ENFORCED BY: Check-Architecture rule 4 ('UAirsideSettings::ContentlessDefaultAirframe' - production
+	 * calls in AirsideSettings.h/.cpp only: a second caller would bypass the content default)
+	 */
+	static FAirframe ContentlessDefaultAirframe();
+
 	/** The apron's two rates, as ResolveApronRates hands them out. Plain C++: an answer, not state. */
 	struct FApronRates
 	{

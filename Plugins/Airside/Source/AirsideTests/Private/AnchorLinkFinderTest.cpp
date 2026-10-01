@@ -126,8 +126,8 @@ bool FAnchorLinkFinderTest::RunTest(const FString& Parameters)
 	// side to side rather than corner to corner - moved to
 	// Airside.Build.ServiceLaneEntersOnEverySideWithinReach, which measures it on the real
 	// stand: a road alongside enters at BOTH near corners, not once at whichever end came
-	// first. GuidelineGeom::NearestBetweenPolylines keeps its own tests in
-	// Airside.Solve.GuidelineGeom.
+	// first. (GuidelineGeom::NearestBetweenPolylines, which this block's polyline-to-polyline
+	// measurement once called, was deleted by #462: no production code ever ran it.)
 
 	// LinkFinderFor: dispatches to the strategy matching Kind. Proved by BEHAVIOUR that only
 	// the right strategy can produce, not by a result a wrong one could match by accident:

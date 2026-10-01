@@ -300,20 +300,37 @@ bool FMergingClosePointsRemovesTheSpuriousSlowdownTest::RunTest(const FString& P
 		return Slowest;
 	};
 
-	auto RouteNow = [&Fix](std::initializer_list<FRoadNodeId> Ids)
+	// THE ROUTE IS WALKED OFF THE NETWORK, not assembled from node ids the test chose (#463). The "after" route used to be
+	// RouteNow({ Start, Kink1, End }) - the three nodes the test already knew should survive - and MergeNodes never moves the
+	// KEPT node, so that list was the same positions whether the merge ran or not: it passed with MergeNodes replaced by
+	// `return true`. Walking the live segments from Start takes whatever the network now has, so a merge that did nothing
+	// leaves the close pair on the route and the measurement below sees it.
+	auto WalkFrom = [&Fix](FRoadNodeId From)
 	{
 		TArray<FVector2D> Points;
-		for (const FRoadNodeId Id : Ids)
+		FRoadNodeId At = From;
+		FRoadSegmentId Came;
+		for (int32 Guard = 0; Guard < 16; ++Guard)
 		{
-			if (const FRoadNode* Node = Fix.Network->GetNode(Id))
+			const FRoadNode* Node = Fix.Network->GetNode(At);
+			if (Node == nullptr) { break; }
+			Points.Add(Node->Position);
+
+			FRoadSegmentId Onward;
+			for (const FRoadSegmentId Arm : Node->Incident)
 			{
-				Points.Add(Node->Position);
+				if (Arm != Came) { Onward = Arm; break; }
 			}
+			if (!Onward.IsSet()) { break; }
+			At = Fix.Network->GetOtherEnd(Onward, At);
+			Came = Onward;
 		}
 		return Points;
 	};
 
-	const double Before = SlowestAlong(RouteNow({ Start, Kink0, Kink1, End }));
+	const TArray<FVector2D> RouteBefore = WalkFrom(Start);
+	if (!TestEqual(TEXT("the route as laid has all four nodes, close pair included"), RouteBefore.Num(), 4)) { return false; }
+	const double Before = SlowestAlong(RouteBefore);
 
 	// THE CONTROL. If the close pair did not slow anything down, the assertion below would
 	// pass on a profile that was never impeded and this test would measure nothing.
@@ -325,8 +342,12 @@ bool FMergingClosePointsRemovesTheSpuriousSlowdownTest::RunTest(const FString& P
 	}
 
 	TestTrue(TEXT("the close pair merges"), Fix.Network->MergeNodes(Kink1, Kink0));
+	TestNull(TEXT("the merged-away node is dead, not merely absent from a list the test wrote"), Fix.Network->GetNode(Kink0));
 
-	const double After = SlowestAlong(RouteNow({ Start, Kink1, End }));
+	const TArray<FVector2D> RouteAfter = WalkFrom(Start);
+	TestEqual(TEXT("and the route the network now has is one corner shorter: Start, the kept node, End"),
+		RouteAfter.Num(), 3);
+	const double After = SlowestAlong(RouteAfter);
 
 	// The figures in the log, so a reader can see the size of the effect rather than only
 	// that there was one. Taxi cap is %.0f.

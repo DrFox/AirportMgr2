@@ -147,7 +147,9 @@ bool RunUntil(UGroundTraffic& Traffic, const URoadNetwork& Net, double Seconds, 
  */
 namespace TestAirframes
 {
-	/** A Piper Meridian: Ground, Climb, Approach and Engine, so it can both land and taxi. */
+	/** A Piper Meridian - the whole airframe, exactly as the content-less production default has it (#479): every
+	 *  property, so it can land, taxi, tow-fit and park like the one aeroplane no flight needs content for. Pinned to
+	 *  UAirsideSettings::ContentlessDefaultAirframe() by Airside.Content.FixturePiperIsTheMeridiansOwn. */
 	FAirframe Piper();
 
 	/** Ground defaults (Accel 100, Decel 200, cap 1000), a nimble nosewheel so corners do
@@ -159,9 +161,9 @@ namespace TestAirframes
 	 *  departs - a ground vehicle in everything but name. */
 	FAirframe GroundOnly();
 
-	/** The Piper's own published field-length requirements, independent of Piper() above:
-	 *  Airside.Model.ArrivalPlanner.NotAdmitted tests admission against the PUBLISHED
-	 *  figures on their own, not bundled into a flyable airframe. */
+	/** The Piper's own published field-length requirements, on their own: Piper().Requirements
+	 *  carries the same figures since #479, but Airside.Model.ArrivalPlanner.NotAdmitted tests
+	 *  admission against the PUBLISHED figures without building a whole airframe to hold them. */
 	FRunwayRequirements PiperRequirements();
 
 	/**

@@ -25,13 +25,6 @@
 
 namespace
 {
-	// #312: was a hand-built FRouteQuery that skipped AvoidRunways - see TestGraph::Probe's
-	// own comment for why that silently answered every errand with the permissive policy.
-	FRoutePlan M2TrafficRoute(const URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B, ETraversalClass Class)
-	{
-		return TestGraph::Probe(Net, A, B, Class);
-	}
-
 	/** The two named nodes a rebuilt A-B-C(-D) test graph keeps handles to. */
 	struct FRebuiltGraph
 	{
@@ -60,8 +53,8 @@ bool FTrafficNodeYieldTest::RunTest(const FString& Parameters)
 	TestGraph::Join(*Net, S, J); TestGraph::Join(*Net, J, N);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, W, E, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
-	const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, S, N, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 Plane = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, W, E, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
+	const int32 Van = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, S, N, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	if (!TestTrue(TEXT("both dispatched"), Plane > 0 && Van > 0)) { return false; }
 
 	double VanMinStopWithin = TNumericLimits<double>::Max();
@@ -170,8 +163,8 @@ bool FTrafficPriorityOverrideTest::RunTest(const FString& Parameters)
 		{ ETraversalClass::GroundVehicle, ETraversalClass::Aircraft });
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, W, E, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
-	const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, S, N, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 Plane = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, W, E, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
+	const int32 Van = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, S, N, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 
 	bool bPlaneWaitedOnVan = false;
 	bool bVanWaitedOnPlane = false;
@@ -204,7 +197,7 @@ bool FTrafficCarFollowingTest::RunTest(const FString& Parameters)
 	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
 	const FGuidelineNodeId B = TestGraph::Node(*Net, 60000.0, 0.0);
 	TestGraph::Join(*Net, A, B);
-	const FRoutePlan Plan = M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft);
+	const FRoutePlan Plan = TestGraph::Probe(*Net, A, B, ETraversalClass::Aircraft);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	FAirframe Leader = TestAirframes::GroundOnly();
@@ -266,8 +259,8 @@ bool FTrafficHeadOnStopsTest::RunTest(const FString& Parameters)
 	const FGuidelineNodeId B = TestGraph::Node(*Net, 40000.0, 0.0);
 	TestGraph::Join(*Net, A, B);
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const int32 P1 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
-	const int32 P2 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, B, A, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
+	const int32 P1 = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, B, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
+	const int32 P2 = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, B, A, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
 	double MinSeparation = TNumericLimits<double>::Max();
 	TickUntil(*Traffic, *Net, 120.0, [&](int32)
 	{
@@ -348,9 +341,9 @@ bool FTrafficBoxEntryTest::RunTest(const FString& Parameters)
 	TestGraph::Join(*Net, C, A, { EGuidelineDir::AToB });
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const int32 V1 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
-	const int32 V2 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, B, A, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
-	const int32 V3 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, C, B, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 V1 = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 V2 = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, B, A, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 V3 = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, C, B, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	if (!TestTrue(TEXT("all three routed and dispatched"), V1 > 0 && V2 > 0 && V3 > 0)) { return false; }
 
 	// ONE tick. The cycle must be complete after the first arbitration pass and not after a
@@ -426,7 +419,7 @@ bool FTrafficBoxEntryFirstOnlyTest::RunTest(const FString& Parameters)
 	TestGraph::Join(*Net, N3, N4, { EGuidelineDir::AToB });
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, N0, N4, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 Van = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, N0, N4, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Van > 0)) { return false; }
 
 	// The phantom: agent 99 exists only in the table, so nothing ever releases it. STANDING
@@ -522,7 +515,7 @@ bool FTrafficHoldingPositionTest::RunTest(const FString& Parameters)
 		FTrafficClaim Blocker;
 		Traffic->OccupancyForTest().TryClaim(Hold, Blocker);
 	}
-	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, S, N, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
+	const int32 Plane = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, S, N, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
 
 	// A BAR MUST NOT CLOSE THE RUNWAY FOR THE WHOLE TAXI. Sampled while the plane is still
@@ -808,13 +801,13 @@ bool FTrafficAgentIndexSurvivesRetireTest::RunTest(const FString& Parameters)
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const int32 First = Traffic->DispatchAgent(Net,
-		M2TrafficRoute(*Net, LaneA[0], LaneA[1], ETraversalClass::GroundVehicle),
+		TestGraph::Probe(*Net, LaneA[0], LaneA[1], ETraversalClass::GroundVehicle),
 		TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	const int32 Middle = Traffic->DispatchAgent(Net,
-		M2TrafficRoute(*Net, LaneB[0], LaneB[1], ETraversalClass::GroundVehicle),
+		TestGraph::Probe(*Net, LaneB[0], LaneB[1], ETraversalClass::GroundVehicle),
 		TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	const int32 Last = Traffic->DispatchAgent(Net,
-		M2TrafficRoute(*Net, LaneC[0], LaneC[1], ETraversalClass::GroundVehicle),
+		TestGraph::Probe(*Net, LaneC[0], LaneC[1], ETraversalClass::GroundVehicle),
 		TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	if (!TestTrue(TEXT("all three admitted"), First > 0 && Middle > 0 && Last > 0))
 	{
@@ -882,7 +875,7 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 	// which is what the long leg here measures.
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const FAirframe Airframe = TestAirframes::GroundOnly();
-	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, S, N, ETraversalClass::Aircraft), Airframe, ETraversalClass::Aircraft, 1.0);
+	const int32 Plane = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, S, N, ETraversalClass::Aircraft), Airframe, ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
 
 	const FTrafficResource Strip = FTrafficResource::OfSurface(RunwaySeg);
@@ -1047,7 +1040,7 @@ bool FTrafficRunwayChainCacheTest::RunTest(const FString& Parameters)
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const FAirframe Airframe = TestAirframes::GroundOnly();
 	const int32 Plane = Traffic->DispatchAgent(Net,
-		M2TrafficRoute(*Net, Crossing.S, Crossing.N, ETraversalClass::Aircraft), Airframe, ETraversalClass::Aircraft, 1.0);
+		TestGraph::Probe(*Net, Crossing.S, Crossing.N, ETraversalClass::Aircraft), Airframe, ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
 
 	// THE WHOLE TAXI, near-bar to past-the-far-bar and on to N: every substep of every tick
@@ -1118,7 +1111,7 @@ bool FTrafficRunwayEdgeClaimTest::RunTest(const FString& Parameters)
 		FTrafficClaim Blocker;
 		Traffic->OccupancyForTest().TryClaim(Hold, Blocker);
 	}
-	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
+	const int32 Plane = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, C, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
 
 	TickUntil(*Traffic, *Net, 60.0, [&](int32)
@@ -1183,7 +1176,7 @@ bool FTrafficReplanTest::RunTest(const FString& Parameters)
 	TestGraph::Join(*Net, B, X); TestGraph::Join(*Net, X, C);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 Van = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	TickUntil(*Traffic, *Net, 8.0, [](int32) { return true; });
 	const FRoadAgent* V = Traffic->FindAgent(Van);
 	const FVector2D Before = V->LastMotion.Position;
@@ -1278,7 +1271,7 @@ bool FTrafficReplanTest::RunTest(const FString& Parameters)
 	const FGuidelineEdgeId PQ = TestGraph::Join(*Dead, P, Qn);
 
 	UGroundTraffic* Only = NewObject<UGroundTraffic>(GetTransientPackage());
-	const int32 Stuck = Only->DispatchAgent(Dead, M2TrafficRoute(*Dead, P, Qn, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 Stuck = Only->DispatchAgent(Dead, TestGraph::Probe(*Dead, P, Qn, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	TickUntil(*Only, *Dead, 5.0, [](int32) { return true; });
 	const double StuckAt = Only->FindAgent(Stuck)->Follower.Travelled;
 	const double StuckSpeed = Only->FindAgent(Stuck)->Follower.Speed;
@@ -1357,10 +1350,10 @@ bool FTrafficDeadlockRingTest::RunTest(const FString& Parameters)
 	// footprint to the van's for the same reason and says so at the assignment.
 	Traffic->Rules.VehicleFootprint = 500.0;
 
-	const int32 V1 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
-	const int32 V2 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, B, D, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
-	const int32 V3 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, C, A, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
-	const int32 V4 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, D, B, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 V1 = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 V2 = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, B, D, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 V3 = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, C, A, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 V4 = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, D, B, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	if (!TestTrue(TEXT("all four routed and dispatched"), V1 > 0 && V2 > 0 && V3 > 0 && V4 > 0)) { return false; }
 	TestEqual(TEXT("V4's first plan goes via A (2 steps), not the escape"), Traffic->FindAgent(V4)->Follower.Plan.Steps.Num(), 2);
 
@@ -1492,10 +1485,10 @@ bool FTrafficDeadlockMixedClassTest::RunTest(const FString& Parameters)
 	Traffic->Rules.VehicleFootprint = 500.0;
 	Traffic->Rules.AircraftFootprint = Traffic->Rules.VehicleFootprint;
 	Traffic->Rules.AircraftGap = Traffic->Rules.GapFor(ETraversalClass::GroundVehicle);
-	const int32 V1 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
-	const int32 V2 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, B, D, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
-	const int32 P3 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, C, A, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
-	const int32 V4 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, D, B, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 V1 = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 V2 = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, B, D, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 P3 = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, C, A, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
+	const int32 V4 = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, D, B, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	if (!TestTrue(TEXT("all four routed and dispatched"), V1 > 0 && V2 > 0 && P3 > 0 && V4 > 0)) { return false; }
 	TestEqual(TEXT("the van on B goes via C (2 steps), not round Y"), Traffic->FindAgent(V2)->Follower.Plan.Steps.Num(), 2);
 	TestEqual(TEXT("and the aircraft via D, not round X"), Traffic->FindAgent(P3)->Follower.Plan.Steps.Num(), 2);
@@ -1592,7 +1585,7 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const FAirframe Airframe = TestAirframes::GroundOnly();
 	const double Half = Traffic->Rules.AircraftFootprint * 0.5;
-	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, S, N, ETraversalClass::Aircraft), Airframe, ETraversalClass::Aircraft, 1.0);
+	const int32 Plane = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, S, N, ETraversalClass::Aircraft), Airframe, ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
 
 	const FTrafficResource Strip = FTrafficResource::OfSurface(RunwaySeg);
@@ -1723,7 +1716,7 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 
 	auto Dispatch = [&](URoadNetwork& Net, UGroundTraffic& Traffic, FGuidelineNodeId A, FGuidelineNodeId C)
 	{
-		const int32 Id = Traffic.DispatchAgent(&Net, M2TrafficRoute(Net, A, C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+		const int32 Id = Traffic.DispatchAgent(&Net, TestGraph::Probe(Net, A, C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 		TickUntil(Traffic, Net, 5.0, [](int32) { return true; });   // a few thousand uu along A->B
 		return Id;
 	};
@@ -1865,7 +1858,7 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 		const auto [A, C] = Build(*Net, true, false);
 		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-		const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::GroundVehicle),
+		const int32 Van = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, C, ETraversalClass::GroundVehicle),
 			TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 
 		// PAST B. 30 s at Accel 100 to a cap of 1000 is 25000 uu - comfortably past B at
@@ -1966,7 +1959,7 @@ bool FTrafficRebuildSplitUnderTheAgentTest::RunTest(const FString& Parameters)
 		TestGraph::Join(*Net, B, C);
 
 		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-		const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::Aircraft),
+		const int32 Plane = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, C, ETraversalClass::Aircraft),
 			TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
 		if (!TestTrue(FString::Printf(TEXT("%s: dispatched"), Case.Name), Plane > 0)) { return false; }
 
@@ -2069,7 +2062,7 @@ bool FTrafficStrandedIsNotParkedTest::RunTest(const FString& Parameters)
 	TestGraph::Join(*Net, A, B);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft),
+	const int32 Plane = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, B, ETraversalClass::Aircraft),
 		TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
 	TArray<EAgentPhase> Heard;
@@ -2132,7 +2125,7 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 	const FGuidelineEdgeId AB = TestGraph::Join(*Net, A, B);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::GroundVehicle),
+	const int32 Van = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, B, ETraversalClass::GroundVehicle),
 		TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Van > 0)) { return false; }
 
@@ -2212,7 +2205,7 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 		const FGuidelineNodeId N = Crossing.N;
 
 		UGroundTraffic* Air = NewObject<UGroundTraffic>(GetTransientPackage());
-		const int32 Plane = Air->DispatchAgent(Cross, M2TrafficRoute(*Cross, S, N, ETraversalClass::Aircraft),
+		const int32 Plane = Air->DispatchAgent(Cross, TestGraph::Probe(*Cross, S, N, ETraversalClass::Aircraft),
 			TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
 		if (TestTrue(TEXT("the crossing aircraft is dispatched"), Plane > 0))
 		{
@@ -2445,7 +2438,7 @@ bool FTrafficReservationCycleYieldsTest::RunTest(const FString& Parameters)
 
 	// FIRST goes W -> W1 -> n31 -> stub -> n30 -> NN. Run it until it holds n31 and not yet
 	// the stub: the reach has asked for the node, the window has not reached the edge.
-	const int32 First = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, W, NN, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
+	const int32 First = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, W, NN, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("first dispatched"), First > 0)) { return false; }
 	const int32 FirstSteps = Traffic->FindAgent(First)->Follower.Plan.Steps.Num();
 	bool bStaged = false;
@@ -2462,7 +2455,7 @@ bool FTrafficReservationCycleYieldsTest::RunTest(const FString& Parameters)
 	// SECOND starts 1900 uu east of n30, at rest: its window (F/2 + G = 2000) covers n30 and
 	// the near end of the stub, and stops 392 short of n31 - so it reserves the stub and
 	// never asks for the node First already holds. Route NR -> n30 -> stub -> n31 -> E1 -> E.
-	const int32 Second = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, NR, E, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
+	const int32 Second = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, NR, E, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("second dispatched"), Second > 0)) { return false; }
 	const int32 SecondSteps = Traffic->FindAgent(Second)->Follower.Plan.Steps.Num();
 
@@ -2557,7 +2550,7 @@ bool FTrafficReplanTurnsOverFreeRunwayEndTest::RunTest(const FString& Parameters
 	// FREE: the replan from A with A->B banned goes A -> R1 -> R2 -> B -> E.
 	{
 		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-		const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, W, E, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
+		const int32 Plane = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, W, E, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
 		if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
 		const FRoadAgent* Before = Traffic->FindAgent(Plane);
 		TestTrue(TEXT("the cleared route is the taxiway, three steps, no strip"), Before->Follower.Plan.Steps.Num() == 3 && !UsesStrip(Before->Follower.Plan));
@@ -2579,7 +2572,7 @@ bool FTrafficReplanTurnsOverFreeRunwayEndTest::RunTest(const FString& Parameters
 		FTrafficClaim Bar; Bar.AgentId = 99; Bar.Resource = FTrafficResource::OfSurface(Strip); Bar.bOccupied = false;
 		FTrafficClaim Blocker;
 		Traffic->OccupancyForTest().TryClaim(Bar, Blocker);
-		const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, W, E, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
+		const int32 Plane = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, W, E, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
 		if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
 		const bool bReplanned = FGroundTrafficTestAccess(*Traffic).ReplanAt(Plane, *Net, /*SpliceStep=*/1, AB);
 		const FRoadAgent* After = Traffic->FindAgent(Plane);
@@ -2641,7 +2634,7 @@ bool FTrafficSubstepTest::RunTest(const FString& Parameters)
 		Runs[Which] = NewObject<UGroundTraffic>(GetTransientPackage());
 		Runs[Which]->Rules.MaxSubstepSeconds = Longest[Which];
 		Ids[Which] = Runs[Which]->DispatchAgent(Net,
-			M2TrafficRoute(*Net, W, N, ETraversalClass::Aircraft),
+			TestGraph::Probe(*Net, W, N, ETraversalClass::Aircraft),
 			TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
 	}
 	if (!TestTrue(TEXT("all three dispatched"), Ids[0] > 0 && Ids[1] > 0 && Ids[2] > 0))
@@ -2776,7 +2769,7 @@ bool FTrafficWarmRedirectTest::RunTest(const FString& Parameters)
 	const double AtSpeed = Airframe.Engine.IsSet() ? Airframe.Engine.MaxRPM : 2000.0;
 
 	const int32 Id = Traffic->DispatchAgent(Net,
-		M2TrafficRoute(*Net, W, J, ETraversalClass::Aircraft),
+		TestGraph::Probe(*Net, W, J, ETraversalClass::Aircraft),
 		Airframe, ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
 
@@ -2789,7 +2782,7 @@ bool FTrafficWarmRedirectTest::RunTest(const FString& Parameters)
 		Cold->GetEngineRPM()), Cold->GetEngineRPM() < AtSpeed);
 
 	if (!TestTrue(TEXT("the redirect is accepted"),
-		Traffic->RedirectAgent(Id, Net, M2TrafficRoute(*Net, W, N, ETraversalClass::Aircraft))))
+		Traffic->RedirectAgent(Id, Net, TestGraph::Probe(*Net, W, N, ETraversalClass::Aircraft))))
 	{
 		return false;
 	}
@@ -2841,7 +2834,7 @@ bool FTrafficColdRedirectTest::RunTest(const FString& Parameters)
 
 	// A HAIR-TRIGGER SHUTDOWN PAUSE, so the aircraft is sitting with its engine already off
 	// well within a handful of ticks - #107 item 2's DepartAgent-on-a-shut-down-aircraft case.
-	const int32 Id = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft),
+	const int32 Id = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, B, ETraversalClass::Aircraft),
 		Airframe, ETraversalClass::Aircraft, /*ShutdownPauseSeconds=*/0.1);
 	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
 
@@ -2865,7 +2858,7 @@ bool FTrafficColdRedirectTest::RunTest(const FString& Parameters)
 	AddInfo(*FString::Printf(TEXT("shut down at %.0f RPM, still decaying"), PreRedirectRPM));
 
 	if (!TestTrue(TEXT("the redirect is accepted"),
-		Traffic->RedirectAgent(Id, Net, M2TrafficRoute(*Net, B, C, ETraversalClass::Aircraft))))
+		Traffic->RedirectAgent(Id, Net, TestGraph::Probe(*Net, B, C, ETraversalClass::Aircraft))))
 	{
 		return false;
 	}
@@ -2930,7 +2923,7 @@ bool FTrafficRedirectPosesImmediatelyTest::RunTest(const FString& Parameters)
 
 	// A -> B, due EAST (heading 0) - so a redirect's heading is measured against a real
 	// change, not against the same number StartTaxi's fallback would have left anyway.
-	const int32 Id = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft),
+	const int32 Id = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, B, ETraversalClass::Aircraft),
 		Airframe, ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
 
@@ -2942,7 +2935,7 @@ bool FTrafficRedirectPosesImmediatelyTest::RunTest(const FString& Parameters)
 	// B -> D, due NORTH (heading +90 deg) - unmistakably different from both 0 and from
 	// whatever FAgentMotion()'s default would read.
 	if (!TestTrue(TEXT("the redirect is accepted"),
-		Traffic->RedirectAgent(Id, Net, M2TrafficRoute(*Net, B, D, ETraversalClass::Aircraft))))
+		Traffic->RedirectAgent(Id, Net, TestGraph::Probe(*Net, B, D, ETraversalClass::Aircraft))))
 	{
 		return false;
 	}
@@ -3134,7 +3127,7 @@ bool FTrafficGraphRebuildNodeVisitsTest::RunTest(const FString& Parameters)
 		// FRESH, NOT TICKED: StartTaxi poses an agent on step 0 with Travelled 0, so every
 		// one of the chain's NumNodes-1 steps is still "remaining" - the worst case
 		// OnGraphRebuilt's own header names, not a shortened one a few ticks would leave.
-		Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, Nodes[0], Nodes.Last(), ETraversalClass::GroundVehicle),
+		Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, Nodes[0], Nodes.Last(), ETraversalClass::GroundVehicle),
 			TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	}
 
@@ -3343,7 +3336,7 @@ bool FTrafficExtendRouteKeepsMovingTest::RunTest(const FString& Parameters)
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const FAirframe Airframe = TestAirframes::GroundOnly();
-	const int32 Id = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft),
+	const int32 Id = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, B, ETraversalClass::Aircraft),
 		Airframe, ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
 	for (int32 Tick = 0; Tick < 2000 && Traffic->FindAgent(Id)->Follower.Travelled < 5000.0; ++Tick)
@@ -3358,13 +3351,13 @@ bool FTrafficExtendRouteKeepsMovingTest::RunTest(const FString& Parameters)
 
 	// REFUSED, NOTHING CHANGED: a tail from A does not start where the route ends (B).
 	TestFalse(TEXT("a tail that does not start where the route ends is refused"),
-		Traffic->ExtendRoute(Id, Net, M2TrafficRoute(*Net, A, C, ETraversalClass::Aircraft)));
+		Traffic->ExtendRoute(Id, Net, TestGraph::Probe(*Net, A, C, ETraversalClass::Aircraft)));
 	TestEqual(TEXT("the refusal left the route as it was"), Traffic->FindAgent(Id)->Follower.Plan.Length, LengthBefore);
 	TestEqual(TEXT("and the distance travelled"), Traffic->FindAgent(Id)->Follower.Travelled, Before);
 	TestTrue(TEXT("and the goal"), Traffic->FindAgent(Id)->GoalNode == B);
 	TestEqual(TEXT("and bumped no occupancy revision"), Traffic->OccupancyRevision(), RevisionBefore);
 
-	if (!TestTrue(TEXT("the extension is accepted"), Traffic->ExtendRoute(Id, Net, M2TrafficRoute(*Net, B, C, ETraversalClass::Aircraft)))) { return false; }
+	if (!TestTrue(TEXT("the extension is accepted"), Traffic->ExtendRoute(Id, Net, TestGraph::Probe(*Net, B, C, ETraversalClass::Aircraft)))) { return false; }
 	TestEqual(TEXT("the distance travelled survives the splice"), Traffic->FindAgent(Id)->Follower.Travelled, Before);
 	TestEqual(TEXT("and so does the speed"), Traffic->FindAgent(Id)->Follower.Speed, SpeedBefore);
 	TestTrue(TEXT("the goal moved on to C"), Traffic->FindAgent(Id)->GoalNode == C);
@@ -3386,7 +3379,7 @@ bool FTrafficExtendRouteKeepsMovingTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("it began braking for C"), bBraking)) { return false; }
 	const double SpeedWhileBraking = Traffic->FindAgent(Id)->Follower.Speed;
 	if (!TestTrue(TEXT("a second extension, while braking, is accepted"),
-		Traffic->ExtendRoute(Id, Net, M2TrafficRoute(*Net, C, D, ETraversalClass::Aircraft)))) { return false; }
+		Traffic->ExtendRoute(Id, Net, TestGraph::Probe(*Net, C, D, ETraversalClass::Aircraft)))) { return false; }
 
 	double SlowestPastB = TNumericLimits<double>::Max();
 	double SlowestPastC = TNumericLimits<double>::Max();
@@ -3437,13 +3430,13 @@ bool FTrafficExtendRouteMovesTheGoalTest::RunTest(const FString& Parameters)
 		TestGraph::Join(*Net, B, C);
 
 		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-		const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft),
+		const int32 Plane = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, B, ETraversalClass::Aircraft),
 			TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
 		if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
 		if (!TestTrue(TEXT("the route ends on the runway, so a departure is armed"), Traffic->FindAgent(Plane)->bDepartureArmed)) { return false; }
 		Traffic->Advance(0.05, Net);
 		if (!TestTrue(TEXT("extended across the runway to C"),
-			Traffic->ExtendRoute(Plane, Net, M2TrafficRoute(*Net, B, C, ETraversalClass::Aircraft)))) { return false; }
+			Traffic->ExtendRoute(Plane, Net, TestGraph::Probe(*Net, B, C, ETraversalClass::Aircraft)))) { return false; }
 		TestFalse(TEXT("the departure is disarmed: the route no longer ends on the runway"), Traffic->FindAgent(Plane)->bDepartureArmed);
 		TestEqual(TEXT("and it holds no runway chain for it"), Traffic->FindAgent(Plane)->GetDepartureRunway().Num(), 0);
 		bool bDeparted = false;
@@ -3489,7 +3482,7 @@ bool FTrafficExtendRouteMovesTheGoalTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("still taxiing and waiting after the rebuild"), Waiter != nullptr && Waiter->Phase == EAgentPhase::Taxiing && Waiter->IsWaitingFor(EAgentWait::ForStand))) { return false; }
 		const FGuidelineNodeId From = Waiter->Follower.Plan.Steps.Num() > 0 ? Waiter->Follower.Plan.Steps.Last().To : Waiter->Follower.Plan.Start;
 		const FGuidelineNodeId StandPose = Air.Pose(Placed);
-		const FRoutePlan Tail = M2TrafficRoute(*Air.Net, From, StandPose, ETraversalClass::Aircraft);
+		const FRoutePlan Tail = TestGraph::Probe(*Air.Net, From, StandPose, ETraversalClass::Aircraft);
 		if (!TestTrue(TEXT("a route from the waiter's route end to the new stand exists"), Tail.IsValid())) { return false; }
 		if (!TestTrue(TEXT("the extension onto the stand is accepted"), Traffic->ExtendRoute(Id, Air.Net, Tail))) { return false; }
 		TestFalse(TEXT("the waiter is no longer waiting - it has a stand to go to"), Traffic->FindAgent(Id)->IsWaitingFor(EAgentWait::ForStand));
@@ -3505,6 +3498,14 @@ bool FTrafficExtendRouteMovesTheGoalTest::RunTest(const FString& Parameters)
  * AN EXTENDED ROUTE DOES NOT GROW FOR EVER (review of ed81410c): KeepBehind trims the steps
  * driven more than that far back, and Travelled is rebased by exactly what was dropped - so the
  * agent is where it was, on the same line, and still parks at the far end.
+ *
+ * TWICE, NOT ONCE (#462, lane C's #500): RigCourse's RouteStaysBounded drove three loops so that
+ * the trim was exercised again and again, and folding it into OneLoopHeadless left that suite one
+ * extension. A trim that is right the first time and wrong on the second - a rebase taken from the
+ * plan as it was dispatched rather than as it now stands, the shape a stale offset has - would pass
+ * a single extension and drift an agent off its line on the next. The second extension drops TWO
+ * steps (20000) where the first dropped one (10000), so a rebase that stayed at the first figure
+ * is a different number from the right one.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FTrafficExtendRouteTrimsHistoryTest,
@@ -3515,13 +3516,13 @@ bool FTrafficExtendRouteTrimsHistoryTest::RunTest(const FString& Parameters)
 {
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	TArray<FGuidelineNodeId> N;
-	for (int32 I = 0; I < 5; ++I)
+	for (int32 I = 0; I < 7; ++I)
 	{
 		N.Add(TestGraph::Node(*Net, I * 10000.0, 0.0));
 		if (I > 0) { TestGraph::Join(*Net, N[I - 1], N[I]); }
 	}
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const int32 Id = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, N[0], N[2], ETraversalClass::Aircraft),
+	const int32 Id = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, N[0], N[2], ETraversalClass::Aircraft),
 		TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
 	for (int32 Tick = 0; Tick < 4000 && Traffic->FindAgent(Id)->Follower.Travelled < 15000.0; ++Tick)
@@ -3532,7 +3533,7 @@ bool FTrafficExtendRouteTrimsHistoryTest::RunTest(const FString& Parameters)
 	const double Travelled = Traffic->FindAgent(Id)->Follower.Travelled;
 	double Dropped = -1.0;
 	if (!TestTrue(TEXT("extended, keeping 20 m behind"), Traffic->ExtendRoute(Id, Net,
-		M2TrafficRoute(*Net, N[2], N[4], ETraversalClass::Aircraft), 2000.0, &Dropped))) { return false; }
+		TestGraph::Probe(*Net, N[2], N[4], ETraversalClass::Aircraft), 2000.0, &Dropped))) { return false; }
 	TestEqual(TEXT("the first step, ending 50 m back, was dropped - and only it"), Dropped, 10000.0, 1.0);
 	TestEqual(TEXT("Travelled is rebased by exactly that"), Traffic->FindAgent(Id)->Follower.Travelled, Travelled - Dropped, 0.001);
 	TestEqual(TEXT("the route is the rest: 40 m minus 10 m"), Traffic->FindAgent(Id)->Follower.Plan.Length, 30000.0, 1.0);
@@ -3540,9 +3541,134 @@ bool FTrafficExtendRouteTrimsHistoryTest::RunTest(const FString& Parameters)
 	TestTrue(*FString::Printf(TEXT("and the agent is where it was, one tick on (moved %.1f uu)"),
 		FVector2D::Distance(Traffic->FindAgent(Id)->LastMotion.Position, At)),
 		FVector2D::Distance(Traffic->FindAgent(Id)->LastMotion.Position, At) < 100.0);
+
+	// THE SECOND EXTENSION, from a plan that has already been trimmed once: N[1]..N[4], 30 km, with the agent
+	// driven on until it is 25 km along it - so the cut (Travelled less the 20 m kept) is past TWO whole steps.
+	// Driven on rather than extended at once: a second extension straight after the first has nothing new
+	// behind the agent to drop, and "dropped nothing" is not the case under test. The agent is still moving
+	// (the plan ends at 30 km and it brakes only for the last few), which is the only phase ExtendRoute accepts.
+	for (int32 Tick = 0; Tick < 4000 && Traffic->FindAgent(Id)->Follower.Travelled < 25000.0; ++Tick)
+	{
+		Traffic->Advance(0.05, Net);
+	}
+	if (!TestTrue(TEXT("the agent is still taxiing, 25 km along the trimmed plan"),
+		Traffic->FindAgent(Id)->Phase == EAgentPhase::Taxiing && Traffic->FindAgent(Id)->Follower.Travelled >= 25000.0)) { return false; }
+	const FVector2D AtSecond = Traffic->FindAgent(Id)->LastMotion.Position;
+	const double TravelledSecond = Traffic->FindAgent(Id)->Follower.Travelled;
+	double DroppedSecond = -1.0;
+	if (!TestTrue(TEXT("extended again, keeping 20 m behind"), Traffic->ExtendRoute(Id, Net,
+		TestGraph::Probe(*Net, N[4], N[6], ETraversalClass::Aircraft), 2000.0, &DroppedSecond))) { return false; }
+	TestEqual(TEXT("the second extension drops the next TWO steps - 20 km, ending 50 m back - and only them"),
+		DroppedSecond, 20000.0, 1.0);
+	TestEqual(TEXT("Travelled is rebased by exactly that on the second extension too"),
+		Traffic->FindAgent(Id)->Follower.Travelled, TravelledSecond - DroppedSecond, 0.001);
+	TestEqual(TEXT("the route is the rest: 50 km on the trimmed plan, less the 20 km dropped"),
+		Traffic->FindAgent(Id)->Follower.Plan.Length, 30000.0, 1.0);
+	Traffic->Advance(0.05, Net);
+	TestTrue(*FString::Printf(TEXT("and the agent is where it was after the second trim, one tick on (moved %.1f uu)"),
+		FVector2D::Distance(Traffic->FindAgent(Id)->LastMotion.Position, AtSecond)),
+		FVector2D::Distance(Traffic->FindAgent(Id)->LastMotion.Position, AtSecond) < 100.0);
+
 	RunUntil(*Traffic, *Net, 600.0, [&]() { return Traffic->FindAgent(Id)->Phase == EAgentPhase::Parked; });
-	TestTrue(TEXT("and it parks at the extended end"),
-		Traffic->FindAgent(Id)->Phase == EAgentPhase::Parked && FVector2D::Distance(Traffic->FindAgent(Id)->LastMotion.Position, FVector2D(40000.0, 0.0)) < 1000.0);
+	TestTrue(TEXT("and it parks at the twice-extended end"),
+		Traffic->FindAgent(Id)->Phase == EAgentPhase::Parked && FVector2D::Distance(Traffic->FindAgent(Id)->LastMotion.Position, FVector2D(60000.0, 0.0)) < 1000.0);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A REJOIN OBEYS THE LEVEL'S TUNED RunwayPenalty (#477, pinned by #479).
+ *
+ * #477 put the rejoin every split, drive-side flip and player Unstick takes (RejoinNearby) on FRouteQuery::WithRules, which
+ * carries the runway penalty with the congestion weight. It had taken the weight alone, so a level's tuned penalty was obeyed by
+ * every route but this one, and the only thing guarding the call was a lint row. This drives the rejoin through the Unstick's
+ * door, RescueStranded - the same RejoinNearby and the same query, at the composition level: a real UGroundTraffic, a stranded
+ * aeroplane, a graph with a runway beside it.
+ *
+ * THE GRAPH IS ONE CHOICE: from the foot of the strip (A) to B, along the 10 m strip (laid short on purpose, so the default
+ * penalty still takes it) or round a detour via D. The aeroplane is stranded WELL SHORT of A, on S -> S2: a route that ended at
+ * A - 1000 uu from the strip's end, inside its width - would arm a DEPARTURE, and the agent would take that flow instead of
+ * a taxi's (the first draft of this test did, and said so in the log). At the default 10 the strip route costs 2000 + 10 x 1000 = 12000 against the
+ * detour's 16031, so the strip wins; at a tuned 100 it costs 102000 and the detour wins; at the multiplier floor of 1 the strip
+ * wins again. The penalty is the ONLY thing that can swap them, which is what makes this measure the rule rather than name it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficRejoinObeysTheTunedRunwayPenaltyTest,
+	"Airside.Model.Traffic.RejoinObeysTheTunedRunwayPenalty",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficRejoinObeysTheTunedRunwayPenaltyTest::RunTest(const FString& Parameters)
+{
+	struct FCase { const TCHAR* Name; double Penalty; bool bExpectStrip; };
+	const FCase Cases[] = {
+		{ TEXT("the default penalty of 10"), 10.0, true },
+		{ TEXT("a tuned penalty of 100"), 100.0, false },
+		{ TEXT("the multiplier floor of 1"), 1.0, true },
+	};
+
+	for (const FCase& Case : Cases)
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* Runway = TestProfiles::Runway();
+		const FRoadNodeId RoadR1 = Net->AddNode(FVector2D(0.0, -1000.0));
+		const FRoadNodeId RoadR2 = Net->AddNode(FVector2D(1000.0, -1000.0));
+		const FRoadSegmentId Strip = Net->AddStraightSegment(RoadR1, RoadR2, Runway);
+		if (!TestTrue(FString::Printf(TEXT("%s: the strip is a runway segment"), Case.Name), Net->IsRunwaySegment(Strip))) { return false; }
+
+		// S -> S2 is where the aeroplane is stranded; A -> B is the choice. The strip's edge is derived from the runway segment, which
+		// is what makes it a runway edge to the search (RouteSearch's bRunwayEdge), exactly as RouteSearch.RunwayPenalty lays it.
+		const FGuidelineNodeId S = TestGraph::Node(*Net, -20000.0, 0.0);
+		const FGuidelineNodeId S2 = TestGraph::Node(*Net, -10000.0, 0.0);
+		const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+		const FGuidelineNodeId B = TestGraph::Node(*Net, 1000.0, 0.0);
+		const FGuidelineNodeId D = TestGraph::Node(*Net, 500.0, 8000.0);
+		const FGuidelineNodeId R1 = TestGraph::Node(*Net, 0.0, -1000.0);
+		const FGuidelineNodeId R2 = TestGraph::Node(*Net, 1000.0, -1000.0);
+		TestGraph::Join(*Net, S, S2); TestGraph::Join(*Net, S2, A);
+		TestGraph::Join(*Net, A, D); TestGraph::Join(*Net, D, B);
+		TestGraph::Join(*Net, A, R1); TestGraph::Join(*Net, R2, B);
+		{
+			FGuidelineEdge Along;
+			Along.A = R1; Along.B = R2;
+			Along.Control = FVector2D(500.0, -1000.0);
+			Along.AllowedTraffic = FTrafficMask::All();
+			Along.DerivedFrom = Strip;
+			Net->AddGuidelineEdge(MoveTemp(Along));
+		}
+
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		Traffic->Rules.RunwayPenalty = Case.Penalty;
+
+		const int32 Plane = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, S, S2, ETraversalClass::Aircraft),
+			TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
+		if (!TestTrue(FString::Printf(TEXT("%s: dispatched S -> S2"), Case.Name), Plane > 0)) { return false; }
+		TickUntil(*Traffic, *Net, 5.0, [](int32) { return true; });
+		FGroundTrafficTestAccess(*Traffic).Strand(Plane);
+		TickUntil(*Traffic, *Net, 1.0, [](int32) { return true; });
+		const FRoadAgent* Stranded = Traffic->FindAgent(Plane);
+		if (!TestTrue(FString::Printf(TEXT("%s: stranded on S -> S2"), Case.Name),
+			Stranded != nullptr && Stranded->Phase == EAgentPhase::Stranded)) { return false; }
+
+		// THE REJOIN: RescueStranded runs RejoinNearby, which searches from the edge under the aeroplane to the goal B with the rebuild
+		// errand's query - the runway-penalised, occupancy-reading one - and the rules in force are the ones set above.
+		if (!TestTrue(FString::Printf(TEXT("%s: rescued toward B"), Case.Name), Traffic->RescueStranded(Plane, *Net, B))) { return false; }
+		const FRoadAgent* Rescued = Traffic->FindAgent(Plane);
+		if (!TestTrue(FString::Printf(TEXT("%s: it has a valid route again"), Case.Name),
+			Rescued != nullptr && Rescued->Follower.Plan.IsValid())) { return false; }
+
+		bool bViaStrip = false;
+		bool bViaDetour = false;
+		for (const FRouteStep& Step : Rescued->Follower.Plan.Steps)
+		{
+			const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Step.Edge);
+			bViaStrip = bViaStrip || (Edge != nullptr && Edge->DerivedFrom.IsSet() && Net->IsRunwaySegment(Edge->DerivedFrom));
+			bViaDetour = bViaDetour || Step.To == D;
+		}
+		TestEqual(FString::Printf(TEXT("%s: the rejoin %s the strip"), Case.Name, Case.bExpectStrip ? TEXT("takes") : TEXT("routes round")),
+			bViaStrip, Case.bExpectStrip);
+		TestEqual(FString::Printf(TEXT("%s: and the other way round - it %s the detour"), Case.Name, Case.bExpectStrip ? TEXT("skips") : TEXT("takes")),
+			bViaDetour, !Case.bExpectStrip);
+	}
 	return true;
 }
 
@@ -3573,13 +3699,13 @@ bool FTrafficRedirectDisarmsDepartureTest::RunTest(const FString& Parameters)
 	TestGraph::Join(*Net, A, C);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft),
+	const int32 Plane = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, B, ETraversalClass::Aircraft),
 		TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
 	if (!TestTrue(TEXT("its route ends on the runway, so a departure is armed"), Traffic->FindAgent(Plane)->bDepartureArmed)) { return false; }
 	Traffic->Advance(0.05, Net);
 	if (!TestTrue(TEXT("redirected to C, off the runway"),
-		Traffic->RedirectAgent(Plane, Net, M2TrafficRoute(*Net, A, C, ETraversalClass::Aircraft)))) { return false; }
+		Traffic->RedirectAgent(Plane, Net, TestGraph::Probe(*Net, A, C, ETraversalClass::Aircraft)))) { return false; }
 	TestFalse(TEXT("the departure is disarmed: the new route does not end on a runway"), Traffic->FindAgent(Plane)->bDepartureArmed);
 	bool bDeparted = false;
 	RunUntil(*Traffic, *Net, 600.0, [&]()
@@ -3630,7 +3756,7 @@ bool FTrafficRebuildCoincidentTwinsTest::RunTest(const FString& Parameters)
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	const FTwinGraph Was = Build(*Net);
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, Was.A, Was.C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 Van = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, Was.A, Was.C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	TickUntil(*Traffic, *Net, 5.0, [](int32) { return true; });
 	const FRoadAgent* Agent = Traffic->FindAgent(Van);
 	if (!TestNotNull(TEXT("the van is out"), Agent)) { return false; }
@@ -3706,7 +3832,7 @@ bool FTrafficRebuildTwinAtCurrentStepTest::RunTest(const FString& Parameters)
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 		const TwinFixture::FTwins Was = TwinFixture::Build(*Net, bSwap, true);
 		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-		const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, Was.A, Was.C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+		const int32 Van = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, Was.A, Was.C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 		TickUntil(*Traffic, *Net, 120.0, [&](int32)
 		{
 			const FRoadAgent* A = Traffic->FindAgent(Van);
@@ -3751,7 +3877,7 @@ bool FTrafficRebuildGoalIsATwinTest::RunTest(const FString& Parameters)
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 		const TwinFixture::FTwins Was = TwinFixture::Build(*Net, bSwap, false);
 		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-		const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, Was.A, Was.B2, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+		const int32 Van = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, Was.A, Was.B2, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 		TickUntil(*Traffic, *Net, 5.0, [](int32) { return true; });
 		const FRoadAgent* Agent = Traffic->FindAgent(Van);
 		if (!TestTrue(TEXT("the van is out, A->B1->B2"), Agent != nullptr && Agent->Follower.Plan.Steps.Num() == 2)) { return false; }
@@ -3801,7 +3927,7 @@ bool FTrafficFindAgentSurvivesAStaleIndexTest::RunTest(const FString& Parameters
 	TestGraph::Join(*Net, A, B);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const int32 Id = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::GroundVehicle),
+	const int32 Id = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, A, B, ETraversalClass::GroundVehicle),
 		TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
 	if (!TestTrue(TEXT("found before the index is cleared"), Traffic->FindAgent(Id) != nullptr)) { return false; }

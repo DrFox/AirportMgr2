@@ -156,8 +156,29 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FFreeStartOffersOnlyPositionalGuidesTest::RunTest(const FString& Parameters)
 {
+	// THE SHIPPED DEFAULTS FIRST (#462, merge M24, from Airside.Tool.FreeStartWorksOnTheShippedDefaults). Begin's two forced
+	// toggles - Collinear and Taxiway - are already the defaults, so that test built the SAME context as this one and asserted
+	// the half this one did not: that a brand new airport's first click is guided with NO button pressed. Turning Collinear on
+	// by default (2026-09-24) is the point - every ANGULAR row sits out on a free start by construction, so with Collinear off a
+	// new airport offers a first click no guide at all, and a player met exactly that in PIE ("switch Collinear on" was the
+	// undocumented step between "no edge alignment" and "works"). This is the one place in this file that takes the defaults.
 	FFreeStart Start;
-	if (!TestTrue(TEXT("an idle taxiway tool"), Begin(Start, TEXT("Taxiway")))) { return false; }
+	if (!TestTrue(TEXT("an idle taxiway tool on a new airport's settings"),
+		Begin(Start, TEXT("Taxiway"), /*bShippedDefaults*/ true))) { return false; }
+
+	TestTrue(TEXT("whose Collinear row is on without anyone touching it"),
+		Start.Tunables.GuideSources.IsRelationOn(SnapGuide::ERelation::Collinear));
+	const FToolContext OutOfTheBox = Start.At(OffTheLine);
+	if (TestTrue(TEXT("so a first click is guided with no button pressed"), OutOfTheBox.Guide.bActive))
+	{
+		TestTrue(TEXT("onto the line the taxiway already lies along"),
+			FMath::IsNearlyEqual(OutOfTheBox.GuidedCursor().Y, 0.0, 1.0));
+	}
+
+	// THEN THE TWO TOGGLES THIS TEST DEPENDS ON ARE FORCED, as every other test in this file does, so it keeps measuring the
+	// tool when a default moves either way. Already on - which is why one fixture serves both halves.
+	Start.Tunables.GuideSources.bCollinear = true;
+	Start.Tunables.GuideSources.bTaxiway = true;
 
 	TestTrue(TEXT("with the angular rows switched on, so their absence below is a measurement"),
 		Start.Tunables.GuideSources.bParallel && Start.Tunables.GuideSources.bWorld);
@@ -340,45 +361,6 @@ bool FFreeStartClickLandsOnTheGuideTest::RunTest(const FString& Parameters)
 			});
 		TestTrue(TEXT("a runway's first threshold sits where the guide put it"), bFromThreshold);
 	}
-
-	return true;
-}
-
-/**
- * AND IT WORKS OUT OF THE BOX, WITH NOTHING SWITCHED ON BY HAND.
- *
- * THE POINT OF TURNING Collinear ON BY DEFAULT (2026-09-20). Every ANGULAR row sits out on a
- * free start by construction, so with Collinear off a brand new airport offers a first click
- * NO guide at all - the whole of the item above would be dead until the player found a button
- * nothing told them about. That is not hypothetical: a player met exactly that in PIE, and
- * "switch Collinear on" was the undocumented step between "no edge alignment" and "works".
- *
- * IT TAKES THE SHIPPED DEFAULTS DELIBERATELY, which is the one place in this file that does.
- */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FFreeStartWorksOnTheShippedDefaultsTest,
-	"Airside.Tool.FreeStartWorksOnTheShippedDefaults",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FFreeStartWorksOnTheShippedDefaultsTest::RunTest(const FString& Parameters)
-{
-	FFreeStart Start;
-	if (!TestTrue(TEXT("an idle taxiway tool on a new airport's settings"),
-		Begin(Start, TEXT("Taxiway"), /*bShippedDefaults*/ true)))
-	{
-		return false;
-	}
-
-	TestTrue(TEXT("whose Collinear row is on without anyone touching it"),
-		Start.Tunables.GuideSources.IsRelationOn(SnapGuide::ERelation::Collinear));
-
-	const FToolContext Context = Start.At(OffTheLine);
-	if (!TestTrue(TEXT("so a first click is guided with no button pressed"), Context.Guide.bActive))
-	{
-		return false;
-	}
-	TestTrue(TEXT("onto the line the taxiway already lies along"),
-		FMath::IsNearlyEqual(Context.GuidedCursor().Y, 0.0, 1.0));
 
 	return true;
 }

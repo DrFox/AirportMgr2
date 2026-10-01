@@ -96,9 +96,3 @@ void GraphOverlay::DescribeStands(const URoadNetwork& Network, IToolPreviewSink&
 		}
 	}
 }
-
-void GraphOverlay::Describe(const URoadNetwork& Network, IToolPreviewSink& Sink)
-{
-	DescribeNodes(Network, Sink);
-	DescribeStands(Network, Sink);
-}

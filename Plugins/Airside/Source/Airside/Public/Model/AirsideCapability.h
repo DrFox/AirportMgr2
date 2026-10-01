@@ -24,19 +24,6 @@ struct AIRSIDE_API FRunwaySummary
 	UPROPERTY() TObjectPtr<const URoadProfile> Profile = nullptr;
 };
 
-/** One stand: what it was sized for and which service roles can reach it. */
-USTRUCT()
-struct AIRSIDE_API FStandSummary
-{
-	GENERATED_BODY()
-
-	UPROPERTY() FEntityInstanceId Entity;
-	UPROPERTY() double DesignWingspan = 0.0;
-	/** The pad's pavement, copied from FEntityInstance::Pavement beside DesignWingspan. */
-	UPROPERTY() EPavement Pavement = EPavement::Tarmac;
-	UPROPERTY() TArray<EServiceRole> AnchorRoles;
-};
-
 /**
  * What the AIRFIELD can admit, as a pure function of the graph. The building half of the
  * airport's capability (which services are offered) lives in AirportOps and joins this.
@@ -48,15 +35,14 @@ struct AIRSIDE_API FAirsideCapability
 	GENERATED_BODY()
 
 	UPROPERTY() TArray<FRunwaySummary> Runways;
-	UPROPERTY() TArray<FStandSummary> Stands;
-
-	double LongestRunway() const;
 };
 
 namespace AirsideCapability
 {
 	/**
-	 * Enumerates runways and stands. A runway is recognised by its profile
+	 * Enumerates the runways. (It enumerated stands too - FStandSummary, and a LongestRunway() beside
+	 * them - until #462 deleted both: the last production reader of either went in b6926198, and
+	 * only tests were keeping them.) A runway is recognised by its profile
 	 * (URoadProfile::bContinuousThroughJunctions), and a strip split by exits is ONE runway:
 	 * each continuous segment is asked for its extent via URoadNetwork::RunwayExtentAt, and
 	 * extents that share a threshold pair (either way round) are the same strip. Deduplicated
@@ -65,7 +51,7 @@ namespace AirsideCapability
 	 */
 	AIRSIDE_API FAirsideCapability Summarise(const URoadNetwork& Network);
 
-	/** Summarise's runway half alone - the same walk, without the stands. What
+	/** Summarise's runway list without the wrapper struct - the same walk. What
 	 *  RunwayAdmission::CheckArrival asks, once per arrival admission. */
 	AIRSIDE_API TArray<FRunwaySummary> SummariseRunways(const URoadNetwork& Network);
 }

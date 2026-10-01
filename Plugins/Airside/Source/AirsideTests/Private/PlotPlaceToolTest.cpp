@@ -77,22 +77,13 @@ namespace
 	 */
 	FToolContext OnRoad(ARoadNetworkActor* Actor, const FVector2D& Where)
 	{
-		FToolContext Context = TestTool::ContextAt(*Actor, Where, ERoadSnapKind::Segment);
-		Context.Snap.Segment = Actor->Network->SegmentIdAt(0);
-
-		// T FROM THE SEGMENT'S REAL ENDS, not from the coordinates LayRoad was asked for.
-		// This assumed the road ran -10000 to +10000 and it does not, so every anchor landed
-		// somewhere other than under the cursor - harmless while nothing measured absolute
-		// positions, and the cause of three baffling failures the moment something did.
-		const FRoadSegment* Segment = Actor->Network->GetSegment(Context.Snap.Segment);
-		const FRoadNode* A = Segment != nullptr ? Actor->Network->GetNode(Segment->A) : nullptr;
-		const FRoadNode* B = Segment != nullptr ? Actor->Network->GetNode(Segment->B) : nullptr;
-		if (A != nullptr && B != nullptr)
-		{
-			Context.Snap.SegmentT =
-				RoadGeom::ClosestPointOnSegment(A->Position, B->Position, Where);
-		}
-		return Context;
+		// THE SEGMENT HANDLE AND ITS T ARE NO LONGER FILLED IN (#462, dead infrastructure). The anchor search asks the NETWORK for
+		// the nearest accepted road rather than reading Context.Snap (PlotGesture.cpp, "ASKED OF THE NETWORK, not read off
+		// FToolContext::Snap"), so a Segment snap and a Free one reach the same anchor, and the two fields this once computed
+		// - including the T-from-the-real-ends arithmetic a baffling-failures note was written about - were written and never read.
+		// What is kept is the KIND, which is what distinguishes "over the carriageway" from PlotAt's "off it" for a tool that
+		// does look at Snap.Kind.
+		return TestTool::ContextAt(*Actor, Where, ERoadSnapKind::Segment);
 	}
 
 	/**
@@ -106,6 +97,9 @@ namespace
 	{
 		double NearestY = TNumericLimits<double>::Max();
 		double DeepestY = -TNumericLimits<double>::Max();
+		/** The ghost's reach ALONG the frontage - what Airside.Tool.PlotGhostAgreesWithTheBar reads (#463). */
+		double LeftX = TNumericLimits<double>::Max();
+		double RightX = -TNumericLimits<double>::Max();
 
 		int32 Lines = 0;
 		int32 CrossMarks = 0;
@@ -143,6 +137,9 @@ namespace
 		 */
 		double Depth() const { return DeepestY - NearestY; }
 
+		/** How wide the ghost is along X: the frontage line's length at the Frontage stage. */
+		double WidthX() const { return RightX - LeftX; }
+
 		virtual void Marker(const FVector2D&, EPreviewStyle Style) override
 		{
 			MarkerStyles.Add(Style);
@@ -153,6 +150,8 @@ namespace
 			LineStyles.Add(Style);
 			NearestY = FMath::Min3(NearestY, From.Y, To.Y);
 			DeepestY = FMath::Max3(DeepestY, From.Y, To.Y);
+			LeftX = FMath::Min3(LeftX, From.X, To.X);
+			RightX = FMath::Max3(RightX, From.X, To.X);
 		}
 		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override
 		{
@@ -277,58 +276,30 @@ bool FPlotStartsFromOffTheRoadTest::RunTest(const FString& Parameters)
 
 	// AND A TAXIWAY IS STILL NOT A SERVICE ROAD. The search skips anything without a ground
 	// vehicle guideline, so widening WHERE you can stand did not widen WHAT you can stand by.
+	//
+	// TWO CURSORS, BOTH REFUSED, WITH THE READOUT (#462, merge M23 - this block and Airside.Tool.PlotIgnoresATaxiway were one
+	// refusal). A depot anchored on a taxiway would dispatch its trucks onto one, so the gesture must refuse to start at all
+	// rather than build something that looks right and routes an aeroplane into a fuel truck. The second test clicked 2 m off the
+	// taxiway through OnRoad() and was named for "snapped properly" - but the anchor search reads the network, not Context.Snap
+	// (PlotGesture.cpp), so a Free cursor and a Segment snap reach the same refusal and one block covers both. The readout says
+	// WHY, rather than the tool silently doing nothing: a click ignored with no explanation reads as a broken tool.
 	{
 		Actor->ClearNetwork();
 		LayRoad(Actor, 0.0, ERoadKind::Taxiway);
 
-		FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
-		Tool.OnClick(PlotAt(Actor, FVector2D(0.0, 1000.0)));
-		TestEqual(TEXT("standing beside a taxiway anchors nothing"), Tool.PinnedCount(), 0);
+		const FToolContext Cursors[] = { PlotAt(Actor, FVector2D(0.0, 1000.0)), OnRoad(Actor, FVector2D(0.0, 200.0)) };
+		for (const FToolContext& Cursor : Cursors)
+		{
+			FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+			Tool.OnClick(Cursor);
+			TestEqual(TEXT("standing beside a taxiway anchors nothing"), Tool.PinnedCount(), 0);
+
+			FToolReadoutCollector Collector;
+			Tool.BuildReadout(Cursor, Collector);
+			TestEqual(TEXT("and the readout says to move near a service road"), Collector.Readout.Warnings.Num(), 1);
+			TestFalse(TEXT("and nothing is committable"), Collector.Readout.bCommittable);
+		}
 	}
-
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FPlotPinsOneCornerAtATimeTest,
-	"Airside.Tool.PlotPinsOneCornerAtATime",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FPlotPinsOneCornerAtATimeTest::RunTest(const FString& Parameters)
-{
-	FAirsideTestWorld TestWorld;
-	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
-	ARoadNetworkActor* Actor = TestWorld.Actor;
-	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
-
-	Actor->ClearNetwork();
-	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
-	LayServiceRoad(Actor, 0.0);
-
-	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
-	TestEqual(TEXT("a fresh tool has pinned nothing"), Tool.PinnedCount(), 0);
-
-	Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 200.0)));
-	TestEqual(TEXT("the first click pins the anchor"), Tool.PinnedCount(), 1);
-
-	Tool.OnClick(PlotAt(Actor, FVector2D(2000.0, 200.0)));
-	TestEqual(TEXT("the second pins the frontage"), Tool.PinnedCount(), 2);
-
-	Tool.OnClick(PlotAt(Actor, FVector2D(2000.0, 1800.0)));
-	TestEqual(TEXT("the third pins a back corner"), Tool.PinnedCount(), 3);
-
-	Tool.OnClick(PlotAt(Actor, FVector2D(0.0, 1500.0)));
-	TestEqual(TEXT("the fourth pins the last corner"), Tool.PinnedCount(), 4);
-	TestEqual(TEXT("and the gesture is ready to commit"),
-		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Confirm));
-
-	// THE LAST CLICK LOCKS, IT DOES NOT BUILD. The review beat is the whole point of a
-	// staged gesture; a click that committed would delete it.
-	TestEqual(TEXT("and nothing was built by pinning it"), LiveEntities(Actor), 0);
-
-	// AND CANCEL WALKS BACK ONE AT A TIME, which is the answer a misclick deserves.
-	Tool.OnCancel(PlotAt(Actor, FVector2D(0.0, 1500.0)));
-	TestEqual(TEXT("cancel unpins the last corner"), Tool.PinnedCount(), 3);
 
 	return true;
 }
@@ -646,55 +617,6 @@ bool FPlotAnchorsSnapToTheFrontageStepTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FPlotIgnoresATaxiwayTest,
-	"Airside.Tool.PlotIgnoresATaxiway",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FPlotIgnoresATaxiwayTest::RunTest(const FString& Parameters)
-{
-	FAirsideTestWorld TestWorld;
-	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
-	ARoadNetworkActor* Actor = TestWorld.Actor;
-	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
-
-	Actor->ClearNetwork();
-
-	// A TAXIWAY, not a service road. A depot anchored here would dispatch its trucks onto
-	// one, so the gesture must refuse to start at all rather than build something that looks
-	// right and routes an aeroplane into a fuel truck.
-	LayRoad(Actor, 0.0, ERoadKind::Taxiway);
-
-	// SNAPPED TO IT PROPERLY, which is the whole point of this test. An earlier version left
-	// the context at ContextAt's default Free kind, so the tool refused for want of ANY
-	// segment and this passed without ever reaching the service-road filter - green for a
-	// reason that had nothing to do with what it claims to check.
-	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
-	Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 200.0)));
-
-	TestEqual(TEXT("a taxiway does not anchor a depot plot"),
-		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Idle));
-
-	// AND THE READOUT SAYS WHY, rather than the tool silently doing nothing - a click that
-	// is ignored with no explanation reads as a broken tool.
-	FToolReadoutCollector Collector;
-	Tool.BuildReadout(OnRoad(Actor, FVector2D(0.0, 200.0)), Collector);
-	TestEqual(TEXT("and the readout says to move near a service road"),
-		Collector.Readout.Warnings.Num(), 1);
-	TestFalse(TEXT("and nothing is committable"), Collector.Readout.bCommittable);
-
-	return true;
-}
-
-/**
- * THE PREVIEW AND THE READOUT, MEASURED AGAINST EACH OTHER - which the test named
- * PlotReadoutMatchesPreview does not actually do: it reads facts at the Confirm stage and
- * never looks at a line the tool drew.
- *
- * The case is the SECOND plot of a session. Stage returns to Idle but Width and Depth keep
- * what the last gesture locked, so a stale depth is there to be drawn; the first plot of a
- * session cannot catch this because Depth still holds its initial 1.
- */
 /**
  * THE PAD DOES NOT LIE ON THE ROAD.
  *
@@ -1053,6 +975,15 @@ bool FPlotShowsTheAnchorItWouldTakeTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * THE PREVIEW AND THE READOUT, MEASURED AGAINST EACH OTHER - which the test named
+ * PlotReadoutMatchesPreview does not actually do: it reads facts at the Confirm stage and
+ * never looks at a line the tool drew.
+ *
+ * The case is the SECOND plot of a session. Stage returns to Idle but Width and Depth keep
+ * what the last gesture locked, so a stale depth is there to be drawn; the first plot of a
+ * session cannot catch this because Depth still holds its initial 1.
+ */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FPlotGhostAgreesWithTheBarTest,
 	"Airside.Tool.PlotGhostAgreesWithTheBar",
@@ -1106,6 +1037,16 @@ bool FPlotGhostAgreesWithTheBarTest::RunTest(const FString& Parameters)
 	// FIRST gesture every member still holds its initial value, where stale and correct agree.
 	TestEqual(TEXT("the readout reports the frontage that actually snapped"),
 		Frontage->Value, FString(TEXT("20 m")));
+
+	// AND THE GHOST DRAWS THE SAME FRONTAGE (#463). The sink above was filled and never read - its assertion was removed in
+	// 3989c158 - so the test named for the ghost agreeing with the bar only ever measured the bar. At this stage the ghost is
+	// the single frontage line from the anchor to the snapped cursor, so its reach along X IS the frontage, in uu, and the bar
+	// says it in metres: 20 m asked as 16 m and snapped up to the floor. A ghost drawn from the raw cursor would be 16 m long.
+	const double ReadoutUu = FCString::Atod(*Frontage->Value) * 100.0;
+	if (TestTrue(TEXT("the ghost drew the frontage line"), Sink.Lines > 0))
+	{
+		TestEqual(TEXT("the ghost is as wide as the frontage the bar reports"), Sink.WidthX(), ReadoutUu, 1.0);
+	}
 
 	return true;
 }
@@ -1523,10 +1464,11 @@ bool FPlotSpecsComeFromTheTargetTest::RunTest(const FString& Parameters)
 
 	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
 
-	// THE ANCHOR CLICK, built by hand rather than through OnRoad(): that helper reads the
-	// actor's own Network to fill Context.Snap, and this context's Target is the fake, not
-	// the actor - IRoadEditTarget::GetNetwork() must answer through the fake for Context.
-	// Network() to see the road at all (FToolContext::Network() reads Target->GetNetwork()).
+	// THE ANCHOR CLICK, built by hand rather than through OnRoad(): that helper builds its context
+	// on the real actor as Target, and this context's Target is the fake, not the actor -
+	// IRoadEditTarget::GetNetwork() must answer through the fake for Context.Network() to see the
+	// road at all (FToolContext::Network() reads Target->GetNetwork()). The Snap segment set below
+	// is only so the snap names the road it sits on: the anchor search asks the network itself.
 	FToolContext Anchor = TestTool::ContextAt(Fake, FVector2D(0.0, 200.0), ERoadSnapKind::Segment);
 	Anchor.Snap.Segment = Actor->Network->SegmentIdAt(0);
 	const FRoadSegment* Segment = Actor->Network->GetSegment(Anchor.Snap.Segment);

@@ -55,7 +55,7 @@ namespace PlotYard
 	 * unbounded search would make laying a road stutter on an airport full of depots.
 	 *
 	 * 64 RATHER THAN 24, which was the first figure and was too few: candidates are cheap
-	 * only because LayOut samples from the region a module can actually occupy, and even
+	 * only because the sampler (FYardSpace, behind Reserve) samples from the region a module can actually occupy, and even
 	 * then a well-filled yard rejects most of them on the modules already standing.
 	 */
 	inline constexpr int32 MaxTries = 64;
@@ -107,32 +107,6 @@ namespace PlotYard
 		/** Radians. +X faces away from the road, as UEntityDefinition::BuildFuelDepot states. */
 		double Heading = 0.0;
 		bool bPlaced = false;
-	};
-
-	struct FYard
-	{
-		/**
-		 * One per footprint given, IN THE ORDER GIVEN; a dropped one has bPlaced false.
-		 *
-		 * NOT COMPACTED to the ones that fit. The caller knows which module it asked about
-		 * only by index, and compacting would silently re-associate a pump's stand with a
-		 * tank - a depot drawing the wrong box in the wrong place, with nothing to say so.
-		 */
-		TArray<FStand> Stands;
-
-		/** How many more of the caller's sample footprint would still fit. */
-		int32 RoomForMore = 0;
-
-		/** Derived, never stored: a second count is a second thing to keep in agreement. */
-		int32 DroppedCount() const
-		{
-			int32 Count = 0;
-			for (const FStand& Stand : Stands)
-			{
-				if (!Stand.bPlaced) { ++Count; }
-			}
-			return Count;
-		}
 	};
 
 	/**
@@ -200,7 +174,7 @@ namespace PlotYard
 	/**
 	 * Everything a plot has room for, decided once.
 	 *
-	 * ONLY WHAT IT PLACED. Unlike FYard, which reports a module it could not fit, a
+	 * ONLY WHAT IT PLACED. The deleted LayOut/FYard reported a module it could not fit; a
 	 * reservation has nothing to refuse - it chose the list. A stand here is a promise that
 	 * the module fits, which is what lets the player be shown ghosted slots and charged for
 	 * filling them.
@@ -229,7 +203,7 @@ namespace PlotYard
 		 * How many modules of one kit this plot can hold.
 		 *
 		 * DERIVED, never stored beside Stands: a second count is a second thing to keep in
-		 * agreement, for the same reason FYard::DroppedCount is derived. Sums RunLength
+		 * agreement. Sums RunLength
 		 * rather than counting stands, because a three-bay run IS three modules.
 		 */
 		int32 CeilingFor(int32 KitIndex) const
@@ -277,18 +251,6 @@ namespace PlotYard
 		const FStand& B, const FFootprint& FootprintB);
 
 	/**
-	 * Lay the footprints out in the plot.
-	 *
-	 * Gate is where the fence is left open - URoadEditFacade::PlaceEntityInPlot puts the
-	 * entity's pose there, so it is the entity's Position. Seed makes the result repeatable;
-	 * see the design doc section 5 for why that is a requirement and not a nicety.
-	 */
-	AIRSIDE_API FYard LayOut(TArrayView<const FVector2D> Outline,
-		FVector2D FrontageA, FVector2D FrontageB, FVector2D Gate,
-		TArrayView<const FFootprint> Footprints, int32 Seed,
-		const FFootprint& RoomForFootprint);
-
-	/**
 	 * Fill the plot, and report what fits.
 	 *
 	 * THE PLOT'S CAPACITY IS WHAT THIS PLACED, not a number derived beside it. A budget in
@@ -298,11 +260,14 @@ namespace PlotYard
 	 * nearly always, and the occasional wrong is the expensive kind: the player spent money
 	 * and got a module that could not be placed.
 	 *
-	 * THE SAME SAMPLER LayOut USES. The layout shown while the outline is dragged IS the
+	 * ONE SAMPLER. A LayOut(footprints) entry that took a caller's list stood beside this one
+	 * until #462 deleted it: the presenter and the tool had moved to Reserve on 2026-09-20 and
+	 * only its own tests still called it. The layout shown while the outline is dragged IS the
 	 * layout that gets built, because there is one piece of code that decides where a thing
 	 * stands. A second evaluator would be a preview quietly describing a different depot.
 	 *
-	 * Gate is where the fence is left open, as LayOut has it. Seed makes the result
+	 * Gate is where the fence is left open - URoadEditFacade::PlaceEntityInPlot puts the
+	 * entity's pose there, so it is the entity's Position. Seed makes the result
 	 * repeatable, which here is load-bearing rather than merely nice: nothing about a
 	 * reservation is saved, so the same plot must solve the same way every rebuild.
 	 */

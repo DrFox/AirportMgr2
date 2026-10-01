@@ -36,6 +36,15 @@ namespace
 		URoadProfile* Runway = TestProfiles::NarrowRunway();
 		URoadProfile* Taxiway = TestProfiles::Taxiway();
 
+		// THE SHORT N-S STRIP IS LAID FIRST (#463). With the long strip laid first, "the shortest taxi" and "the first runway
+		// found" were the same runway, so a PlanAny that simply took the first strip it met passed Shortest. Laid in this order
+		// the first strip is the one with the LONGER taxi, and only the ranking can pick the W-E one.
+		const FRoadNodeId S = Out.Net->AddNode(FVector2D(100000.0, -50000.0));
+		const FRoadNodeId M = Out.Net->AddNode(FVector2D(100000.0, -20000.0));
+		const FRoadNodeId N = Out.Net->AddNode(FVector2D(100000.0, 10000.0));
+		Out.ShortSeed = Out.Net->AddStraightSegment(S, M, Runway);
+		Out.Net->AddStraightSegment(M, N, Runway);
+
 		const FRoadNodeId W = Out.Net->AddNode(FVector2D(-40000.0, 0.0));
 		const FRoadNodeId X = Out.Net->AddNode(FVector2D(20000.0, 0.0));
 		const FRoadNodeId E = Out.Net->AddNode(FVector2D(60000.0, 0.0));
@@ -44,12 +53,7 @@ namespace
 		Out.Net->AddStraightSegment(X, E, Runway);
 		Out.Net->AddStraightSegment(X, T, Taxiway);
 
-		// The short strip, 60000 uu east of T, joined at its midpoint.
-		const FRoadNodeId S = Out.Net->AddNode(FVector2D(100000.0, -50000.0));
-		const FRoadNodeId M = Out.Net->AddNode(FVector2D(100000.0, -20000.0));
-		const FRoadNodeId N = Out.Net->AddNode(FVector2D(100000.0, 10000.0));
-		Out.ShortSeed = Out.Net->AddStraightSegment(S, M, Runway);
-		Out.Net->AddStraightSegment(M, N, Runway);
+		// The short strip is joined to the long one's taxiway at its midpoint, 60000 uu east of T.
 		Out.Net->AddStraightSegment(T, M, Taxiway);
 
 		TestGraph::Derive(*Out.Net);
@@ -84,14 +88,13 @@ bool FPlanAnyShortestTest::RunTest(const FString& Parameters)
 
 	// The alternative, priced: any plan to the N-S strip is longer.
 	FRunwayEnd OtherEnd;
-	A.Net->RunwayExtentAt(FVector2D(100000.0, -49990.0), OtherEnd);
+	if (!TestTrue(TEXT("the N-S strip resolves"), A.Net->RunwayExtentAt(FVector2D(100000.0, -49990.0), OtherEnd))) { return false; }
 	const FDeparturePlan Other = DeparturePlanner::Plan(*A.Net, A.StandNode,
 		OtherEnd.Threshold + OtherEnd.Direction * 10.0, Airframe, ETraversalClass::Aircraft);
 	UE_LOG(LogAirsideTests, Log, TEXT("N-S alternative: %s"), *DeparturePlanner::Describe(Other));
-	if (Other.IsValid())
-	{
-		TestTrue(TEXT("the chosen taxi is no longer than the other strip's"), Plan.Route.Length <= Other.Route.Length);
-	}
+	// ASSERTED, NOT GUARDED BY AN `if`: the comparison below is the whole test, and a plan that never came back would skip it.
+	if (!TestTrue(TEXT("the other strip is plannable, so there is a longer taxi to be shorter than"), Other.IsValid())) { return false; }
+	TestTrue(TEXT("the chosen taxi is strictly shorter than the other strip's"), Plan.Route.Length < Other.Route.Length);
 	return true;
 }
 

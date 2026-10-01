@@ -3,16 +3,6 @@
 #include "Model/RoadNode.h"
 #include "Profiles/RoadProfile.h"
 
-double FAirsideCapability::LongestRunway() const
-{
-	double Longest = 0.0;
-	for (const FRunwaySummary& R : Runways)
-	{
-		Longest = FMath::Max(Longest, R.End.Length);
-	}
-	return Longest;
-}
-
 namespace
 {
 	bool SameStrip(const FRunwaySummary& A, const FVector2D& Threshold, const FVector2D& FarEnd)
@@ -65,20 +55,5 @@ FAirsideCapability AirsideCapability::Summarise(const URoadNetwork& Network)
 	// The runway walk is SummariseRunways, so CheckArrival and this agree on what one runway is.
 	Out.Runways = SummariseRunways(Network);
 
-	const TArray<FEntityInstance>& Entities = Network.GetEntities();
-	for (int32 Index = 0; Index < Entities.Num(); ++Index)
-	{
-		const FEntityInstance& E = Entities[Index];
-		if (!E.bAlive) { continue; }
-		FStandSummary S;
-		S.Entity = Network.EntityIdAt(Index);
-		S.DesignWingspan = E.DesignWingspan;
-		S.Pavement = E.Pavement;
-		for (const FResolvedAnchor& Anchor : E.ResolvedAnchors)
-		{
-			S.AnchorRoles.AddUnique(Anchor.Role);
-		}
-		Out.Stands.Add(S);
-	}
 	return Out;
 }

@@ -54,15 +54,10 @@ namespace GraphOverlay
 	 */
 	AIRSIDE_API void DescribeStands(const URoadNetwork& Network, IToolPreviewSink& Sink);
 
-	/**
-	 * DescribeNodes then DescribeStands.
-	 *
-	 * NO PRODUCTION CALLER SINCE 2026-09-20, and that is worth saying rather than leaving a
-	 * reader to find out: the editor viewport was the one caller with no per-feature toggle,
-	 * and it now has one - the node rings are scaffolding and stand down outside the road
-	 * tools and Edit (see FToolRegistration::bShowsRoadNodes). Kept because it is still the
-	 * honest answer for a caller that genuinely wants everything, and the tests use it; a
-	 * third such caller should ask whether it really has no toggle before reaching for it.
-	 */
-	AIRSIDE_API void Describe(const URoadNetwork& Network, IToolPreviewSink& Sink);
+	// NO COMBINED Describe(Network, Sink) (DescribeNodes then DescribeStands), deleted by #462. It had no
+	// production caller since 2026-09-20 - the editor viewport was the one caller with no per-feature
+	// toggle, and it got one (the node rings are scaffolding and stand down outside the road tools and
+	// Edit, see FToolRegistration::bShowsRoadNodes) - and only the tests kept it. A caller that wants
+	// both calls both; a third caller that thinks it wants "everything" should first ask whether it
+	// really has no toggle.
 }
