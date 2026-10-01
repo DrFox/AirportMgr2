@@ -21,6 +21,13 @@
  * rubber-banding the substep split exists to remove in the first place, just moved to a
  * higher speed setting instead of fixed.
  *
+ * READS THE REAL SPLIT, not a position that a pre-costed speed profile can mask (see
+ * FRouteFollower::Advance's Profile.LimitAt - it plans a corner's braking many steps ahead,
+ * which makes a coarser step's actual DISPLACEMENT a weak and noisy signal here). What matters
+ * is simpler and exact: the number of steps Advance takes for a full ladder-top frame, and so
+ * the length of each, against MaxSubstepSeconds - read off the actor's default rules, i.e. on
+ * whatever a level that never touches either figure actually runs.
+ *
  * HERE, IN AirportOpsTests, SINCE #462: this lived in AirsideTests as Airside.Model.Traffic.
  * SubstepCeilingCoversTheSpeedLadder and passed with its subject broken - the ladder's top
  * was a typed 32.0, so a rung added to USimClock::SpeedLadder (which is in AirportOps, and

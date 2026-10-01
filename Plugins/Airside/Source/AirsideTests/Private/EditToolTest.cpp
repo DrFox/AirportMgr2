@@ -446,7 +446,7 @@ bool FEditModeDragOffersGuidesTest::RunTest(const FString& Parameters)
 	// is within snap reach of any cursor used here.
 	const int32 M0 = Actor->PlaceNode(FVector2D(-6000.0, 15080.0));
 	const int32 M1 = Actor->PlaceNode(FVector2D(-3000.0, 15080.0));
-	Actor->ConnectNodes(M0, M1);
+	if (!TestTrue(TEXT("the third road connects"), Actor->ConnectNodes(M0, M1))) { return false; }
 
 	FBuildSession Session;
 	Session.SelectTool(1);

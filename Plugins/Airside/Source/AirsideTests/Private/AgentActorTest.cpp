@@ -191,20 +191,22 @@ bool FMeridianPitchesAboutItsMainsTest::RunTest(const FString& Parameters)
 	// mechanism. plane7 is exported about the nose gear, so FixedAxleX is -237.8 and the
 	// Meridian is corrected like every other measured airframe.
 	//
-	// THIS TEST GOES RED IF ANYONE PUTS THE DEVIATION BACK, which is the point: reverting
-	// BuildPiperMeridian - which TestAirframes::PiperType() is a one-line wrapper for - to a
-	// main-gear origin would leave every assertion in
-	// Airside.Model.AirframeAxles passing on a self-consistent type, and change nothing
-	// visible except that a Meridian's tail sinks through the tarmac during the flare - a
-	// defect that was reported from play once already, for plane2, and described as "the rear
-	// wheels push into the ground on landing".
+	// WHAT THIS TEST UNIQUELY PINS is the ACTOR'S half. Reverting BuildPiperMeridian - which
+	// TestAirframes::PiperType() is a one-line wrapper for - to a main-gear origin is caught by
+	// Airside.Model.AirframeAxles section 5, which compares the builder with the shipped plane7
+	// asset and its rig; it used to leave every assertion there passing on a self-consistent type.
+	// What nothing else measures is that the pivot the type carries is the one SetPose holds
+	// still while the body pitches: a correct type under a broken correction is a Meridian whose
+	// tail sinks through the tarmac during the flare - a defect that was reported from play once
+	// already, for plane2, and described as "the rear wheels push into the ground on landing".
 	UAircraftType* Type = TestAirframes::PiperType();
 	const FAirframe Meridian = Type->Airframe();
 
 	// THE ONE PITCHED CHECK, since #462 M28. Airside.Present.AgentActor used to repeat this
 	// arithmetic with plane2's mains typed in (-454.3) - the same SetMotion call, the same
 	// three assertions, differing only in where the pivot came from - so this is the survivor
-	// and the pivot is the type's, which is the one source that can drift from the aeroplane.
+	// and the pivot is the type's, so the figure that reaches SetPose is the one the aeroplane
+	// carries.
 	// WHAT THE ARITHMETIC IS FOR, carried over from there:
 	//
 	// PITCHING KEEPS THE MAINS ON THE GROUND, which is the whole of the flare looking right.

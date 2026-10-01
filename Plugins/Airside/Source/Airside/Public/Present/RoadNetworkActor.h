@@ -1385,7 +1385,9 @@ public:
 	URoadProfile* ResolveProfile();
 
 	/**
-	 * How many times RebuildMesh has run, for Airside.Present.MeshRebuildsOnFacadeChange.
+	 * How many times RebuildMesh has run, for Airside.Present.MutatorNotifiesExactlyOnce (one
+	 * row per mutator, MoveNode's included) and Airside.Present.MeshRebuildsOnFacadeChange (the
+	 * undo rebuilds of a hand-drawn guideline link).
 	 *
 	 * A count survives where a triangle-count comparison cannot: MoveNode's own rebuild can
 	 * leave the triangle count exactly as it was (same segment, same profile, a shifted

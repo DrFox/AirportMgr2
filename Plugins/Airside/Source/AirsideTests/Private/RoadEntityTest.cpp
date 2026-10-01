@@ -134,7 +134,9 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		Stand->Anchors.Insert(Late, 0);
 
 		// The instance predates it and cannot know where the de-icer parks. A MISS is the
-		// correct answer; an index would have read past the end of the array to get here.
+		// correct answer. An index would answer wrongly: at the front it shifts every anchor
+		// of the definition by one, so the instance's element N is no longer the definition's
+		// (and appended at the back it would have read past the end).
 		TestNull(TEXT("an anchor added after placement does not resolve on that instance"),
 			Net->GetAnchorNode(Placed, FName(TEXT("DeIcer"))));
 
@@ -167,16 +169,24 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("no ground fixture claims to be the aircraft"),
 				Net->FirstAnchorIdForRole(Placed, EServiceRole::Aircraft).IsNone());
 
-			TestEqual(TEXT("the hydrant pit is the fuel anchor"),
-				Net->FirstAnchorIdForRole(Placed, EServiceRole::Fuel), FName(TEXT("HydrantPit")));
-
-			// ONE BAGGAGE BAY since 2026-09-17, where the Code C stand used to paint two. Role is a
+			// ONE HYDRANT PIT AND ONE BAGGAGE BAY on the definition, counted by role (since
+			// 2026-09-17 the Code C stand paints one bay where it used to paint two). Role is a
 			// CATEGORY, not an identity - a stand with two belt loaders is legal, and a by-role query
 			// then answers the first in definition order - so anything that addresses a service
 			// position does it by ID, which is the invariant FResolvedAnchor exists to hold and the
-			// reason this asks by role at all. (The query used to return the whole list and this
+			// reason this asks by role at all. The query used to return the whole list and these
 			// counted it; production only ever read element 0, so FirstAnchorIdForRole is the one
-			// asked now.)
+			// asked now and the count is taken from the definition the id must come from.
+			const auto AnchorsWithRole = [Stand](EServiceRole Role)
+			{
+				return Stand->Anchors.FilterByPredicate(
+					[Role](const FEntityAnchor& Anchor) { return Anchor.Role == Role; }).Num();
+			};
+			TestEqual(TEXT("the definition declares one fuel anchor"), AnchorsWithRole(EServiceRole::Fuel), 1);
+			TestEqual(TEXT("and one baggage anchor"), AnchorsWithRole(EServiceRole::Baggage), 1);
+
+			TestEqual(TEXT("the hydrant pit is the fuel anchor"),
+				Net->FirstAnchorIdForRole(Placed, EServiceRole::Fuel), FName(TEXT("HydrantPit")));
 			TestEqual(TEXT("the baggage hold is the baggage anchor"),
 				Net->FirstAnchorIdForRole(Placed, EServiceRole::Baggage), FName(TEXT("BaggageHold")));
 

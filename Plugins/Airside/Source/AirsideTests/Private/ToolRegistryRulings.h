@@ -5,7 +5,7 @@
 
 /**
  * WHAT EACH REGISTERED TOOL IS RULED TO DO, one row per ToolRegistry() entry and one column per
- * ruling - the ONE table the registry-agreement tests read (#462 M6; there were five, one per
+ * ruling - the ONE table the registry-agreement tests read (#462 M6; there were four, one per
  * column, and a new tool had to be added to every one of them).
  *
  * Airside.Tool.RegistryRulingsAreDeclaredForEveryEntry checks the registry against it by NAME,
