@@ -409,4 +409,113 @@ bool FHeldTaxiOutRestartClaimedFirstTest::RunTest(const FString&)
 	return true;
 }
 
+/**
+ * A DEPARTURE WHOSE RUNWAY ENTRY GOES MID-PUSH HOLDS WHERE THE PUSH ENDS (issue #498). The push's re-resolve points the goal
+ * at the push's own end, and the taxi out's re-resolve, finding no node where the entry was, replanned to that goal: the taxi
+ * out became a drive to the last live node and back to where the push ended ("taxi-in replanned by the rebuild at step 2:
+ * 10800 uu" on this fixture), disarmed and with no wait, so the aeroplane drove out and back and stopped there, no departure
+ * armed and nothing to retry it. The held taxi out's contract (#174, #444) is the answer: the push runs out, the aeroplane
+ * holds there for a way to the runway, and a line drawn to one re-arms it.
+ *
+ * TWO PHASES, because the bug is made in one and shows in the other: the rebuild's answer (the taxi out marked to be planned
+ * again, and not extended), then what the aeroplane does with it once the push has run out.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHeldTaxiOutMidPushRunwayLossTest, "Airside.Model.Traffic.HeldTaxiOut.MidPushRunwayLossHolds",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FHeldTaxiOutMidPushRunwayLossTest::RunTest(const FString&)
+{
+	const FAirframe Piper = TestAirframes::Piper();
+	const FTestAirport Air = FTestAirport::Build(Piper, { .StandCount = 2 });
+	URoadNetwork* Net = Air.Net;
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+
+	// AN AEROPLANE ON A STAND, sent off for the runway, and one second into its push.
+	const int32 Id = Traffic->DispatchArrival(*Net, Air.Threshold - FVector2D(1000.0, 0.0), Piper, 0.0);
+	if (!TestTrue(TEXT("an arrival is admitted"), Id > 0)) { return false; }
+	if (!TestTrue(TEXT("and parks"), RunUntil(*Traffic, *Net, 900.0, [&]()
+		{
+			const FRoadAgent* A = Traffic->FindAgent(Id);
+			return A != nullptr && A->Phase == EAgentPhase::Parked;
+		}))) { return false; }
+	if (!TestEqual(TEXT("it departs"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None)) { return false; }
+	for (int32 Tick = 0; Tick < 30; ++Tick) { Traffic->Advance(1.0 / 30.0, Net); }
+	const FRoadAgent* Pushing = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("mid-push, armed, a taxi out waiting at the push's end"),
+		Pushing != nullptr && Pushing->Phase == EAgentPhase::Manoeuvring && !Pushing->Pushback.HasArrived()
+		&& Pushing->bDepartureArmed && Pushing->TaxiOutPlan.Polyline.Num() > 1)) { return false; }
+	const FVector2D PushEnd = Pushing->TaxiOutPlan.Polyline[0];
+	const double TaxiOutWas = Pushing->TaxiOutPlan.Length;
+
+	// THE RUNWAY'S LINES GO - every guideline node within 30 m of the centreline, the entry among them.
+	TArray<FGuidelineNodeId> OnRunway;
+	for (int32 Index = 0; Index < Net->GetGuidelineNodes().Num(); ++Index)
+	{
+		const FGuidelineNode& Node = Net->GetGuidelineNodes()[Index];
+		if (Node.bAlive && FMath::Abs(Node.Position.Y) <= 3000.0)
+		{
+			OnRunway.Add(Net->GuidelineNodeIdAt(Index));
+		}
+	}
+	for (const FGuidelineNodeId Node : OnRunway) { Net->RemoveGuidelineNode(Node); }
+	FLogLineSpy Spy(FName(TEXT("LogAirsideTraffic")));
+	GLog->AddOutputDevice(&Spy);
+	Traffic->OnGraphRebuilt(*Net);
+	GLog->RemoveOutputDevice(&Spy);
+
+	// PHASE 1, THE REBUILD: the taxi out is to be planned again, and it is not a route back to where the push ends.
+	const FRoadAgent* Rebuilt = Traffic->FindAgent(Id);
+	if (!TestNotNull(TEXT("it is still there"), Rebuilt)) { return false; }
+	TestTrue(TEXT("still pushing"), Rebuilt->Phase == EAgentPhase::Manoeuvring && !Rebuilt->Pushback.HasArrived());
+	TestTrue(TEXT("its taxi out is marked to be planned again where the push ends"), Rebuilt->IsWaitingFor(EAgentWait::ForTaxiOutRoute));
+	TestFalse(TEXT("no replan line: the taxi out was not re-routed to the goal the push's re-resolve left"),
+		Spy.CapturedLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("replanned by the rebuild")); }));
+	TestTrue(TEXT("and the rebuild's line names the taxi out, not a taxi-in"),
+		Spy.CapturedLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("'s taxi-out truncated by the rebuild")); }));
+	const double EndsFromPushEnd = FVector2D::Distance(Rebuilt->TaxiOutPlan.Polyline.Last(), PushEnd);
+	TestTrue(FString::Printf(TEXT("its taxi out is not extended back to the push's end (ends %.0f uu from it, %.0f uu long, was %.0f)"),
+		EndsFromPushEnd, Rebuilt->TaxiOutPlan.Length, TaxiOutWas),
+		EndsFromPushEnd > 1000.0 && Rebuilt->TaxiOutPlan.Length <= TaxiOutWas + 1.0);
+
+	// PHASE 2, THE PUSH RUNS OUT: it holds there for a way to the runway, and never taxis - there is nowhere to taxi to.
+	bool bEverTaxied = false;
+	const int32 AskedBefore = Traffic->TaxiOutReplanAttemptsForTest();
+	const bool bHeld = RunUntil(*Traffic, *Net, 300.0, [&]()
+		{
+			const FRoadAgent* A = Traffic->FindAgent(Id);
+			bEverTaxied |= A != nullptr && A->Phase == EAgentPhase::Taxiing;
+			return A != nullptr && A->IsHoldingForTaxiOut();
+		}, 1.0 / 30.0);
+	for (int32 Tick = 0; bHeld && Tick < 60; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+		bEverTaxied |= Traffic->FindAgent(Id)->Phase == EAgentPhase::Taxiing;
+	}
+	const FRoadAgent* Held = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("the push ran out and it holds for a way to the runway"), bHeld && Held != nullptr
+		&& Held->IsHoldingForTaxiOut() && Held->IsWaitingFor(EAgentWait::ForTaxiOutRoute))) { return false; }
+	TestFalse(TEXT("it never taxied"), bEverTaxied);
+	TestTrue(FString::Printf(TEXT("it holds where the push ended (%.1f uu from it)"), FVector2D::Distance(Held->LastMotion.Position, PushEnd)),
+		FVector2D::Distance(Held->LastMotion.Position, PushEnd) < 10.0);
+	TestTrue(TEXT("asked for a way out, and refused - the hold is the retry's, not a dead end"),
+		Traffic->TaxiOutReplanAttemptsForTest() > AskedBefore && Held->HasSaidWait());
+
+	// THE PLAYER'S FIX: a line from the node nearest where it holds - the one the retry searches from - to the runway.
+	const FGuidelineNodeId Near = RouteSearch::FindNearestNode(*Net, Held->LastMotion.Position, Held->Class, 3000.0);
+	if (!TestTrue(TEXT("a taxi line is within reach of where it holds"), Near.IsSet())) { return false; }
+	const FVector2D NearAt = Net->GetGuidelineNode(Near)->Position;
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	TestGraph::Join(*Net, Near, TestGraph::Node(*Net, NearAt.X, 0.0), Options);
+	Traffic->Advance(1.0 / 30.0, Net);
+	const FRoadAgent* Fixed = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("re-armed for the runway, its wait over"),
+		Fixed != nullptr && Fixed->bDepartureArmed && !Fixed->IsWaitingFor(EAgentWait::ForTaxiOutRoute))) { return false; }
+	TestTrue(TEXT("and it leaves on the new line and rolls"), RunUntil(*Traffic, *Net, 300.0, [&]()
+		{
+			const FRoadAgent* A = Traffic->FindAgent(Id);
+			return A != nullptr && A->Phase == EAgentPhase::Departing;
+		}, 1.0 / 30.0));
+	return true;
+}
+
 #endif

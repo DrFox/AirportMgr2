@@ -19,13 +19,19 @@ namespace
 	// refused with no sentence of its own. Taxiing, Parked and Stranded are answered by Decide before it gets here.
 	// ENFORCED BY: AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (C4062 as an error over this function); Check-Architecture rule 81
 	AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
-	FText PhaseRefusal(EAgentPhase Phase)
+	FText PhaseRefusal(const FRoadAgent& Agent)
 	{
-		switch (Phase)
+		switch (Agent.Phase)
 		{
 		case EAgentPhase::Arriving:    return LOCTEXT("Arriving", "On the runway - the landing owns it");
 		case EAgentPhase::Departing:   return LOCTEXT("Departing", "Taking off - the runway owns it");
-		case EAgentPhase::Manoeuvring: return LOCTEXT("Manoeuvring", "Coming off its stand - wait for it to finish");
+		// A PUSH THAT IS OVER AND HOLDING is not coming off its stand (#501 review): its card reads "No way to the runway -
+		// waiting" (InspectFacts::StatusOf) and this said "wait for it to finish" beside it. It goes by itself once a line
+		// reaches it - UGroundTraffic::RetryWaiters - so there is nothing for Replan to do but say so, in the card's words.
+		// ENFORCED BY: AirportOps.Model.AgentRescue.HeldPushRefusalMatchesTheCard
+		case EAgentPhase::Manoeuvring: return Agent.IsHoldingForTaxiOut()
+			? LOCTEXT("HeldPush", "No way to the runway - waiting for a line to reach it")
+			: LOCTEXT("Manoeuvring", "Coming off its stand - wait for it to finish");
 		case EAgentPhase::Reversing:   return LOCTEXT("Reversing", "Reversing - wait for it to finish");
 		case EAgentPhase::Gone:        return LOCTEXT("Gone", "Already gone");
 		case EAgentPhase::Taxiing:
@@ -67,7 +73,7 @@ FUnstickVerdict UAgentRescue::Decide(const FRoadAgent& Agent, EUnstickAction Act
 			return FUnstickVerdict::No(bVehicle ? LOCTEXT("ParkedVehicle", "Parked - it is not going anywhere to replan")
 				: LOCTEXT("ParkedAircraft", "Parked - use Depart to send it"));
 		}
-		return FUnstickVerdict::No(PhaseRefusal(Agent.Phase));
+		return FUnstickVerdict::No(PhaseRefusal(Agent));
 
 	case EUnstickAction::SendHome:
 		if (bVehicle)
@@ -95,7 +101,14 @@ FUnstickVerdict UAgentRescue::Decide(const FRoadAgent& Agent, EUnstickAction Act
 		{
 			return FUnstickVerdict::No(LOCTEXT("OnStand", "Already parked"));
 		}
-		return FUnstickVerdict::No(PhaseRefusal(Agent.Phase));
+		// A HELD PUSH IS A DEPARTURE (#501 re-review): Find stand would send it back to one, and Replan's sentence (the
+		// card's, from PhaseRefusal) answers a different question - this one says why there is no stand to seek.
+		// ENFORCED BY: AirportOps.Model.AgentRescue.HeldPushRefusalMatchesTheCard
+		if (Agent.Phase == EAgentPhase::Manoeuvring && Agent.IsHoldingForTaxiOut())
+		{
+			return FUnstickVerdict::No(LOCTEXT("HeldPushHome", "Departing - it waits for a way to the runway, not a stand"));
+		}
+		return FUnstickVerdict::No(PhaseRefusal(Agent));
 	}
 	return FUnstickVerdict::No(FText::GetEmpty());
 }

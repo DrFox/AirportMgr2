@@ -4875,7 +4875,12 @@ $modelLineBudget = [ordered]@{
     # 2026-10-01: re-resolution after a graph rebuild (splice, re-resolve, rescue) - already the extraction out of
     # GroundTraffic.cpp; 7 functions, each long. RAISED 1582 -> 1589 the same day by #444: the retarget branch's guard for a
     # held departure, with its reason and its test. RAISED 1589 -> 1591 by #497: who settles a refused re-hold (#442).
-    'Plugins\Airside\Source\Airside\Private\Model\GroundTrafficRebuild.cpp'   = 1591
+    # RAISED 1591 -> 1690 by #498 (PR #501, with its two reviews): a pushing departure's push and taxi out each re-resolved to
+    # its own goal (the push's false "NOT REPLANNED" comment rewritten as its contract), the push's rejoin of the live line
+    # under it (RejoinPush, PushRejoinRadius - #396's RejoinInPlace for the push - with a Rejoin's aftermath spelled out, since
+    # FRouteChange::Rejoin is the follower's), and the three rebuild lines naming the plan; each with its reason and pin. The
+    # rejoin's extraction to its own file is #502. No cut here: all of it is re-resolution after a rebuild, this file's job.
+    'Plugins\Airside\Source\Airside\Private\Model\GroundTrafficRebuild.cpp'   = 1690
     # 2026-10-01: the route search (A* over the guideline graph, plan building, run description) - one algorithm.
     'Plugins\Airside\Source\Airside\Private\Model\RouteSearch.cpp'            = 1191
     # 2026-10-01: what #427 left of UJobBoard - the jobs, the vehicles' lifecycle and Step's one sequence; bidding and

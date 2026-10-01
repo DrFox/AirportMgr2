@@ -81,6 +81,27 @@ struct AIRSIDE_API FPushbackRun
 	bool Advance(double DeltaSeconds, double StopWithin, bool bHasThrust,
 		FVector2D& OutPosition, double& OutHeading);
 
-	/** True once the manoeuvre has run the length of its route. */
-	bool HasArrived() const { return Plan.IsRunBy(Travelled); }
+	/**
+	 * ONTO A LIVE LINE UNDER IT, after a rebuild moved the one it was on (#498 review; the rebuild's RejoinPush). Route
+	 * runs from the start of that edge to the push's end, and Along is how far along it the aeroplane's projection is. The
+	 * push carries on FROM WHERE IT STANDS, Speed kept as the follower's Replace keeps it: a line a few metres off is met
+	 * by a straight join leg that reaches it AHEAD, never by a hop - a push has no steering to hide a sideways jump, and
+	 * PushbackStrandedTaxiOutReplans measures every frame for one. On the line already (a node moved along it), no join.
+	 * False, and NOTHING touched, for a route that is not drivable or an Along off it - and for a join the first step
+	 * has no room for (see the .cpp: a steep or backward leg is an instant yaw, so that push strands and holds instead).
+	 * ENFORCED BY: Airside.Model.PushbackJunctionMovedBehindItCompletes (a join),
+	 * Airside.Model.PushbackLeadInMovedAlongItCompletes (none), Airside.Model.PushbackArmShiftedNearItsEndHolds (no room)
+	 */
+	bool Rejoin(const FRoutePlan& Route, double Along, const FVector2D& From);
+
+	/**
+	 * True once the manoeuvre has run the length of its route - OR ITS ROUTE DIED UNDER IT: a rebuild that strands a push
+	 * (the ground under it deleted) marks the plan Unreachable, and this went on playing it, pushing the aeroplane along a
+	 * line that no longer existed (#498's probe). Over is over: Advance ends it where it stands, and the handover holds it
+	 * there for a way to the runway, as it holds a push cut short. THE STRAND'S OWN MARKER, as the Reversing arm reads it
+	 * (#455), not FRouteFollower's !IsDrivable: Start refuses a plan that is not drivable, so a running push's plan stops
+	 * being one only by that marker, and a hand-built push in a unit test need not be a whole route to be a live one.
+	 * ENFORCED BY: Airside.Model.PushbackOnDeletedGroundStops
+	 */
+	bool HasArrived() const { return Plan.Result == ERouteResult::Unreachable || Plan.IsRunBy(Travelled); }
 };

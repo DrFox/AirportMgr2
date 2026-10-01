@@ -4,6 +4,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/GroundTraffic.h"
+#include "Model/InspectFacts.h"
 #include "Model/PushbackRun.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadGuideline.h"
@@ -399,6 +400,11 @@ bool FPushbackStrandedTaxiOutReplansTest::RunTest(const FString& Parameters)
 	// tens of uu; a teleport to the old runway start is thousands.
 	FVector2D Last = Traffic->FindAgent(Id)->LastMotion.Position;
 	double WorstJump = 0.0;
+	// AND EVERY FRAME'S TURN (#501 re-review): the play report was "facing the wrong way, crabbed round" as well as the
+	// jump, and a push has no steer law - a kink in the line it walks is an instant yaw. The rejoin's join leg meets the
+	// moved arm at 14.04 degrees; nothing on this run may turn the body further in one frame.
+	double LastHeading = Traffic->FindAgent(Id)->LastMotion.Heading;
+	double WorstTurn = 0.0;
 	bool bDeparted = false;
 	int32 DeadAtHandover = INDEX_NONE;   // dead lines in the route it taxis on, read once
 	// AND ONE SECOND INTO THE ROLL: the take-off places the aeroplane on its entry on the first
@@ -415,6 +421,8 @@ bool FPushbackStrandedTaxiOutReplansTest::RunTest(const FString& Parameters)
 		// A first version broke out first and never saw it.
 		WorstJump = FMath::Max(WorstJump, FVector2D::Distance(Last, Now->LastMotion.Position));
 		Last = Now->LastMotion.Position;
+		WorstTurn = FMath::Max(WorstTurn, FMath::RadiansToDegrees(FMath::Abs(FMath::UnwindRadians(Now->LastMotion.Heading - LastHeading))));
+		LastHeading = Now->LastMotion.Heading;
 		// THE ROUTE IT IS HANDED WHEN THE PUSH ENDS. The code before this fix drove the stranded
 		// taxi-out's old polyline - every metre of it on lines the edit had removed.
 		if (DeadAtHandover == INDEX_NONE && Now->Phase == EAgentPhase::Taxiing)
@@ -429,6 +437,7 @@ bool FPushbackStrandedTaxiOutReplansTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("it taxis out on live lines only - none the edit removed"), DeadAtHandover, 0);
 	TestTrue(FString::Printf(TEXT("it never jumps: worst frame-to-frame move %.0f uu"), WorstJump), WorstJump < 200.0);
+	TestTrue(FString::Printf(TEXT("it never swings round: worst frame-to-frame turn %.2f deg"), WorstTurn), WorstTurn <= 14.1);
 	TestTrue(TEXT("and it reaches the runway and rolls"), bDeparted);
 	return true;
 }
@@ -639,6 +648,458 @@ bool FPushbackRouteIsDrawnTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("then the taxi out, forward"), Runs[1].bReverse);
 	TestTrue(TEXT("which begins where the push ends"),
 		Runs[1].Points.Num() > 0 && Runs[1].Points[0].Equals(Agent->TaxiOutPlan.Polyline[0], 1.0));
+	return true;
+}
+
+namespace
+{
+/**
+ * A PUSH WHOSE END IS DELETED NEVER REVERSES ONTO THE RUNWAY (found by #498's probe). The push's re-resolve, finding no node
+ * where the push was to end, replanned to the AGENT's goal - the runway entry DepartAgent gave the taxi out - so the push
+ * became stand -> junction -> runway entry, and the aeroplane was pushed backwards up the taxiway and onto the runway
+ * ("taxi-in replanned by the rebuild at step 1: 20000 uu"). #498's own bug, on the push instead of the taxi out.
+ *
+ * THE PUSH CONTRACT this states: a push is re-routed only to its OWN end, where its taxi out begins - never to the
+ * departure's goal. When that end is gone it is cut back to the last live node it reaches and ends there; a push that ends
+ * anywhere but where its taxi out begins holds for a new way to the runway, which RetryWaiters plans from where it stopped.
+ *
+ * TWO EDITS, one contract: the push's end node deleted, and the arm J-E deleted with E left standing alone (#501 review:
+ * the commonest edit, and a different branch - the push's own end is then still a live node, so the search to it runs and
+ * finds no way there, where a deleted end's fails at once for want of a goal). Both cut the push back to J.
+ */
+	bool PushbackStopsShortOfTheRunway(FAutomationTestBase& Test, TFunctionRef<void(URoadNetwork&, const FPushbackGraph&)> Edit)
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const FPushbackGraph G = PushbackBuildGraph(*Net);
+		const int32 Id = PushbackParkFacing(*Traffic, *Net, G.B, G.A);
+		if (!Test.TestTrue(TEXT("parked"), Id > 0)) { return false; }
+		if (!Test.TestEqual(TEXT("departs by pushing back"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None)) { return false; }
+		for (int32 Tick = 0; Tick < 30; ++Tick) { Traffic->Advance(1.0 / 30.0, Net); }
+		if (!Test.TestTrue(TEXT("mid-push, still on the lead-in"), Traffic->FindAgent(Id)->Phase == EAgentPhase::Manoeuvring
+			&& Traffic->FindAgent(Id)->Pushback.Travelled < 10000.0)) { return false; }
+
+		// THE EDIT, beyond the junction. The entry B and the line J-B to it are untouched.
+		const FVector2D Entry = Net->GetGuidelineNode(G.B)->Position;
+		const FVector2D Junction = Net->GetGuidelineNode(G.J)->Position;
+		const double PushNearest = FVector2D::Distance(Junction, Entry);   // the nearest a push down the lead-in comes to B
+		Edit(*Net, G);
+		FLogLineSpy Spy(FName(TEXT("LogAirsideTraffic")));
+		GLog->AddOutputDevice(&Spy);
+		Traffic->OnGraphRebuilt(*Net);
+		GLog->RemoveOutputDevice(&Spy);
+		Test.TestTrue(TEXT("the rebuild's line names the push, not a taxi-in"), Spy.CapturedLines.ContainsByPredicate([](const FString& L)
+			{
+				return L.Contains(TEXT("'s push truncated by the rebuild"));
+			}));
+
+		auto PushNamesTheEntry = [&](const FRoadAgent& A)
+		{
+			return A.Pushback.Plan.Steps.ContainsByPredicate([&](const FRouteStep& S) { return S.To == G.B; })
+				|| A.Pushback.Plan.Polyline.ContainsByPredicate([&](const FVector2D& P) { return FVector2D::Distance(P, Entry) < 100.0; });
+		};
+		const FRoadAgent* Rebuilt = Traffic->FindAgent(Id);
+		Test.TestFalse(TEXT("the push is not re-routed to the runway entry"), PushNamesTheEntry(*Rebuilt));
+		Test.TestTrue(FString::Printf(TEXT("it is cut back to the junction, the last live node it reaches (ends %.0f uu from it)"),
+			Rebuilt->Pushback.Plan.Polyline.Num() > 0 ? FVector2D::Distance(Rebuilt->Pushback.Plan.Polyline.Last(), Junction) : -1.0),
+			Rebuilt->Pushback.Plan.IsValid() && FVector2D::Distance(Rebuilt->Pushback.Plan.Polyline.Last(), Junction) < 1.0);
+
+		// THE PUSH PLAYS OUT: never along a line to the entry, never nearer it than the junction.
+		double Nearest = TNumericLimits<double>::Max();
+		bool bNamed = false;
+		FVector2D PushEndedAt = Rebuilt->LastMotion.Position;
+		const bool bPushOver = RunUntil(*Traffic, *Net, 300.0, [&]()
+			{
+				const FRoadAgent* A = Traffic->FindAgent(Id);
+				if (A == nullptr || A->Phase != EAgentPhase::Manoeuvring || A->IsHoldingForTaxiOut()) { return true; }
+				Nearest = FMath::Min(Nearest, FVector2D::Distance(A->LastMotion.Position, Entry));
+				bNamed |= PushNamesTheEntry(*A);
+				PushEndedAt = A->LastMotion.Position;
+				return false;
+			}, 1.0 / 30.0);
+		Test.TestTrue(TEXT("the push ends"), bPushOver);
+		Test.TestFalse(TEXT("its push never named the entry"), bNamed);
+		Test.TestTrue(FString::Printf(TEXT("and never took it nearer the entry than the junction (%.0f uu, the junction is %.0f)"), Nearest, PushNearest),
+			Nearest >= PushNearest - 10.0);
+		Test.TestTrue(FString::Printf(TEXT("it ends at the junction (%.0f uu from it)"), FVector2D::Distance(PushEndedAt, Junction)),
+			FVector2D::Distance(PushEndedAt, Junction) < 10.0);
+
+		// AND IS GIVEN A WAY OUT FROM THERE: J-B is live, so the retry plans it at once, and it rolls.
+		Test.TestTrue(TEXT("then a new way to the runway from where its push ended, and it rolls"), RunUntil(*Traffic, *Net, 300.0, [&]()
+			{
+				const FRoadAgent* A = Traffic->FindAgent(Id);
+				return A != nullptr && A->Phase == EAgentPhase::Departing;
+			}, 1.0 / 30.0));
+		return true;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPushbackEndGoneStopsShortTest,
+	"Airside.Model.PushbackEndGoneStopsShortOfTheRunway",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPushbackEndGoneStopsShortTest::RunTest(const FString& Parameters)
+{
+	// THE PUSH'S END GOES: E, and the arm J-E with it.
+	return PushbackStopsShortOfTheRunway(*this, [](URoadNetwork& Net, const FPushbackGraph& G) { Net.RemoveGuidelineNode(G.E); });
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPushbackArmDeletedStopsShortTest,
+	"Airside.Model.PushbackArmDeletedStopsAtTheJunction",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPushbackArmDeletedStopsShortTest::RunTest(const FString& Parameters)
+{
+	// THE ARM GOES, ITS END LEFT STANDING ALONE: the line J-E, not the node E.
+	return PushbackStopsShortOfTheRunway(*this, [](URoadNetwork& Net, const FPushbackGraph& G)
+		{
+			for (int32 Index = 0; Index < Net.GetGuidelineEdges().Num(); ++Index)
+			{
+				const FGuidelineEdge& Edge = Net.GetGuidelineEdges()[Index];
+				if (Edge.bAlive && ((Edge.A == G.J && Edge.B == G.E) || (Edge.A == G.E && Edge.B == G.J)))
+				{
+					FGuidelineEdgeId JE;
+					JE.Index = Index;
+					JE.Generation = Edge.Generation;
+					Net.RemoveGuidelineEdge(JE);
+					return;
+				}
+			}
+		});
+}
+
+/**
+ * A PUSH WHOSE JUNCTION IS DRAGGED BEHIND IT COMPLETES (#501 review). Past J and pushed along the arm toward E, J moves
+ * 5 m: far past the 25 uu re-resolve radius, so the step it is on fails its match with the arm under it still pavement, a
+ * few metres off. Stranding it stopped the aeroplane mid-arm for good - no node within the held taxi out's 30 m - where
+ * main had played its old line out over the pavement and departed. It rejoins the moved arm (ReResolvePlan's RejoinPush)
+ * by a join leg, not a hop, completes its push at E and departs.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPushbackJunctionMovedBehindItTest,
+	"Airside.Model.PushbackJunctionMovedBehindItCompletes",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPushbackJunctionMovedBehindItTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FPushbackGraph G = PushbackBuildGraph(*Net);
+	const int32 Id = PushbackParkFacing(*Traffic, *Net, G.B, G.A);
+	if (!TestTrue(TEXT("parked"), Id > 0)) { return false; }
+	if (!TestEqual(TEXT("departs by pushing back"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None)) { return false; }
+	// 6 km ALONG THE ARM: the nearest node, after the drag, is 60 m away - past the held taxi out's 30 m reach.
+	for (int32 Tick = 0; Tick < 30 * 300 && Traffic->FindAgent(Id)->Pushback.Travelled < 16000.0; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+	}
+	if (!TestTrue(TEXT("pushing along the arm, past the junction"), Traffic->FindAgent(Id)->Phase == EAgentPhase::Manoeuvring
+		&& Traffic->FindAgent(Id)->Pushback.Travelled >= 16000.0)) { return false; }
+
+	// J DRAGGED 5 m SOUTH: every line through it re-laid to the moved node. E, the push's end, stays.
+	const FVector2D EndAt = Net->GetGuidelineNode(G.E)->Position;
+	Net->RemoveGuidelineNode(G.J);
+	const FGuidelineNodeId J2 = TestGraph::Node(*Net, 0.0, -10500.0);
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	TestGraph::Join(*Net, G.A, J2, Options);
+	TestGraph::Join(*Net, J2, G.B, Options);
+	TestGraph::Join(*Net, J2, G.E, Options);
+	// A WAIT IT WAS IN when the edit landed (#501 re-review): somebody's claim on the push's end, five seconds of stall.
+	// The rejoin is a new route, and #429's reason holds for it - the wait is over by construction - so both reset.
+	FGroundTrafficTestAccess(*Traffic).ScriptWait(Id, FTrafficResource::OfNode(G.E), 99, 5.0);
+	FLogLineSpy Spy(FName(TEXT("LogAirsideTraffic")));
+	GLog->AddOutputDevice(&Spy);
+	Traffic->OnGraphRebuilt(*Net);
+	GLog->RemoveOutputDevice(&Spy);
+	TestTrue(TEXT("the push rejoined the moved arm"), Spy.CapturedLines.ContainsByPredicate([](const FString& L)
+		{
+			return L.Contains(TEXT("'s push rejoined the pavement under it"));
+		}));
+	TestTrue(TEXT("its push is live, not stranded"), Traffic->FindAgent(Id)->Pushback.Plan.IsValid());
+	TestTrue(FString::Printf(TEXT("and its old wait is over: waiting on %d, stalled %.1f s"), Traffic->FindAgent(Id)->GetWaitingOn(),
+		Traffic->FindAgent(Id)->GetStalledSeconds()),
+		Traffic->FindAgent(Id)->GetWaitingOn() == 0 && Traffic->FindAgent(Id)->GetStalledSeconds() == 0.0);
+
+	// THE PUSH PLAYS OUT, without a jump or a swing, to its own end. The join leg meets the moved arm at atan(1/4), 14.04
+	// degrees, and leaves the old line at that less the arm's own 1.4 - the bound FPushbackRun::Rejoin states.
+	FVector2D Last = Traffic->FindAgent(Id)->LastMotion.Position;
+	double LastHeading = Traffic->FindAgent(Id)->LastMotion.Heading;
+	FVector2D PushEndedAt = Last;
+	double WorstJump = 0.0;
+	double WorstTurn = 0.0;
+	RunUntil(*Traffic, *Net, 300.0, [&]()
+		{
+			const FRoadAgent* A = Traffic->FindAgent(Id);
+			if (A == nullptr || A->Phase != EAgentPhase::Manoeuvring || A->IsHoldingForTaxiOut()) { return true; }
+			WorstJump = FMath::Max(WorstJump, FVector2D::Distance(Last, A->LastMotion.Position));
+			WorstTurn = FMath::Max(WorstTurn,
+				FMath::RadiansToDegrees(FMath::Abs(FMath::UnwindRadians(A->LastMotion.Heading - LastHeading))));
+			Last = A->LastMotion.Position;
+			LastHeading = A->LastMotion.Heading;
+			PushEndedAt = Last;
+			return false;
+		}, 1.0 / 30.0);
+	TestTrue(FString::Printf(TEXT("it never jumps onto the moved arm: worst frame-to-frame move %.0f uu"), WorstJump), WorstJump < 200.0);
+	TestTrue(FString::Printf(TEXT("nor swings onto it: worst frame-to-frame turn %.2f deg"), WorstTurn), WorstTurn <= 14.1);
+	TestTrue(FString::Printf(TEXT("it completes its push at E (%.0f uu from it)"), FVector2D::Distance(PushEndedAt, EndAt)),
+		FVector2D::Distance(PushEndedAt, EndAt) < 10.0);
+	TestTrue(TEXT("and departs"), RunUntil(*Traffic, *Net, 300.0, [&]()
+		{
+			const FRoadAgent* A = Traffic->FindAgent(Id);
+			return A != nullptr && A->Phase == EAgentPhase::Departing;
+		}, 1.0 / 30.0));
+	return true;
+}
+
+/**
+ * A PUSH WHOSE LEAD-IN IS SHORTENED UNDER IT COMPLETES (#501 review, the probe's S6). On the lead-in A-J, J and E are both
+ * moved 5 m: J along the lead-in's own axis, so the line under the aeroplane is still pavement exactly where it is, but the
+ * step it is on ends at a node that no longer resolves and the push's end E has gone. It held where it stood with the line
+ * still under it - no node within 30 m. It rejoins the line it is on (no join: 0 uu off), completes its push at the moved
+ * end, and departs.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPushbackLeadInMovedAlongItTest,
+	"Airside.Model.PushbackLeadInMovedAlongItCompletes",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPushbackLeadInMovedAlongItTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FPushbackGraph G = PushbackBuildGraph(*Net);
+	const int32 Id = PushbackParkFacing(*Traffic, *Net, G.B, G.A);
+	if (!TestTrue(TEXT("parked"), Id > 0)) { return false; }
+	if (!TestEqual(TEXT("departs by pushing back"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None)) { return false; }
+	// HALF WAY DOWN THE LEAD-IN: 50 m from the stand and 45 m from where J will be - both past the retry's 30 m.
+	for (int32 Tick = 0; Tick < 30 * 300 && Traffic->FindAgent(Id)->Pushback.Travelled < 5000.0; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+	}
+	if (!TestTrue(TEXT("pushing down the lead-in"), Traffic->FindAgent(Id)->Phase == EAgentPhase::Manoeuvring
+		&& Traffic->FindAgent(Id)->Pushback.Travelled >= 5000.0 && Traffic->FindAgent(Id)->Pushback.Travelled < 10000.0)) { return false; }
+
+	Net->RemoveGuidelineNode(G.J);
+	Net->RemoveGuidelineNode(G.E);
+	const FGuidelineNodeId J2 = TestGraph::Node(*Net, 0.0, -10500.0);
+	const FGuidelineNodeId E2 = TestGraph::Node(*Net, 20000.0, -10500.0);
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	TestGraph::Join(*Net, G.A, J2, Options);
+	TestGraph::Join(*Net, J2, G.B, Options);
+	TestGraph::Join(*Net, J2, E2, Options);
+	const FVector2D FoundAt = Traffic->FindAgent(Id)->LastMotion.Position;
+	const double TravelledWas = Traffic->FindAgent(Id)->Pushback.Travelled;
+	Traffic->OnGraphRebuilt(*Net);
+	const FRoadAgent* Rebuilt = Traffic->FindAgent(Id);
+	TestTrue(TEXT("its push is live, not stranded"), Rebuilt->Pushback.Plan.IsValid());
+	// ON THE SAME LINE FROM THE SAME STAND, so the projection is as far along the rejoined push as the aeroplane was along
+	// the old one: no join leg, and nothing re-read on other geometry.
+	TestTrue(FString::Printf(TEXT("it rejoins at the distance it had pushed (%.1f uu, was %.1f)"), Rebuilt->Pushback.Travelled,
+		TravelledWas), FMath::IsNearlyEqual(Rebuilt->Pushback.Travelled, TravelledWas, 1.0));
+	Traffic->Advance(1.0 / 30.0, Net);
+	TestTrue(FString::Printf(TEXT("and one frame on it is a frame's push from where it stood (%.1f uu)"),
+		FVector2D::Distance(FoundAt, Traffic->FindAgent(Id)->LastMotion.Position)),
+		FVector2D::Distance(FoundAt, Traffic->FindAgent(Id)->LastMotion.Position) < 20.0);
+
+	FVector2D PushEndedAt = Traffic->FindAgent(Id)->LastMotion.Position;
+	RunUntil(*Traffic, *Net, 300.0, [&]()
+		{
+			const FRoadAgent* A = Traffic->FindAgent(Id);
+			if (A == nullptr || A->Phase != EAgentPhase::Manoeuvring || A->IsHoldingForTaxiOut()) { return true; }
+			PushEndedAt = A->LastMotion.Position;
+			return false;
+		}, 1.0 / 30.0);
+	const FVector2D MovedEnd = Net->GetGuidelineNode(E2)->Position;
+	TestTrue(FString::Printf(TEXT("it completes its push at the moved end (%.0f uu from it)"), FVector2D::Distance(PushEndedAt, MovedEnd)),
+		FVector2D::Distance(PushEndedAt, MovedEnd) < 10.0);
+	TestTrue(TEXT("and departs"), RunUntil(*Traffic, *Net, 300.0, [&]()
+		{
+			const FRoadAgent* A = Traffic->FindAgent(Id);
+			return A != nullptr && A->Phase == EAgentPhase::Departing;
+		}, 1.0 / 30.0));
+	return true;
+}
+
+namespace
+{
+	/**
+	 * A REJOIN WITH NO ROOM AHEAD HOLDS INSTEAD (#501 re-review), the measure both shapes below share. A push has no steer
+	 * law, so the join leg's angle is an instant yaw: FPushbackRun::Rejoin refuses a join its first step has not four
+	 * offsets of room for, and the push strands and holds. Here: no rejoin, the push stranded, the aeroplane not a uu
+	 * further while it is still the push's, no frame turning it past the join's own 14.04 degrees, and the hold's retry -
+	 * "planned again from where it was pushed back to", said only for a holding push - giving it a way out from there.
+	 * Moving J and E is a drag of both, 5 m south; PushTo is where along the push the edit lands.
+	 */
+	bool PushbackRejoinWithNoRoomHolds(FAutomationTestBase& Test, double PushTo)
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const FPushbackGraph G = PushbackBuildGraph(*Net);
+		const int32 Id = PushbackParkFacing(*Traffic, *Net, G.B, G.A);
+		if (!Test.TestTrue(TEXT("parked"), Id > 0)) { return false; }
+		if (!Test.TestEqual(TEXT("departs by pushing back"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None)) { return false; }
+		for (int32 Tick = 0; Tick < 30 * 600 && Traffic->FindAgent(Id)->Pushback.Travelled < PushTo; ++Tick)
+		{
+			Traffic->Advance(1.0 / 30.0, Net);
+		}
+		const FRoadAgent* Pushing = Traffic->FindAgent(Id);
+		if (!Test.TestTrue(FString::Printf(TEXT("still pushing, %.0f uu along"), Pushing->Pushback.Travelled),
+			Pushing->Phase == EAgentPhase::Manoeuvring && Pushing->Pushback.Travelled >= PushTo
+			&& !Pushing->Pushback.HasArrived())) { return false; }
+		const FVector2D StoodAt = Pushing->LastMotion.Position;
+		double LastHeading = Pushing->LastMotion.Heading;
+
+		Net->RemoveGuidelineNode(G.J);
+		Net->RemoveGuidelineNode(G.E);
+		const FGuidelineNodeId J2 = TestGraph::Node(*Net, 0.0, -10500.0);
+		const FGuidelineNodeId E2 = TestGraph::Node(*Net, 20000.0, -10500.0);
+		TestGraph::FJoinOptions Options;
+		Options.bDerived = false;
+		TestGraph::Join(*Net, G.A, J2, Options);
+		TestGraph::Join(*Net, J2, G.B, Options);
+		TestGraph::Join(*Net, J2, E2, Options);
+		FLogLineSpy Spy(FName(TEXT("LogAirsideTraffic")));
+		GLog->AddOutputDevice(&Spy);
+		Traffic->OnGraphRebuilt(*Net);
+		const FRoadAgent* Rebuilt = Traffic->FindAgent(Id);
+		Test.TestFalse(TEXT("its push does not rejoin: the join would have had no room"),
+			Spy.CapturedLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("'s push rejoined")); }));
+		Test.TestEqual(TEXT("its push is stranded"), Rebuilt->Pushback.Plan.Result, ERouteResult::Unreachable);
+
+		double WorstMove = 0.0;
+		double WorstTurn = 0.0;
+		const bool bDeparted = RunUntil(*Traffic, *Net, 300.0, [&]()
+			{
+				const FRoadAgent* A = Traffic->FindAgent(Id);
+				if (A != nullptr && A->Phase == EAgentPhase::Manoeuvring)
+				{
+					WorstMove = FMath::Max(WorstMove, FVector2D::Distance(StoodAt, A->LastMotion.Position));
+					WorstTurn = FMath::Max(WorstTurn,
+						FMath::RadiansToDegrees(FMath::Abs(FMath::UnwindRadians(A->LastMotion.Heading - LastHeading))));
+					LastHeading = A->LastMotion.Heading;
+				}
+				return A != nullptr && A->Phase == EAgentPhase::Departing;
+			}, 1.0 / 30.0);
+		GLog->RemoveOutputDevice(&Spy);
+		Test.TestTrue(FString::Printf(TEXT("it stops where the edit found it (%.1f uu further at most)"), WorstMove), WorstMove < 1.0);
+		Test.TestTrue(FString::Printf(TEXT("and never swings while it is the push's: worst frame-to-frame turn %.2f deg"), WorstTurn),
+			WorstTurn <= 14.1);
+		Test.TestTrue(TEXT("it held there, and the hold's retry planned it a way out from where it stopped"),
+			Spy.CapturedLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("planned again from where it was pushed back to")); }));
+		Test.TestTrue(TEXT("and it departs"), bDeparted);
+		return true;
+	}
+}
+
+/**
+ * AN ARM SHIFTED SIDEWAYS UNDER A PUSH NEAR ITS END HOLDS (#501 re-review). The moved arm is 5 m off and the push 10 m from
+ * its end: the join, clamped to the step's end, met the line at 26.6 degrees in one frame (68 at 2 m). No room for a join
+ * four offsets long, so no join.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPushbackArmShiftedNearItsEndTest,
+	"Airside.Model.PushbackArmShiftedNearItsEndHolds",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPushbackArmShiftedNearItsEndTest::RunTest(const FString& Parameters)
+{
+	return PushbackRejoinWithNoRoomHolds(*this, 29000.0);
+}
+
+/**
+ * A LEAD-IN MOVED BEHIND A PUSH THAT HAS PASSED THE MOVED NODE HOLDS (#501 re-review). J moves 5 m back along the lead-in to
+ * just behind the aeroplane: its projection on the shortened lead-in is that edge's END, and the join ran BACKWARD to it - a
+ * 180-degree flip in one frame. A join needs room ahead; there is none behind.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPushbackPastTheMovedNodeTest,
+	"Airside.Model.PushbackPastTheMovedNodeHolds",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPushbackPastTheMovedNodeTest::RunTest(const FString& Parameters)
+{
+	return PushbackRejoinWithNoRoomHolds(*this, 9750.0);
+}
+
+/**
+ * A PUSH ON GROUND THE EDIT DELETED STOPS (found by #498's probe). The rebuild strands a push whose step under it is gone -
+ * its plan Unreachable - and FPushbackRun went on playing it: Travelled grew along the deleted lead-in for the rest of the
+ * push (17778 uu two minutes on) and the aeroplane then taxied out as if nothing had happened. A taxiing departure whose
+ * route dies stops where it is and holds for a new way to the runway (TaxiingDepartureStrandedDoesNotJump); a push is that
+ * departure's first leg, and gets the same: at rest where the edit found it, holding, until a line from there exists.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPushbackOnDeletedGroundStopsTest,
+	"Airside.Model.PushbackOnDeletedGroundStops",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPushbackOnDeletedGroundStopsTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FPushbackGraph G = PushbackBuildGraph(*Net);
+	const int32 Id = PushbackParkFacing(*Traffic, *Net, G.B, G.A);
+	if (!TestTrue(TEXT("parked"), Id > 0)) { return false; }
+	if (!TestEqual(TEXT("departs by pushing back"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None)) { return false; }
+	for (int32 Tick = 0; Tick < 30; ++Tick) { Traffic->Advance(1.0 / 30.0, Net); }
+	if (!TestTrue(TEXT("mid-push, on the lead-in"), Traffic->FindAgent(Id)->Phase == EAgentPhase::Manoeuvring
+		&& Traffic->FindAgent(Id)->Pushback.Travelled < 10000.0)) { return false; }
+
+	// THE LEAD-IN UNDER IT GOES: the line A-J it is being pushed along.
+	FGuidelineEdgeId AJ;
+	for (int32 Index = 0; Index < Net->GetGuidelineEdges().Num(); ++Index)
+	{
+		const FGuidelineEdge& Edge = Net->GetGuidelineEdges()[Index];
+		if (Edge.bAlive && ((Edge.A == G.A && Edge.B == G.J) || (Edge.A == G.J && Edge.B == G.A)))
+		{
+			AJ.Index = Index;
+			AJ.Generation = Edge.Generation;
+		}
+	}
+	if (!TestTrue(TEXT("the lead-in exists to delete"), AJ.IsSet())) { return false; }
+	Net->RemoveGuidelineEdge(AJ);
+	Traffic->OnGraphRebuilt(*Net);
+	const FRoadAgent* Rebuilt = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("precondition: the rebuild stranded the push - its plan is dead"),
+		Rebuilt->Phase == EAgentPhase::Manoeuvring && Rebuilt->Pushback.Plan.Result == ERouteResult::Unreachable)) { return false; }
+	const double TravelledAt = Rebuilt->Pushback.Travelled;
+	const FVector2D FoundAt = Rebuilt->LastMotion.Position;
+
+	for (int32 Tick = 0; Tick < 30 * 10; ++Tick) { Traffic->Advance(1.0 / 30.0, Net); }
+	const FRoadAgent* After = Traffic->FindAgent(Id);
+	if (!TestNotNull(TEXT("it is still there"), After)) { return false; }
+	TestTrue(FString::Printf(TEXT("it pushes no further along the deleted line (Travelled %.0f -> %.0f)"), TravelledAt, After->Pushback.Travelled),
+		After->Pushback.Travelled <= TravelledAt + UE_KINDA_SMALL_NUMBER);
+	TestTrue(FString::Printf(TEXT("it stands where the edit found it (%.2f uu away)"), FVector2D::Distance(After->LastMotion.Position, FoundAt)),
+		FVector2D::Distance(After->LastMotion.Position, FoundAt) < 1.0);
+	TestTrue(FString::Printf(TEXT("at rest (%.2f uu/s)"), After->LastMotion.GroundSpeed), FMath::IsNearlyZero(After->LastMotion.GroundSpeed));
+	TestTrue(TEXT("holding for a new way to the runway, as a taxiing departure whose route died does"), After->IsHoldingForTaxiOut());
+
+	// A SECOND EDIT, NOWHERE NEAR IT, leaves it a departure (#501 review): the rebuild's push arm pointed the goal at the
+	// DEAD push's end before skipping it, and the card's destination went from its runway to a node.
+	FAgentFacts Facts;
+	InspectFacts::DescribeAgent(*Traffic, Net, Id, Facts);
+	TestTrue(FString::Printf(TEXT("held, its card names the runway (%s)"), *Facts.Destination), Facts.Destination.StartsWith(TEXT("Runway")));
+	const FGuidelineNodeId GoalBefore = After->GoalNode;
+	TestGraph::Node(*Net, -30000.0, -30000.0);
+	Traffic->OnGraphRebuilt(*Net);
+	TestTrue(TEXT("an unrelated rebuild leaves its goal where it was"), Traffic->FindAgent(Id)->GoalNode == GoalBefore);
+	InspectFacts::DescribeAgent(*Traffic, Net, Id, Facts);
+	TestTrue(FString::Printf(TEXT("and its card still names the runway (%s)"), *Facts.Destination), Facts.Destination.StartsWith(TEXT("Runway")));
+
+	// THE PLAYER REDRAWS THE LEAD-IN: a way out from where it holds, and it goes.
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	TestGraph::Join(*Net, G.A, G.J, Options);
+	TestTrue(TEXT("given a way out once the line is back, it rolls"), RunUntil(*Traffic, *Net, 300.0, [&]()
+		{
+			const FRoadAgent* A = Traffic->FindAgent(Id);
+			return A != nullptr && A->Phase == EAgentPhase::Departing;
+		}, 1.0 / 30.0));
 	return true;
 }
 
