@@ -652,15 +652,129 @@ bool FStandNumbersTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	TestEqual(TEXT("the backfill numbers the three stands"), Legacy->EnsureStandNumbers(), 3);
+	// THE DEPOT IS NUMBERED TOO NOW (#490, Airside.Model.DepotNumbers): the return counts every entity the backfill numbered, so three stands
+	// and one depot is four. The depot's own number is that test's to pin; what this one holds is that the STAND numbers did not move.
+	TestEqual(TEXT("the backfill numbers the three stands and the depot"), Legacy->EnsureStandNumbers(), 4);
 	TestEqual(TEXT("entity order: the first is 1"), Legacy->GetEntity(L1)->StandNumber, 1);
 	TestEqual(TEXT("entity order: the second is 2"), Legacy->GetEntity(L2)->StandNumber, 2);
 	TestEqual(TEXT("entity order: the third is 3"), Legacy->GetEntity(L3)->StandNumber, 3);
-	TestEqual(TEXT("the depot stays unnumbered"), Legacy->GetEntity(LDep)->StandNumber, 0);
+	TestEqual(TEXT("the depot is still no stand: it carries no stand number"), Legacy->GetEntity(LDep)->StandNumber, 0);
 	TestEqual(TEXT("the counter is past the backfill"), Legacy->GetNextStandNumber(), 4);
 	TestEqual(TEXT("a second load renumbers nothing"), Legacy->EnsureStandNumbers(), 0);
 	TestEqual(TEXT("and the first is still 1"), Legacy->GetEntity(L1)->StandNumber, 1);
 
+	return true;
+}
+
+/**
+ * A DEPOT HAS A NUMBER LIKE A STAND (#490).
+ *
+ * Every depot label printed the entity INDEX, which RoadSlot recycles into a different depot after a bulldoze: a player who built depots 1 and 2,
+ * bulldozed 1 and built another read "depot 1" beside a memory of the depot that was gone. FEntityInstance::DepotNumber is StandNumber's twin:
+ * issued by PlaceEntity from a saved counter (NextDepotNumber), never reused, backfilled for a level saved before it existed, and carried by a
+ * copy and a restore. The fixture is the issue's own pin: depots 1 and 2, delete 1, place another - it is 3, in the first one's recycled slot.
+ * The counters are SEPARATE: a stand's number is painted on the ground and counts stands only.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDepotNumbersTest,
+	"Airside.Model.DepotNumbers",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDepotNumbersTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	const auto PlaceDepot = [&Depot](URoadNetwork& Network, double X)
+	{
+		return Network.PlaceEntity(Depot, Depot->Anchors, FVector2D(X, 30000.0), 0.0, 0.0, EServiceRole::Fuel);
+	};
+
+	const FEntityInstanceId D1 = PlaceDepot(*Net, 0.0);
+	const FEntityInstanceId D2 = PlaceDepot(*Net, 10000.0);
+	const FEntityInstanceId S1 = Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, 0.0), 0.0);
+	if (!TestTrue(TEXT("two depots and a stand placed"), D1.IsSet() && D2.IsSet() && S1.IsSet())) { return false; }
+	TestEqual(TEXT("the first depot is 1"), Net->GetEntity(D1)->DepotNumber, 1);
+	TestEqual(TEXT("the second depot is 2"), Net->GetEntity(D2)->DepotNumber, 2);
+	TestEqual(TEXT("a stand is not a depot and carries no depot number"), Net->GetEntity(S1)->DepotNumber, 0);
+	TestEqual(TEXT("a depot is not a stand and carries no stand number"), Net->GetEntity(D1)->StandNumber, 0);
+	TestEqual(TEXT("the stand counts stands only: it is stand 1, though two depots came first"), Net->GetEntity(S1)->StandNumber, 1);
+	TestEqual(TEXT("the next depot is 3"), Net->GetNextDepotNumber(), 3);
+
+	// THE ISSUE'S PIN. RETIRED, NOT REUSED: D1's slot is recycled by D3 (RoadSlot's free list), its number is not.
+	TestTrue(TEXT("depot 1 is bulldozed"), Net->RemoveEntity(D1));
+	const FEntityInstanceId D3 = PlaceDepot(*Net, 0.0);
+	if (!TestTrue(TEXT("a third depot placed"), D3.IsSet())) { return false; }
+	TestEqual(TEXT("it took the DELETED depot's slot - the recycling that makes an index the wrong name for a depot"), D3.Index, D1.Index);
+	TestEqual(TEXT("and it is depot 3, not the retired 1 the index would say"), Net->GetEntity(D3)->DepotNumber, 3);
+	TestEqual(TEXT("the survivor keeps its own number"), Net->GetEntity(D2)->DepotNumber, 2);
+	const FEntityInstanceId S2 = Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(10000.0, 0.0), 0.0);
+	TestEqual(TEXT("a stand placed after the depots is stand 2 - the counters do not share"), Net->GetEntity(S2)->StandNumber, 2);
+
+	// UNDO IS A MEMENTO (a DuplicateObject of the network, RoadEditHistory): the counter and the number both ride in it, with no actor and so no
+	// load repair to heal a loss. Restored, the delete of depot 3 is undone as depot 3, and the next depot is 4 - the counter did not move twice.
+	URoadNetwork* Snapshot = DuplicateObject<URoadNetwork>(Net, GetTransientPackage());
+	TestTrue(TEXT("depot 3 is bulldozed"), Net->RemoveEntity(D3));
+	const FEntityInstance* InSnapshot = Snapshot->GetEntity(D3);
+	if (TestNotNull(TEXT("the snapshot still holds depot 3"), InSnapshot))
+	{
+		TestEqual(TEXT("the snapshot's depot is still 3"), InSnapshot->DepotNumber, 3);
+	}
+	TestEqual(TEXT("the snapshot's counter is where it was"), Snapshot->GetNextDepotNumber(), 4);
+
+	Net->RestoreFrom(*Snapshot);
+	const FEntityInstance* Restored = Net->GetEntity(D3);
+	if (TestNotNull(TEXT("RestoreFrom brings depot 3 back under the same id"), Restored))
+	{
+		TestEqual(TEXT("as depot 3"), Restored->DepotNumber, 3);
+	}
+	TestEqual(TEXT("with the counter restored"), Net->GetNextDepotNumber(), 4);
+	const FEntityInstanceId AfterRestore = PlaceDepot(*Net, 20000.0);
+	TestEqual(TEXT("and the next depot is 4 - the restore did not hand 3 out twice"), Net->GetEntity(AfterRestore)->DepotNumber, 4);
+
+	// A COPY (the ghost's scratch network, CopyFrom) keeps the number on each depot AND the counter - a copy with its own counter would number its
+	// next depot from 1. (The counter is also pinned by Airside.Model.CopyFromCoversEveryProperty, which walks the class; the depot's own FIELD, inside
+	// FEntityInstance, is walked by nothing, which is why this asserts it.)
+	URoadNetwork* Copy = NewObject<URoadNetwork>(GetTransientPackage());
+	Copy->CopyFrom(*Net);
+	const FEntityInstance* CopiedD3 = Copy->GetEntity(D3);
+	if (TestNotNull(TEXT("the copy holds depot 3"), CopiedD3))
+	{
+		TestEqual(TEXT("with its number"), CopiedD3->DepotNumber, 3);
+	}
+	TestEqual(TEXT("and depot 2 keeps its own"), Copy->GetEntity(D2)->DepotNumber, 2);
+	TestEqual(TEXT("the copy's counter is the source's"), Copy->GetNextDepotNumber(), Net->GetNextDepotNumber());
+	TestEqual(TEXT("so the copy's next depot is 5, not 1"), Copy->GetEntity(PlaceDepot(*Copy, 30000.0))->DepotNumber, 5);
+
+	// BACKFILL ON LOAD: a level saved before depot numbers existed loads every depot at 0 and the counter at 1. EnsureStandNumbers
+	// (URoadNetwork::PostLoad) numbers them in entity order, beside the stands, each kind from its own counter.
+	URoadNetwork* Legacy = NewObject<URoadNetwork>(GetTransientPackage());
+	const FEntityInstanceId LA = PlaceDepot(*Legacy, 0.0);
+	const FEntityInstanceId LS1 = Legacy->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, 0.0), 0.0);
+	const FEntityInstanceId LB = PlaceDepot(*Legacy, 10000.0);
+	const FEntityInstanceId LS2 = Legacy->PlaceEntity(Stand, Stand->Anchors, FVector2D(10000.0, 0.0), 0.0);
+	FRoadNetworkTestAccess(*Legacy).ClearStandNumbersForTest();
+	if (!TestEqual(TEXT("the legacy depots really are unnumbered before the backfill"), Legacy->GetEntity(LB)->DepotNumber, 0)) { return false; }
+	TestEqual(TEXT("and the counter is back at its default"), Legacy->GetNextDepotNumber(), 1);
+
+	TestEqual(TEXT("the backfill numbers the two depots and the two stands"), Legacy->EnsureStandNumbers(), 4);
+	TestEqual(TEXT("entity order: the first depot is 1"), Legacy->GetEntity(LA)->DepotNumber, 1);
+	TestEqual(TEXT("entity order: the second depot is 2"), Legacy->GetEntity(LB)->DepotNumber, 2);
+	TestEqual(TEXT("the stands are numbered as before"), Legacy->GetEntity(LS1)->StandNumber + Legacy->GetEntity(LS2)->StandNumber, 3);
+	TestEqual(TEXT("a depot still carries no stand number"), Legacy->GetEntity(LA)->StandNumber, 0);
+	TestEqual(TEXT("the depot counter is past the backfill"), Legacy->GetNextDepotNumber(), 3);
+	TestEqual(TEXT("a second load renumbers nothing"), Legacy->EnsureStandNumbers(), 0);
+	TestEqual(TEXT("and the first depot is still 1"), Legacy->GetEntity(LA)->DepotNumber, 1);
+
+	// THE BACKFILL GOES PAST A NUMBER ALREADY HELD, not merely the counter: depots at 0 beside one that was issued 1 (a half-migrated level) must
+	// not be handed that 1 a second time. The never-reuse rule outranks the counter's value.
+	FRoadNetworkTestAccess(*Legacy).ClearStandNumbersForTest();
+	const FEntityInstanceId LC = PlaceDepot(*Legacy, 20000.0);
+	TestEqual(TEXT("the premise: a depot placed off the reset counter is issued 1, beside two unnumbered ones"), Legacy->GetEntity(LC)->DepotNumber, 1);
+	TestEqual(TEXT("the backfill numbers the two unnumbered depots and the two unnumbered stands"), Legacy->EnsureStandNumbers(), 4);
+	TestEqual(TEXT("the held number is not reissued: the first unnumbered depot is 2"), Legacy->GetEntity(LA)->DepotNumber, 2);
+	TestEqual(TEXT("the second is 3"), Legacy->GetEntity(LB)->DepotNumber, 3);
+	TestEqual(TEXT("and the depot that already had one keeps it"), Legacy->GetEntity(LC)->DepotNumber, 1);
 	return true;
 }
 

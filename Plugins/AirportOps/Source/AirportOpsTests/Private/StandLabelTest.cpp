@@ -142,4 +142,102 @@ bool FStandLabelFallbackTest::RunTest(const FString&)
 	return true;
 }
 
+// ONE NAME FOR A DEPOT (#490): the same fault #447 fixed for stands. The depot card's title and the job board's vehicle lines ("to depot /
+// refilling at depot / at depot") printed the entity INDEX, which RoadSlot recycles into a different depot after a bulldoze - so a player who
+// built depots 1 and 2, bulldozed 1 and built another read "depot 1" beside their memory of the depot that was gone. The fixture is the issue's
+// own pin: two depots, #1 deleted, another placed.
+
+namespace
+{
+	struct FRecycledDepotField
+	{
+		URoadNetwork* Net = nullptr;
+		/** The depot placed AFTER the first was deleted: number 3, in the first one's recycled slot. */
+		FEntityInstanceId Third;
+		FEntityInstanceId FirstGone;
+		FEntityInstanceId Second;
+
+		bool Build()
+		{
+			Net = NewObject<URoadNetwork>(GetTransientPackage());
+			UEntityDefinition* DepotDef = UEntityDefinition::MakeFuelDepotTransient();
+			FirstGone = Net->PlaceEntity(DepotDef, DepotDef->Anchors, FVector2D(0.0, 30000.0), 0.0, 0.0, EServiceRole::Fuel);
+			Second = Net->PlaceEntity(DepotDef, DepotDef->Anchors, FVector2D(10000.0, 30000.0), 0.0, 0.0, EServiceRole::Fuel);
+			if (!FirstGone.IsSet() || !Second.IsSet() || !Net->RemoveEntity(FirstGone))
+			{
+				return false;
+			}
+			Third = Net->PlaceEntity(DepotDef, DepotDef->Anchors, FVector2D(0.0, 30000.0), 0.0, 0.0, EServiceRole::Fuel);
+			return Third.IsSet();
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDepotLabelVehicleLinesTest, "AirportOps.Model.DepotLabel.VehicleLinesSayTheDepotsNumber",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDepotLabelVehicleLinesTest::RunTest(const FString&)
+{
+	FRecycledDepotField Field;
+	if (!TestTrue(TEXT("two depots placed, the first deleted, a third placed"), Field.Build())) { return false; }
+	const FEntityInstance* Third = Field.Net->GetEntity(Field.Third);
+	if (!TestNotNull(TEXT("the third depot is alive"), Third)) { return false; }
+	TestEqual(TEXT("it is depot 3 - the first's number is retired, not reused"), Third->DepotNumber, 3);
+	TestEqual(TEXT("it took the DELETED depot's slot - the recycling that makes an index the wrong name for a depot"), Field.Third.Index, Field.FirstGone.Index);
+	TestNotEqual(TEXT("so its entity index is NOT its number, which is the whole of the bug"), Field.Third.Index, Third->DepotNumber);
+	TestEqual(TEXT("the label is the number"), OpsNames::DepotLabel(Field.Net, Field.Third), FString(TEXT("3")));
+
+	// THE THREE LINES THAT NAME A DEPOT, one per vehicle state (UJobBoard::VehicleDoing).
+	UJobBoard* Board = NewObject<UJobBoard>(GetTransientPackage());
+	FServiceVehicle& Bowser = Board->AddVehicleForTest(TEXT("FUEL"), Field.Third, EServiceVehicleState::ToFacility, 1000.0);
+	Bowser.AgentId = 7;
+	TestTrue(*FString::Printf(TEXT("heading home names the depot by number: '%s'"), *Board->VehicleLine(Bowser, Field.Net)),
+		Board->VehicleLine(Bowser, Field.Net).Contains(TEXT("to depot 3")));
+	TestTrue(*FString::Printf(TEXT("and so does the vehicle card's own line: '%s'"), *Board->DescribeAgent(7, 0.0, Field.Net)),
+		Board->DescribeAgent(7, 0.0, Field.Net).Contains(TEXT("to depot 3")));
+	Bowser.State = EServiceVehicleState::AtFacility;
+	TestTrue(*FString::Printf(TEXT("refilling names it by number: '%s'"), *Board->VehicleLine(Bowser, Field.Net)),
+		Board->VehicleLine(Bowser, Field.Net).Contains(TEXT("refilling at depot 3")));
+	Bowser.State = EServiceVehicleState::Idle;
+	TestTrue(*FString::Printf(TEXT("sitting idle names it by number: '%s'"), *Board->VehicleLine(Bowser, Field.Net)),
+		Board->VehicleLine(Bowser, Field.Net).Contains(TEXT("at depot 3")));
+
+	// THE DEPOT CARD'S BACKLOG carries the same line for each vehicle, and the FLEET ROW is the card's third place that says it (see the stand
+	// test above for why the rows matter: one card said one thing in its backlog and another in its fleet).
+	Bowser.State = EServiceVehicleState::ToFacility;
+	const FDepotBacklog Backlog = Board->DescribeDepot(Field.Third, 0.0, Field.Net);
+	TestTrue(*FString::Printf(TEXT("the backlog's vehicle line says depot 3: '%s'"), *Backlog.Detail), Backlog.Detail.Contains(TEXT("to depot 3")));
+	UFacilityPurchases* Shop = NewObject<UFacilityPurchases>(GetTransientPackage());
+	Shop->JobBoard = Board;
+	const FFacilityQuote Quote = Shop->Quote(*Field.Net, Field.Third);
+	if (TestTrue(TEXT("the depot is a facility with the vehicle as a fleet row"), Quote.IsFacility() && Quote.Fleet.Num() == 1))
+	{
+		TestTrue(*FString::Printf(TEXT("the fleet row says depot 3: '%s'"), *Quote.Fleet[0].Line), Quote.Fleet[0].Line.Contains(TEXT("to depot 3")));
+	}
+
+	// THE SURVIVOR keeps its own: depot 2 is still 2, wherever the third went.
+	TestEqual(TEXT("the survivor keeps its number"), OpsNames::DepotLabel(Field.Net, Field.Second), FString(TEXT("2")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDepotLabelFallbackTest, "AirportOps.Model.DepotLabel.FallsBackToTheIndex",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDepotLabelFallbackTest::RunTest(const FString&)
+{
+	FRecycledDepotField Field;
+	if (!TestTrue(TEXT("two depots placed, the first deleted, a third placed"), Field.Build())) { return false; }
+	// THE FALLBACKS, each the index: there is no number to give.
+	TestEqual(TEXT("no network (a world-free board test): the index"), OpsNames::DepotLabel(nullptr, Field.Third), FString::FromInt(Field.Third.Index));
+	TestEqual(TEXT("the deleted depot's stale handle: its index, not the number of whoever took its slot"),
+		OpsNames::DepotLabel(Field.Net, Field.FirstGone), FString::FromInt(Field.FirstGone.Index));
+	TestEqual(TEXT("an unset handle: INDEX_NONE"), OpsNames::DepotLabel(Field.Net, FEntityInstanceId()), FString::FromInt(INDEX_NONE));
+
+	// A graph-free board test of a vehicle line still reads: no network, the index, exactly as before.
+	UJobBoard* Board = NewObject<UJobBoard>(GetTransientPackage());
+	FEntityInstanceId Home;
+	Home.Index = 4;
+	FServiceVehicle& Bowser = Board->AddVehicleForTest(TEXT("FUEL"), Home, EServiceVehicleState::ToFacility, 1000.0);
+	TestTrue(TEXT("a vehicle line with no network names the depot by index"), Board->VehicleLine(Bowser, nullptr).Contains(TEXT("to depot 4")));
+	return true;
+}
+
 #endif

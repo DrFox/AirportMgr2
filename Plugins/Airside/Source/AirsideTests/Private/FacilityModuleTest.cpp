@@ -178,11 +178,14 @@ bool FDepotFrontageMigrationTest::RunTest(const FString&)
 	if (!TestEqual(TEXT("the premise: a legacy plotted depot stores no frontage"), Net->GetEntity(Legacy)->FrontageEdge, static_cast<int32>(INDEX_NONE))) { return false; }
 	TestFalse(TEXT("and so has nothing to solve from"), DepotKit::ReservationOf(*Net->GetEntity(Legacy), Specs).IsSet());
 
+	// A STAND NOW STORES ITS OWN ENTRANCE FROM PLACEMENT (#450's leftover): this one got its Code C box and an edge at the door. What this test holds
+	// is that the DEPOT migration does not touch it, so the edge is read before and after.
+	const int32 StandEdgeBefore = Net->GetEntity(Stand)->FrontageEdge;
 	TestEqual(TEXT("the migration gives exactly the one legacy plotted depot a frontage"), Net->EnsureDepotFrontages(), 1);
 	TestEqual(TEXT("the edge whose midpoint is Position - the far edge, not edge 0"), Net->GetEntity(Legacy)->FrontageEdge, 2);
 	TestEqual(TEXT("a depot already storing an edge keeps it"), Net->GetEntity(AlreadyStored)->FrontageEdge, 1);
 	TestEqual(TEXT("a plotless depot stores none"), Net->GetEntity(Plotless)->FrontageEdge, static_cast<int32>(INDEX_NONE));
-	TestEqual(TEXT("and a stand stores none"), Net->GetEntity(Stand)->FrontageEdge, static_cast<int32>(INDEX_NONE));
+	TestEqual(TEXT("and a stand's entrance is left exactly as placement stored it"), Net->GetEntity(Stand)->FrontageEdge, StandEdgeBefore);
 	TestEqual(TEXT("a second pass finds nothing to do"), Net->EnsureDepotFrontages(), 0);
 	const TOptional<PlotYard::FReservation> Migrated = DepotKit::ReservationOf(*Net->GetEntity(Legacy), Specs);
 	if (!TestTrue(TEXT("the migrated depot solves again"), Migrated.IsSet())) { return false; }

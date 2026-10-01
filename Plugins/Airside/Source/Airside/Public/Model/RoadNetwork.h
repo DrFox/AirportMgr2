@@ -35,8 +35,8 @@ class AIRSIDE_API URoadNetwork : public UObject
 
 public:
 	/**
-	 * Super::PostLoad() then EnsureStandOutlines(), EnsureStandNumbers() and EnsureDepotFrontages() - see those
-	 * functions. The only override this class had until Serialize (below, #426) joined it
+	 * Super::PostLoad() then EnsureStandOutlines(), EnsureStandNumbers(), EnsureDepotFrontages() and EnsureStandFrontages() - see
+	 * those functions. The only override this class had until Serialize (below, #426) joined it
 	 * - and a LEVEL'S load only: a save game's load is Serialize alone, which is why
 	 * ARoadNetworkActor::RepairLoadedNetwork runs the pair again. Needed because
 	 * a level saved before outlines existed (or before stands could be point-
@@ -846,16 +846,18 @@ public:
 	int32 EnsureStandOutlines();
 
 	/**
-	 * Number every alive IsStand() entity whose StandNumber is 0, in entity order, from
-	 * max(NextStandNumber, 1 + the highest number already held), and leave the counter past
-	 * the last one. Returns how many it numbered; logs LogAirside when more than zero.
+	 * Number every alive IsStand() entity whose StandNumber is 0, and every alive IsDepot() entity whose DepotNumber is 0 (#490), each
+	 * kind in entity order from max(its counter, 1 + the highest number already held), and leave each counter past the last one it
+	 * issued. Returns how many entities it numbered, both kinds together; logs LogAirside, once per kind, when more than zero.
 	 *
 	 * EXISTS FOR LEGACY SAVE DATA, like EnsureStandOutlines above: a level saved before
-	 * 2026-09-29 loads every stand at 0 and the counter at its default. PostLoad calls it, so
-	 * "every stand has a number" holds everywhere. Idempotent - a second load finds nothing
-	 * at 0, so it never renumbers (the number is painted on the ground; see
-	 * FEntityInstance::StandNumber). Public beside EnsureStandOutlines so a test can drive
-	 * the exact PostLoad path. ENFORCED BY: Airside.Model.StandNumbers.
+	 * 2026-09-29 loads every stand at 0 and the counter at its default, and one saved before 2026-10-01 loads every depot the same way.
+	 * PostLoad calls it, so "every stand and every depot has a number" holds everywhere. Idempotent - a second load finds nothing
+	 * at 0, so it never renumbers (a stand's number is painted on the ground; see FEntityInstance::StandNumber, and
+	 * FEntityInstance::DepotNumber for why a depot's is just as stable). ONE FUNCTION FOR BOTH, not a sibling: PostLoad and
+	 * ARoadNetworkActor::RepairLoadedNetwork each call it once, and a second call to remember is the shape that lets one of
+	 * the two kinds go unnumbered on one load path. Public beside EnsureStandOutlines so a test can drive
+	 * the exact PostLoad path. ENFORCED BY: Airside.Model.StandNumbers, Airside.Model.DepotNumbers.
 	 */
 	int32 EnsureStandNumbers();
 
@@ -876,8 +878,28 @@ public:
 	 */
 	int32 EnsureDepotFrontages();
 
+	/**
+	 * Store the entrance edge of every alive plotted STAND that has none: the edge whose midpoint lies furthest behind the stop mark along
+	 * its facing (StandBox::EntranceEdgeOf). Returns how many it gave one; logs LogAirside when more than zero. EnsureDepotFrontages'
+	 * sibling, for the other half of #450's leftover: a level or a save written before a stand stored its entrance loads every drawn stand at
+	 * INDEX_NONE, and the readers (UStandDefinitionCache's re-pose, FStandMarkingBuilder's paint) no longer search - a stand with no stored
+	 * edge would lose its pose repair and its paint.
+	 *
+	 * THE READERS' OWN RULE, run once here, which is the point: the stand cache searched by rearmost midpoint on every load and the paint
+	 * by rearmost corner on every rebuild, and for every stand the game can make (a rectangle whose entrance faces its stop mark) the
+	 * two name the same end of the stand, so storing the midpoint rule's answer moves no paint. ENFORCED BY:
+	 * Airside.Model.StandFrontage.StoredEdgeIsTodaysHeuristicAnswer (measures both readers against the old rules over every fixture).
+	 *
+	 * Leaves an edge already stored alone, so it is idempotent, and never touches a depot or a stand with no outline. Public beside its
+	 * siblings so a test can drive the exact PostLoad path. ENFORCED BY: Airside.Model.StandFrontage.MigrationStoresTheEntranceOnce
+	 */
+	int32 EnsureStandFrontages();
+
 	/** The number the next placed stand will be issued. See NextStandNumber. */
 	int32 GetNextStandNumber() const { return NextStandNumber; }
+
+	/** The number the next placed depot will be issued. See NextDepotNumber. */
+	int32 GetNextDepotNumber() const { return NextDepotNumber; }
 
 	/**
 	 * Removes the entity, the anchor nodes it owns, and every guideline edge incident to
@@ -1280,6 +1302,15 @@ private:
 	UPROPERTY() int32 NextStandNumber = 1;
 
 	/**
+	 * The number PlaceEntity issues to the next depot - FEntityInstance::DepotNumber (#490). NextStandNumber's twin, and its rules are
+	 * that field's: ONLY EVER ADVANCES (a bulldozed depot's number is retired, so "depot 3" cannot come to name two depots in one
+	 * player's memory), SAVED rather than recomputed as 1 + the highest live number (which would reissue the most recently deleted
+	 * depot's number after a reload), and it rides in the undo Memento with Entities, so an undone delete neither loses nor
+	 * double-spends a number. A counter per kind, not one shared: a stand's number is painted on the ground and counts stands only.
+	 */
+	UPROPERTY() int32 NextDepotNumber = 1;
+
+	/**
 	 * FindEntityIndexByPoseNode's index, memoised the same discipline FNodeReachCache and
 	 * FRunwayChainCache use against GuidelineRevision - brought inside this class rather than
 	 * a separate cache struct because there is only ever one Entities array to be stale
@@ -1339,7 +1370,9 @@ struct AIRSIDE_API FRoadNetworkTestAccess
 
 	/** Write Outline directly onto an already-placed entity - simulating a drawn stand
 	 *  (Airside.Present.PlotPresenter.StandOutlineIsNotADepot) before any production path can
-	 *  draw one. False for a dead entity. */
+	 *  draw one. A STAND'S FRONTAGE FOLLOWS THE OUTLINE (StandBox::EntranceEdgeOf, or INDEX_NONE for an outline of under three points):
+	 *  FEntityInstance::FrontageEdge indexes Outline, so a rewrite of one is a rewrite of the other, and the stand readers read the edge.
+	 *  False for a dead entity. */
 	bool SetEntityOutlineForTest(FEntityInstanceId Entity, TArray<FVector2D> Outline);
 
 	/** Write Pavement directly onto an already-placed entity - a stand's pad upkeep and its
@@ -1352,9 +1385,14 @@ struct AIRSIDE_API FRoadNetworkTestAccess
 	 *  SetRunwayFacts cannot: it reads 0 as "keep the strip's". False when Seed is no runway. */
 	bool ClearRunwayInUseForTest(FRoadSegmentId Seed);
 
-	/** Zero every entity's StandNumber and reset the counter to its default - a level as saved
-	 *  before stand numbers existed loads (Airside.Model.StandNumbers' backfill case). */
+	/** Zero every entity's StandNumber AND DepotNumber and reset both counters to their default - a level as saved
+	 *  before stand and depot numbers existed loads (Airside.Model.StandNumbers' and Airside.Model.DepotNumbers' backfill cases). */
 	void ClearStandNumbersForTest();
+
+	/** Write FrontageEdge directly onto an already-placed entity - a level as saved before a stand stored its entrance loads
+	 *  (INDEX_NONE, Airside.Model.StandFrontage.MigrationStoresTheEntranceOnce), or an edge that disagrees with what a search would
+	 *  answer, to show a reader reads the stored one (Airside.Model.StandFrontage.ReadersReadTheStoredEdge). False for a dead entity. */
+	bool SetEntityFrontageForTest(FEntityInstanceId Entity, int32 FrontageEdge);
 
 	/** Write Direction directly onto a live guideline edge - a one-way sweep, which FAnchorLink
 	 *  never lays today (Airside.Build.StandTurnOff.NumberOnADrivableSweep). False for a dead edge. */

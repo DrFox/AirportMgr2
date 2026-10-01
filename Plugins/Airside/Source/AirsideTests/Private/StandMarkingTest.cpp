@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "Algo/Reverse.h"
 #include "Build/AnchorLink.h"
 #include "Build/HoldingPositionMarkingBuilder.h"
 #include "Build/StandMarkingBuilder.h"
@@ -1233,6 +1234,392 @@ bool FStandTurnOffNeighbourDoesNotMoveTheNumberTest::RunTest(const FString& Para
 	TestTrue(TEXT("stand 2 is signed too - the neighbour really joined the taxiway"), NumberOf(2, Second));
 	TestTrue(*FString::Printf(TEXT("stand 1's number has not moved (%.1f uu)"), FVector2D::Distance(Before, After)),
 		FVector2D::Distance(Before, After) <= 1.0);
+	return true;
+}
+
+// ----------------------------------------------------------------------------------------------------------------------------------------------
+// A STAND'S ENTRANCE IS STORED, AND BOTH READERS READ IT (#450's leftover)
+//
+// FEntityInstance::FrontageEdge holds a plotted depot's frontage since #491; two readers still RECOVERED a stand's by heuristic on every call -
+// UStandDefinitionCache::PoseFromOutline (the rearmost MIDPOINT, on every load) and FStandMarkingBuilder::FrameFor (the rearmost CORNER, on
+// every rebuild). They now read the stored edge, and the stand paint is VISIBLE, so the contract is that NOTHING THAT IS DRAWN MOVED: the pin
+// below measures, for every stand fixture, the stored-edge answer against a verbatim copy of each retired heuristic, compared as values.
+// ----------------------------------------------------------------------------------------------------------------------------------------------
+
+namespace StandFrontageTest
+{
+	/** THE RETIRED POSE HEURISTIC, VERBATIM (UStandDefinitionCache::PoseFromOutline before #450's leftover): the edge whose midpoint lies furthest
+	 *  behind the stop mark along the stand's heading. A COPY, on purpose: the pin compares the stored edge against what the readers USED TO
+	 *  compute, so it must not call the production function that replaced it. */
+	int32 RetiredPoseEntrance(const FEntityInstance& Stand)
+	{
+		const TArray<FVector2D>& Outline = Stand.Outline;
+		const FVector2D Facing(FMath::Cos(Stand.Heading), FMath::Sin(Stand.Heading));
+		int32 Entrance = 0;
+		double Behind = TNumericLimits<double>::Max();
+		for (int32 Corner = 0; Corner < Outline.Num(); ++Corner)
+		{
+			const FVector2D Mid = 0.5 * (Outline[Corner] + Outline[(Corner + 1) % Outline.Num()]);
+			const double Along = FVector2D::DotProduct(Mid - Stand.Position, Facing);
+			if (Along < Behind)
+			{
+				Behind = Along;
+				Entrance = Corner;
+			}
+		}
+		return Entrance;
+	}
+
+	/** THE RETIRED PAINT HEURISTIC, VERBATIM (FStandMarkingBuilder::FrameFor before): the outline's rearmost CORNER along Facing, as the
+	 *  signed distance behind the stop mark (negative = behind). */
+	double RetiredPaintBehind(const FEntityInstance& Stand)
+	{
+		const FVector2D Facing(FMath::Cos(Stand.Heading), FMath::Sin(Stand.Heading));
+		double Behind = DBL_MAX;
+		for (const FVector2D& Corner : Stand.Outline)
+		{
+			Behind = FMath::Min(Behind, FVector2D::DotProduct(Corner - Stand.Position, Facing));
+		}
+		return Behind;
+	}
+
+	/** A SUB-MILLIMETRE, in uu (1 uu = 1 cm): far below anything drawn, far above the ulp noise of a cos/sin pair. The pose inputs below are
+	 *  compared EXACTLY (they are the same two vertices); only the paint distance - a dot product, and a min of two equal-in-theory corners
+	 *  against the midpoint of the same edge - may differ in the last bits. */
+	constexpr double PaintToleranceUu = 1.0e-4;
+
+	/** One stand, measured both ways. Returns whether it agreed; every disagreement is an error naming the fixture. */
+	bool ExpectStoredAgreesWithRetiredHeuristics(FAutomationTestBase& Test, const URoadNetwork& Net, FEntityInstanceId Id, const FString& Name)
+	{
+		const FEntityInstance* Stand = Net.GetEntity(Id);
+		if (!Test.TestNotNull(*(Name + TEXT(": the stand is alive")), Stand)) { return false; }
+		FVector2D StoredA, StoredB;
+		if (!Test.TestTrue(*(Name + TEXT(": it stores an entrance edge")), Stand->GetFrontage(StoredA, StoredB))) { return false; }
+
+		// THE POSE'S INPUTS: the entrance's two ends. PoseFor is a pure function of them and the outline, so equal ends = the same pose.
+		const int32 Retired = RetiredPoseEntrance(*Stand);
+		const FVector2D RetiredA = Stand->Outline[Retired];
+		const FVector2D RetiredB = Stand->Outline[(Retired + 1) % Stand->Outline.Num()];
+		bool bAgreed = Test.TestEqual(*(Name + TEXT(": the stored edge is the rearmost-midpoint edge the pose reader used to find")), Stand->FrontageEdge, Retired);
+		bAgreed &= Test.TestTrue(*(Name + TEXT(": and its two ends are the same two points")), StoredA == RetiredA && StoredB == RetiredB);
+
+		// THE PAINT'S INPUTS: how far behind the stop mark the entrance sits, and the point on the pose's line it centres on.
+		FStandPaintFrame Frame;
+		if (!Test.TestTrue(*(Name + TEXT(": it has a paint frame")), FStandMarkingBuilder::FrameFor(*Stand, FLetterEnvelopeTable::Floor(), Frame))) { return false; }
+		const double RetiredBehind = RetiredPaintBehind(*Stand);
+		const FVector2D RetiredMid = Stand->Position + Frame.Facing * RetiredBehind;
+		bAgreed &= Test.TestTrue(*FString::Printf(TEXT("%s: the paint's setback is the rearmost corner's (%.6f vs %.6f)"), *Name, Frame.Setback, -RetiredBehind),
+			FMath::Abs(Frame.Setback - (-RetiredBehind)) <= PaintToleranceUu);
+		bAgreed &= Test.TestTrue(*FString::Printf(TEXT("%s: and the lead-in centres on the same point ((%.6f, %.6f) vs (%.6f, %.6f))"), *Name,
+				Frame.EntranceMid.X, Frame.EntranceMid.Y, RetiredMid.X, RetiredMid.Y),
+			Frame.EntranceMid.Equals(RetiredMid, PaintToleranceUu));
+		return bAgreed;
+	}
+
+	/** A drawn stand of Letter placed through URoadNetwork::PlaceEntity at Heading, the way a fixture builds one (StandMarkingTest::PlaceDrawnStand,
+	 *  rotated): StandBox::BoxAt off a pose, no frontage stated. ExtraDepth > 0 drags the far edge out, a stand drawn deeper than its floor. */
+	FEntityInstanceId PlaceBoxStand(URoadNetwork& Net, UEntityDefinition* Definition, EIcaoCode Letter, const FVector2D& Position, double Heading, double ExtraDepth)
+	{
+		const FLetterEnvelope Envelope = IcaoCode::FloorEnvelopeForLetter(Letter);
+		StandBox::FStandPose Pose;
+		Pose.Position = Position;
+		Pose.Facing = FVector2D(FMath::Cos(Heading), FMath::Sin(Heading));
+		FEntityPlacement Placement;
+		Placement.Definition = Definition;
+		Placement.Anchors = Definition->Anchors;
+		Placement.Position = Pose.Position;
+		Placement.Heading = RoadGeom::Bearing(Pose.Facing);
+		Placement.PoseRole = Definition->PoseRole;
+		StandBox::BoxAt(Pose, Letter, Envelope, Placement.Outline);
+		if (ExtraDepth > 0.0)
+		{
+			Placement.Outline[2] += Pose.Facing * ExtraDepth;
+			Placement.Outline[3] += Pose.Facing * ExtraDepth;
+		}
+		Placement.DesignWingspan = IcaoCode::DesignSpanForLetter(Letter);
+		return Net.PlaceEntity(Placement);
+	}
+
+	/** PlaceBoxStand with the outline listed the OTHER way round (the facade reverses a clockwise outline, which puts the drawn far edge at 0 -> 1),
+	 *  so the entrance is NOT edge 0 and a migration that stored 0 by default cannot pass. The frontage is cleared: a level as saved before it was stored. */
+	FEntityInstanceId PlaceLegacyReversedStand(URoadNetwork& Net, UEntityDefinition* Definition, const FVector2D& Position, double Heading)
+	{
+		const FEntityInstanceId Id = PlaceBoxStand(Net, Definition, EIcaoCode::C, Position, Heading, 0.0);
+		const FEntityInstance* Placed = Net.GetEntity(Id);
+		if (Placed == nullptr) { return FEntityInstanceId(); }
+		TArray<FVector2D> Reversed = Placed->Outline;
+		Algo::Reverse(Reversed);
+		FRoadNetworkTestAccess Access(Net);
+		Access.SetEntityOutlineForTest(Id, Reversed);
+		Access.SetEntityFrontageForTest(Id, INDEX_NONE);
+		return Id;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandFrontageStoredEdgeTest,
+	"Airside.Model.StandFrontage.StoredEdgeIsTodaysHeuristicAnswer",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandFrontageStoredEdgeTest::RunTest(const FString& Parameters)
+{
+	using namespace StandFrontageTest;
+
+	// EVERY WAY THE GAME MAKES A STAND, so a path that stores the wrong edge (or none) has a fixture to fail on:
+	//   - the FACADE, through PlaceStandInPlot, every letter, drawn four ways (see below: both windings, the list started at another corner, square and
+	//     rotated) - the commit path, whose STORED edge is the one it was GIVEN and so the only one that could differ from the heuristic;
+	//   - PlaceEntity with a BoxAt outline and no frontage, at headings all round, and a stand dragged deeper than its floor;
+	//   - the point-placed stand (no outline: PlaceEntity gives it its Code C box);
+	//   - and every one of them again after a LEGACY LOAD (the edge cleared, EnsureStandFrontages run).
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+	IRoadEditTarget* Target = Actor;
+
+	// FOUR WAYS TO DRAW EACH LETTER, chosen so the edge the facade STORES is not always the same index (a pin whose fixtures all store edge 0 cannot tell a
+	// facade that stores the given edge from one that stores 0):
+	//   - drawn to the entrance's LEFT (the rectangle is wound counter-clockwise, so the facade keeps the list as it is: the entrance is edge 0);
+	//   - drawn to its RIGHT (clockwise: the facade REVERSES it, which puts the drawn far edge at 0 -> 1 and the entrance at 2 - the case the old
+	//     searches were written for);
+	//   - and some of those with the list STARTED TWO CORNERS ON, so the entrance is the list's THIRD edge. (Two, not one: the facade measures a
+	//     stand's width off the list's first edge and its depth off the second - StandBox::WidthOf/DepthOf - so a list turned by one corner swaps them
+	//     and reads as another letter, or none. The far edge first is the one other start the gesture's own reversal can produce.)
+	// Two are axis-aligned and two rotated.
+	TArray<TPair<FString, FEntityInstanceId>> Facade;
+	int32 Slot = 0;
+	int32 NonZeroEdges = 0;
+	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+	{
+		for (int32 Variant = 0; Variant < 4; ++Variant)
+		{
+			const bool bRotated = Variant >= 2;
+			const bool bToTheRight = (Variant % 2) == 1;
+			const int32 Shift = (Variant == 1 || Variant == 2) ? 2 : 0;   // list started two corners on: the entrance is the list's THIRD edge
+			const double Width = IcaoCode::StandWidthForLetter(Letter);
+			const double Depth = IcaoCode::StandDepthForLetter(Letter);
+			const double Angle = bRotated ? FMath::DegreesToRadians(37.0 + 11.0 * static_cast<double>(Letter)) : 0.0;
+			const FVector2D Along(FMath::Cos(Angle), FMath::Sin(Angle));
+			const FVector2D Dir = bToTheRight ? -RoadGeom::PerpCCW(Along) : RoadGeom::PerpCCW(Along);
+			// 40 km a slot: the widest floor is under 190 m, so no two can overlap whatever the table's figures do later.
+			const FVector2D Origin(40000.0 * static_cast<double>(Slot++), 0.0);
+			const TArray<FVector2D> Drawn = { Origin, Origin + Along * Width, Origin + Along * Width + Dir * Depth, Origin + Dir * Depth };
+			TArray<FVector2D> Rect;
+			for (int32 Corner = 0; Corner < 4; ++Corner) { Rect.Add(Drawn[(Corner + Shift) % 4]); }
+			const int32 EntranceAt = (4 - Shift) % 4;   // where the drawn entrance Drawn[0] -> Drawn[1] sits in the list
+			const FString Name = FString::Printf(TEXT("facade Code %s drawn to the %s, %s, list started %d corner(s) on"), IcaoCode::ToLetter(Letter),
+				bToTheRight ? TEXT("right") : TEXT("left"), bRotated ? TEXT("rotated") : TEXT("square"), Shift);
+			const int32 Index = Target->PlaceStandInPlot(Rect, Rect[EntranceAt], Rect[(EntranceAt + 1) % 4], EPavement::Tarmac);
+			if (TestTrue(*(Name + TEXT(": placed")), Index != INDEX_NONE))
+			{
+				const FEntityInstanceId Placed = Actor->Network->EntityIdAt(Index);
+				NonZeroEdges += Actor->Network->GetEntity(Placed)->FrontageEdge > 0 ? 1 : 0;
+				Facade.Add(TPair<FString, FEntityInstanceId>(Name, Placed));
+			}
+		}
+	}
+	TestTrue(TEXT("the facade fixtures include stands whose stored entrance is NOT edge 0 - the pin would otherwise not tell a stored edge from a default"), NonZeroEdges >= 5);
+
+	URoadNetwork* Model = NewObject<URoadNetwork>(GetTransientPackage());
+	UEntityDefinition* Definition = UEntityDefinition::MakeStandTransient();
+	TArray<TPair<FString, FEntityInstanceId>> Boxes;
+	for (int32 Step = 0; Step < 12; ++Step)
+	{
+		const double Heading = FMath::DegreesToRadians(Step * 30.0 + 7.0);
+		const FVector2D Where(30000.0 * static_cast<double>(Step), 60000.0);
+		const double ExtraDepth = (Step % 3 == 2) ? 2500.0 : 0.0;
+		const EIcaoCode Letter = (Step % 2 == 0) ? EIcaoCode::C : EIcaoCode::E;
+		const FString Name = FString::Printf(TEXT("box Code %s heading %d%s"), IcaoCode::ToLetter(Letter), Step * 30 + 7, ExtraDepth > 0.0 ? TEXT(" deeper than its floor") : TEXT(""));
+		const FEntityInstanceId Id = PlaceBoxStand(*Model, Definition, Letter, Where, Heading, ExtraDepth);
+		if (TestTrue(*(Name + TEXT(": placed")), Id.IsSet())) { Boxes.Add(TPair<FString, FEntityInstanceId>(Name, Id)); }
+	}
+	for (int32 Step = 0; Step < 6; ++Step)
+	{
+		const double Heading = FMath::DegreesToRadians(Step * 60.0);
+		const FString Name = FString::Printf(TEXT("point-placed heading %d"), Step * 60);
+		const FEntityInstanceId Id = Model->PlaceEntity(Definition, Definition->Anchors, FVector2D(30000.0 * static_cast<double>(Step), 120000.0), Heading);
+		if (TestTrue(*(Name + TEXT(": placed")), Id.IsSet())) { Boxes.Add(TPair<FString, FEntityInstanceId>(Name, Id)); }
+	}
+	if (!TestTrue(TEXT("setup: twenty facade stands and eighteen model ones"), Facade.Num() == 20 && Boxes.Num() == 18)) { return false; }
+
+	int32 Disagreed = 0;
+	for (const TPair<FString, FEntityInstanceId>& Fixture : Facade)
+	{
+		Disagreed += ExpectStoredAgreesWithRetiredHeuristics(*this, *Actor->Network, Fixture.Value, Fixture.Key) ? 0 : 1;
+	}
+	for (const TPair<FString, FEntityInstanceId>& Fixture : Boxes)
+	{
+		Disagreed += ExpectStoredAgreesWithRetiredHeuristics(*this, *Model, Fixture.Value, Fixture.Key) ? 0 : 1;
+	}
+
+	// A LEVEL SAVED BEFORE THE EDGE WAS STORED: clear it on every fixture, run the migration, ask the same question again. The migration's
+	// answer must be the retired heuristic's too, or an authored map's stands would move the day it first loaded.
+	FRoadNetworkTestAccess FacadeAccess(*Actor->Network);
+	FRoadNetworkTestAccess ModelAccess(*Model);
+	for (const TPair<FString, FEntityInstanceId>& Fixture : Facade) { FacadeAccess.SetEntityFrontageForTest(Fixture.Value, INDEX_NONE); }
+	for (const TPair<FString, FEntityInstanceId>& Fixture : Boxes) { ModelAccess.SetEntityFrontageForTest(Fixture.Value, INDEX_NONE); }
+	TestEqual(TEXT("the migration stores an edge on every drawn stand of the facade's network"), Actor->Network->EnsureStandFrontages(), Facade.Num());
+	TestEqual(TEXT("and of the model network"), Model->EnsureStandFrontages(), Boxes.Num());
+	for (const TPair<FString, FEntityInstanceId>& Fixture : Facade)
+	{
+		Disagreed += ExpectStoredAgreesWithRetiredHeuristics(*this, *Actor->Network, Fixture.Value, Fixture.Key + TEXT(" after the legacy migration")) ? 0 : 1;
+	}
+	for (const TPair<FString, FEntityInstanceId>& Fixture : Boxes)
+	{
+		Disagreed += ExpectStoredAgreesWithRetiredHeuristics(*this, *Model, Fixture.Value, Fixture.Key + TEXT(" after the legacy migration")) ? 0 : 1;
+	}
+	TestEqual(TEXT("no stand fixture disagreed with the heuristic it retired - if one does, what is DRAWN would move: stop and report it"), Disagreed, 0);
+	return true;
+}
+
+/**
+ * BOTH READERS READ THE STORED EDGE, NOT THEIR OWN SEARCH.
+ *
+ * The pin above passes for a reader that still searches (the search and the stored edge agree on every fixture - that is its point), so
+ * this is the half that measures the READ: the stored edge is overwritten with the FAR edge, which no search would ever name. A reader that
+ * searched answers as before; one that reads the edge follows it. (Mutation-checked: putting either search back turns this red.)
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandFrontageReadersTest,
+	"Airside.Model.StandFrontage.ReadersReadTheStoredEdge",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandFrontageReadersTest::RunTest(const FString& Parameters)
+{
+	using namespace StandFrontageTest;
+
+	// THE PAINT: a stand whose stored entrance is moved to its far edge paints from THAT edge.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FEntityInstanceId Id = PlaceBoxStand(*Net, UEntityDefinition::MakeStandTransient(), EIcaoCode::C, FVector2D(0.0, 0.0), 0.0, 0.0);
+		if (!TestTrue(TEXT("a stand is placed"), Id.IsSet())) { return false; }
+		FStandPaintFrame Entrance;
+		if (!TestTrue(TEXT("it has a paint frame"), FStandMarkingBuilder::FrameFor(*Net->GetEntity(Id), FLetterEnvelopeTable::Floor(), Entrance))) { return false; }
+		TestEqual(TEXT("its entrance is BoxAt's edge 0"), Net->GetEntity(Id)->FrontageEdge, 0);
+
+		TestTrue(TEXT("the far edge is stored"), FRoadNetworkTestAccess(*Net).SetEntityFrontageForTest(Id, 2));
+		const FEntityInstance* Stand = Net->GetEntity(Id);
+		FStandPaintFrame Far;
+		if (!TestTrue(TEXT("and it still has a paint frame"), FStandMarkingBuilder::FrameFor(*Stand, FLetterEnvelopeTable::Floor(), Far))) { return false; }
+		const FVector2D Facing(FMath::Cos(Stand->Heading), FMath::Sin(Stand->Heading));
+		const double FarBehind = FMath::Min(FVector2D::DotProduct(Stand->Outline[2] - Stand->Position, Facing),
+			FVector2D::DotProduct(Stand->Outline[3] - Stand->Position, Facing));
+		TestTrue(*FString::Printf(TEXT("the paint follows the STORED edge: setback %.1f is the far edge's (%.1f), not the entrance's (%.1f)"),
+				Far.Setback, -FarBehind, Entrance.Setback),
+			FMath::Abs(Far.Setback - (-FarBehind)) <= PaintToleranceUu && FMath::Abs(Far.Setback - Entrance.Setback) > 1000.0);
+
+		// NO STORED EDGE: the floor figure, the same fallback a stand nobody drew gets - the paint is not lost and nothing searches.
+		TestTrue(TEXT("no edge is stored"), FRoadNetworkTestAccess(*Net).SetEntityFrontageForTest(Id, INDEX_NONE));
+		FStandPaintFrame None;
+		if (TestTrue(TEXT("a plotted stand with no stored entrance still has a paint frame"), FStandMarkingBuilder::FrameFor(*Net->GetEntity(Id), FLetterEnvelopeTable::Floor(), None)))
+		{
+			const double Floor = StandBox::EntranceSetback(EIcaoCode::C, IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C));
+			TestTrue(*FString::Printf(TEXT("painted at the floor setback (%.1f), as a stand nobody drew is: %.1f"), Floor, None.Setback), FMath::Abs(None.Setback - Floor) <= PaintToleranceUu);
+		}
+	}
+
+	// THE POSE: the load's re-derivation (UStandDefinitionCache::RebindStandDefinitions, here through the actor's own repair) re-poses a stand off
+	// its STORED entrance. Left as placed it is a no-op - a stand placed today re-derives its own pose; pointed at its far edge it moves.
+	{
+		FAirsideTestWorld TestWorld;
+		if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+		ARoadNetworkActor* Actor = TestWorld.Actor;
+		if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+		Actor->ClearNetwork();
+		Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
+		IRoadEditTarget* Target = Actor;
+		const double Width = IcaoCode::StandWidthForLetter(EIcaoCode::C);
+		const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
+		const TArray<FVector2D> Rect = { FVector2D(0.0, 5000.0), FVector2D(Width, 5000.0), FVector2D(Width, 5000.0 + Depth), FVector2D(0.0, 5000.0 + Depth) };
+		const int32 Index = Target->PlaceStandInPlot(Rect, Rect[0], Rect[1], EPavement::Tarmac);
+		if (!TestTrue(TEXT("a Code C stand is placed"), Index != INDEX_NONE)) { return false; }
+		const FEntityInstanceId Id = Actor->Network->EntityIdAt(Index);
+		const FVector2D Placed = Actor->Network->GetEntity(Id)->Position;
+		const int32 Entrance = Actor->Network->GetEntity(Id)->FrontageEdge;
+		if (!TestTrue(TEXT("it stores an entrance"), Entrance != INDEX_NONE)) { return false; }
+
+		Actor->RebindStandDefinitions();
+		TestTrue(TEXT("control: re-deriving the pose off the stored entrance leaves a stand placed today where it is"),
+			Actor->Network->GetEntity(Id)->Position.Equals(Placed, 1.0));
+
+		FRoadNetworkTestAccess(*Actor->Network).SetEntityFrontageForTest(Id, (Entrance + 2) % 4);
+		Actor->RebindStandDefinitions();
+		const FVector2D Moved = Actor->Network->GetEntity(Id)->Position;
+		TestTrue(*FString::Printf(TEXT("the re-pose follows the STORED edge: the stop mark moved from (%.0f, %.0f) to (%.0f, %.0f)"), Placed.X, Placed.Y, Moved.X, Moved.Y),
+			!Moved.Equals(Placed, 100.0));
+	}
+	return true;
+}
+
+/**
+ * A STAND SAVED BEFORE THE ENTRANCE WAS STORED KEEPS ITS POSE AND ITS PAINT (the migration).
+ *
+ * A level or save written before FEntityInstance::FrontageEdge held a stand's entrance loads every drawn stand at INDEX_NONE. EnsureStandFrontages
+ * stores the rule the readers used to run, once: only on a stand that has an outline and no edge, idempotently, on both load paths (PostLoad for a
+ * level, RepairLoadedNetwork for a save game, whose load is Serialize alone). A stand already storing an edge is left alone - the player's stored
+ * fact outranks a search - and so is every depot.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandFrontageMigrationTest,
+	"Airside.Model.StandFrontage.MigrationStoresTheEntranceOnce",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandFrontageMigrationTest::RunTest(const FString& Parameters)
+{
+	using namespace StandFrontageTest;
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	UEntityDefinition* DepotDef = UEntityDefinition::MakeFuelDepotTransient();
+	FRoadNetworkTestAccess Access(*Net);
+
+	const FEntityInstanceId Legacy = PlaceLegacyReversedStand(*Net, StandDef, FVector2D(0.0, 0.0), FMath::DegreesToRadians(30.0));
+	const FEntityInstanceId AlreadyStored = PlaceBoxStand(*Net, StandDef, EIcaoCode::C, FVector2D(20000.0, 0.0), 0.0, 0.0);
+	const FEntityInstanceId Outlineless = PlaceBoxStand(*Net, StandDef, EIcaoCode::C, FVector2D(40000.0, 0.0), 0.0, 0.0);
+	TArray<FVector2D> DepotPlot = { FVector2D(0.0, 30000.0), FVector2D(5000.0, 30000.0), FVector2D(5000.0, 32400.0), FVector2D(0.0, 32400.0) };
+	FEntityPlacement DepotPlacement;
+	DepotPlacement.Definition = DepotDef;
+	DepotPlacement.Anchors = DepotDef->Anchors;
+	DepotPlacement.Position = (DepotPlot[0] + DepotPlot[1]) * 0.5;
+	DepotPlacement.PoseRole = EServiceRole::Fuel;
+	DepotPlacement.Outline = DepotPlot;
+	DepotPlacement.FrontageEdge = 2;
+	const FEntityInstanceId Depot = Net->PlaceEntity(DepotPlacement);
+	if (!TestTrue(TEXT("setup: three stands and a depot"), Legacy.IsSet() && AlreadyStored.IsSet() && Outlineless.IsSet() && Depot.IsSet())) { return false; }
+
+	// THE RETIRED SEARCH'S ANSWER for the reversed box - not edge 0, which is the far edge once the list is turned round.
+	const int32 Expected = RetiredPoseEntrance(*Net->GetEntity(Legacy));
+	if (!TestTrue(TEXT("the premise: the legacy stand's entrance is not edge 0, so storing the default cannot pass"), Expected != 0)) { return false; }
+	// A LEVEL AS PRE-#450 HOLDS IT: an outline, no stored entrance. The "already stored" stand names the FAR edge - not what a search would say.
+	Access.SetEntityFrontageForTest(AlreadyStored, 2);
+	Access.SetEntityOutlineForTest(Outlineless, {});
+	if (!TestEqual(TEXT("the premise: a legacy stand stores no entrance"), Net->GetEntity(Legacy)->FrontageEdge, static_cast<int32>(INDEX_NONE))) { return false; }
+	TestEqual(TEXT("and a stand whose outline is gone stores none either (the frontage follows the outline)"), Net->GetEntity(Outlineless)->FrontageEdge, static_cast<int32>(INDEX_NONE));
+
+	TestEqual(TEXT("EnsureDepotFrontages leaves every stand alone"), Net->EnsureDepotFrontages(), 0);
+	TestEqual(TEXT("the migration gives exactly the one legacy drawn stand an entrance"), Net->EnsureStandFrontages(), 1);
+	TestEqual(TEXT("the rearmost-midpoint edge the readers used to find"), Net->GetEntity(Legacy)->FrontageEdge, Expected);
+	TestEqual(TEXT("a stand already storing an edge keeps it - the stored fact outranks a search"), Net->GetEntity(AlreadyStored)->FrontageEdge, 2);
+	TestEqual(TEXT("a stand with no outline has none to store"), Net->GetEntity(Outlineless)->FrontageEdge, static_cast<int32>(INDEX_NONE));
+	TestEqual(TEXT("a depot's own frontage is untouched"), Net->GetEntity(Depot)->FrontageEdge, 2);
+	TestEqual(TEXT("a second pass finds nothing to do"), Net->EnsureStandFrontages(), 0);
+
+	// THE LEVEL'S LOAD: PostLoad runs it. (Unwired, an authored map's stands load with no entrance: no pose repair, floor-figure paint.)
+	URoadNetwork* Loaded = NewObject<URoadNetwork>(GetTransientPackage());
+	const FEntityInstanceId LoadedStand = PlaceLegacyReversedStand(*Loaded, StandDef, FVector2D(0.0, 0.0), FMath::DegreesToRadians(30.0));
+	Loaded->PostLoad();
+	TestEqual(TEXT("PostLoad stores the legacy stand's entrance"), Loaded->GetEntity(LoadedStand)->FrontageEdge, Expected);
+
+	// A SAVE GAME'S LOAD, which is Serialize alone: the actor's repair runs the migration too.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	const FEntityInstanceId SavedStand = PlaceLegacyReversedStand(*Actor->Network, StandDef, FVector2D(0.0, 0.0), FMath::DegreesToRadians(30.0));
+	Actor->RepairLoadedNetwork(ELoadedFrom::SaveGame);
+	TestEqual(TEXT("RepairLoadedNetwork stores the legacy stand's entrance for a save game"), Actor->Network->GetEntity(SavedStand)->FrontageEdge, Expected);
 	return true;
 }
 

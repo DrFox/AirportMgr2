@@ -359,4 +359,91 @@ bool FPlotFrontageEdgeSurvivesUndoRedoTest::RunTest(const FString& Parameters)
 	return ExpectBack(TEXT("after a bulldoze is undone"));
 }
 
+/**
+ * A DEPOT KEEPS ITS NUMBER THROUGH UNDO AND REDO (#490).
+ *
+ * Undo and redo restore the exact {Index, Generation} a slot had, and the Memento carries the whole entity and NextDepotNumber with it - so a
+ * redone depot should come back as the same depot, with the same number, and the next one placed should not be handed it twice. The player's
+ * sequence is the issue's own: depots 1 and 2, bulldoze 1, build another (3, in the recycled slot); then undo that placement, redo it, bulldoze it
+ * and undo the bulldoze. Each time the depot that returns is the one under the same id, still depot 3, with the counter where it was.
+ *
+ * WHAT THE ACTOR HALF DOES AND DOES NOT PIN - as Airside.Entities.PlotFrontageEdgeSurvivesUndoAndRedo says of the frontage: the actor re-runs the
+ * load repair on a network undo hands back, and EnsureStandNumbers numbers a depot at 0, so a restore that DROPPED the field is healed here (to
+ * the counter's next value - which differs from 3 here, so it is not invisible, but it is not the Memento's own copy either). The second half is the
+ * one that measures that: a DuplicateObject snapshot with no actor and no repair (Airside.Model.DepotNumbers holds the same at the model level).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDepotNumberSurvivesUndoRedoTest,
+	"Airside.Entities.DepotNumberSurvivesUndoAndRedo",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDepotNumberSurvivesUndoRedoTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+
+	// 40 x 30 m plots (4000 x 3000 uu), 200 m apart: none overlaps another, and each is the size the single-plot test above reserves a yard on.
+	const auto PlaceDepotAt = [Actor](double X)
+	{
+		const FVector2D Origin(X, 20000.0);
+		const TArray<FVector2D> Plot = { Origin, Origin + FVector2D(4000.0, 0.0), Origin + FVector2D(4000.0, 3000.0), Origin + FVector2D(0.0, 3000.0) };
+		return Actor->PlaceEntityInPlot(Plot, Plot[0], Plot[1], TArray<EDepotModule>(), EPlaceableEntity::FuelDepot);
+	};
+
+	const int32 First = PlaceDepotAt(0.0);
+	const int32 Second = PlaceDepotAt(20000.0);
+	if (!TestTrue(TEXT("two depots are placed"), First != INDEX_NONE && Second != INDEX_NONE)) { return false; }
+	TestEqual(TEXT("the first is depot 1"), Actor->Network->GetEntities()[First].DepotNumber, 1);
+	TestEqual(TEXT("the second is depot 2"), Actor->Network->GetEntities()[Second].DepotNumber, 2);
+	if (!TestTrue(TEXT("depot 1 is bulldozed"), Actor->DeleteEntity(First))) { return false; }
+	const int32 ThirdIndex = PlaceDepotAt(40000.0);
+	if (!TestTrue(TEXT("a third is placed"), ThirdIndex != INDEX_NONE)) { return false; }
+	TestEqual(TEXT("it took the bulldozed depot's slot"), ThirdIndex, First);
+	const FEntityInstanceId Third = Actor->Network->EntityIdAt(ThirdIndex);
+	TestEqual(TEXT("and it is depot 3, not the retired 1"), Actor->Network->GetEntity(Third)->DepotNumber, 3);
+
+	// EACH RETURN OF THE DEPOT: the same entity under the same id, still depot 3, the counter where it was.
+	const auto ExpectBack = [&](const TCHAR* When)
+	{
+		const FEntityInstance* Back = Actor->Network->GetEntity(Third);
+		if (!TestNotNull(*FString::Printf(TEXT("%s: the depot is back under the same id"), When), Back)) { return false; }
+		TestEqual(*FString::Printf(TEXT("%s: it is still depot 3"), When), Back->DepotNumber, 3);
+		TestEqual(*FString::Printf(TEXT("%s: and the next depot is 4 - the counter neither lost 3 nor spent it twice"), When), Actor->Network->GetNextDepotNumber(), 4);
+		TestEqual(*FString::Printf(TEXT("%s: the survivor is still depot 2"), When), Actor->Network->GetEntities()[Second].DepotNumber, 2);
+		return true;
+	};
+
+	if (!TestTrue(TEXT("the placement undoes"), Actor->Undo())) { return false; }
+	TestNull(TEXT("and the depot is gone"), Actor->Network->GetEntity(Third));
+	if (!TestTrue(TEXT("and redoes"), Actor->Redo())) { return false; }
+	if (!ExpectBack(TEXT("after undo then redo"))) { return false; }
+
+	if (!TestTrue(TEXT("the depot is bulldozed"), Actor->DeleteEntity(ThirdIndex))) { return false; }
+	TestNull(TEXT("and gone"), Actor->Network->GetEntity(Third));
+	if (!TestTrue(TEXT("the bulldoze undoes"), Actor->Undo())) { return false; }
+	if (!ExpectBack(TEXT("after a bulldoze is undone"))) { return false; }
+
+	// THE NEXT DEPOT after all of that is 4, never a number already worn.
+	const int32 Fourth = PlaceDepotAt(60000.0);
+	if (TestTrue(TEXT("a fourth is placed"), Fourth != INDEX_NONE))
+	{
+		TestEqual(TEXT("it is depot 4"), Actor->Network->GetEntities()[Fourth].DepotNumber, 4);
+	}
+
+	// THE MEMENTO'S OWN COPY, with nothing to heal a loss: a DuplicateObject snapshot of the live network, the way the undo history takes one.
+	URoadNetwork* Snapshot = DuplicateObject<URoadNetwork>(Actor->Network, GetTransientPackage());
+	if (!TestNotNull(TEXT("a snapshot"), Snapshot)) { return false; }
+	const FEntityInstance* Copied = Snapshot->GetEntity(Third);
+	if (TestNotNull(TEXT("the snapshot holds the third depot"), Copied))
+	{
+		TestEqual(TEXT("with its number"), Copied->DepotNumber, 3);
+	}
+	TestEqual(TEXT("and its counter"), Snapshot->GetNextDepotNumber(), 5);
+	return true;
+}
+
 #endif

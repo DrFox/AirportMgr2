@@ -429,6 +429,46 @@ bool FInspectorStandCardTest::RunTest(const FString&)
 	return true;
 }
 
+/**
+ * THE DEPOT CARD NAMES THE DEPOT BY ITS NUMBER, NOT ITS ENTITY INDEX (#490).
+ *
+ * The title printed the INDEX, which RoadSlot recycles into a different depot after a bulldoze - the card of a depot built after one was
+ * bulldozed said "Fuel depot 1" beside a player's memory of the depot that was gone. The issue's own pin: depots 1 and 2, bulldoze 1, build another;
+ * the third takes the first's slot, and its card says depot 3 (the same number the job board's vehicle lines say - AirportOps.Model.DepotLabel.*).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorDepotCardNamesTheDepotByItsNumberTest, "AirportMgr.Inspector.DepotCardNamesTheDepotByItsNumber",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FInspectorDepotCardNamesTheDepotByItsNumberTest::RunTest(const FString&)
+{
+	using namespace InspectorCardsTest;
+	FCardDepotRig Rig;
+	if (!TestTrue(TEXT("setup: an attached runtime and the first plotted depot"), Rig.Build())) { return false; }
+	ARoadNetworkActor* Actor = Rig.World.Actor;
+	const auto PlaceDepotAt = [Actor](double X)
+	{
+		const TArray<FVector2D> Plot = { FVector2D(X, 0.0), FVector2D(X + 5000.0, 0.0), FVector2D(X + 5000.0, 2400.0), FVector2D(X, 2400.0) };
+		return Actor->PlaceEntityInPlot(Plot, Plot[0], Plot[1], { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump }, EPlaceableEntity::FuelDepot);
+	};
+	const int32 First = Rig.Index;
+	const int32 Second = PlaceDepotAt(20000.0);
+	if (!TestTrue(TEXT("a second depot is placed"), Second != INDEX_NONE)) { return false; }
+	if (!TestTrue(TEXT("the first is bulldozed"), Actor->DeleteEntity(First))) { return false; }
+	const int32 Third = PlaceDepotAt(40000.0);
+	if (!TestTrue(TEXT("a third depot is placed"), Third != INDEX_NONE)) { return false; }
+	TestEqual(TEXT("it took the bulldozed depot's slot - the recycling that makes an index the wrong name for a depot"), Third, First);
+
+	const auto TitleOf = [&Rig](int32 EntityIndex)
+	{
+		Rig.Index = EntityIndex;
+		FDepotCard Card;
+		const FInspectorCardView* View = Card.Describe(Rig.Input());
+		return View != nullptr ? View->Title : FString(TEXT("<no card>"));
+	};
+	TestEqual(TEXT("the third depot's card says depot 3, not the retired 1 its index would give"), TitleOf(Third), FString(TEXT("Fuel depot 3")));
+	TestEqual(TEXT("the survivor's card still says depot 2"), TitleOf(Second), FString(TEXT("Fuel depot 2")));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorDepotCardTest, "AirportMgr.Inspector.Card.Depot",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FInspectorDepotCardTest::RunTest(const FString&)

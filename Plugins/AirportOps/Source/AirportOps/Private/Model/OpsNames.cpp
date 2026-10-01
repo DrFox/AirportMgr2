@@ -25,3 +25,25 @@ FString OpsNames::StandLabel(const URoadNetwork* Network, FEntityInstanceId Stan
 	}
 	return FString::FromInt(Stand.Index);
 }
+
+FString OpsNames::DepotLabel(const URoadNetwork* Network, FEntityInstanceId Depot)
+{
+	const FEntityInstance* Entity = Network != nullptr ? Network->GetEntity(Depot) : nullptr;
+	if (Entity != nullptr && Entity->DepotNumber > 0)
+	{
+		return FString::FromInt(Entity->DepotNumber);
+	}
+	if (Entity != nullptr)
+	{
+		// ALIVE AND UNNUMBERED: the invariant Airside.Model.DepotNumbers pins has broken (or the entity is no depot at all), and "depot 0" beside a
+		// card that says something else is the symptom - so the index goes out, and the log says why, once. StandLabel's own fallback.
+		static bool bWarned = false;
+		if (!bWarned)
+		{
+			bWarned = true;
+			UE_LOG(LogAirportOps, Warning,
+				TEXT("OpsNames: entity %d is an unnumbered depot - EnsureStandNumbers did not run? Naming it by index."), Depot.Index);
+		}
+	}
+	return FString::FromInt(Depot.Index);
+}

@@ -603,6 +603,11 @@ int32 ARoadNetworkActor::RepairLoadedNetwork(ELoadedFrom From)
 	// AND THE DEPOTS' FRONTAGES (#450): a save game's load is Serialize alone, like the pair above, so a save written before the
 	// frontage was stored needs the same migration the level's PostLoad runs.
 	const int32 Fronted = Network->EnsureDepotFrontages();
+	// AND THE STANDS' ENTRANCES (#450's leftover), AFTER THE OUTLINES above - the entrance is an edge of the outline a legacy stand was just given - and
+	// BEFORE RebindStandDefinitions below, whose pose repair reads the stored edge instead of searching. The same reason as the depots': a save
+	// game's load is Serialize alone, so a save written before a stand stored its entrance needs the migration the level's PostLoad runs.
+	// ENFORCED BY: Airside.Model.StandFrontage.MigrationStoresTheEntranceOnce (the save-game path)
+	const int32 Entranced = Network->EnsureStandFrontages();
 
 	// THE DEFINITIONS NEXT, before anything below reads one: a D/E/F stand's definition is
 	// never saved (see LetterStandDefinitions), so a loaded or duplicated level arrives
@@ -637,12 +642,12 @@ int32 ARoadNetworkActor::RepairLoadedNetwork(ELoadedFrom From)
 	// ONE LINE WHEN A LOAD REPAIRED ANYTHING, so "did it" is one grep - the questions the
 	// comments above answer by reasoning, answered by measurement. Silent when nothing needed
 	// it: PostRegisterAllComponents re-runs on every editor re-registration of this actor.
-	const int32 Total = DefaultsResolved + Outlined + Numbered + Fronted + Rebound + RefreshedAnchors + Forgotten;
+	const int32 Total = DefaultsResolved + Outlined + Numbered + Fronted + Entranced + Rebound + RefreshedAnchors + Forgotten;
 	if (Total > 0)
 	{
 		UE_LOG(LogRoadMesh, Log,
-			TEXT("Load repairs on %s: %d default re-resolved, %d outline(s), %d number(s), %d depot frontage(s), %d definition(s), %d anchor(s), %d transient profile ref(s)"),
-			*GetName(), DefaultsResolved, Outlined, Numbered, Fronted, Rebound, RefreshedAnchors, Forgotten);
+			TEXT("Load repairs on %s: %d default re-resolved, %d outline(s), %d number(s), %d depot frontage(s), %d stand entrance(s), %d definition(s), %d anchor(s), %d transient profile ref(s)"),
+			*GetName(), DefaultsResolved, Outlined, Numbered, Fronted, Entranced, Rebound, RefreshedAnchors, Forgotten);
 	}
 	return Total;
 }

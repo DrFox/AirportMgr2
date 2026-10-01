@@ -32,6 +32,28 @@
 #include "Tool/PlotGesture.h"
 #include "Present/RoadEditHistory.h"
 
+// NAMED, NOT ANONYMOUS: the plugin is a UNITY build, and an anonymous helper of a common name compiles alone and collides with another file's copy.
+namespace RoadEditFacadeSurfacesLocal
+{
+	/**
+	 * Which edge of Outline runs EXACTLY from A to B, as the index i of the edge Outline[i] -> Outline[(i + 1) % Num]; INDEX_NONE when none does.
+	 * Exact equality and not a nearest-midpoint guess: the caller's points are the same floats it copied the outline's corners from, and a pair that
+	 * is not an edge is a caller that has not understood "given, not searched for" - see PlaceEntityInPlot's own comment on what it does about that.
+	 * One loop for the depot's plot and the stand's, so the two cannot come to mean different things by "the given edge".
+	 */
+	int32 EdgeIndexOf(const TArray<FVector2D>& Outline, const FVector2D& A, const FVector2D& B)
+	{
+		for (int32 Corner = 0; Corner < Outline.Num(); ++Corner)
+		{
+			if (Outline[Corner] == A && Outline[(Corner + 1) % Outline.Num()] == B)
+			{
+				return Corner;
+			}
+		}
+		return INDEX_NONE;
+	}
+}
+
 bool URoadEditFacade::Travel(TFunctionRef<URoadNetwork*(URoadEditHistory&, URoadNetwork&)> Step)
 {
 	ARoadNetworkActor& Owner = Actor();
@@ -455,15 +477,7 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 	// same floats, copied, and a frontage that is not an edge of its own outline is a caller that has not understood the
 	// contract ("given, not searched for") - refused, where a nearest-edge guess would have built a yard facing the wrong
 	// side and said nothing.
-	int32 FrontageEdge = INDEX_NONE;
-	for (int32 Corner = 0; Corner < Wound.Num(); ++Corner)
-	{
-		if (Wound[Corner] == FrontageA && Wound[(Corner + 1) % Wound.Num()] == FrontageB)
-		{
-			FrontageEdge = Corner;
-			break;
-		}
-	}
+	const int32 FrontageEdge = RoadEditFacadeSurfacesLocal::EdgeIndexOf(Wound, FrontageA, FrontageB);
 	if (FrontageEdge == INDEX_NONE)
 	{
 		UE_LOG(LogRoadMesh, Warning,
@@ -960,6 +974,17 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 	Placement.Heading = RoadGeom::Bearing(Pose.Facing);
 	Placement.PoseRole = Definition->PoseRole;
 	Placement.Outline = Wound;
+
+	// THE ENTRANCE EDGE, STORED (#450's leftover): the edge of the wound outline that runs from the entrance A to B (swapped with the outline above, so
+	// in Wound's own direction) - the fact the gesture knew and the entity forgot, which UStandDefinitionCache::PoseFromOutline and
+	// FStandMarkingBuilder::FrameFor each re-derived by a heuristic of their own on every load and every rebuild. They read it now.
+	//
+	// NOT REFUSED WHEN IT IS NOT AN EDGE, unlike a depot's frontage (PlaceEntityInPlot): this function has always accepted entrance points that are
+	// not corners of the outline, and WhyStandRefused - the gate the tool's readout and this commit share - does not look at them, so refusing here
+	// would be a placement the readout lit and the commit dropped. A pair that names no edge stores none, and PlaceEntity gives the stand the one
+	// StandBox::EntranceEdgeOf answer the readers used to find - which is what was drawn before, so nothing moves.
+	// ENFORCED BY: Airside.Model.StandFrontage.StoredEdgeIsTodaysHeuristicAnswer (a stand placed here stores the edge the heuristic names)
+	Placement.FrontageEdge = RoadEditFacadeSurfacesLocal::EdgeIndexOf(Wound, A, B);
 
 	// THE WIDEST SPAN THAT STILL READS BACK AS THIS LETTER - see
 	// IcaoCode::DesignSpanForLetter's own header for why MaxWingspanForLetter's ceiling

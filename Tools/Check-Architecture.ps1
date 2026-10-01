@@ -533,15 +533,50 @@ $AllowedCallers = @(
         ProdReason  = 'FApronDrawTool is the one client of the closing-polygon gesture (#450); a second one is the moment to fold or re-justify it'
     },
     @{
-        # THE FRONTAGE EDGE HAS THREE WRITERS AND NO MORE (#450, PR #491 review): the facade's PlaceEntityInPlot (the edge it was GIVEN, looked
-        # up in the outline it stores), URoadNetwork::PlaceEntity (copying the placement's onto the instance) and the load migration
-        # EnsureDepotFrontages; RoadEntity.h holds the two defaults. A writer anywhere else is a second opinion on where a plot faces - the
-        # heuristics this field replaced. Tests set Placement.FrontageEdge to say which edge a fixture means, and are exempt.
+        # THE FRONTAGE EDGE HAS A FEW WRITERS AND NO MORE (#450, PR #491 review; a stand's entrance too since #450's leftover): the facade's
+        # PlaceEntityInPlot and PlaceStandInPlot (the edge each was GIVEN, looked up in the outline it stores), URoadNetwork::PlaceEntity (copying the
+        # placement's onto the instance, and giving a stand that was given none the one StandBox::EntranceEdgeOf answer) and the load migrations
+        # EnsureDepotFrontages / EnsureStandFrontages; RoadEntity.h holds the two defaults. A writer anywhere else is a second opinion on where a
+        # plot faces - the heuristics this field replaced. Tests set Placement.FrontageEdge to say which edge a fixture means, and are exempt.
         Name        = 'FEntityInstance::FrontageEdge write'
         Pattern     = '\bFrontageEdge\s*=(?!=)'
         ProdAllowed = @('Public\Model\RoadEntity.h', 'Private\Model\RoadNetwork.cpp', 'Private\Present\RoadEditFacadeSurfaces.cpp')
         TestExempt  = $true
-        ProdReason  = 'FrontageEdge is written by PlaceEntityInPlot (the edge it was given), PlaceEntity (the copy) and EnsureDepotFrontages (the load migration) only (#450)'
+        ProdReason  = 'FrontageEdge is written by PlaceEntityInPlot / PlaceStandInPlot (the edge each was given), PlaceEntity (the copy, and the default for a stand given none) and EnsureDepotFrontages / EnsureStandFrontages (the load migrations) only (#450)'
+    },
+    @{
+        # RULE 79 (#490): A DEPOT IS NAMED BY ITS NUMBER, NOT ITS ENTITY INDEX. RoadSlot recycles a freed slot, so the index in "Fuel depot 1" or "to
+        # depot 1" named a different depot after a bulldoze. FEntityInstance::DepotNumber is issued by PlaceEntity from NextDepotNumber and
+        # backfilled by EnsureStandNumbers - and by no one else: a second writer is a second numbering that the card and the vehicle lines would not agree with.
+        Name        = 'FEntityInstance::DepotNumber write (rule 79)'
+        Pattern     = '\b(?:Next)?DepotNumber\s*=(?!=)|\bNextDepotNumber\s*\+\+|\+\+\s*NextDepotNumber'
+        ProdAllowed = @('Public\Model\RoadEntity.h', 'Public\Model\RoadNetwork.h', 'Private\Model\RoadNetwork.cpp')
+        TestExempt  = $true
+        ProdReason  = 'a depot is numbered by URoadNetwork::PlaceEntity (and the EnsureStandNumbers backfill) only - a second writer is a second numbering (#490)'
+    },
+    @{
+        # RULE 79 (#490), THE READ SIDE: the three job-board sentences that say where a service vehicle is ("to depot / refilling at depot / at depot")
+        # and the depot card's title once printed the entity index. OpsNames::DepotLabel is the one wording; the shape to keep out is a depot sentence
+        # built from an index. (A log line may still print Home.Index - a diagnostic names the slot - and is not matched: the sentences are the whole
+        # string literal, and the card's title is the Format call over a one-field index.)
+        Name        = 'depot named by its entity index in a player-facing line (rule 79)'
+        Pattern     = 'TEXT\("(?:to |refilling at |at )depot %d"\)|depot \{0\}"\)\.ToString\(\)\s*,\s*\{\s*\w+\.Index\b'
+        ProdAllowed = @()
+        TestExempt  = $true
+        ProdReason  = 'name the depot with OpsNames::DepotLabel (its DepotNumber) - the entity index is recycled by a delete, so it names a different depot afterwards (#490)'
+    },
+    @{
+        # RULE 80 (#450's leftover): THE STAND READERS READ THE STORED ENTRANCE, THEY DO NOT SEARCH. StandBox::EntranceEdgeOf is the old pose
+        # reader's rearmost-midpoint search, moved to the one writer that still needs it (URoadNetwork: PlaceEntity for a stand given no edge, and
+        # EnsureStandFrontages for one saved before the field). UStandDefinitionCache::PoseFromOutline and FStandMarkingBuilder::FrameFor read
+        # FEntityInstance::GetFrontage now; a reader that asks EntranceEdgeOf is searching again, and "the stand cache and the paint agree" is a
+        # comment again. BEST EFFORT, and it says so: a reader that re-typed the loop inline is not seen here - Airside.Model.StandFrontage.
+        # ReadersReadTheStoredEdge is the half that measures the read.
+        Name        = 'StandBox::EntranceEdgeOf callers (rule 80)'
+        Pattern     = '\bEntranceEdgeOf\s*\('
+        ProdAllowed = @('Public\Solve\StandBox.h', 'Private\Solve\StandBox.cpp', 'Private\Model\RoadNetwork.cpp')
+        TestExempt  = $true
+        ProdReason  = 'read FEntityInstance::GetFrontage, the entrance edge placement or the load migration stored; only URoadNetwork writes it, with this search (#450)'
     },
     @{
         # HOW A VEHICLE CAME IS WRITTEN WHERE IT IS MADE (#450/#487, PR #491 review): FServiceFleet::Create sets Origin for Add (Bought or
@@ -558,8 +593,8 @@ $AllowedCallers = @(
         # THE FRONTAGE IS STORED, NOT RECOVERED (#450). DepotKit::RecoverFrontage guessed it from the edge whose midpoint was nearest
         # Position; FEntityInstance::FrontageEdge holds the edge the facade was GIVEN. Nothing may bring the guess back under its old
         # name, tests included - a fixture says which edge it means (Placement.FrontageEdge) rather than leaving the solve to search.
-        # (The stand readers - StandDefinitionCache's rearmost midpoint, StandMarkingBuilder's rearmost corner - still search; #450
-        # left them, and this row does not cover their names.)
+        # (The stand readers - StandDefinitionCache's rearmost midpoint, StandMarkingBuilder's rearmost corner - read the stored entrance
+        # now, which rule 80's row 'StandBox::EntranceEdgeOf callers' keeps from searching again; this row covers the depot's name.)
         Name        = 'RecoverFrontage'
         Pattern     = '\bRecoverFrontage\s*\('
         ProdAllowed = @()
@@ -682,10 +717,11 @@ $AllowedCallers = @(
         # ONE REPAIR FUNCTION FOR BOTH LOADS (#426). The save-game load ran two of the four load-time repairs a level
         # gets, under a comment claiming it ran them all; ARoadNetworkActor::RepairLoadedNetwork is the one list now,
         # called by PostRegisterAllComponents and by URoadEditFacade::RestoreInPlace. A repair called from a second
-        # production site is a second list that will drift from the first. EnsureStand* are also URoadNetwork::PostLoad's
-        # own pair (RoadNetwork.cpp, the definition file), which a level's asset load runs first.
+        # production site is a second list that will drift from the first. EnsureStand* and EnsureDepotFrontages are also
+        # URoadNetwork::PostLoad's own list (RoadNetwork.cpp, the definition file), which a level's asset load runs first.
+        # (The two frontage migrations joined the row with #450's leftover: they are repairs of the same two loads.)
         Name        = 'load-time repairs'
-        Pattern     = '\b(RefreshResolvedAnchors|EnsureStandOutlines|EnsureStandNumbers|RepointTransientDefaultProfile)\s*\('
+        Pattern     = '\b(RefreshResolvedAnchors|EnsureStandOutlines|EnsureStandNumbers|EnsureDepotFrontages|EnsureStandFrontages|RepointTransientDefaultProfile)\s*\('
         ProdAllowed = @('Public\Entities\EntityDefinition.h', 'Private\Entities\EntityDefinition.cpp', 'Public\Model\RoadNetwork.h', 'Private\Model\RoadNetwork.cpp', 'Private\Present\RoadNetworkActor.cpp')
         TestExempt  = $true
         ProdReason  = 'a load-time repair runs from ARoadNetworkActor::RepairLoadedNetwork only - add it there, not beside a load'

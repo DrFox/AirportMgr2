@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Algo/Reverse.h"
 #include "Misc/AutomationTest.h"
 #include "Solve/IcaoCode.h"
 #include "Solve/RoadGeom.h"
@@ -279,6 +280,64 @@ bool FStandBoxMeasuresWholeUuTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("the sweep met raw lengths an ulp off the floor, so the rounding was exercised"),
 		Inexact > 0);
+	return true;
+}
+
+/**
+ * THE ENTRANCE EDGE IS THE ONE WHOSE MIDPOINT LIES FURTHEST BEHIND THE STOP MARK ALONG ITS FACING (#450's leftover).
+ *
+ * The search UStandDefinitionCache::PoseFromOutline ran on every load, moved here for the one writer that still needs it
+ * (PlaceEntity and EnsureStandFrontages, for a stand given no edge). Pinned on a box built by BoxAt - whose entrance is edge 0 by construction -
+ * at every heading, in BOTH windings (the facade reverses a clockwise outline, which puts the drawn FAR edge at 0 -> 1, so "index 0" is not the
+ * entrance there), and on the degenerate outlines.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandBoxEntranceEdgeTest,
+	"Airside.Solve.StandBox.EntranceEdgeIsTheRearmostMidpoint",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandBoxEntranceEdgeTest::RunTest(const FString& Parameters)
+{
+	const EIcaoCode Letter = EIcaoCode::C;
+	const FLetterEnvelope Envelope = IcaoCode::FloorEnvelopeForLetter(Letter);
+	int32 Headings = 0;
+	for (int32 Step = 0; Step < 24; ++Step)
+	{
+		const double Heading = FMath::DegreesToRadians(Step * 15.0 + 3.0);
+		StandBox::FStandPose Pose;
+		Pose.Position = FVector2D(1234.5, -6789.0);
+		Pose.Facing = FVector2D(FMath::Cos(Heading), FMath::Sin(Heading));
+		TArray<FVector2D> Box;
+		StandBox::BoxAt(Pose, Letter, Envelope, Box);
+
+		TestEqual(TEXT("BoxAt's own entrance is its edge 0, and the search finds it at every heading"),
+			StandBox::EntranceEdgeOf(Box, Pose.Position, Pose.Facing), 0);
+
+		// THE FACADE'S REVERSAL: the same box wound the other way. The entrance is the same two points, now at 2 -> 3 (Box[1], Box[0] reversed).
+		TArray<FVector2D> Reversed = Box;
+		Algo::Reverse(Reversed);
+		const int32 Edge = StandBox::EntranceEdgeOf(Reversed, Pose.Position, Pose.Facing);
+		if (TestTrue(TEXT("a reversed box still has an entrance"), Edge != INDEX_NONE))
+		{
+			const FVector2D A = Reversed[Edge];
+			const FVector2D B = Reversed[(Edge + 1) % Reversed.Num()];
+			TestTrue(TEXT("and it is the same two points (in the other order), not index 0 - which is the far edge now"),
+				(A == Box[1] && B == Box[0]) && Edge != 0);
+		}
+		++Headings;
+	}
+	TestEqual(TEXT("every heading was measured"), Headings, 24);
+
+	// AN OUTLINE OF UNDER THREE POINTS has no edge to name - INDEX_NONE, never a read past the array.
+	TestEqual(TEXT("no outline: none"), StandBox::EntranceEdgeOf(TArray<FVector2D>(), FVector2D::ZeroVector, FVector2D(1.0, 0.0)), static_cast<int32>(INDEX_NONE));
+	const TArray<FVector2D> Two = { FVector2D(0.0, 0.0), FVector2D(100.0, 0.0) };
+	TestEqual(TEXT("two points: none"), StandBox::EntranceEdgeOf(Two, FVector2D::ZeroVector, FVector2D(1.0, 0.0)), static_cast<int32>(INDEX_NONE));
+
+	// AN EXACT TIE KEEPS THE FIRST EDGE, as the reader did: a diamond facing +X has its two rear edges (2 and 3) meeting at the rear vertex, their
+	// midpoints exactly level along X.
+	const TArray<FVector2D> Diamond = { FVector2D(0.0, -100.0), FVector2D(100.0, 0.0), FVector2D(0.0, 100.0), FVector2D(-100.0, 0.0) };
+	TestEqual(TEXT("two rear edges tie exactly: the first one wins"),
+		StandBox::EntranceEdgeOf(Diamond, FVector2D::ZeroVector, FVector2D(1.0, 0.0)), 2);
 	return true;
 }
 

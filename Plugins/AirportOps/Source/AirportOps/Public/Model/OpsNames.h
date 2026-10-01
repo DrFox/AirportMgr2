@@ -34,4 +34,17 @@ namespace OpsNames
 	 * card), Airside.Model.StandNumbers (placement and the backfill give every stand one)
 	 */
 	AIRPORTOPS_API FString StandLabel(const URoadNetwork* Network, FEntityInstanceId Stand);
+
+	/**
+	 * The depot's number as the player reads it: FEntityInstance::DepotNumber, 1..N in placement order, never reused (#490). StandLabel's
+	 * twin for a fuel depot - the inspector card's title and the job board's vehicle lines ("to depot 3") both name a depot, and both
+	 * printed the entity INDEX, which RoadSlot recycles into a different depot after a bulldoze: "depot 1" beside a player's memory
+	 * of a depot that is gone.
+	 *
+	 * THE SAME FALLBACK, for the same reasons: the index, and a one-time Warning, only when there is no number to give - no network,
+	 * an unset or dead handle, or a depot that reached here unnumbered (which PlaceEntity and EnsureStandNumbers' backfill prevent).
+	 * ENFORCED BY: AirportOps.Model.DepotLabel.VehicleLinesSayTheDepotsNumber (the number, through the vehicle's lines, the backlog and the fleet row),
+	 * AirportMgr.Inspector.DepotCardNamesTheDepotByItsNumber (the card), Airside.Model.DepotNumbers (placement and the backfill give every depot one)
+	 */
+	AIRPORTOPS_API FString DepotLabel(const URoadNetwork* Network, FEntityInstanceId Depot);
 }
