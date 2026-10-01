@@ -41,6 +41,12 @@ double FTrafficRules::GapFor(ETraversalClass Class) const
 	return FMath::Max(Gap, FootprintFor(Class) * 0.5 + 1.0);
 }
 
+double FTrafficRules::PushClearBy(ETraversalClass Class) const
+{
+	// THROUGH THE TWO LOOKUPS, so GapFor's floor holds here too.
+	return FootprintFor(Class) + GapFor(Class);
+}
+
 // ENFORCED BY: AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (checked 2026-09-30 by a stray enumerator: the build failed here)
 AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
 double FTrafficRules::PushSpeedFor(EPushbackNeed Need) const

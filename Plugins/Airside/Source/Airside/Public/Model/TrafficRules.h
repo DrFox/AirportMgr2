@@ -201,6 +201,14 @@ struct AIRSIDE_API FTrafficRules
 	double FootprintFor(ETraversalClass Class) const;
 	double GapFor(ETraversalClass Class) const;
 
+	/**
+	 * A BODY AND ITS GAP, FootprintFor + GapFor: how far past its junction a push is planned to finish (DepartAgent's
+	 * PushbackPlanner call), and how much further than its clearance a push re-routed by a rebuild may go (ReResolvePlan,
+	 * #502). ONE figure for both, because they are one question - the room a push is cleared for - and the two spelled it
+	 * separately until #502's review.
+	 */
+	double PushClearBy(ETraversalClass Class) const;
+
 	/** Which of the three push speeds above applies. The ONE consumer that has to agree with
 	 *  EPushbackNeed - see its body for why that matters. */
 	double PushSpeedFor(EPushbackNeed Need) const;

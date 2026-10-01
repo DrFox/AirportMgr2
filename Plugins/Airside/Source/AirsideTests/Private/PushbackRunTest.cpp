@@ -183,19 +183,35 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 
 	// 5. ARBITRATION IS THE ONE INPUT, exactly as it is for the follower: a push held short
 	//    stops where it is told and does not creep past it.
+	//
+	//    FED AS THE CLAIM PASS FEEDS IT (#502 review): StopWithin is how much further it may go, re-measured every tick
+	//    from where it is - FClaimPass::StopWithinFor's answer. This fed a constant 1000, which a reading of it as a plan
+	//    distance also passed; in play that reading stopped a refused push half way to its line. And at the line it reads
+	//    no speed: the ramp alternated zero and one frame's PushAccel against it, an aeroplane at rest with creeping wheels.
 	{
 		FPushbackRun Run;
 		Run.Start(PushbackEastArmPlan(), 150.0, 30.0, false);
 
 		FVector2D At = FVector2D::ZeroVector;
 		double Heading = 0.0;
+		constexpr double StopLine = 1000.0;
 		for (int32 Frame = 0; Frame < 2000; ++Frame)
 		{
-			Run.Advance(PushbackFrame, /*StopWithin*/ 1000.0, true, At, Heading);
+			Run.Advance(PushbackFrame, /*StopWithin*/ StopLine - Run.Travelled, true, At, Heading);
 		}
 
-		TestEqual(TEXT("a push stops where arbitration says"), Run.Travelled, 1000.0, 1.0);
+		TestEqual(TEXT("a push stops where arbitration says"), Run.Travelled, StopLine, 1.0);
 		TestFalse(TEXT("and has not arrived, so it is still the driving phase"), Run.HasArrived());
+		TestEqual(TEXT("and reads no speed standing at the line"), Run.Speed, 0.0, 1.0e-6);
+
+		// AND FROM PART WAY ALONG: given a new line 400 uu further on, it ends on that line - not at 400 along its plan,
+		// which the plan-distance reading clamped it BACK to, 600 uu in one frame.
+		const double From = Run.Travelled;
+		for (int32 Frame = 0; Frame < 2000; ++Frame)
+		{
+			Run.Advance(PushbackFrame, /*StopWithin*/ From + 400.0 - Run.Travelled, true, At, Heading);
+		}
+		TestEqual(TEXT("refused further along, it stops on its new line, never back down its plan"), Run.Travelled, From + 400.0, 1.0);
 	}
 
 	// 6. AN UNUSABLE ROUTE IS REFUSED AND LEAVES NOTHING HALF-ARMED - the rule

@@ -1,5 +1,6 @@
 #include "Model/PushbackRun.h"
 
+#include "Model/RouteJoin.h"
 #include "Solve/GuidelineGeom.h"
 
 bool FPushbackRun::Start(const FRoutePlan& InPlan, double InPushSpeed, double InPushAccel,
@@ -20,6 +21,8 @@ bool FPushbackRun::Start(const FRoutePlan& InPlan, double InPushSpeed, double In
 	Plan = InPlan;
 	Travelled = 0.0;
 	Speed = 0.0;
+	// THE CLEARANCE, as DepartAgent granted it: the whole of this plan (#502 review - see ClearedTo).
+	ClearedTo = InPlan.Length;
 
 	// FACING THE WAY IT PARKED, which is this line's tangent turned about - see the header.
 	// Seeded here so a caller reading the pose before the first Advance sees the aeroplane on
@@ -44,12 +47,17 @@ bool FPushbackRun::Rejoin(const FRoutePlan& Route, double Along, const FVector2D
 		return false;
 	}
 
+	// THE CLEARANCE LEFT, carried into the new route's distances below whichever way it is joined (#502 review): a rejoin
+	// moves the push onto another line, not further than it was cleared to go.
+	const double ClearanceLeft = ClearedTo - Travelled;
+
 	// ON THE LINE ALREADY - a lead-in shortened along its own axis, a split: the new route is walked from the projection.
 	const double Offset = FVector2D::Distance(From, OnLine);
 	if (Offset < 1.0)
 	{
 		Plan = Route;
 		Travelled = Along;
+		ClearedTo = Travelled + ClearanceLeft;
 		return true;
 	}
 
@@ -71,44 +79,44 @@ bool FPushbackRun::Rejoin(const FRoutePlan& Route, double Along, const FVector2D
 	{
 		return false;
 	}
-	FVector2D JoinAt = FVector2D::ZeroVector;
-	if (!GuidelineGeom::PointAtDistance(Route.Polyline, JoinTo, JoinAt, Tangent))
+	// THE LEG ITSELF IS RouteJoin::Prepend's (#502), the one join-leg shape the held taxi out's join shares: the polyline
+	// re-laid from where the aeroplane stands, every step re-based. Refused there, untouched here.
+	FRoutePlan Joined;
+	if (!RouteJoin::Prepend(Route, From, JoinTo, Joined))
 	{
 		return false;
 	}
-	// THE FIRST VERTEX PAST THE JOIN, by the arc length PointAtDistance and every EndDistance were measured with.
-	int32 Keep = Route.Polyline.Num();
-	double Walked = 0.0;
-	for (int32 Index = 1; Index < Route.Polyline.Num(); ++Index)
-	{
-		Walked += FVector2D::Distance(Route.Polyline[Index - 1], Route.Polyline[Index]);
-		if (Walked > JoinTo + UE_KINDA_SMALL_NUMBER)
-		{
-			Keep = Index;
-			break;
-		}
-	}
-
-	const double Leg = FVector2D::Distance(From, JoinAt);
-	FRoutePlan Joined = Route;
-	Joined.Polyline.Reset();
-	Joined.Polyline.Add(From);
-	Joined.Polyline.Add(JoinAt);
-	for (int32 Index = Keep; Index < Route.Polyline.Num(); ++Index)
-	{
-		Joined.Polyline.Add(Route.Polyline[Index]);
-	}
-	for (FRouteStep& Step : Joined.Steps)
-	{
-		// The first step may end AT the join (JoinTo clamped to it): its end is then the join's own vertex.
-		const bool bEndsAtJoin = Step.EndDistance <= JoinTo + UE_KINDA_SMALL_NUMBER;
-		Step.EndVertex = bEndsAtJoin ? 1 : Step.EndVertex - Keep + 2;
-		Step.EndDistance = bEndsAtJoin ? Leg : Leg + (Step.EndDistance - JoinTo);
-	}
-	Joined.Length = GuidelineGeom::PolylineLength(Joined.Polyline);
 	Plan = Joined;
 	Travelled = 0.0;
+	ClearedTo = ClearanceLeft;
 	return true;
+}
+
+void FPushbackRun::AppendRemainingRun(bool bReverse, TArray<FRouteRun>& Out) const
+{
+	// BY THE ARC LENGTH Advance WALKS (PointAtDistance), so the run starts under the steered axle, where the pose is.
+	FVector2D At = FVector2D::ZeroVector;
+	double Tangent = 0.0;
+	if (HasArrived() || !GuidelineGeom::PointAtDistance(Plan.Polyline, Travelled, At, Tangent))
+	{
+		return;
+	}
+	FRouteRun Run;
+	Run.bReverse = bReverse;
+	Run.Points.Add(At);
+	double Walked = 0.0;
+	for (int32 Index = 1; Index < Plan.Polyline.Num(); ++Index)
+	{
+		Walked += FVector2D::Distance(Plan.Polyline[Index - 1], Plan.Polyline[Index]);
+		if (Walked > Travelled + UE_KINDA_SMALL_NUMBER)
+		{
+			Run.Points.Add(Plan.Polyline[Index]);
+		}
+	}
+	if (Run.Points.Num() >= 2)
+	{
+		Out.Add(MoveTemp(Run));
+	}
 }
 
 bool FPushbackRun::Advance(double DeltaSeconds, double StopWithin, bool bHasThrust,
@@ -149,7 +157,16 @@ bool FPushbackRun::Advance(double DeltaSeconds, double StopWithin, bool bHasThru
 	// WHERE IT MAY GET TO THIS FRAME: the end of the route, or wherever arbitration stopped
 	// it, whichever is nearer. StopWithin is the ONE input into this motion, exactly as it is
 	// for the follower - there is no second evaluator of where an agent may go.
-	const double StopAt = FMath::Min(Plan.Length, FMath::Max(0.0, StopWithin));
+	//
+	// RELATIVE, AS THE FOLLOWER READS IT (#502 review): FClaimPass::StopWithinFor answers how much further the agent may go
+	// from where it stands, and this read it as a distance along the plan. A refused push stopped where that figure fell in
+	// plan distance - half way to its stop line, closing on the half point for minutes (40 m short of the van on
+	// PushbackRejoinedOntoAnOccupiedLineWaits) - and one refused further along than the figure would have been clamped
+	// BACKWARD to it. A push is granted whole, so no refusal in play had shown it; only PushbackRun's own case 5, which fed a
+	// constant StopWithin, agreed with the old reading.
+	// ENFORCED BY: Airside.Model.PushbackRun (case 5: a stop line fed as the claim pass feeds it),
+	// Airside.Model.PushbackRejoinedOntoAnOccupiedLineWaits
+	const double StopAt = FMath::Min(Plan.Length, Travelled + FMath::Max(0.0, StopWithin));
 
 	// TRAPEZOIDAL, AND IT ENDS AT REST. The aeroplane is about to reverse its direction of
 	// travel: handing the follower a non-zero speed would have it pull away forwards at the
@@ -160,7 +177,19 @@ bool FPushbackRun::Advance(double DeltaSeconds, double StopWithin, bool bHasThru
 		? FMath::Max(0.0, Speed - PushAccel * DeltaSeconds)
 		: FMath::Min(PushSpeed, Speed + PushAccel * DeltaSeconds);
 
-	Travelled = FMath::Clamp(Travelled + Speed * DeltaSeconds, 0.0, StopAt);
+	const double WasTravelled = Travelled;
+	const double Wanted = Travelled + Speed * DeltaSeconds;
+	Travelled = FMath::Clamp(Wanted, 0.0, StopAt);
+
+	// HELD AT ITS STOP, IT READS THE MOTION IT MADE (#502 review). The ramp above is asked against a stop line arbitration
+	// sets, and held there it alternated zero and one frame's PushAccel - 2 uu/s - while the clamp kept it still: ground
+	// speed on an aeroplane at rest, its wheels creeping (PushbackRejoinedOntoAnOccupiedLineWaits). Clamped, the speed is
+	// the distance the clamp let it move this frame - none at a stop, a leader's pace behind one that moves on.
+	// ENFORCED BY: Airside.Model.PushbackRejoinedOntoAnOccupiedLineWaits (no speed standing at the stop)
+	if (Wanted > StopAt && DeltaSeconds > 0.0)
+	{
+		Speed = FMath::Max(0.0, Travelled - WasTravelled) / DeltaSeconds;
+	}
 
 	// AND IT IS ACTUALLY STOPPED WHEN IT STOPS. The ramp above is discrete, so it lands within
 	// one frame's PushAccel of zero and HasArrived ends the run on the next frame before the

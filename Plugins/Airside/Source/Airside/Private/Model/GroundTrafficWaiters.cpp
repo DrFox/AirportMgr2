@@ -14,6 +14,7 @@
 #include "Model/ExhaustiveSwitch.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RouteChange.h"
+#include "Model/RouteJoin.h"
 #include "Model/RouteSearch.h"
 #include "Model/SendAgent.h"
 
@@ -154,17 +155,15 @@ void UGroundTraffic::ReplanHeldTaxiOut(int32 AgentId, const URoadNetwork& Networ
 	// THE JOIN: the route starts at a node; the aeroplane is where its push ended. A leg
 	// from here to that node is prepended so the follower drives it - the handover checks
 	// the route begins HERE, and a route that began at the node would be a jump.
+	// RouteJoin::Prepend at 0 along the route (#502): the one join-leg shape, shared with a push's rejoin. At 0 it refuses
+	// only a route of fewer than two points, with no direction to leave by - refused here like no route at all, rather than
+	// started from a node the aeroplane is not at.
 	FRoutePlan Route = Plan.Route;
 	const double Leg = FVector2D::Distance(Here, Route.Polyline[0]);
-	if (Leg > 1.0)
+	if (Leg > 1.0 && !RouteJoin::Prepend(Plan.Route, Here, 0.0, Route))
 	{
-		Route.Polyline.Insert(Here, 0);
-		for (FRouteStep& Step : Route.Steps)
-		{
-			++Step.EndVertex;
-			Step.EndDistance += Leg;
-		}
-		Route.Length += Leg;
+		Agent.MarkWaitRefusedAt(GraphNow);
+		return;
 	}
 	// AT THE END OF A PUSH the handover starts it; A TAXIING aeroplane that held where a
 	// stranded route left it restarts on it now, clear of the claims and queue position

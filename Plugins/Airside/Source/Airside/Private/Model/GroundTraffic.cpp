@@ -413,14 +413,13 @@ TArray<FRouteRun> UGroundTraffic::RemainingRouteRuns(int32 AgentId) const
 	}
 
 	// A PUSH WALKS ITS OWN LINE, not the follower's: the lead-in and the far arm (FPushbackRun::Plan), the body
-	// backing along it the whole way - one reverse run - and then the taxi out the handover starts, forward. A
-	// taxi out waiting to be planned again has nothing yet to draw: the one it had is dead.
-	// ENFORCED BY: Airside.Model.Traffic.PushRouteIsDrawn
+	// backing along it the whole way - one reverse run, of only what is LEFT of it and none once it is over (#502: a
+	// stranded push drew its whole dead line) - and then the taxi out the handover starts, forward. A taxi out
+	// waiting to be planned again has nothing yet to draw: the one it had is dead.
+	// ENFORCED BY: Airside.Model.Traffic.PushRouteIsDrawn, Airside.Model.Traffic.PushRouteDrawsOnlyWhatIsLeft
 	if (Agent->Phase == EAgentPhase::Manoeuvring)
 	{
-		FRouteRun& Push = Runs.AddDefaulted_GetRef();
-		Push.bReverse = Agent->PhaseTraits().bBodyBacks;
-		Push.Points = Agent->Pushback.Plan.Polyline;
+		Agent->Pushback.AppendRemainingRun(Agent->PhaseTraits().bBodyBacks, Runs);
 		if (!Agent->IsWaitingFor(EAgentWait::ForTaxiOutRoute))
 		{
 			TArray<FRouteRun> TaxiOut;
@@ -1020,7 +1019,7 @@ FDepartureAsk UGroundTraffic::AskDeparture(const FRoadAgent& Agent, const FAirfr
 	// takes up, and inventing a second answer is how the two drift.
 	Ask.Push = PushbackPlanner::Plan(Network, Agent.GoalNode, Ask.Plan,
 		Aircraft, Agent.Class,
-		Rules.FootprintFor(Agent.Class) + Rules.GapFor(Agent.Class));
+		Rules.PushClearBy(Agent.Class));
 	if (!Ask.Push.IsValid())
 	{
 		Ask.Why = EDepartureRefusal::NoPushbackRoute;
