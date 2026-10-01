@@ -39,7 +39,8 @@ namespace
 			{
 				return nullptr;
 			}
-			// Clamped, mirroring ARoadNetworkActor - see FFakeWidthTarget's same line.
+			// Clamped, mirroring ARoadNetworkActor's own contract - a fake that did not clamp would let a
+			// test pass against behaviour a real target refuses.
 			return Widths[FMath::Clamp(Index, 0, Widths.Num() - 1)];
 		}
 		virtual URoadProfile* ResolveProfileFor(ERoadKind Kind, int32 WidthIndex) override

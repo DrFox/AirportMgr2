@@ -102,40 +102,19 @@ bool FStandBoxMeasuredFromTheFarEdgeTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FStandBoxTailToEntranceTest,
-	"Airside.Solve.StandBox.TailToEntrance",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FStandBoxTailToEntranceTest::RunTest(const FString& Parameters)
-{
-	// THE NOSE POINTS AWAY FROM THE TAXIWAY: the pose's Facing is exactly Inward, and the
-	// stop mark sits EntranceSetback (MaxTailAft + wingtip clearance) along it from the
-	// entrance edge's midpoint - since this task (far-side entry), the tail's own clearance
-	// off the entrance, not the old Depth - NoseFwd that put most of the depth's slack
-	// behind the tail.
-	const EIcaoCode Letter = EIcaoCode::C;
-	const FVector2D A(0.0, 0.0);
-	const FVector2D B(IcaoCode::StandWidthForLetter(Letter), 0.0);
-	const FVector2D Inward(0.0, 1.0);
-
-	const FLetterEnvelope Envelope = IcaoCode::FloorEnvelopeForLetter(Letter);
-	const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, {}, Letter, Envelope);
-	TestTrue(TEXT("Facing equals Inward"), Pose.Facing.Equals(Inward, 1e-9));
-
-	const double Expected = StandBox::EntranceSetback(Letter, Envelope);
-	const double Actual = FVector2D::DotProduct(Pose.Position - A, Inward);
-	TestTrue(TEXT("stop mark is EntranceSetback in from the entrance, along Inward"),
-		FMath::IsNearlyEqual(Actual, Expected, 0.01));
-
-	return true;
-}
-
 /**
  * THE POSE AND FAR EDGE AGREE, PER LETTER (this task, far-side entry): the tail is pulled in
  * to EntranceSetback = MaxTailAft + wingtip clearance from the entrance, never flush with the
  * far edge, and the slack the far-side entry needs is left ahead of the nose instead - the
  * far edge (Depth) still carries the service ground, now beyond the nose rather than the tail.
+ *
+ * THE NOSE POINTS AWAY FROM THE TAXIWAY: the pose's Facing is exactly Inward, and the stop mark sits
+ * EntranceSetback (MaxTailAft + wingtip clearance) along it from the entrance edge's midpoint - since
+ * the far-side-entry task, the tail's own clearance off the entrance, not the old Depth - NoseFwd that
+ * put most of the depth's slack behind the tail. That was Airside.Solve.StandBox.TailToEntrance, at
+ * Code C only and with EntranceSetback restated as the very sum asserted below; it is the first two
+ * assertions of the loop now, for every letter. A facing that FOLLOWS an Inward pointing the other way
+ * is Airside.Solve.StandBox.FarSide.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandBoxTailAtEntranceTest,
@@ -154,6 +133,9 @@ bool FStandBoxTailAtEntranceTest::RunTest(const FString& Parameters)
 		const double Depth = IcaoCode::StandDepthForLetter(Letter);
 
 		const StandBox::FStandPose Pose = StandBox::PoseFor(A, B, Inward, {}, Letter, Envelope);
+		TestTrue(*FString::Printf(TEXT("%s Facing equals Inward"), LetterName), Pose.Facing.Equals(Inward, 1e-9));
+		TestEqual(*FString::Printf(TEXT("%s stop mark is EntranceSetback in from the entrance, along Inward"), LetterName),
+			FVector2D::DotProduct(Pose.Position - A, Inward), StandBox::EntranceSetback(Letter, Envelope), 0.01);
 
 		const double ExpectedSetback = Envelope.MaxTailAft + IcaoCode::WingtipClearanceForLetter(Letter);
 		TestEqual(*FString::Printf(TEXT("%s stop mark sits MaxTailAft + clearance in from the entrance"), LetterName),

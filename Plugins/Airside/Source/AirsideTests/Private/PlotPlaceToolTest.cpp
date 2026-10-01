@@ -184,7 +184,7 @@ namespace
 	 * forwards GetNetwork to a real network so OnClick's road search still has something to
 	 * find - issue #181.
 	 *
-	 * DERIVES FROM FNullEditTarget (#189), like FFakeRunwayTarget/FFakeWidthTarget: every
+	 * DERIVES FROM FNullEditTarget (#189), like FFakeRunwayTarget: every
 	 * virtual this does not override is its inert default, because FPlotPlaceTool calls
 	 * nothing else on Target before BuildReadout reaches ReservationFor in this test's
 	 * scenario.

@@ -189,11 +189,44 @@ bool FTowReverseRefusalTest::RunTest(const FString& Parameters)
 {
 	// A BAY TOO TIGHT TO BACK INTO stops the rig at the leg's start rather than driving the
 	// reverse leg forwards - the crab the rigid arm already refuses.
-	FRoadAgent Agent = TowReverseAgentTest::MakeAgent(TowReverseAgentTest::BayPlan(250.0), UAirsideSettings::ResolveRigVehicle());
-	const TArray<TowReverseAgentTest::FFrame> Frames = TowReverseAgentTest::Drive(Agent, 3000);
+	//
+	// 600 FRAMES (30 s), not the 3000 it ran: every assertion below holds from the first frame the rig
+	// stalls, so the rest of the window only re-proved a stall that cannot end (the leg never becomes
+	// backable-into). The window is long enough that a stall IS the state, which is asserted: the rig stopped
+	// moving at least 100 frames before the end, rather than the test reading a crawl's speed at one instant.
+	//
+	// AND IT STOPS AT THE LEG'S START, NOT SOMEWHERE ON THE WAY: BayPlan approaches east along y = 0 to
+	// (6000, 0) and the reverse leg leaves that point westwards, so a rig that drove the leg forwards - the
+	// crab - would be found WEST of its stall, and one that never got there would be short of it. The pose
+	// the frames record is the FIXED axle, a wheelbase behind the steered axle that stops at the leg's start
+	// (measured 2026-10-01: stalled at (5630, 0) with a 370 uu wheelbase), so the stall is held to within
+	// 1 uu of (6000 - wheelbase, 0). TWO GUARDS keep the crab out - TryArmTowReverse's refusal stalls the
+	// rig, and FRoadAgent::FollowAndTow caps the follower's allowance at the leg's start - so reverting either
+	// one alone leaves this green; it goes red with both reverted.
+	const FVehicle Rig = UAirsideSettings::ResolveRigVehicle();
+	FRoadAgent Agent = TowReverseAgentTest::MakeAgent(TowReverseAgentTest::BayPlan(250.0), Rig);
+	const TArray<TowReverseAgentTest::FFrame> Frames = TowReverseAgentTest::Drive(Agent, 600);
 	TestEqual(TEXT("still taxiing - never entered the reverse"), Agent.Phase, EAgentPhase::Taxiing);
 	TestFalse(TEXT("nothing armed"), Agent.TowReverse.IsArmed());
 	TestTrue(TEXT("stopped"), Agent.Follower.Speed < 1.0);
+
+	if (TestTrue(TEXT("the window ran to its end - the rig never parked"), Frames.Num() == 600))
+	{
+		int32 StalledFrom = Frames.Num() - 1;
+		while (StalledFrom > 0 && FVector2D::Distance(Frames[StalledFrom - 1].Position, Frames.Last().Position) < 0.01)
+		{
+			--StalledFrom;
+		}
+		AddInfo(FString::Printf(TEXT("the rig stalled at frame %d of %d, at (%.1f, %.1f)"), StalledFrom, Frames.Num(),
+			Frames.Last().Position.X, Frames.Last().Position.Y));
+		TestTrue(FString::Printf(TEXT("and it was stopped, not crawling: stationary from frame %d of %d"), StalledFrom, Frames.Num()),
+			StalledFrom <= Frames.Num() - 100);
+		const FVector2D StallExpected(6000.0 - Rig.Chassis.Wheelbase(), 0.0);
+		TestTrue(FString::Printf(TEXT("at the reverse leg's start, not on it or short of it: stalled at (%.1f, %.1f), expected (%.1f, %.1f)"),
+			Frames.Last().Position.X, Frames.Last().Position.Y, StallExpected.X, StallExpected.Y),
+			FVector2D::Distance(Frames.Last().Position, StallExpected) < 1.0);
+
+	}
 	return true;
 }
 

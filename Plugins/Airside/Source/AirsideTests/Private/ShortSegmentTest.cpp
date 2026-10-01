@@ -64,6 +64,10 @@ bool FRoadShortSegmentTest::RunTest(const FString& Parameters)
 	}
 
 	const FRoadMeshBuffers& Buffers = Builder.GetBuffers();
+	// A FLOOR ON THE LOOP BELOW: "no triangle is inverted" is true of an empty buffer, so a builder that drew
+	// nothing for these two short segments and their junction passed this test whatever the winding.
+	if (!TestTrue(FString::Printf(TEXT("the two segments and their junction produced triangles to judge (%d indices)"),
+		Buffers.Indices.Num()), Buffers.Indices.Num() >= 3)) { return false; }
 	int32 Inverted = 0;
 	for (int32 Slot = 0; Slot + 2 < Buffers.Indices.Num(); Slot += 3)
 	{

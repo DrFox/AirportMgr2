@@ -16,13 +16,6 @@
 
 namespace
 {
-	// #312: was a hand-built FRouteQuery that skipped AvoidRunways - see TestGraph::Probe's
-	// own comment for why that silently answered every errand with the permissive policy.
-	FRoutePlan M2HeadOnRoute(const URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B)
-	{
-		return TestGraph::Probe(Net, A, B, ETraversalClass::Aircraft);
-	}
-
 	bool M2HeadOnUsesRunway(const URoadNetwork& Net, const FRoutePlan& Plan)
 	{
 		for (const FRouteStep& Step : Plan.Steps)
@@ -139,8 +132,8 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 	// THE ARRIVAL'S FIXED ROUTE: along the runway to W, then the west taxiway - built the way
 	// ArrivalPlanner would (runway to the exit, shortest taxi from there), spliced so the
 	// runway steps carry DerivedFrom and hold the strip while it rolls.
-	const FRoutePlan Rollout = M2HeadOnRoute(*Net, RunwayX, RunwayW);
-	const FRoutePlan TaxiIn = M2HeadOnRoute(*Net, RunwayW, Goal);
+	const FRoutePlan Rollout = TestGraph::Probe(*Net, RunwayX, RunwayW, ETraversalClass::Aircraft);
+	const FRoutePlan TaxiIn = TestGraph::Probe(*Net, RunwayW, Goal, ETraversalClass::Aircraft);
 	if (!TestTrue(TEXT("rollout and taxi-in routes exist"), Rollout.IsValid() && TaxiIn.IsValid())) { return false; }
 	TestTrue(TEXT("the rollout is on the runway"), M2HeadOnUsesRunway(*Net, Rollout));
 	{
@@ -166,7 +159,7 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const int32 Arrival = Traffic->DispatchAgent(Net, ArrivalPlan, TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
-	const int32 Dep1 = Traffic->DispatchAgent(Net, M2HeadOnRoute(*Net, Bottom, RunwayW), TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
+	const int32 Dep1 = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, Bottom, RunwayW, ETraversalClass::Aircraft), TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("both dispatched"), Arrival > 0 && Dep1 > 0)) { return false; }
 
 	// THE ARRIVAL HOLDS THE STRIP BY ITS BODY, as one that has just vacated does (spec §3.1,

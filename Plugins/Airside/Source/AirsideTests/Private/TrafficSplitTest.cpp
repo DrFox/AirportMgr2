@@ -9,25 +9,6 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-namespace
-{
-	// The same helper RouteSearchTest.cpp uses: a bidirectional guideline admitting
-	// everything, straight unless a control is given.
-	FGuidelineEdgeId TrafficSplitJoin(URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B)
-	{
-		const FGuidelineNode* NodeA = Net.GetGuidelineNode(A);
-		const FGuidelineNode* NodeB = Net.GetGuidelineNode(B);
-
-		FGuidelineEdge Edge;
-		Edge.A = A;
-		Edge.B = B;
-		Edge.Control = (NodeA->Position + NodeB->Position) * 0.5;
-		Edge.AllowedTraffic = FTrafficMask::All();
-		Edge.Direction = EGuidelineDir::Bidirectional;
-		return Net.AddGuidelineEdge(MoveTemp(Edge));
-	}
-}
-
 // ---------------------------------------------------------------------------------------
 // Issue #84: UGroundTraffic's claim pass, deadlock resolver and replan mechanism are now
 // FClaimPass, FDeadlockResolver and FPlanReResolver - plain structs a test can construct
@@ -197,10 +178,10 @@ bool FTrafficSplitPlanReResolverStandaloneTest::RunTest(const FString& Parameter
 		const FGuidelineNodeId East = Network->AddGuidelineNode(FVector2D(1000.0, 0.0));
 		const FGuidelineNodeId North = Network->AddGuidelineNode(FVector2D(0.0, 4000.0));
 		const FGuidelineNodeId South = Network->AddGuidelineNode(FVector2D(0.0, -100.0));
-		TrafficSplitJoin(*Network, West, North);
-		TrafficSplitJoin(*Network, North, East);
-		const FGuidelineEdgeId WestSouth = TrafficSplitJoin(*Network, West, South);
-		TrafficSplitJoin(*Network, South, East);
+		TestGraph::Join(*Network, West, North);
+		TestGraph::Join(*Network, North, East);
+		const FGuidelineEdgeId WestSouth = TestGraph::Join(*Network, West, South);
+		TestGraph::Join(*Network, South, East);
 
 		// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
 		const FRoutePlan Plan = TestGraph::Probe(*Network, West, East, ETraversalClass::Aircraft);

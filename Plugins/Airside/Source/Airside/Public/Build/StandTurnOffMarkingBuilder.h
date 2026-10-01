@@ -57,7 +57,7 @@ struct AIRSIDE_API FStandTurnOffCensus
  * Nothing records a turn-off; it is re-derived from the graph on every Topology rebuild, which
  * is when RebuildMarkings runs, after FAnchorLink::Build.
  * ENFORCED BY: Airside.Present.StandTurnOff.PaintsAfterPlacement,
- * Airside.Build.StandTurnOff.PaintsNoSweep, ...NoRoomBranch and ...LeadInOnlyOnPavement.
+ * Airside.Build.StandTurnOff.PaintsNoSweep, ...NoRoomBranch and ...PaintLiesOnThePavement.
  *
  * A SEPARATE BUILDER, not more of FStandMarkingBuilder: that one paints inside a stand's own box
  * and is clipped to it; this paints outside every box, on ground the stand does not own.

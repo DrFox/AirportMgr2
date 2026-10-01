@@ -95,32 +95,11 @@ bool FServiceRoadWidthTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-namespace
-{
-	/** A target with no road tiers at all - what a project that never ran the script has. */
-	struct FNoTiersTarget : FNullEditTarget
-	{
-		virtual int32 GetWidthCount(ERoadKind) const override { return 0; }
-		virtual URoadProfile* ResolveWidthProfile(ERoadKind, int32) const override { return nullptr; }
-	};
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FServiceRoadWidthEmptyTest,
-	"Airside.Tool.ServiceRoadWidthEmpty",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FServiceRoadWidthEmptyTest::RunTest(const FString& Parameters)
-{
-	// Review focus 1: nothing to cycle is said, and the tool keeps the default.
-	FNoTiersTarget Target;
-	FToolContext Context;
-	Context.Target = &Target;
-	FRoadDrawTool Tool(ERoadKind::ServiceRoad);
-	Tool.OnReselect(Context);
-	TestEqual(TEXT("with no tiers the tool stays where it started, on the narrowest"), Tool.GetWidthIndex(), 0);
-	return true;
-}
+// NO "EMPTY TIERS" TEST (Airside.Tool.ServiceRoadWidthEmpty, removed in #462): a tool with no road tiers to cycle
+// keeps its default, which is the OnReselect `Count <= 0` branch, and Airside.Tool.TaxiwayWidth block 5 now asks it of
+// BOTH kinds on a target with no content. This copy also stayed green with the branch deleted, because StepAxis finds
+// no Width axis and refuses the same way; what either can pin is the behaviour (the index does not move), not the guard.
+// ENFORCED BY: Airside.Tool.TaxiwayWidth (block 5, the Taxiway and ServiceRoad cases)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRoadWidthResolutionTest,

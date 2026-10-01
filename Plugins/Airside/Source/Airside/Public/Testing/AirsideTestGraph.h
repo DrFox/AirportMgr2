@@ -96,12 +96,6 @@ struct AIRSIDE_API FTestAirport
 	 *  Same FEntityInstanceId a stand is, so Pose() below reads either kind. */
 	TArray<FEntityInstanceId> Depots;
 
-	/** An interior TAXIWAY grid node BuildScale places - unset for the plain Build() above.
-	 *  Unset (not Threshold or one of Exits) on purpose: a drag-frame test wants an ordinary
-	 *  junction, not a runway endpoint that MoveNode's own length/facts validation may treat
-	 *  differently - see Airside.Perf.Scale.DragFrameStaysGeometryOnly for the one caller. */
-	FRoadNodeId SampleGridNode;
-
 	/** Builds onto ExistingNet if given, else a fresh transient URoadNetwork. */
 	static FTestAirport Build(const FAirframe& Airframe, const FTestAirportOptions& Options = FTestAirportOptions(),
 		URoadNetwork* ExistingNet = nullptr);

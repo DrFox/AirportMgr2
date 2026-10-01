@@ -381,47 +381,6 @@ bool FStandPlotUndoRemovesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FStandPlotEveryLetterBuildsTest,
-	"Airside.Present.StandPlot.EveryLetterBuilds",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FStandPlotEveryLetterBuildsTest::RunTest(const FString& Parameters)
-{
-	using namespace StandPlotPlacementTest;
-
-	FAirsideTestWorld TestWorld;
-	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
-	ARoadNetworkActor* Actor = TestWorld.Actor;
-	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
-
-	Actor->ClearNetwork();
-
-	// REPLACES FStandPlotUnfitLetterRefusedTest (far-side-entry spec, 2026-09-26): A and B used to
-	// be refused here because their bays were laid for the fuel truck - the first measured
-	// table named them the two that did not fit. Every letter now has its own DESIGN VEHICLE
-	// (UAirsideSettings::ResolveStandDesignVehicle: the utility tow for A/B, the fuel truck for
-	// C-F) and A/B's floors were widened for the tow's lane, so
-	// Airside.Entities.StandLayoutEveryLetterBuilds already pins every template fitting its own
-	// floor at the Model/ level - WhyStandRefused's "cannot be built yet" branch this test used
-	// to exercise is UNREACHABLE from here now, and asserting it would just pin a template that
-	// happens to still be too small rather than the placement path. This test asks the question
-	// one level up: the actor's own cache resolves a real UEntityDefinition for every letter, so
-	// nothing between the template and PlaceStandInPlot silently drops one.
-	//
-	// CODE A DROPPED (2026-09-27 merge): ResolveStandDefinitionFor(A) is unreachable now by
-	// construction - LetterOf never answers A any more, so FitsItsLetter(_, A) can never be true
-	// (see IcaoCode.h's StandLetterFor) and this cache returns null for A on every call. Left
-	// unreachable rather than special-cased, per the merge's own ruling.
-	for (const EIcaoCode Letter : { EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
-	{
-		TestNotNull(*FString::Printf(TEXT("Code %s resolves a stand definition"), IcaoCode::ToLetter(Letter)),
-			Actor->ResolveStandDefinitionFor(Letter));
-	}
-
-	return true;
-}
-
 // FIX ROUND 1: PlacesCodeC alone only proves the one letter with an authored asset. D, E and
 // F all go through ResolveStandDefinitionFor's lazily-built cache instead - this loop is the
 // same round trip for each of them, one stand per letter so none can overlap another.
@@ -434,6 +393,20 @@ bool FStandPlotEveryLetterBuildsTest::RunTest(const FString& Parameters)
 // A DROPPED FROM THE LOOP AGAIN, 2026-09-27 (merge into B): the loop's own assertion is that a
 // stand drawn at Letter's floor reads BACK as Letter, and a rectangle at A's floor now reads as
 // B (IcaoCode::StandLetterFor) - that is B's case already in this same array, not a second one.
+//
+// THE RESOLVER IS NOT ASSERTED ON ITS OWN HERE ANY MORE. A test beside this one (StandPlot.EveryLetterBuilds,
+// removed in #462) asked only that the actor's cache resolves a real UEntityDefinition for B-F - the question
+// "nothing between the template and PlaceStandInPlot silently drops one" - and PlaceStandInPlot refuses on a
+// null resolution (WhyStandRefused), so a letter whose template stopped resolving fails the placement just
+// below, with the letter named. It replaced FStandPlotUnfitLetterRefusedTest (far-side-entry spec,
+// 2026-09-26): A and B used to be refused because their bays were laid for the fuel truck, and every letter
+// now has its own DESIGN VEHICLE (UAirsideSettings::ResolveStandDesignVehicle: the utility tow for A/B, the
+// fuel truck for C-F), so WhyStandRefused's "cannot be built yet" branch is UNREACHABLE from a test now and
+// asserting it would pin a template that happens to still be too small, not the placement path. That every
+// template fits its floor is Airside.Entities.StandLayoutEveryLetterBuilds at the Model/ level. CODE A DROPPED
+// (2026-09-27 merge): ResolveStandDefinitionFor(A) is unreachable by construction - LetterOf never answers A
+// any more, so FitsItsLetter(_, A) can never be true (IcaoCode.h's StandLetterFor) and the cache returns null
+// for A on every call; left unreachable rather than special-cased, per the merge's own ruling.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandPlotPlacesOtherLettersTest,
 	"Airside.Present.StandPlot.PlacesOtherLetters",

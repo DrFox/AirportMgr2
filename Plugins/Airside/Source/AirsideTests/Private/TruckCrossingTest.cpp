@@ -288,10 +288,6 @@ namespace
 		FVehicle Vehicle;
 		/** Seconds after the first vehicle is dispatched. */
 		double After = 0.0;
-		/** A route of its own, From -> To, instead of the spec's shared one (a merging vehicle). */
-		bool bOwnRoute = false;
-		FVector2D From = FVector2D::ZeroVector;
-		FVector2D To = FVector2D::ZeroVector;
 	};
 
 	struct FContestAircraft
@@ -377,12 +373,10 @@ namespace
 		const FRoutePlan VehiclePlan = DerivedCrossingRoute(*Net, Spec.VehicleFrom, Spec.VehicleTo, First.Class,
 			2000.0, Spec.VehicleMinCrossings);
 		if (!Test.TestTrue(*FString::Printf(TEXT("%s: the vehicles route across"), Name), VehiclePlan.IsValid())) { return Out; }
+		// EVERY VEHICLE TAKES THE SHARED ROUTE. A per-vehicle route of its own (a merging vehicle) existed as three
+		// fields and a branch here, and no contest ever set them (#462).
 		TArray<FRoutePlan> VehiclePlans;
-		for (const FContestVehicle& V : Spec.Vehicles)
-		{
-			VehiclePlans.Add(V.bOwnRoute ? DerivedCrossingRoute(*Net, V.From, V.To, V.Class) : VehiclePlan);
-			if (!Test.TestTrue(*FString::Printf(TEXT("%s: every vehicle routes"), Name), VehiclePlans.Last().IsValid())) { return Out; }
-		}
+		VehiclePlans.Init(VehiclePlan, Spec.Vehicles.Num());
 
 		TArray<FRoutePlan> AircraftPlans;
 		TArray<TArray<FVector2D>> CrossingsOf;
@@ -933,52 +927,6 @@ bool FVanLoopCrossesTaxiwayTwiceTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FAircraftQueueWaitsClearOfRoadTest,
-	"Airside.Model.Traffic.AircraftQueueWaitsClearOfRoad",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FAircraftQueueWaitsClearOfRoadTest::RunTest(const FString& Parameters)
-{
-	// FINAL REVIEW, IMPORTANT 7: splitting the taxiway's through-turn at the conflicts made its
-	// first short piece the "box" whose entry the claim pass guards, so an aircraft queued
-	// behind one standing on the far arm drove into the junction and stopped ACROSS THE ROAD. On
-	// main the whole turn was the box and it waited a gap short of it - behind the junction.
-	// No vehicle anywhere: this is a behaviour change for aircraft that never meet one.
-	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	const FRoadCrossingFixture Crossing = FRoadCrossingFixture::Lay(*Net);
-	TestGraph::Rebuild(*Net);
-	const FAirframe Plane = TestAirframes::PiperType()->Airframe();
-
-	// The leader parks on the EAST arm's end at the junction; the follower is bound beyond it.
-	const FGuidelineNodeId EastEnd = TestGraph::NodeFor(*Net, Crossing.East, /*bEndA=*/true);
-	const FRoutePlan FollowerPlan = DerivedCrossingRoute(*Net, FVector2D(-20000.0, 0.0), FVector2D(20000.0, 0.0), ETraversalClass::Aircraft);
-	if (!TestTrue(TEXT("the follower routes through"), FollowerPlan.IsValid())) { return false; }
-	const FRoutePlan LeaderPlan = TestGraph::Probe(*Net, FollowerPlan.Start, EastEnd, ETraversalClass::Aircraft);
-	if (!TestTrue(TEXT("the leader routes to the east arm end"), LeaderPlan.IsValid())) { return false; }
-
-	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const int32 First = Traffic->DispatchAgent(Net, LeaderPlan, Plane, ETraversalClass::Aircraft, 0.0);
-	const bool bParked = RunUntil(*Traffic, *Net, 120.0, [&]()
-	{
-		const FRoadAgent* A = Traffic->FindAgent(First);
-		return A != nullptr && A->Phase == EAgentPhase::Parked;
-	}, 1.0 / 30.0);
-	if (!TestTrue(TEXT("the leader parks on the east arm's end"), bParked)) { return false; }
-
-	const int32 Second = Traffic->DispatchAgent(Net, FollowerPlan, Plane, ETraversalClass::Aircraft, 0.0);
-	TickUntil(*Traffic, *Net, 90.0, [](int32) { return true; }, 1.0 / 30.0);
-	const FRoadAgent* Follower = Traffic->FindAgent(Second);
-	if (!TestNotNull(TEXT("the follower exists"), Follower)) { return false; }
-
-	// WHERE IT WAITS: its nose clear of the road's pavement, west of it.
-	const URoadProfile* Road = Net->ProfileFor(*Net->GetSegment(Crossing.South));
-	const double Nose = Follower->LastMotion.Position.X + FTrafficRules().AircraftFootprint * 0.5;
-	TestTrue(*FString::Printf(TEXT("the follower waits with its nose (x = %.0f) clear of the road (edge x = %.0f)"),
-		Nose, -Road->GetTotalWidth() * 0.5), Nose < -Road->GetTotalWidth() * 0.5);
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FVanStoppedAcrossTheLineTest,
 	"Airside.Model.Traffic.VanStoppedAcrossTheLine",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -1179,6 +1127,14 @@ bool FVanCrossesPastAircraftQueueTest::RunTest(const FString& Parameters)
 	// with the crossing empty. A van then waits at the line for ever: if the queue waits for a
 	// stand that van is needed at, nobody moves. Measured: how long the van waited, where A2
 	// stood, and that the van crossed.
+	//
+	// WHERE A2 STANDS IS ALSO FINAL REVIEW, IMPORTANT 7: splitting the taxiway's through-turn at the conflicts
+	// made its first short piece the "box" whose entry the claim pass guards, so an aircraft queued behind one
+	// standing on the far arm drove into the junction and stopped ACROSS THE ROAD; on main the whole turn was
+	// the box and it waited a gap short of it, behind the junction. A2's nose is asserted clear of the road
+	// BEFORE the van is dispatched, so that check is a behaviour change for an aircraft that never meets a
+	// vehicle. A test of just that (Airside.Model.Traffic.AircraftQueueWaitsClearOfRoad, removed in #462) had
+	// this fixture, these routes and this assertion with a 90 s settle where this one settles for 60 s.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	const FRoadCrossingFixture Crossing = FRoadCrossingFixture::Lay(*Net);
 	TestGraph::Rebuild(*Net);

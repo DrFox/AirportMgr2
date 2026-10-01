@@ -153,51 +153,6 @@ namespace StandMarkingTest
 		return true;
 	}
 
-	/**
-	 * A real B stand through the facade and the real rebuild, so FStandLayoutBuild has laid its
-	 * service layout - Airside.Build.StandPadSlots' own fixture shape. Null on failure.
-	 */
-	const FEntityInstance* PlaceRealBStand(FAutomationTestBase& Test, FAirsideTestWorld& World, FEntityInstanceId& OutId)
-	{
-		ARoadNetworkActor* Actor = World.Actor;
-		if (!Test.TestNotNull(TEXT("actor constructed"), Actor)) { return nullptr; }
-		Actor->ClearNetwork();
-		IRoadEditTarget* Target = Actor;
-		const TArray<FVector2D> Pad = { {0,0}, {5000,0}, {5000,3950}, {0,3950} };
-		if (!Test.TestTrue(TEXT("a B stand is placed"), Target->PlaceStandInPlot(Pad, Pad[0], Pad[1], EPavement::Tarmac) != INDEX_NONE)) { return nullptr; }
-		Actor->RebuildMesh();
-		const URoadNetwork& Net = *Actor->Network;
-		for (int32 Index = 0; Index < Net.GetEntities().Num(); ++Index)
-		{
-			if (Net.GetEntities()[Index].bAlive && Net.GetEntities()[Index].IsStand())
-			{
-				OutId = Net.EntityIdAt(Index);
-				return &Net.GetEntities()[Index];
-			}
-		}
-		Test.AddError(TEXT("no stand in the network after placement"));
-		return nullptr;
-	}
-
-	/**
-	 * The nodes of the stand's SERVICE POINTS - the anchors its definition lays a bay for - read
-	 * from the layout's own data (UEntityDefinition::ServiceBays' AnchorId -> the instance's
-	 * resolved anchor), never from where they happen to be.
-	 */
-	TSet<FGuidelineNodeId> ServicePointNodes(const FEntityInstance& Stand)
-	{
-		TSet<FGuidelineNodeId> Out;
-		if (Stand.Definition == nullptr) { return Out; }
-		for (const FServiceBay& Bay : Stand.Definition->ServiceBays)
-		{
-			for (const FResolvedAnchor& Anchor : Stand.ResolvedAnchors)
-			{
-				if (Anchor.Id == Bay.AnchorId) { Out.Add(Anchor.Node); }
-			}
-		}
-		return Out;
-	}
-
 	/** Every triangle in Buffers faces up, measured the way every winding test in this
 	 *  project does (memory: CCW faces DOWN in Unreal - assert on the engine's own normal,
 	 *  never a 2D signed area). */
@@ -243,8 +198,17 @@ bool FStandMarkingPaintsOnePerStandTest::RunTest(const FString& Parameters)
 
 	if (!TestTrue(TEXT("a Code C stand placed"), PlaceDrawnStand(*Net, Stand, EIcaoCode::C, 0.0).IsSet())) { return false; }
 	if (!TestTrue(TEXT("a Code E stand placed clear of the first"), PlaceDrawnStand(*Net, Stand, EIcaoCode::E, 20000.0).IsSet())) { return false; }
-	Net->PlaceEntity(Depot, Depot->Anchors, FVector2D(-9000.0, -9000.0), 0.0, /*DesignWingspan=*/0.0,
-		Depot->PoseRole, Depot->Trucks);
+	const FEntityInstanceId DepotId = Net->PlaceEntity(Depot, Depot->Anchors, FVector2D(-9000.0, -9000.0), 0.0,
+		/*DesignWingspan=*/0.0, Depot->PoseRole, Depot->Trucks);
+	// A PLOTTED DEPOT, which is the case the doc comment above names: unplotted, IsPlotted() is false and
+	// a builder gating on IsPlotted() alone would exclude it just as a correct IsStand() gate does, so the
+	// regression this test is about passed.
+	if (!TestTrue(TEXT("a depot placed"), DepotId.IsSet())) { return false; }
+	if (!TestTrue(TEXT("and given a drawn outline"), FRoadNetworkTestAccess(*Net).SetEntityOutlineForTest(
+		DepotId, { {-14000.0, -14000.0}, {-4000.0, -14000.0}, {-4000.0, -4000.0}, {-14000.0, -4000.0} }))) { return false; }
+	const FEntityInstance* DepotInstance = Net->GetEntity(DepotId);
+	if (!TestTrue(TEXT("so it is plotted yet not a stand"),
+		DepotInstance != nullptr && DepotInstance->IsPlotted() && !DepotInstance->IsStand())) { return false; }
 
 	FRoadMeshBuffers Buffers;
 	FStandMarkingCensus Census;
@@ -465,58 +429,6 @@ bool FStandMarkingGlyphReadsUnmirroredTest::RunTest(const FString& Parameters)
 		MeanC < 0.0);
 	TestTrue(FString::Printf(TEXT("d's upright sits on the reader's RIGHT - else it reads as b (mean %.1f uu)"), MeanD),
 		MeanD > 0.0);
-	return true;
-}
-
-/**
- * THE COMPOSITION QUESTION (controller note): does placing a stand rebuild markings with no
- * other edit in between, the same as FHoldingPositionMeshFollowsToggleTest proves for
- * SetIntermediateHoldingPosition (issue #179)? PlaceStandInPlot's own commit already runs
- * through URoadEditFacade::CommitPurchase -> CommitAndNotify -> NotifyChanged(Topology) ->
- * ARoadNetworkActor::RebuildMeshForChange(Topology) -> URoadSurfacePresenter::Rebuild, which
- * calls RebuildMarkings unconditionally - so this is a proof the WIRING (this task's own
- * hook into RebuildMarkings) actually sits on that path, not a claim that the path itself
- * needed building.
- */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FStandMarkingPaintsAfterPlacementTest,
-	"Airside.Present.StandMarking.PaintsAfterPlacement",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FStandMarkingPaintsAfterPlacementTest::RunTest(const FString& Parameters)
-{
-	FAirsideTestWorld TestWorld;
-	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
-	ARoadNetworkActor* Actor = TestWorld.Actor;
-	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
-
-	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
-
-	IRoadEditTarget* Target = Actor;
-	const int32 West = Target->PlaceNode(FVector2D(-10000.0, 0.0));
-	const int32 East = Target->PlaceNode(FVector2D(10000.0, 0.0));
-	Target->ConnectNodes(West, East, ERoadKind::Taxiway, INDEX_NONE);
-
-	const int32 Before = Actor->GetPresenter()->HoldingPaintTriangleCountForTest();
-
-	const double Width = IcaoCode::StandWidthForLetter(EIcaoCode::C);
-	const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
-	// BEHIND THE TAXIWAY'S CLEARANCE STRIP (2026-09-28), where the stand tool puts an entrance -
-	// a bare 1000.0 sat over the pavement's own edge and is refused now.
-	const FRoadSegmentId Taxi = Actor->Network->SegmentIdAt(0);
-	const double EntranceY = Actor->Network->GetSegment(Taxi)->Profile->GetHalfWidthLeft()
-		+ TaxiwayStrip::StripWidthOf(*Actor->Network, Taxi);
-	const FVector2D A(0.0, EntranceY);
-	const FVector2D B(Width, EntranceY);
-	const TArray<FVector2D> Rect = { A, B, FVector2D(Width, EntranceY + Depth), FVector2D(0.0, EntranceY + Depth) };
-	const int32 Placed = Target->PlaceStandInPlot(Rect, A, B, EPavement::Tarmac);
-	if (!TestTrue(TEXT("the stand is placed"), Placed != INDEX_NONE)) { return false; }
-
-	const int32 After = Actor->GetPresenter()->HoldingPaintTriangleCountForTest();
-	TestTrue(TEXT("placing a stand paints it with no other edit in between - the same wiring "
-		"issue #179 proved for the holding-position toggle"), After > Before);
-
 	return true;
 }
 
@@ -764,16 +676,14 @@ namespace StandTurnOffTest
 	/** A bare network with a real taxiway SEGMENT and its guideline laid by hand, DerivedFrom
 	 *  set as the builder would - so a lead-in can be cast at exact geometry, no balloon, no
 	 *  junction. Returns the segment. */
-	FRoadSegmentId LayRawTaxiway(URoadNetwork& Net, double Y, double WestX, double EastX, bool bReverseGuideline = false)
+	FRoadSegmentId LayRawTaxiway(URoadNetwork& Net, double Y, double WestX, double EastX)
 	{
 		const FRoadNodeId A = Net.AddNode(FVector2D(WestX, Y));
 		const FRoadNodeId B = Net.AddNode(FVector2D(EastX, Y));
 		const FRoadSegmentId Seg = Net.AddStraightSegment(A, B, TestProfiles::Taxiway());
 		FGuidelineEdge Edge;
-		// bReverseGuideline: the guideline runs East -> West against its West -> East segment,
-		// which changes which sweep FAnchorLink::Join lays first and nothing else.
-		Edge.A = Net.AddGuidelineNode(FVector2D(bReverseGuideline ? EastX : WestX, Y));
-		Edge.B = Net.AddGuidelineNode(FVector2D(bReverseGuideline ? WestX : EastX, Y));
+		Edge.A = Net.AddGuidelineNode(FVector2D(WestX, Y));
+		Edge.B = Net.AddGuidelineNode(FVector2D(EastX, Y));
 		Edge.Control = FVector2D((WestX + EastX) * 0.5, Y);
 		Edge.AllowedTraffic = FTrafficMask::All();
 		Edge.Direction = EGuidelineDir::Bidirectional;
@@ -850,14 +760,16 @@ bool FStandTurnOffPaintsOneNumberPerTurnOffTest::RunTest(const FString& Paramete
  * grass or shoulder and carries no paint (spec "Paint (user, from BHX)"). Paired with a count,
  * so an empty buffer cannot pass. It used to also require the lead-in to reach the pavement
  * edge; that paint was the sweeps', which are no longer painted (user 2026-09-29) - here the
- * triangles are the arrow and the sign.
+ * triangles are the arrow and the sign. RENAMED FROM ...LeadInOnlyOnPavement (#462): the lead-in is
+ * not painted any more, so the old name described a check this test stopped making; what it measures
+ * is that the PAINT lies on the pavement.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FStandTurnOffLeadInOnlyOnPavementTest,
-	"Airside.Build.StandTurnOff.LeadInOnlyOnPavement",
+	FStandTurnOffPaintLiesOnThePavementTest,
+	"Airside.Build.StandTurnOff.PaintLiesOnThePavement",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FStandTurnOffLeadInOnlyOnPavementTest::RunTest(const FString& Parameters)
+bool FStandTurnOffPaintLiesOnThePavementTest::RunTest(const FString& Parameters)
 {
 	using namespace StandTurnOffTest;
 	FAirsideTestWorld TestWorld;
@@ -1023,6 +935,17 @@ bool FStandTurnOffNoTaxiwayTest::RunTest(const FString& Parameters)
  * THE SEAM: the presenter's marking rebuild runs the turn-off builder. Placing a stand paints the
  * layer with exactly what the three marking builders make of the network - so a presenter that
  * skipped this one comes up short by the turn-off's triangles.
+ *
+ * THE COMPOSITION QUESTION, which this test now carries for the STAND builder too (it was
+ * Airside.Present.StandMarking.PaintsAfterPlacement, issue #179's wiring question): does placing a stand
+ * rebuild markings with no other edit in between? PlaceStandInPlot's own commit already runs through
+ * URoadEditFacade::CommitPurchase -> CommitAndNotify -> NotifyChanged(Topology) ->
+ * ARoadNetworkActor::RebuildMeshForChange(Topology) -> URoadSurfacePresenter::Rebuild, which calls
+ * RebuildMarkings unconditionally - so this proves the WIRING of each builder into RebuildMarkings sits
+ * on that path, not that the path itself needed building. THE STAND HALF IS MEASURED, NOT ASSUMED: that
+ * test asserted only `After > Before` on a layer three builders share, and a stand beside a taxiway
+ * always brings the turn-off's paint, so it passed with the stand builder unwired. Here the stand's own
+ * triangles are required to exist, so the equality below comes up short without them.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandTurnOffPresenterPaintsItTest,
@@ -1043,6 +966,7 @@ bool FStandTurnOffPresenterPaintsItTest::RunTest(const FString& Parameters)
 	FStandMarkingBuilder::Build(Net, 0.0, Stands, UAirsideSettings::ResolveLetterEnvelopeTable());
 	FStandTurnOffMarkingBuilder::Build(Net, 0.0, TurnOffs);
 	if (!TestTrue(TEXT("the turn-off paints something"), TurnOffs.Indices.Num() > 0)) { return false; }
+	if (!TestTrue(TEXT("and so does the stand, or its half of the sum below measures nothing"), Stands.Indices.Num() > 0)) { return false; }
 	TestEqual(TEXT("the paint layer holds the holding, stand AND turn-off paint"),
 		TestWorld.Actor->GetPresenter()->HoldingPaintTriangleCountForTest(),
 		(Holding.Indices.Num() + Stands.Indices.Num() + TurnOffs.Indices.Num()) / 3);

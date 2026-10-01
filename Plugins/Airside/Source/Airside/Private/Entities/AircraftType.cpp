@@ -50,25 +50,6 @@ void UAircraftType::BuildFootprintLines(
 	Segment(FVector2D(Footprint.TailplaneX, -HalfTail), FVector2D(Footprint.TailplaneX, HalfTail));
 }
 
-bool UAircraftType::HasUsableServiceIds(const UAircraftType* Type)
-{
-	if (Type == nullptr)
-	{
-		return false;
-	}
-
-	TSet<FName> Seen;
-	for (const FEntityAnchor& Point : Type->ServicePoints)
-	{
-		if (Point.Id.IsNone() || Seen.Contains(Point.Id))
-		{
-			return false;
-		}
-		Seen.Add(Point.Id);
-	}
-	return true;
-}
-
 void UAircraftType::BuildA320(UAircraftType* Type)
 {
 	if (Type == nullptr)
@@ -283,8 +264,7 @@ void UAircraftType::BuildPiperMeridian(UAircraftType* Type)
 	// NO SERVICE POINTS, deliberately. A Meridian's cabin door and refuel points would be
 	// invented numbers - nothing in this repo measures them - and an invented door station
 	// is exactly the class of error the provenance note at the top of this class exists to
-	// keep out. Nothing consumes them yet either. HasUsableServiceIds passes on an empty
-	// array, which is the honest answer: no ids, no duplicate ids.
+	// keep out. Nothing consumes them yet either (see ServicePoints in the header on the id rule).
 
 	Type->Ground = PiperMeridianGround();
 	Type->Climb = PiperMeridianClimb();

@@ -134,10 +134,11 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 	TestNull(TEXT("and the view is gone"), Traffic->GetNewestAgent());
 	TestEqual(TEXT("removal was relayed as Taxiing -> Gone"), Relayed.Num(), 2);
 
-	TArray<EArrivalRefusal> Refusals;
-	Model->OnArrivalRefused.AddLambda([&Refusals](EArrivalRefusal Why, const FString&) { Refusals.Add(Why); });
-	TestFalse(TEXT("no runway: arrival refused"), Actor->DispatchArrival(FVector2D::ZeroVector, UAirsideSettings::ResolveDefaultAirframe()));
-	TestEqual(TEXT("the refusal announced on the model, through the actor's dispatch"), Refusals.Num(), 1);
+	// THE ARRIVAL REFUSAL IS NOT RE-ASSERTED HERE: the actor's DispatchArrival refused on a runway-less
+	// network and the model's OnArrivalRefused announced it - Airside.Present.ArrivalRefusedEvent makes the
+	// same call and also measures the reason and the plan's sentence, so the four lines that stood here
+	// (#462 M29) could not fail without it failing first.
+	// ENFORCED BY: Airside.Present.ArrivalRefusedEvent
 
 	// AND THE ROUTING SIDE OF THE SAME SEAM. Spec §4: "vehicles always route with the table,
 	// aircraft never do" - the aircraft's route is fixed at clearance. That rule lives in

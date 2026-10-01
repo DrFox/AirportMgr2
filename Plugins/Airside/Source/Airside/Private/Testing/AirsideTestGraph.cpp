@@ -355,11 +355,6 @@ FTestAirport FTestAirport::BuildScale(const FAirframe& Airframe, int32 Seed, boo
 		}
 	}
 
-	// AN INTERIOR NODE, away from every grid edge (row/col 2 of an 8x20 grid, never row/col 0
-	// or the last one), for a drag test that wants an ordinary junction - see SampleGridNode's
-	// own comment.
-	Out.SampleGridNode = GridNodes[2 * GridCols + 2];
-
 	// TWO CONNECTORS, each dropped from its own runway's exit to the grid COLUMN nearest
 	// that exit's own X, so the spur meets its runway close to perpendicular rather than at
 	// a shallow diagonal across most of the grid's width - a route from the exit into the
@@ -367,9 +362,9 @@ FTestAirport FTestAirport::BuildScale(const FAirframe& Airframe, int32 Seed, boo
 	// warning at these two exit junctions (RoadMeshBuilder's "rim not star-shaped from any
 	// apex" fallback): that fires from the WIDTH difference between a 4500 uu runway and a
 	// 2300 uu taxiway meeting at a T, not from this angle - moving the connector's target
-	// column measurably changes nothing about it (checked). See
-	// Airside.Perf.Scale.DragFrameStaysGeometryOnly's own comment for how that test reads
-	// past it rather than papering over it here.
+	// column measurably changes nothing about it (checked). A test that wants the census line
+	// absent at this scale reads past that warning by naming "Rebuilt:", which is ScaleFixtureTest.cpp's
+	// header's note, rather than papering over it here.
 	const int32 ConnectorCol = FMath::Clamp(FMath::RoundToInt(Exit1AtX / GridDX), 0, GridCols - 1);
 	TestGraph::Lay(*Out.Net, Runway1Exit1, GridNodes[ConnectorCol], Taxiway);
 	TestGraph::Lay(*Out.Net, Runway2Exit1, GridNodes[(GridRows - 1) * GridCols + ConnectorCol], Taxiway);

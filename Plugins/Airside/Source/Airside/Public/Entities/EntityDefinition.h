@@ -270,6 +270,12 @@ public:
 	 * with Fuel but no hydrant fixture needs a bowser, which is a different vehicle making
 	 * a different journey. Availability and position are separate questions and this is the
 	 * first of them.
+	 *
+	 * WRITTEN AND SAVED, NOT ASKED. Its one reader, Provides(Role), had no production caller and went
+	 * in #462 (2026-10-01): a stand's services are read from its resolved anchors
+	 * (URoadNetwork::FirstAnchorIdForRole). The property stays because DA_FuelDepot and DA_Stand_CodeC
+	 * still serialise it - deleting it would drop their stored value on the next resave and warn on
+	 * load, for no gain - so it goes WITH a resave of those two assets, not before.
 	 */
 	UPROPERTY(EditAnywhere) TArray<EServiceRole> AvailableServices;
 
@@ -341,10 +347,6 @@ public:
 	 * gives the real positions.
 	 */
 	UPROPERTY(EditAnywhere) TObjectPtr<UAircraftType> DesignAircraft;
-
-	/** True when this stand can provide Role at all. */
-	UFUNCTION(BlueprintCallable, Category = "Airside")
-	bool Provides(EServiceRole Role) const { return AvailableServices.Contains(Role); }
 
 	/**
 	 * A contact stand for tests and the debug gallery: the aircraft stop position, plus

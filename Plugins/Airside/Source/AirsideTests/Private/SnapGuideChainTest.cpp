@@ -12,10 +12,11 @@
 namespace
 {
 	/**
-	 * An EMPTY network, because none of the three sources installed so far reads one -
-	 * Extending and PointAlign are handed their geometry by the tool, and World is absolute.
-	 * A network with roads in it would suggest these sources consult it, which is exactly
-	 * what stage 2 changes.
+	 * An EMPTY network, because the sources these tests are about do not read one - Extending
+	 * and PointAlign are handed their geometry by the tool, and World is absolute. The chain
+	 * installs many more (the per-segment walks, the runway, apron and outline sources) and
+	 * those DO read the network, so an empty one is what keeps their candidates out of the
+	 * counts below; the per-source tests that follow lay roads on purpose.
 	 */
 	URoadNetwork* EmptyNetwork()
 	{
@@ -186,13 +187,16 @@ bool FGuideChainOffersNothingBetweenCandidatesTest::RunTest(const FString& Param
  * unbounded). 8 + 2 + 12 = 22. ServiceRoad/Apron/Stand/World are switched off, and there are no
  * aprons or entities in the fixture, so the sources that also answer to Parallel/Collinear/
  * AngledFrom (World, Apron x3, Aligned) contribute nothing to add or hide from that number.
+ *
+ * RENAMED FROM ...ProposeTheSameCandidateCount (#462): it compares nothing with anything - it asserts the
+ * six walkers' known figures, which is what "expected" says.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FSegmentWalkersProposeTheSameCandidateCountTest,
-	"Airside.Tool.SegmentWalkersProposeTheSameCandidateCount",
+	FSegmentWalkersProposeTheExpectedCandidateCountTest,
+	"Airside.Tool.SegmentWalkersProposeTheExpectedCandidateCount",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FSegmentWalkersProposeTheSameCandidateCountTest::RunTest(const FString& Parameters)
+bool FSegmentWalkersProposeTheExpectedCandidateCountTest::RunTest(const FString& Parameters)
 {
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }

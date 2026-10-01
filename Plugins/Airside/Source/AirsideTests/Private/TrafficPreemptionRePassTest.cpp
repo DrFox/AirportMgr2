@@ -8,15 +8,6 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-namespace
-{
-	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.
-	FRoutePlan PreemptionRoute(const URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B, ETraversalClass Class)
-	{
-		return TestGraph::Probe(Net, A, B, Class);
-	}
-}
-
 // Issue #194 (2026-09-21 test-suite review). UGroundTraffic::Arbitrate's own comment on its
 // re-pass loop - "a preempted agent drives a whole frame on a reservation it no longer holds
 // - into the very node that was just taken from it" - is measured only at the TABLE level:
@@ -81,7 +72,7 @@ bool FTrafficPreemptedAgentGetsARePassTest::RunTest(const FString& Parameters)
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 
 	// THE PLANE RESERVES J FIRST, alone: nothing else exists yet to contest it.
-	const int32 Plane = Traffic->DispatchAgent(Net, PreemptionRoute(*Net, PlaneStart, J, ETraversalClass::Aircraft),
+	const int32 Plane = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, PlaneStart, J, ETraversalClass::Aircraft),
 		TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("the plane dispatches"), Plane > 0)) { return false; }
 
@@ -99,7 +90,7 @@ bool FTrafficPreemptedAgentGetsARePassTest::RunTest(const FString& Parameters)
 	// THE VAN DISPATCHES LATER, on a route that also ends at J. Order still runs the plane's
 	// OWN turn first this tick (Order sorts on TraversalPriority(Class) alone, never on the
 	// override) - the van's turn, second, is where J's override actually bites.
-	const int32 Van = Traffic->DispatchAgent(Net, PreemptionRoute(*Net, VanStart, J, ETraversalClass::GroundVehicle),
+	const int32 Van = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, VanStart, J, ETraversalClass::GroundVehicle),
 		TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	if (!TestTrue(TEXT("the van dispatches"), Van > 0)) { return false; }
 

@@ -748,7 +748,8 @@ FString URoadEditFacade::WhyStandSiteRefused(TArrayView<const FVector2D> Outline
 	// or floor regression is refused loudly here rather than silently building something too
 	// small. ResolveStandDefinitionFor is the one place the answer is cached and logged; this
 	// asks it rather than re-deriving FitsItsLetter.
-	// ENFORCED BY: Airside.Present.StandPlot.EveryLetterBuilds
+	// ENFORCED BY: Airside.Present.StandPlot.PlacesOtherLetters (B, D, E, F placed through here),
+	// Airside.Present.StandPlot.OldPoseRederivedOnLoad (asserts C and B resolve)
 	if (Actor().ResolveStandDefinitionFor(*Letter) == nullptr)
 	{
 		return FString::Printf(TEXT("Code %s stands cannot be built yet"),

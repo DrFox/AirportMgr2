@@ -172,8 +172,8 @@ struct FLogLineSpy : public FOutputDevice
 /**
  * Every IRoadEditTarget pure virtual defaulted to an inert answer (false / INDEX_NONE /
  * nullptr / empty) - issue #189. RunwayToolTest.cpp's FFakeRunwayTarget and
- * TaxiwayWidthTest.cpp's FFakeWidthTarget each hand-stubbed all 35 of them and differed in
- * only two or three; deriving from this and overriding just the ones a test actually cares
+ * TaxiwayWidthTest.cpp's FFakeWidthTarget (deleted in #462; the empty-list case it served
+ * uses this directly) each hand-stubbed all 35 of them and differed in only two or three; deriving from this and overriding just the ones a test actually cares
  * about is the SAME fake with the boilerplate held once, matching every non-virtual overload
  * the interface itself provides (ConnectNodes, PlaceRunway, PlaceStand, UpdateGhost,
  * DispatchAgent, GetStandDefinition all stay reachable through `using` here so a derived
@@ -241,8 +241,7 @@ struct FNullEditTarget : IRoadEditTarget
 	virtual FString WhyStandUnaffordable(TArrayView<const FVector2D>, EPavement) const override { return FString(); }
 	virtual uint32 GetEditEpoch() const override { return 0; }
 	/** ALLOWED, unlike WhyStandRefused above: a null target has no network, so no strip to be
-	 *  inside, and the road fakes built on this (TaxiwayWidthTest's FFakeWidthTarget) record a
-	 *  click's ConnectNodes - a refusal here would stop the click before it reached them. */
+	 *  inside and nothing to refuse for. */
 	virtual FString WhySegmentRefused(int32, const FRoadSnapResult&, ERoadKind, int32) const override { return FString(); }
 	/** Allowed, WhySegmentRefused's reason: no network, no strip - and PlaceEntityInPlot above
 	 *  already answers INDEX_NONE, so nothing is built either way. */

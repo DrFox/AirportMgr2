@@ -25,13 +25,17 @@
  * TestGuide::ProposedBy or FSnapGuideChain::Resolve, both of which now call Describe too); this
  * covers the shapes those happen not to assert byte-for-byte - AngledFromEnd, the apron's
  * EdgeFlushWith/InLineWith, PointAlign's GesturePoint subject, and MatchingGap's exact text.
+ *
+ * RENAMED FROM ...MatchTheOldStrings (#462): the old inline strings are long gone, so "match the old"
+ * named a comparison nothing can make any more. What it is, and stays, is the one place the guide labels
+ * are pinned byte for byte - which is why it is kept rather than folded away.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FSnapGuideLabelsMatchTheOldStringsTest,
-	"Airside.Tool.SnapGuideLabelsMatchTheOldStrings",
+	FSnapGuideLabelsReadExactlyTest,
+	"Airside.Tool.SnapGuideLabelsReadExactly",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FSnapGuideLabelsMatchTheOldStringsTest::RunTest(const FString& Parameters)
+bool FSnapGuideLabelsReadExactlyTest::RunTest(const FString& Parameters)
 {
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
