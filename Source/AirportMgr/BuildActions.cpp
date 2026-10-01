@@ -119,14 +119,16 @@ namespace
 				Why == EDepartureRefusal::None ? TEXT("accepted") : *UEnum::GetValueAsString(Why));
 		}
 
-		/** A runway is selected (ESelectionKind::Runway) and still describes - the card and the verb. */
+		/**
+		 * A runway is selected (ESelectionKind::Runway) and still describes - the card and the verb. THROUGH THE PER-FRAME CACHE (#446): the
+		 * bar asks this in IsEnabled and in DynamicLabel for both runway rows every tick - four InspectFacts::DescribeRunway calls while a
+		 * runway was selected - and the controller answers all four from one (ARoadBuildController::SelectedRunwayFactsThisFrame). The verbs
+		 * below read through it too: the cache is retired by the very network change a flip makes, so a second verb in the frame sees the first's flip.
+		 * ENFORCED BY: AirportMgr.Actions.RunwayRowsDescribeOncePerFrame (one describe a tick, and the flip visible in the same frame)
+		 */
 		bool SelectedRunway(const FBuildActionContext& Ctx, FRunwayCardFacts& Out)
 		{
-			if (Ctx.Selection.Kind != ESelectionKind::Runway || Ctx.Target == nullptr || Ctx.Target->GetNetwork() == nullptr)
-			{
-				return false;
-			}
-			return InspectFacts::DescribeRunway(*Ctx.Target->GetNetwork(), Ctx.Selection.Id, Out);
+			return Ctx.Controller.SelectedRunwayFactsThisFrame(Out);
 		}
 
 		bool CanChangeRunway(const FBuildActionContext& Ctx)
@@ -423,12 +425,13 @@ namespace
 			Out.Add(MoveTemp(Mode));
 		}
 		// UNSTICK (spec 2026-09-29-unstick-agent): one verb, three sub-choices in the inspector's popup
-		// (UUiMenuButton) - so ONE row here, whose Execute asks the inspector to open that popup; the
+		// (UUiMenuButton) - so ONE row here, whose Execute opens that popup through the HUD layer (#446: it was a count the inspector
+		// diffed every tick); the
 		// three choices are UAgentRescue's, not three rows, or the bar would grow three buttons for a
 		// rescue the player needs rarely. No key, Depart's reason: a despawn is a misclick away.
 		// Enabled whenever an agent is selected at all - Despawn always is (UAgentRescue::Decide).
 		Out.Add(Make(TEXT("selection.unstick"), EActionSection::Selection, LOCTEXT("Unstick", "Unstick"), EKeys::Invalid, false,
-			[](FBuildActionContext& Ctx) { Ctx.Controller.RequestUnstickMenu(); }, Never,
+			[](FBuildActionContext& Ctx) { if (Ctx.Hud != nullptr) { Ctx.Hud->OpenUnstickMenu(); } }, Never,
 			[](const FBuildActionContext& Ctx) { return BuildActionVerbs::CanUnstick(Ctx); }));
 
 		// FACILITY PURCHASES (spec 2026-09-29-facility-upgrades §4): the depot card's three verbs, INSPECTOR

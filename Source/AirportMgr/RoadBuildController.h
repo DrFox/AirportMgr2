@@ -502,13 +502,21 @@ public:
 	bool SelectedAgentFactsThisFrame(FAgentFacts& Out) const;
 
 	/**
-	 * The selection.unstick row's Execute: ASK the inspector to open its menu. A COUNTER, not a bool the
-	 * two sides would have to keep in step: the inspector opens whenever it sees a request it has not,
-	 * and the menu closes itself however the player dismisses it - so the bar button and the
-	 * inspector's own reach the one popup, and nothing has to be told it closed.
+	 * The selected RUNWAY's card facts, computed at most once per frame - SelectedAgentFactsThisFrame's shape, for the two bar rows
+	 * (selection.runway_in_use and selection.runway_use) that each ask "does this runway describe" in IsEnabled AND in DynamicLabel: four
+	 * InspectFacts::DescribeRunway calls a tick while a runway was selected (#446), against the inspector's one (gated by its card key, #420).
+	 * FALSE when nothing is selected, the selection is not a runway, or it no longer describes. Retired when the selection changes
+	 * (OnSelectionChanged) and when a Topology or Facts change reaches the network (a runway flip, which is what these rows do) - so a verb
+	 * that flips the runway and a second that reads it in the same frame see the flip, not the frame's first answer.
+	 * ENFORCED BY: AirportMgr.Actions.RunwayRowsDescribeOncePerFrame
 	 */
-	void RequestUnstickMenu() { ++UnstickMenuRequests; }
-	int32 GetUnstickMenuRequests() const { return UnstickMenuRequests; }
+	bool SelectedRunwayFactsThisFrame(FRunwayCardFacts& Out) const;
+
+	/**
+	 * Retires the per-frame answers (SelectedAgentFactsThisFrame, SelectedRunwayFactsThisFrame) - what the NEXT FRAME does by itself. A headless test
+	 * never advances the engine's frame counter, so "this tick, then the next" is this call between them, not a bump of a global the engine owns.
+	 */
+	void RetireFrameCachesForTest() { RetireFrameCaches(); }
 
 	/**
 	 * THE selection->depot WALK, written once (ruling C4 of the facility-upgrades plan): the live fuel
@@ -825,6 +833,9 @@ private:
 	 */
 	mutable TFrameValue<TOptional<FAgentFacts>> SelectedAgentFactsCache;
 
+	/** This frame's SelectedRunwayFactsThisFrame answer - SelectedAgentFactsCache's shape, and TOptional inside for its reason. */
+	mutable TFrameValue<TOptional<FRunwayCardFacts>> SelectedRunwayFactsCache;
+
 	/**
 	 * This frame's readout, refilled by CollectToolReadout.
 	 *
@@ -939,8 +950,16 @@ private:
 	FBuildGesture Gesture;
 
 private:
-	/** See RequestUnstickMenu. */
-	int32 UnstickMenuRequests = 0;
+	/**
+	 * FBuildSession::OnSelectionChanged's handler, bound in the constructor (a headless world never begins play, so BeginPlay is too late for
+	 * a test's controller). The selection this driver's caches describe has gone: they are retired, and the inspector is told - through the
+	 * HUD layer that owns it, not by its diffing the selection every tick (#446). The editor mode has no inspector and subscribes to nothing.
+	 * ENFORCED BY: Check-Architecture rule 47's 'OnSelectionChanged' row (the editor must stay free of an inspector and a HUD layer, or must subscribe)
+	 */
+	void OnSelectionChanged(const FSelection& Old, const FSelection& New);
+
+	/** Drops both per-frame answers: the selection or the network under them has moved (OnSelectionChanged), or a test says the frame has turned. */
+	void RetireFrameCaches();
 
 	// ChosenVehicleType, ArmedSellVehicle and OpsRuntimeOverride WERE HERE until #448. The first two were the inspector's card state
 	// parked on the PlayerController because a BuildActions row could not carry an argument (FBuildAction::TryRunWith carries it

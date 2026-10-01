@@ -5,6 +5,7 @@
 #include "BuildActions.h"
 #include "BuildCameraComponent.h"
 #include "BuildHudLayer.h"
+#include "InspectorWidget.h"
 #include "LandAircraftPanelWidget.h"
 #include "LedgerPanelWidget.h"
 #include "PlayerSettings.h"
@@ -54,6 +55,32 @@ ARoadBuildController::ARoadBuildController()
 	// pattern already established in this codebase.
 	BuildCameraComp = CreateDefaultSubobject<UBuildCameraComponent>(TEXT("BuildCameraComp"));
 	Hud = CreateDefaultSubobject<UBuildHudLayer>(TEXT("Hud"));
+
+	// THE SELECTION'S SUBSCRIBER, bound here and not in BeginPlay: a headless test's world never begins play, and the session exists from
+	// construction. AddUObject holds this weakly, and the session dies with the controller. The editor mode makes no such call because it
+	// has no inspector.
+	// ENFORCED BY: AirportMgr.Inspector.SelectionEventReachesTheInspector, Check-Architecture rule 47's 'OnSelectionChanged' row (the editor side)
+	Session.OnSelectionChanged().AddUObject(this, &ARoadBuildController::OnSelectionChanged);
+}
+
+void ARoadBuildController::RetireFrameCaches()
+{
+	SelectedAgentFactsCache = TFrameValue<TOptional<FAgentFacts>>();
+	SelectedRunwayFactsCache = TFrameValue<TOptional<FRunwayCardFacts>>();
+}
+
+void ARoadBuildController::OnSelectionChanged(const FSelection& Old, const FSelection& New)
+{
+	// BOTH FACTS CACHES DESCRIBE THE SELECTION THAT HAS GONE: a frame's answer for the old aircraft or runway must not be handed out for the
+	// new one (a test, or an alert's Go, selects between two reads in one frame).
+	RetireFrameCaches();
+	UE_LOG(LogRoadBuild, Verbose, TEXT("Selection: kind %d id %d -> kind %d id %d"), static_cast<int32>(Old.Kind), Old.Id, static_cast<int32>(New.Kind), New.Id);
+	// THE INSPECTOR, through the HUD layer that owns it (a direct call, the way this controller already reaches the window toggles) - it
+	// resets what a new card resets, instead of comparing the selection it was handed every tick with the last.
+	if (Hud != nullptr && Hud->Inspector != nullptr)
+	{
+		Hud->Inspector->HandleSelectionChanged(Old, New);
+	}
 }
 
 void ARoadBuildController::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -667,6 +694,27 @@ bool ARoadBuildController::SelectedAgentFactsThisFrame(FAgentFacts& Out) const
 	return false;
 }
 
+bool ARoadBuildController::SelectedRunwayFactsThisFrame(FRunwayCardFacts& Out) const
+{
+	if (!SelectedRunwayFactsCache.IsSet())
+	{
+		// THE DESCRIBE, once a frame (#446): a selected RUNWAY that still describes - a split or a deleted strip leaves the selection naming
+		// nothing, and every caller in the frame must hear "no" alike, which is why the TOptional rides inside the frame value.
+		FRunwayCardFacts Facts;
+		const FSelection& Sel = GetSelection();
+		const bool bFound = Sel.Kind == ESelectionKind::Runway && Target != nullptr && Target->GetNetwork() != nullptr
+			&& InspectFacts::DescribeRunway(*Target->GetNetwork(), Sel.Id, Facts);
+		SelectedRunwayFactsCache = bFound ? TOptional<FRunwayCardFacts>(MoveTemp(Facts)) : TOptional<FRunwayCardFacts>();
+	}
+	const TOptional<FRunwayCardFacts>& Cached = SelectedRunwayFactsCache.GetValue();
+	if (Cached.IsSet())
+	{
+		Out = Cached.GetValue();
+		return true;
+	}
+	return false;
+}
+
 FEntityInstanceId ARoadBuildController::DepotForSelection(const ARoadNetworkActor* InTarget, const FSelection& Selection)
 {
 	// A Stand-kind selection's Id is an ENTITY index (a depot is selected as a stand - FStandFacts::PoseRole);
@@ -692,13 +740,10 @@ FEntityInstanceId ARoadBuildController::RevealedDepotFor(const ARoadNetworkActor
 
 void ARoadBuildController::SelectForTest(const FSelection& InSelection)
 {
-	// THROUGH THE CONTEXT'S POINTER, the way the Select tool writes it (FBuildSession::GetSelection's own
-	// comment) - not a second setter on the session.
+	// THROUGH THE CONTEXT'S DOOR, the way the Select tool writes it (FToolContext::SetSelection) - not a second setter on the session, and
+	// so announced exactly as a click's is (#446).
 	const FToolContext Context = Session.MakeContext(Target, FVector2D::ZeroVector, FBuildSessionTunables());
-	if (Context.Selection != nullptr)
-	{
-		*Context.Selection = InSelection;
-	}
+	Context.SetSelection(InSelection);
 }
 
 void ARoadBuildController::OnActionKey(FKey Key)
@@ -925,6 +970,9 @@ void ARoadBuildController::OnNetworkChangedInvalidateRunwayCache(EChangeKind Kin
 	case EChangeKind::Topology:
 	case EChangeKind::Facts:
 		bRunwayCacheValid = false;
+		// A RUNWAY FLIP IS A FACTS CHANGE, and the selected runway's card facts are the same frame's: the next reader describes it afresh
+		// rather than hearing the answer from before the flip (SelectedRunwayFactsThisFrame).
+		SelectedRunwayFactsCache = TFrameValue<TOptional<FRunwayCardFacts>>();
 		return;
 	case EChangeKind::Geometry:
 	case EChangeKind::Markings:
@@ -1021,7 +1069,8 @@ bool ARoadBuildController::SelectAndFocus(const FAlertFocus& Focus)
 		{
 			SelectTool(FBuildSession::SelectToolIndex);
 		}
-		Session.Select(Kind, Id);
+		// WITH THE NETWORK the id indexes, so the selection records the slot's generation and is dropped if that slot is later reused.
+		Session.Select(Kind, Id, Target != nullptr ? Target->GetNetwork() : nullptr);
 	};
 	switch (Focus.Kind)
 	{
@@ -1270,6 +1319,10 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 	// and each mode change: the node rings are asked every frame by the HUD, and a push at
 	// each change site is the "every list must agree" shape this project keeps shipping one
 	// site short. ShowPlotGhosts is two compares unless the answer changed.
+	// #446 CONSIDERED A SELECTION SUBSCRIBER FOR THE REVEAL AND KEPT THIS GATE: the reveal is a function of THREE sources - the selection, whether
+	// the depot is plotted (the network: an undo of a plot, a sale), and the lit tool (WantsPlotGhostsDrawn) - and only the first has an event, so a
+	// subscriber on the selection alone would leave ghosts showing after an undo and after a tool change. The per-frame gate is the one place all
+	// three are read; it is cheap by construction.
 	if (AAirsideBuildingsActor* Found = Buildings.Get())
 	{
 		// R10 (facility-upgrades spec): a LIT PLOT TOOL (the depot tool - FToolRegistration::bShowsPlotGhosts) shows every yard's

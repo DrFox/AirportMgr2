@@ -225,6 +225,45 @@ function Get-Sources([string] $Dir, [string[]] $Ext) {
     Get-ChildItem -Path $Dir -Recurse -File | Where-Object { $Ext -contains $_.Extension }
 }
 
+# COMMENTS STRIPPED, STRING LITERALS KEPT (Strip-ArchComments) - what rule 4 decides "is this line a comment" with, and rule 60(b), whose pass names are
+# strings (Strip-ArchCode, rule 34's, blanks every string literal, so a pattern that names a string - `%02d:%02d`, TEXT("FleetSeed") - needs this one).
+# Character-wise, so a `//` inside a string is not a comment and a `"` inside a comment does not open one; InBlock carries an open /* ... */ across lines.
+# A `'"'` char literal would confuse it - none in the files the rules read today, and a rule that reads a stripped file fails rather than passes if the
+# thing it looks for is gone. Defined HERE, before rule 4, not beside rule 60 where it first lived: a PowerShell function exists only once its
+# definition has run, and rule 4 is the earlier reader.
+function Strip-ArchComments([string] $Line, [ref] $InBlock) {
+    $out = New-Object System.Text.StringBuilder
+    $inString = $false
+    $i = 0
+    while ($i -lt $Line.Length) {
+        if ($InBlock.Value) {
+            $end = $Line.IndexOf('*/', $i)
+            if ($end -lt 0) { return $out.ToString() }
+            $i = $end + 2
+            $InBlock.Value = $false
+            continue
+        }
+        $c = $Line[$i]
+        if ($inString) {
+            [void]$out.Append($c)
+            if ($c -eq '\' -and $i + 1 -lt $Line.Length) { $i++; [void]$out.Append($Line[$i]) }
+            elseif ($c -eq '"') { $inString = $false }
+            $i++
+            continue
+        }
+        if ($c -eq '"') { $inString = $true; [void]$out.Append($c); $i++; continue }
+        if ($c -eq '/' -and $i + 1 -lt $Line.Length) {
+            $next = $Line[$i + 1]
+            if ($next -eq '/') { return $out.ToString() }
+            if ($next -eq '*') { $InBlock.Value = $true; $i += 2; continue }
+        }
+        [void]$out.Append($c)
+        $i++
+    }
+    return $out.ToString()
+}
+
+
 # --- 1. Include direction -----------------------------------------------------------------
 # Layer -> regex of forbidden include prefixes, applied inside EACH module. Solve/ is
 # handled separately as an allow-list.
@@ -358,7 +397,8 @@ $ranRules.Add('doc comments')
 # exemption: a scripted scenario sets up state, it does not enforce production discipline on
 # itself). Comment lines are excluded (the same exemption rules 5-8 give a WHY comment that
 # NAMES the banned shape rather than being it) - RoadEditTarget.h, RunwayTool.h, PlotPresenter.h
-# and RoadNetworkActor.h all discuss these symbols by name in exactly that way.
+# and RoadNetworkActor.h all discuss these symbols by name in exactly that way. "Comment" means removed by Strip-ArchComments, not "starts with `*`" (#446's review:
+# that test threw away a code line starting with a dereference, `*Context.Selection = X;`, as if it were a doc-comment continuation).
 # Issue #291: every entry below names enough of its PATH to be unambiguous (checked with
 # Test-AllowedPathSuffix, not bare-name equality) - 'Private\Entities\AircraftType.cpp', not
 # 'AircraftType.cpp'. Confirmed by grep that each is still the file's real current location
@@ -1009,8 +1049,59 @@ $AllowedCallers = @(
         ProdAllowed = @('Private\Model\ArrivalPlanner.cpp', 'Private\Model\RoutePolicy.cpp')
         TestExempt  = $true
         ProdReason  = 'take the taxi-in query from ArrivalPlanner::TaxiInQuery, the one the stand choice searches with (#429 review)'
+    },
+    @{
+        # RULE 74 (#446): THE UNSTICK MENU IS OPENED BY A CALL. The selection.unstick row's Execute bumped a counter on the controller
+        # (UnstickMenuRequests) that the inspector compared with the last count it had seen, every tick, beside two panels the same controller reached by
+        # a direct call. The row calls UBuildHudLayer::OpenUnstickMenu now. The names are banned outright, and so is the SHAPE - a `Seen...Request(s)`
+        # member is a count somebody diffs on a tick. Rule 74's block is the half that stops this checking nothing.
+        Name        = 'unstick request counter (rule 74)'
+        Pattern     = '\b(?:UnstickMenuRequests|RequestUnstickMenu|GetUnstickMenuRequests)\b|\bSeen\w*Requests?\b'
+        ProdAllowed = @()
+        TestExempt  = $true
+        ProdReason  = 'open the popup with a call: the row runs UBuildHudLayer::OpenUnstickMenu, which calls the inspector - a request count the inspector diffs on a tick is the polling #446 removed'
+    },
+    @{
+        # RULE 75 (#446): A SELECTION CHANGE IS ANNOUNCED, NOT DIFFED. The inspector kept `LastSelection` and compared (Kind, Id) with it every tick to
+        # reopen, close its menus and disarm a sale. FBuildSession::OnSelectionChanged says it once per real change; the panel's HandleSelectionChanged
+        # is what it forwards to.
+        Name        = 'selection diffed on a tick (rule 75)'
+        Pattern     = '\b(?:Last|Prev|Previous)Selection\b'
+        ProdAllowed = @()
+        TestExempt  = $true
+        ProdReason  = 'do not remember the last selection to compare it: subscribe to FBuildSession::OnSelectionChanged (the controller forwards it to UInspectorWidget::HandleSelectionChanged) (#446)'
+    },
+    @{
+        # RULE 75 (#446): EVERY WRITE OF THE SESSION'S SELECTION GOES THROUGH THE DOOR. `Selection->Kind = X` from a tool, `*Context.Selection = S`, or
+        # `Selection.Clear()` changes the selection and announces nothing - the silence the inspector answered with a per-tick diff. A tool writes through
+        # FToolContext::SetSelection/ClearSelection, code through FBuildSession::Select; both land in SelectionDoor::Write, which compares, stores and
+        # announces. (A local FSelection being BUILT - `Out.Kind = ...` in FSelectTool::MakeSelection - is not the session's and is not matched.)
+        Name        = 'selection written outside the door (rule 75)'
+        Pattern     = '\b(?:Selection|Sel)\s*(?:\.|->)\s*(?:Kind|Id|Generation)\s*=(?!=)|(?<![\w>\]])\*\s*(?:\w+\s*(?:\.|->)\s*)*Selection\s*=(?!=)|\b(?:Selection|Sel)\s*(?:\.|->)\s*Clear\s*\('
+        ProdAllowed = @()
+        TestExempt  = $true
+        ProdReason  = 'write the selection through FToolContext::SetSelection / ClearSelection (a tool) or FBuildSession::Select (code) - the door announces the change once (#446)'
+    },
+    @{
+        Name        = 'SelectionDoor::Write callers (rule 75)'
+        Pattern     = '\bSelectionDoor::Write\s*\('
+        ProdAllowed = @('Public\Tool\Selection.h', 'Public\Tool\RoadBuildTool.h', 'Public\Tool\BuildSession.h')
+        TestExempt  = $true
+        ProdReason  = 'the door has two callers - FToolContext::SetSelection and FBuildSession::WriteSelection; a third is a second place that decides what a change is (#446)'
+    },
+    @{
+        # RULE 76 (#446): THE BAR DESCRIBES THE SELECTED RUNWAY ONCE A FRAME. BuildActions' SelectedRunway ran InspectFacts::DescribeRunway from the
+        # IsEnabled and the DynamicLabel of the flip and the mode rows - four times a tick with a runway selected. The controller's
+        # SelectedRunwayFactsThisFrame answers all of them from one; the inspector's runway card has its own key-gated call.
+        Name        = 'InspectFacts::DescribeRunway callers (rule 76)'
+        Pattern     = '(?<![\w.>])(?:InspectFacts::)?DescribeRunway\s*\('
+        ProdAllowed = @('Public\Model\InspectFacts.h', 'Private\Model\InspectFacts.cpp', 'Source\AirportMgr\InspectorNetworkCards.cpp', 'Source\AirportMgr\RoadBuildController.cpp')
+        TestExempt  = $true
+        ProdReason  = "ask ARoadBuildController::SelectedRunwayFactsThisFrame - one describe a frame for every bar row that needs the selected runway's facts (#446); the runway card's own call is InspectorNetworkCards.cpp's, gated by its key"
     }
 )
+# EACH FILE'S COMMENT-STRIPPED LINES, made once and only for a file some row's raw pattern hits (Strip-ArchComments, with the helpers at the top).
+$arch4Code = @{}
 foreach ($row in $AllowedCallers) {
     foreach ($tree in $trees) {
         foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
@@ -1028,7 +1119,16 @@ foreach ($row in $AllowedCallers) {
             if ($inTests -and $row.TestExempt) { continue }
             $hits = Select-String -Path $file.FullName -Pattern $row.Pattern
             foreach ($h in $hits) {
-                if ($h.Line.Trim() -match '^(//|/\*|\*)') { continue }
+                # A COMMENT IS DECIDED FROM COMMENT-STRIPPED CODE, NOT FROM A LEADING `*` (#446's review). This used to skip every line whose trimmed text starts
+                # with `//`, `/*` or `*` - and a dereference WRITE, `*Context.Selection = InSelection;`, starts with `*`, so a row aimed at it could never fire (nor
+                # could #492's `*Slot = ...` row). The raw hit is now confirmed against the same line with comments removed (block comments tracked across
+                # lines, string literals kept): a match inside a comment, leading or trailing, is dropped; a code line that merely starts with `*` is judged.
+                if (-not $arch4Code.ContainsKey($file.FullName)) {
+                    $arch4InBlock = $false
+                    $arch4Code[$file.FullName] = @(Get-Content -LiteralPath $file.FullName | ForEach-Object { Strip-ArchComments $_ ([ref]$arch4InBlock) })
+                }
+                $arch4Lines = $arch4Code[$file.FullName]
+                if ($h.LineNumber -gt $arch4Lines.Count -or $arch4Lines[$h.LineNumber - 1] -notmatch $row.Pattern) { continue }
                 $reason = if ($inTests -and $row.TestReason) { $row.TestReason } else { $row.ProdReason }
                 $failures.Add("allowed-callers: $($file.FullName):$($h.LineNumber) $($row.Name) - ${reason}: $($h.Line.Trim())")
             }
@@ -2897,6 +2997,11 @@ $editorSessionDoors = @(
         Method  = 'Select'
         Absent  = '\bAlert\w*'
         Reason  = "PIE-only: the alert panel's Go (ARoadBuildController::SelectAndFocus) selects the alert's subject, and the editor mode has no alerts - when AirsideEditor names an alert, it needs this call too"
+    },
+    @{
+        Method  = 'OnSelectionChanged'
+        Absent  = '\bUInspectorWidget\b|\bUBuildHudLayer\b|\bInspectorWidget\b'
+        Reason  = "PIE-only SUBSCRIPTION: the controller's handler (ARoadBuildController::OnSelectionChanged) forwards the change to the inspector through the HUD layer, and the editor mode has neither - but it FIRES the event all the same, because its tools write the selection through the contexts the session hands them (Airside.Editor.SelectionChangeIsAnnouncedLikePie). When AirsideEditor names an inspector or a HUD layer, it needs this subscription too (#446)"
     }
 )
 if (-not (Test-Path $sessionHeader) -or -not (Test-Path $sessionController)) {
@@ -3372,7 +3477,6 @@ $controllerPublicAllowList = @(
     'GetTarget',
     'GetToolReadout',
     'GetToolReadoutRevision',
-    'GetUnstickMenuRequests',
     'GetViewFocus',
     'HasAgent',
     'HasNetworkContent',
@@ -3400,12 +3504,13 @@ $controllerPublicAllowList = @(
     'PressPrimaryForTest',
     'QuickLoad',
     'QuickSave',
-    'RequestUnstickMenu',
     'ResolveSnap',
+    'RetireFrameCachesForTest',
     'RevealedDepotFor',
     'SelectActiveVariant',
     'SelectAndFocus',
     'SelectedAgentFactsThisFrame',
+    'SelectedRunwayFactsThisFrame',
     'SelectForTest',
     'SelectTool',
     'SetBuildingsForTest',
@@ -3557,40 +3662,8 @@ $ranRules.Add('input-read-once')
 # containers to the fleet's door and this rule keeps the ONE loop's caller, but a new loop through the public Add is not a
 # container write. Pinned from the other side by AirportOps.Present.Fleet.PlacedDepotIsSeededByTheAnnouncement, which goes
 # red when the pass is not woken by the announcement.
-# COMMENTS STRIPPED, STRING LITERALS KEPT: rule 60(b) matches pass names, which are strings. Character-wise, so a `//` inside a
-# string is not a comment and a `"` inside a comment does not open one. A `'"'` char literal would confuse it - none in
-# OpsRuntime.cpp, and the rule fails rather than passing if the pass it looks for is gone.
-function Strip-ArchComments([string] $Line, [ref] $InBlock) {
-    $out = New-Object System.Text.StringBuilder
-    $inString = $false
-    $i = 0
-    while ($i -lt $Line.Length) {
-        if ($InBlock.Value) {
-            $end = $Line.IndexOf('*/', $i)
-            if ($end -lt 0) { return $out.ToString() }
-            $i = $end + 2
-            $InBlock.Value = $false
-            continue
-        }
-        $c = $Line[$i]
-        if ($inString) {
-            [void]$out.Append($c)
-            if ($c -eq '\' -and $i + 1 -lt $Line.Length) { $i++; [void]$out.Append($Line[$i]) }
-            elseif ($c -eq '"') { $inString = $false }
-            $i++
-            continue
-        }
-        if ($c -eq '"') { $inString = $true; [void]$out.Append($c); $i++; continue }
-        if ($c -eq '/' -and $i + 1 -lt $Line.Length) {
-            $next = $Line[$i + 1]
-            if ($next -eq '/') { return $out.ToString() }
-            if ($next -eq '*') { $InBlock.Value = $true; $i += 2; continue }
-        }
-        [void]$out.Append($c)
-        $i++
-    }
-    return $out.ToString()
-}
+# COMMENTS STRIPPED, STRING LITERALS KEPT: rule 60(b) matches pass names, which are strings - Strip-ArchComments, with the helpers at the
+# top of this file since #446's review (rule 4 needs it too).
 # THE TEXT OF ONE CALL: from the `(` at OpenIndex to its matching `)` (string-aware, so a paren in a literal is not counted).
 # Empty when the parens never balance.
 function Get-ArchCallSpan([string] $Text, [int] $OpenIndex) {
@@ -4013,6 +4086,99 @@ if ($textRuleFiles -lt 50) {
     $failures.Add("text-not-compared-or-indexed: rule 68 read only $textRuleFiles production file(s) - the trees moved, or the rule checks nothing (#447)")
 }
 $ranRules.Add('text-not-compared-or-indexed')
+
+# --- 74. THE UNSTICK MENU IS OPENED BY A CALL, NOT A COUNTER (#446) ----------------------------------------------------
+# selection.unstick's Execute called ARoadBuildController::RequestUnstickMenu, which bumped UnstickMenuRequests; UInspectorWidget::TickPanel compared it with
+# SeenUnstickRequests every tick and opened the popup on a difference - while the same controller reached its other panels by a direct call. The row calls
+# UBuildHudLayer::OpenUnstickMenu now, which calls UInspectorWidget::OpenUnstickMenu. THE BAN is rule 4's 'unstick request counter (rule 74)' row (the three names
+# and the `Seen...Request(s)` shape, in every production file). THIS BLOCK IS THE HALF THAT STOPS IT CHECKING NOTHING: the row must still reach the HUD layer, and the
+# layer must still reach the inspector - a deleted call would pass the ban with an Unstick button that opens nothing.
+# DOES NOT SEE: a new counter under a name the row's two patterns do not spell. AirportMgr.Inspector.UnstickRowOpensTheMenuWithoutATick is the behaviour half.
+$unstickSites = @(
+    @{ Path = (Join-Path $Root 'Source\AirportMgr\BuildActions.cpp'); Needs = '\bHud\s*->\s*OpenUnstickMenu\s*\('; What = "the selection.unstick row's Execute calling Ctx.Hud->OpenUnstickMenu()" },
+    @{ Path = (Join-Path $Root 'Source\AirportMgr\BuildHudLayer.cpp'); Needs = '\bInspector\s*->\s*OpenUnstickMenu\s*\('; What = 'UBuildHudLayer::OpenUnstickMenu calling Inspector->OpenUnstickMenu()' }
+)
+foreach ($site in $unstickSites) {
+    if (-not (Test-Path $site.Path)) {
+        $failures.Add("unstick-by-call: $($site.Path) is named by rule 74 but does not exist - update the rule, do not let it check nothing")
+        continue
+    }
+    $inBlock = $false
+    $siteCode = (Get-Content -LiteralPath $site.Path | ForEach-Object { Strip-ArchCode $_ ([ref]$inBlock) }) -join "`n"
+    if ($siteCode -notmatch $site.Needs) {
+        $failures.Add("unstick-by-call: $(Split-Path $site.Path -Leaf) no longer has $($site.What) - the popup is opened by a call, not a request count the inspector diffs (#446)")
+    }
+}
+$ranRules.Add('unstick-by-call')
+
+# --- 75. THE SELECTION HAS ONE DOOR, AND EVERY CONTEXT CARRIES IT (#446) -------------------------------------------------
+# UInspectorWidget kept LastSelection and compared (Kind, Id) with it every tick to reopen its window, close its menus and disarm a sale; the buildings ghost reveal
+# re-read the selection every frame. FBuildSession::OnSelectionChanged announces a change once, from SelectionDoor::Write, which every writer goes through: a tool
+# through the FToolContext it is handed (SetSelection / ClearSelection), code and the session itself through FBuildSession. THE BANS are rule 4's rows ('selection
+# diffed on a tick', 'selection written outside the door', 'SelectionDoor::Write callers'). THIS BLOCK IS THE HALF THAT STOPS THEM CHECKING NOTHING: the Select tool must
+# still write through the context, the session must still write through WriteSelection and hand EVERY context the door (a context with the selection pointer and no
+# announcement writes silently in ONE driver - rule 47's shape), and the controller must still subscribe. The editor mode fires it by construction (it builds its
+# contexts through the session); rule 47's 'OnSelectionChanged' row records why it does not subscribe.
+# THE BUILDINGS GHOST REVEAL STAYS A PER-FRAME GATE, deliberately: it is a function of three sources - the selection, whether the depot is plotted (the network),
+# and the lit tool (FBuildSession::WantsPlotGhostsDrawn) - and only the first has an event; a subscriber on the selection alone would miss an undo of a plot and a
+# tool change. ShowPlotGhosts is two compares unless the answer moved.
+# DOES NOT SEE: a write spelled some other way (a reference bound to the selection and assigned through). Airside.Tool.BuildSession.SelectionChangedFiresOncePerChange and
+# .EveryContextCarriesTheSelectionDoor are the behaviour half.
+$selectionSites = @(
+    @{ Path = (Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Tool\SelectTool.cpp'); Needs = '\bSetSelection\s*\('; What = 'the Select tool writing the selection through Context.SetSelection(...)' },
+    @{ Path = (Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Tool\SelectTool.cpp'); Needs = '\bClearSelection\s*\('; What = 'the Select tool clearing the selection through Context.ClearSelection()' },
+    @{ Path = (Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Tool\BuildSession.cpp'); Needs = '\bWriteSelection\s*\('; What = "the session writing its selection through WriteSelection" },
+    @{ Path = (Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Tool\BuildSession.cpp'); Needs = '\bContext\s*\.\s*BindSelection\s*\('; What = 'MakeContext binding every context to the session selection and its announcement (Context.BindSelection(...))' },
+    @{ Path = (Join-Path $Root 'Source\AirportMgr\RoadBuildController.cpp'); Needs = '\bSession\s*\.\s*OnSelectionChanged\s*\(\s*\)\s*\.\s*AddUObject\s*\('; What = "the controller subscribing to the session's selection event" }
+)
+foreach ($site in $selectionSites) {
+    if (-not (Test-Path $site.Path)) {
+        $failures.Add("selection-one-door: $($site.Path) is named by rule 75 but does not exist - update the rule, do not let it check nothing")
+        continue
+    }
+    $inBlock = $false
+    $siteCode = (Get-Content -LiteralPath $site.Path | ForEach-Object { Strip-ArchCode $_ ([ref]$inBlock) }) -join "`n"
+    if ($siteCode -notmatch $site.Needs) {
+        $failures.Add("selection-one-door: $(Split-Path $site.Path -Leaf) no longer has $($site.What) - the selection changes through one door that announces it, and the inspector does not diff it (#446)")
+    }
+}
+$ranRules.Add('selection-one-door')
+
+# --- 76. A WINDOW THAT CAN FOLD DOES NOT COMPOSE WHILE FOLDED, AND THE BAR DESCRIBES THE RUNWAY ONCE A FRAME (#446) --------------
+# UUiWindowHost ticks every hosted panel, folded or not (a collapsed window stops Slate ticking its contents, and the tick is what decides to show it again), and the
+# arrivals and offers windows composed every row's strings and painted every text on every one of those ticks - about six and a dozen FText::Format a row - for a body
+# nobody could see. A foldable panel now asks UAirportMgrPanelWidget::IsFolded() and keeps only what the title bar shows (its badge). THE LIST THAT MUST AGREE: every
+# production panel whose WantsWindow says `bCollapsible = true` must call IsFolded() in its own file - a new foldable window without the gate fails here, and so does a
+# gate deleted from one of the two. A FLOOR on the count (two today) stops the rule reading nothing. (The bar's runway describe is rule 4's 'InspectFacts::DescribeRunway
+# callers (rule 76)' row; this block checks BuildActions.cpp still reads through the controller's per-frame answer.)
+# DOES NOT SEE: a panel that folds through some other spelling than bCollapsible, or one that calls IsFolded() and composes anyway. AirportMgr.UI.Arrivals.FoldedPanelComposesNothing
+# and AirportMgr.UI.OfferInbox.FoldedPanelComposesNothing are the behaviour half; AirportMgr.Actions.RunwayRowsDescribeOncePerFrame is the runway's.
+$foldableCount = 0
+foreach ($file in Get-Sources (Join-Path $Root 'Source\AirportMgr') @('.cpp')) {
+    if ($file.Name -like '*Test.cpp') { continue }
+    $inBlock = $false
+    $fileCode = (Get-Content -LiteralPath $file.FullName | ForEach-Object { Strip-ArchCode $_ ([ref]$inBlock) }) -join "`n"
+    if ($fileCode -match '\bbCollapsible\s*=\s*true\b') {
+        $foldableCount++
+        if ($fileCode -notmatch '\bIsFolded\s*\(\s*\)') {
+            $failures.Add("foldable-panels-gate: $($file.Name) sets bCollapsible = true but never asks IsFolded() - a folded window is still ticked by the host, and a panel that composes every row for a body nobody can see is the per-tick cost #446 removed: skip the composing and keep the title bar's badge")
+        }
+    }
+}
+if ($foldableCount -lt 2) {
+    $failures.Add("foldable-panels-gate: rule 76 found $foldableCount panel(s) setting bCollapsible = true under Source\AirportMgr - the arrivals and offers windows are two; the rule reads nothing or the windows moved (#446)")
+}
+$runwayRowsCpp = Join-Path $Root 'Source\AirportMgr\BuildActions.cpp'
+if (-not (Test-Path $runwayRowsCpp)) {
+    $failures.Add("foldable-panels-gate: $runwayRowsCpp is named by rule 76 but does not exist - update the rule, do not let it check nothing")
+} else {
+    $inBlock = $false
+    $runwayRowsCode = (Get-Content -LiteralPath $runwayRowsCpp | ForEach-Object { Strip-ArchCode $_ ([ref]$inBlock) }) -join "`n"
+    if ($runwayRowsCode -notmatch '\bSelectedRunwayFactsThisFrame\s*\(') {
+        $failures.Add("foldable-panels-gate: BuildActions.cpp no longer reads the selected runway through ARoadBuildController::SelectedRunwayFactsThisFrame - the bar's two runway rows ask it four times a tick, and a describe each is what #446 removed")
+    }
+}
+$ranRules.Add('foldable-panels-gate')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was

@@ -150,6 +150,11 @@ bool UAirportMgrPanelWidget::IsShown() const
 	return Host != nullptr ? Host->IsShown(WindowId) : bShownRequested;
 }
 
+bool UAirportMgrPanelWidget::IsFolded() const
+{
+	return Host != nullptr && Host->IsCollapsed(WindowId);
+}
+
 void UAirportMgrPanelWidget::ForgetPlayerClose()
 {
 	if (Host != nullptr)

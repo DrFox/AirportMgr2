@@ -139,3 +139,13 @@ int32 UBuildHudLayer::AlertCount() const
 {
 	return AlertsPanel != nullptr ? AlertsPanel->AlertCount() : 0;
 }
+
+void UBuildHudLayer::OpenUnstickMenu()
+{
+	if (Inspector != nullptr)
+	{
+		Inspector->OpenUnstickMenu();
+		return;
+	}
+	UE_LOG(LogRoadBuild, Log, TEXT("Unstick menu: press spent - the HUD layer has no inspector"));
+}

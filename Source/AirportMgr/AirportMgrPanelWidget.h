@@ -102,6 +102,15 @@ public:
 	/** Whether the window shows: the host's answer when hosted, the last SetShown otherwise. THE ONE ANSWER - no panel keeps its own. */
 	bool IsShown() const;
 
+	/**
+	 * Whether the window is FOLDED to its title bar (a bCollapsible window the player folded) - the host's answer; false when unhosted. A
+	 * folded window is still "shown" and is still ticked by the host (AirportMgr.UI.WindowHost.TicksHiddenPanelsOnce), but nothing of its body is drawn: a panel whose tick composes
+	 * text for rows skips that work while this is true and keeps only what the title bar still shows (its badge). Composing every row's
+	 * strings for a body nobody can see was the arrivals and offers windows' per-tick cost (#446).
+	 * ENFORCED BY: AirportMgr.UI.Arrivals.FoldedPanelComposesNothing, AirportMgr.UI.OfferInbox.FoldedPanelComposesNothing
+	 */
+	bool IsFolded() const;
+
 	/** Runs NativeTick with a throwaway geometry, so a headless test can drive a tick without a
 	 *  viewport - the precedent of ARoadBuildController::PlayerTickForTest. Moved here from
 	 *  UBuildBarWidget and UOfferInboxWidget, which each carried this exact one-liner. */

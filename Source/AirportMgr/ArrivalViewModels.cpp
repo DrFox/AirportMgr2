@@ -7,6 +7,12 @@
 #include "Model/SimClock.h"
 #include "OfferViewModels.h"
 
+namespace
+{
+	/** The stamp each compose takes - see UArrivalRowViewModel::GetRevision. Prefixed for the unity build. */
+	int32 GArrivalRowStamp = 0;
+}
+
 bool UArrivalRowViewModel::IsHoldingPhase(const UFlight& Flight)
 {
 	// THE SAME TEST DescribeStatus WORDS "HOLDING" FROM - Inbound is the phase the arrival queue holds a flight in. One function names
@@ -88,13 +94,49 @@ FText UArrivalRowViewModel::DescribeTurnaround(const UFlight& Flight, double Now
 		GameTimeText::Duration(Flight.ContractSeconds), Remaining);
 }
 
-void UArrivalRowViewModel::Refresh(const USimClock& Clock)
+FArrivalRowKey UArrivalRowViewModel::KeyFor(const UFlight& Live, int32 QueuePosition, double Now)
+{
+	// EACH FIELD IS THE NUMBER ITS SENTENCE PRINTS, taken through the same expression: DescribeStatus words Max(ArrivesAt - Now, 0),
+	// DescribeDetail words Duration(-Left) once late and Duration(Left) before, and the wait is Max(Now - HoldingSince, 0). WholeMinutes is
+	// the rounding Duration itself calls, so the key cannot part from the text by a rounding of its own.
+	FArrivalRowKey Out;
+	Out.Flight = &Live;
+	Out.Phase = Live.GetPhase();
+	Out.QueuePosition = QueuePosition;
+	Out.StatusMinutes = Live.GetPhase() == EFlightPhase::Accepted ? GameTimeText::WholeMinutes(FMath::Max(Live.ArrivesAt - Now, 0.0)) : 0;
+	Out.bContract = Live.ContractSeconds > 0.0;
+	if (Out.bContract)
+	{
+		const double Left = Live.ContractSecondsLeft(Now);
+		Out.bLate = Live.IsLate(Now);
+		Out.DetailMinutes = GameTimeText::WholeMinutes(Out.bLate ? -Left : Left);
+		Out.WaitedMinutes = Live.GetPhase() == EFlightPhase::Inbound
+			? GameTimeText::WholeMinutes(FMath::Max(Now - Live.HoldingSince, 0.0)) : 0;
+	}
+	else
+	{
+		Out.bLate = false;
+		Out.DetailMinutes = 0;
+		Out.WaitedMinutes = 0;
+	}
+	return Out;
+}
+
+bool UArrivalRowViewModel::Refresh(const USimClock& Clock)
 {
 	const UFlight* Live = Flight.Get();
 	if (Live == nullptr)
 	{
-		return;
+		return false;
 	}
+	const FArrivalRowKey Wanted = KeyFor(*Live, QueuePosition, Clock.Now());
+	if (bKeyValid && Wanted == Key)
+	{
+		return false;
+	}
+	Key = Wanted;
+	bKeyValid = true;
+	Revision = ++GArrivalRowStamp;
 	const FString Name = FString::Printf(TEXT("%s  %s"), *Live->Callsign, *Live->TypeName.ToString()).TrimStartAndEnd();
 	Title = QueuePosition > 0
 		? FText::FromString(FString::Printf(TEXT("#%d %s"), QueuePosition, *Name))
@@ -102,24 +144,53 @@ void UArrivalRowViewModel::Refresh(const USimClock& Clock)
 	Status = DescribeStatus(*Live, Clock.Now());
 	bHolding = IsHoldingPhase(*Live);
 	Detail = DescribeDetail(*Live, Clock.Now(), bLate);
+	return true;
 }
 
 void UArrivalsViewModel::Refresh(const UFlightBoard& Board, const USimClock& Clock)
 {
+	SyncRows(Board);
+	RefreshText(Clock);
+}
+
+void UArrivalsViewModel::SyncRows(const UFlightBoard& Board)
+{
 	// THE ROW SET is rebuilt only when the board's revision moved - an accept, a phase change, a
-	// clearance - exactly as UOfferInboxViewModel gates its own; the text refreshes every call,
-	// because "in 6 min" and "47 min left" count down between revisions.
+	// clearance - exactly as UOfferInboxViewModel gates its own. The TEXT is RefreshText's, and a row
+	// composes it only when what it would say has moved: "in 6 min" and "47 min left" count down between
+	// revisions, a minute at a time.
 	const uint32 BoardNow = Board.Revision();
 	if (!bRowsValid || BoardNow != BoardRevisionAt)
 	{
+		// A FLIGHT THAT STAYS KEEPS ITS ROW OBJECT (#446): a NewObject per row on every board revision threw away each row's memo with it, so
+		// every accept, phase change or clearance recomposed every sentence on the board, not just the flight that moved. Matched by the
+		// flight, the row's own identity; its queue place is reassigned below and is part of its key, so a row that moved up the queue
+		// recomposes its title and no other does.
+		TMap<const UFlight*, UArrivalRowViewModel*> Kept;
+		for (const TObjectPtr<UArrivalRowViewModel>& Row : Rows)
+		{
+			if (Row != nullptr && Row->Flight.IsValid())
+			{
+				Kept.Add(Row->Flight.Get(), Row);
+			}
+		}
 		Rows.Reset();
+		auto RowFor = [this, &Kept](UFlight* Each, int32 QueuePosition)
+		{
+			UArrivalRowViewModel* Row = Kept.FindRef(Each);
+			if (Row == nullptr)
+			{
+				Row = NewObject<UArrivalRowViewModel>(this);
+				Row->Flight = Each;
+			}
+			Row->QueuePosition = QueuePosition;
+			Rows.Add(Row);
+		};
+
 		const TArray<UFlight*> Holding = Board.Queue();
 		for (int32 Index = 0; Index < Holding.Num(); ++Index)
 		{
-			UArrivalRowViewModel* Row = NewObject<UArrivalRowViewModel>(this);
-			Row->Flight = Holding[Index];
-			Row->QueuePosition = Index + 1;
-			Rows.Add(Row);
+			RowFor(Holding[Index], Index + 1);
 		}
 
 		TArray<UFlight*> Inbound;
@@ -135,17 +206,21 @@ void UArrivalsViewModel::Refresh(const UFlightBoard& Board, const USimClock& Clo
 			(Each->IsOnGround() ? Ground : Inbound).Add(Each);
 		}
 		Algo::StableSortBy(Inbound, [](const UFlight* F) { return F->ArrivesAt; });
-		for (UFlight* Each : Inbound) { UArrivalRowViewModel* Row = NewObject<UArrivalRowViewModel>(this); Row->Flight = Each; Rows.Add(Row); }
-		for (UFlight* Each : Ground) { UArrivalRowViewModel* Row = NewObject<UArrivalRowViewModel>(this); Row->Flight = Each; Rows.Add(Row); }
+		for (UFlight* Each : Inbound) { RowFor(Each, 0); }
+		for (UFlight* Each : Ground) { RowFor(Each, 0); }
 
 		BoardRevisionAt = BoardNow;
 		bRowsValid = true;
 	}
+}
+
+void UArrivalsViewModel::RefreshText(const USimClock& Clock)
+{
 	for (const TObjectPtr<UArrivalRowViewModel>& Row : Rows)
 	{
-		if (Row != nullptr)
+		if (Row != nullptr && Row->Refresh(Clock))
 		{
-			Row->Refresh(Clock);
+			++Composes;
 		}
 	}
 }

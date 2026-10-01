@@ -226,18 +226,23 @@ void UInspectorWidget::TickPanel(float InDeltaTime)
 		const bool bHaveFacts = C->SelectedAgentFactsThisFrame(Facts);
 		Refresh(C->GetTarget(), C->GetSelection(), bHaveFacts ? &Facts : nullptr);
 		ShowFollowing(C->IsWatchingAgent());
-
-		// THE BAR'S Unstick, arriving - see ARoadBuildController::RequestUnstickMenu. Opened only on an
-		// agent card; a request made with nothing to unstick is spent, not kept for the next card.
-		if (C->GetUnstickMenuRequests() != SeenUnstickRequests)
-		{
-			SeenUnstickRequests = C->GetUnstickMenuRequests();
-			if (UnstickMenu != nullptr && UnstickMenu->GetVisibility() == ESlateVisibility::Visible && IsShown())
-			{
-				UnstickMenu->Open();
-			}
-		}
 	}
+}
+
+void UInspectorWidget::OpenUnstickMenu()
+{
+	// THE BAR'S Unstick, arriving - UBuildHudLayer::OpenUnstickMenu calls this from the row's Execute. Opened only on an
+	// agent card; a request made with nothing to unstick is spent, not kept for the next card.
+	if (UnstickMenu != nullptr && UnstickMenu->GetVisibility() == ESlateVisibility::Visible && IsShown())
+	{
+		++UnstickOpens;
+		UnstickMenu->Open();
+		return;
+	}
+	// SAID, NOT SWALLOWED: "Unstick did nothing" must have a line to grep. The press is spent, not kept for the next card (see above).
+	UE_LOG(LogInspector, Log, TEXT("Unstick menu: press spent - %s"),
+		UnstickMenu == nullptr ? TEXT("this inspector has no popup")
+		: !IsShown() ? TEXT("the inspector is closed") : TEXT("no agent card is showing"));
 }
 
 void UInspectorWidget::ShowFollowing(bool bFollowing)
@@ -286,20 +291,11 @@ void UInspectorWidget::RefreshWith(const UOpsRuntime* Runtime, const ARoadNetwor
 	WaitedForId = 0;
 	if (Target == nullptr || !Selection.IsSet())
 	{
-		// NOTHING SELECTED DISARMS TOO - a sale armed and then clicked away from must not survive to the
-		// next time this depot is picked.
-		if (LastSelection.IsSet() && FacilityRows != nullptr) { FacilityRows->DisarmSale(); }
+		// NOTHING SELECTED: hidden. The sale armed on the card that has just gone is disarmed by the selection EVENT
+		// (HandleSelectionChanged), not by this paint noticing the selection is gone - the window is all Refresh owns here.
 		SetShown(false);
 		bDepartEnabled = false;
-		LastSelection = FSelection();
 		return;
-	}
-	// A NEW SELECTION REOPENS A WINDOW THE PLAYER CLOSED: the close meant "not this one", and
-	// clicking another aircraft is asking to see it (Review Focus 4 of the step 2 plan).
-	const bool bNewSelection = Selection.Kind != LastSelection.Kind || Selection.Id != LastSelection.Id;
-	if (bNewSelection)
-	{
-		OnNewSelection(Selection);
 	}
 
 	// THE CARD FOR THE SELECTION, from the table: one card per kind, its own describe and its own change key (issue #441).
@@ -309,11 +305,12 @@ void UInspectorWidget::RefreshWith(const UOpsRuntime* Runtime, const ARoadNetwor
 		// A KIND WITH NO CARD - only a value outside the enum reaches here now: an appended kind
 		// fails the static_assert in FInspectorCards::CardFor until it has a case. It used to fall into the stand
 		// branch and describe ENTITY Id; now it says so ONCE per selection (Refresh runs every
-		// tick) and shows nothing.
+		// tick - bWarnedNoCard, re-armed by the selection event) and shows nothing.
 		// ENFORCED BY: the static_assert on ESelectionKind::Count in FInspectorCards::CardFor;
 		// AirportMgr.Inspector.UnknownKindWarnsOnce (once per selection, not per tick)
-		if (bNewSelection)
+		if (!bWarnedNoCard)
 		{
+			bWarnedNoCard = true;
 			UE_LOG(LogInspector, Warning, TEXT("Inspector: no card for selection kind %d"), static_cast<int32>(Selection.Kind));
 		}
 		HideCard();
@@ -336,10 +333,25 @@ void UInspectorWidget::RefreshWith(const UOpsRuntime* Runtime, const ARoadNetwor
 	PaintView(*View, Selection, *Target);
 }
 
-void UInspectorWidget::OnNewSelection(const FSelection& Selection)
+void UInspectorWidget::HandleSelectionChanged(const FSelection& Old, const FSelection& New)
 {
+	// THE EVENT'S WORK, once per real change (#446) - see the header. The warning about a kind with no card is said again for the new one.
+	bWarnedNoCard = false;
+	if (!New.IsSet())
+	{
+		// NOTHING SELECTED DISARMS TOO - a sale armed and then clicked away from must not survive to the
+		// next time this depot is picked.
+		if (Old.IsSet() && FacilityRows != nullptr) { FacilityRows->DisarmSale(); }
+		return;
+	}
+	OnNewSelection();
+}
+
+void UInspectorWidget::OnNewSelection()
+{
+	// A NEW SELECTION REOPENS A WINDOW THE PLAYER CLOSED: the close meant "not this one", and
+	// clicking another aircraft is asking to see it (Review Focus 4 of the step 2 plan).
 	ForgetPlayerClose();
-	LastSelection = Selection;
 	// A POPUP FOR THE OLD AGENT closes with its card: its lines were asked of that agent, and a
 	// confirm armed for one aeroplane must not despawn the next one clicked.
 	if (UnstickMenu != nullptr) { UnstickMenu->Close(); }
@@ -566,7 +578,7 @@ bool UInspectorWidget::ShowWaitedFor(ARoadBuildController& InController)
 	}
 	// THE CARD'S OWN LINE FIRST: SelectAndFocus logs as "Alert Go", and a grep for what the player
 	// clicked must find the inspector, not an alert nobody pressed.
-	UE_LOG(LogInspector, Log, TEXT("Inspector Show: agent %d waits for %d"), LastSelection.Id, WaitedForId);
+	UE_LOG(LogInspector, Log, TEXT("Inspector Show: agent %d waits for %d"), InController.GetSelection().Id, WaitedForId);
 	// THE ALERT GO'S PATH, not a second selection mechanism: it leaves a build tool, moves the
 	// camera, selects as the select tool would, and logs "Alert Go: ... -> ..." either way.
 	FAlertFocus Focus;

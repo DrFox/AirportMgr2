@@ -364,9 +364,9 @@ struct FAircraftDisplay
 /**
  * The turnaround sentence, kept until what it prints moves (ops batch 3 PR E): DescribeTurnaround reads the flight's contract and
  * Now, which it shows only as whole minutes left or late - so it is keyed on exactly those, computed from the flight each tick
- * for two subtractions instead of an FText::Format. The minutes recompute RoundToInt(Abs(Left) / 60) BECAUSE GameTimeText::Duration
- * rounds that way (GameTimeText.cpp), which is a coupling across two files - so MinutesShown is a function of its own,
- * and AirportMgr.Inspector.TurnaroundKeyMatchesItsSentence walks Now across a whole day asking that two times with one key say
+ * for two subtractions instead of an FText::Format. The minutes are GameTimeText::WholeMinutes of Abs(Left) - the very function
+ * Duration calls to round (#446; the key rounded inline, which was a coupling across two files) - and
+ * AirportMgr.Inspector.TurnaroundKeyMatchesItsSentence still walks Now across a whole day asking that two times with one key say
  * one sentence: a rounding changed in Duration goes red there, not stale on screen.
  */
 struct FInspectorTurnaround

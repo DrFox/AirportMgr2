@@ -467,20 +467,27 @@ public:
 	int32 NumTools() const { return Tools.Num(); }
 
 	/** What the Select tool has picked. Read by the panel and the HUD; written only through
-	 *  FToolContext::Selection, which MakeContext points here. */
+	 *  FToolContext::SetSelection (which MakeContext wires here) and this session's own Select. */
 	const FSelection& GetSelection() const { return Selection; }
+
+	/**
+	 * THE SELECTION CHANGED - what it was and what it is, once per REAL change from any writer (the Select tool, Select, a build tool
+	 * being lit, a replaced network, a stale subject) and never for a re-select of what is already selected (#446). The inspector used to
+	 * compare (Kind, Id) with the last it saw every tick to reopen, close its menus and disarm a sale. Both drivers share it because they
+	 * share the session: the editor mode's tools write through the same context door PIE's do.
+	 * ENFORCED BY: Airside.Tool.BuildSession.SelectionChangedFiresOncePerChange, AirportMgr.Inspector.SelectionEventReachesTheInspector
+	 */
+	FOnSelectionChanged& OnSelectionChanged() const { return SelectionChanged; }
 
 	/**
 	 * Select something FROM CODE - an alert's "Go" (ops alerts spec 2026-09-29). The select tool's hover
 	 * and click were the only writers before; the inspector shows whatever is selected, whoever set it.
 	 * None clears. The tool's own Tick still clears a selection whose subject has gone.
+	 * Given the network the id indexes, the selection records the slot's generation (FSelection::Generation) and so can tell when that
+	 * slot is later reused; with none (a test, an aircraft) it records none and is judged by the slot being alive alone.
 	 * ENFORCED BY: Airside.Tool.BuildSession.SelectFromCode
 	 */
-	void Select(ESelectionKind Kind, int32 Id) const
-	{
-		Selection.Kind = Kind;
-		Selection.Id = Kind == ESelectionKind::None ? 0 : Id;
-	}
+	void Select(ESelectionKind Kind, int32 Id, const URoadNetwork* Network = nullptr) const;
 
 	/**
 	 * Switches the active tool, deactivating the outgoing one first so nothing is left
@@ -610,8 +617,10 @@ public:
 	 *     and does nothing - every IBuildTool's OnDeactivate resets to idle and cancels only what is part-drawn - so
 	 *     Undo/Redo, which fire Adopted alone, still put the tool down.
 	 *   DISCARDING clears the selection: the network coming has no history in common with this one, so a stand or
-	 *     segment INDEX would silently name something else. Not on an undo: a Memento keeps its slots, and the select
-	 *     tool's own Tick already clears a selection whose subject the undo removed.
+	 *     segment INDEX would silently name something else.
+	 *   ADOPTED drops a selection that is STALE on the network now in place (FSelectTool::IsStale - its slot is gone, or holds another
+	 *     item than it did): an undo of the placement removes the slot, and waiting for the select tool's next Tick left a window in which
+	 *     anything placed into that slot was the selection. A selection the undo did not touch stays - a Memento keeps its slots.
 	 *   ADOPTED retires the frame-context cache, whose key (target, tool, cursor, tunables) a replacement moves none of.
 	 * ENFORCED BY: AirportMgr.Actions.LoadRetiresTheToolAndCaches, AirportMgr.Actions.UndoFromAnywhereRetiresTheTool
 	 */
@@ -688,6 +697,15 @@ private:
 	 * parked on the session so it outlives the tool being active.
 	 */
 	mutable FSelection Selection;
+
+	/** See OnSelectionChanged. mutable for Selection's reason: Select and MakeContext are const and write through these. */
+	mutable FOnSelectionChanged SelectionChanged;
+
+	/**
+	 * THE ONE WRITE of Selection from this class - SelectionDoor::Write, so it announces. True when it changed.
+	 * ENFORCED BY: Check-Architecture rule 75 ('selection written outside the door' row, and the 'SelectionDoor::Write callers' row)
+	 */
+	bool WriteSelection(const FSelection& Wanted) const { return SelectionDoor::Write(&Selection, &SelectionChanged, Wanted); }
 
 	/**
 	 * Rule 1 then rule 2, in that order. Not a UPROPERTY: it owns its rules through

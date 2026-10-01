@@ -218,12 +218,39 @@ struct FToolContext
 	int32 HoverAgent = 0;
 
 	/**
-	 * Where a selection is recorded. Points at FBuildSession::Selection; null in a driver or
-	 * test that has no session, in which case the Select tool selects nothing and says so.
-	 * A pointer rather than a copy because the tool WRITES it, and the panel reads the
-	 * session's copy, so there must be exactly one.
+	 * Binds the selection this context reads and writes: FBuildSession::MakeContext binds the session's own (and its announcement); a test
+	 * binds a bare FSelection and, with no Listeners, the writes land with nobody to tell. Unbound (a driver or test with no session), the Select
+	 * tool selects nothing and says so.
 	 */
-	FSelection* Selection = nullptr;
+	void BindSelection(FSelection& Slot, FOnSelectionChanged* Listeners = nullptr)
+	{
+		SelectionView = &Slot;
+		SelectionSlot = &Slot;
+		SelectionListeners = Listeners;
+	}
+
+	/**
+	 * The selection, READ-ONLY - null when unbound. A pointer rather than a copy because the panel reads the session's copy and a tool's write
+	 * (SetSelection) lands in it, so there must be exactly one.
+	 *
+	 * NOT WRITABLE BY TYPE (#446's review): this was an `FSelection*` a tool wrote through, and `*Context.Selection = X` changes the selection
+	 * without announcing it - the silence the inspector answered with a per-tick diff. The writable pointer is private and only SetSelection /
+	 * ClearSelection hold it, so that line does not compile. Check-Architecture rule 75's patterns are the second line, for the session's own selection.
+	 * ENFORCED BY: the compiler (no non-const access), Check-Architecture rule 75
+	 */
+	const FSelection* CurrentSelection() const { return SelectionView; }
+
+	/** Who hears the selection change - FBuildSession::OnSelectionChanged for a session's context; null for a bare test's. */
+	const FOnSelectionChanged* SelectionAnnouncement() const { return SelectionListeners; }
+
+	/**
+	 * THE DOOR A TOOL WRITES THE SELECTION THROUGH (#446): True when the selection changed; a re-select of what is selected is not a change
+	 * and announces nothing. const: the context is handed to tools by const reference, and what it points at is the session's.
+	 */
+	bool SetSelection(const FSelection& Wanted) const { return SelectionDoor::Write(SelectionSlot, SelectionListeners, Wanted); }
+
+	/** SetSelection of nothing. */
+	bool ClearSelection() const { return SetSelection(FSelection()); }
 
 	/**
 	 * Fill the cursor and the snap together, from the raw plane hit.
@@ -238,6 +265,12 @@ struct FToolContext
 		Cursor = PlaneHit;
 		Snap = InSnap;
 	}
+
+private:
+	/** What CurrentSelection reads, and the ONE writable pointer to the same slot (SetSelection's) - bound together by BindSelection. */
+	const FSelection* SelectionView = nullptr;
+	FSelection* SelectionSlot = nullptr;
+	FOnSelectionChanged* SelectionListeners = nullptr;
 };
 
 /**

@@ -39,6 +39,8 @@ struct FAgentFacts;
  *
  * POLLED each tick from InspectFacts, never subscribed: the bar's enabled states were
  * event-driven once and went stale, and a panel that shows speed needs every frame anyway.
+ * WHAT IS ANNOUNCED IS THE SELECTION (HandleSelectionChanged, #446) - the one thing the owner knows: the panel paints whatever it is
+ * handed each tick, and resets what a new card resets when the session says the selection changed, instead of diffing it with the last it saw.
  * It reads FAgentFacts / FStandFacts and never FRoadAgent, so M3's UFlight fills the same
  * struct and this file does not change.
  *
@@ -117,6 +119,26 @@ public:
 
 	/** The Follow button's caption as it reads now. */
 	FString FollowCaptionForTest() const;
+
+	/**
+	 * Opens the Unstick popup if this is an agent card that shows it (the menu is visible and the window shown); otherwise nothing, and the
+	 * request is spent. What UBuildHudLayer::OpenUnstickMenu calls - the row's Execute reaches it directly (#446) instead of leaving a count
+	 * for TickPanel to notice. Public for that caller; a headless test drives it the same way.
+	 */
+	void OpenUnstickMenu();
+
+	/** How many times OpenUnstickMenu has actually asked the popup to open - a headless anchor cannot open, so this is what a test reads. */
+	int32 UnstickOpenCountForTest() const { return UnstickOpens; }
+
+	/**
+	 * THE SELECTION CHANGED (FBuildSession::OnSelectionChanged, via ARoadBuildController::OnSelectionChanged): what a new card resets -
+	 * a window the player closed reopens (the close meant "not this one"), a popup for the old agent closes, the purchase rows' armed sale
+	 * goes - and, when nothing is selected now, a sale armed on the old card is disarmed. THE EVENT'S, not this panel's diff of the
+	 * selection it was handed every tick against the last it saw (#446): TickPanel and Refresh only PAINT what the selection is.
+	 * Public for the controller's forward and for a headless test, which has no session to fire it.
+	 * ENFORCED BY: AirportMgr.Inspector.SelectionEventReachesTheInspector
+	 */
+	void HandleSelectionChanged(const FSelection& Old, const FSelection& New);
 
 	/** Whether the Unstick button is lit (Selected) - the agent looks stuck. */
 	bool IsUnstickHighlightedForTest() const { return bUnstickHighlighted; }
@@ -236,12 +258,13 @@ private:
 	int32 RunwayActionIndex = INDEX_NONE;
 	/** By id, RunwayActionIndex's rule. */
 	int32 RunwayUseActionIndex = INDEX_NONE;
-	/** By id, RunwayActionIndex's rule. Its row only opens the popup - see ARoadBuildController::RequestUnstickMenu. */
+	/** By id, RunwayActionIndex's rule. Its row only opens the popup - see UBuildHudLayer::OpenUnstickMenu. */
 	int32 UnstickActionIndex = INDEX_NONE;
 
-	/** The controller's request count last acted on - see ARoadBuildController::RequestUnstickMenu. */
-	int32 SeenUnstickRequests = 0;
 	bool bUnstickHighlighted = false;
+
+	/** See UnstickOpenCountForTest. */
+	int32 UnstickOpens = 0;
 
 	/** The popup's lines for the selected agent, one per EUnstickAction in enum order - HandleUnstickChosen
 	 *  reads the line's index AS the action, so the two cannot disagree about which line is which. */
@@ -283,8 +306,8 @@ private:
 	/** UseClockForTest's clock, else Runtime's (the one RefreshWith was handed); null when neither exists. */
 	const USimClock* GameClock(const UOpsRuntime* Runtime) const;
 
-	/** What Refresh last showed, so a NEW selection can reopen a window the player closed. */
-	FSelection LastSelection;
+	/** Whether the "no card for this kind" warning has been said for the selection now shown: once per selection, not per tick. Reset by HandleSelectionChanged. */
+	bool bWarnedNoCard = false;
 
 	void EnsureSlots(const UUIStyle* Style);
 	void RunAction(int32 ActionIndex);
@@ -292,7 +315,7 @@ private:
 	void RunActionWith(int32 ActionIndex, const FBuildActionArg& Arg);
 
 	/** A selection that is not the last one: the window opens again, and everything armed for the old card goes. */
-	void OnNewSelection(const FSelection& Selection);
+	void OnNewSelection();
 	/** Nothing to show: hides the window and unlights Depart. */
 	void HideCard();
 	/** Paints View: the texts, the verbs it names, the purchase rows under it. */

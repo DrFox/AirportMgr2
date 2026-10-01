@@ -16,7 +16,15 @@
 namespace GameTimeText
 {
 	/**
-	 * "15 min", "1 h", "1 h 35 min": WHOLE MINUTES, rounded, never negative, never seconds - the clock's own words for a span. The
+	 * The whole minutes Duration prints for Seconds - ROUNDED, never negative. THE ROUNDING IS WRITTEN HERE ONCE so that a panel which memoises
+	 * a row's text on "what the text would say" (the arrivals and offer rows, #446) keys on the very number Duration prints: a key that
+	 * floored where the text rounds would repaint half a minute late, or hold a text a minute stale - the inspector's own keys did (#480).
+	 * ENFORCED BY: AirportMgr.UI.Arrivals.KeyMovesWithTheText (a sweep of the clock: an unchanged key never hides a changed text)
+	 */
+	AIRPORTOPS_API int32 WholeMinutes(double Seconds);
+
+	/**
+	 * "15 min", "1 h", "1 h 35 min": WHOLE MINUTES (WholeMinutes), rounded, never negative, never seconds - the clock's own words for a span. The
 	 * arrivals rows, the aircraft card, the offer row and the depot backlog all word a duration through this, so two cards describing one
 	 * span cannot differ.
 	 */

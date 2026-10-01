@@ -45,12 +45,76 @@ enum class ESelectionKind : uint8
  * through FToolContext::Selection; the session itself clears it when another tool is lit or a network is replaced, and sets it
  * from code (FBuildSession::Select - an alert's Go). A reader must not assume which of them wrote what it sees. Plain struct,
  * not a USTRUCT: it is runtime UI state that never reaches disk or Blueprint.
+ *
+ * EVERY WRITE GOES THROUGH SelectionDoor::Write (#446), which is what makes FBuildSession::OnSelectionChanged fire exactly once per
+ * REAL change and never for a re-select of what is already selected. The inspector used to learn of a change by comparing (Kind, Id)
+ * with the last one it saw, every tick.
+ * ENFORCED BY: Check-Architecture rule 75 (no production write to a selection outside this file, the session and the context's door),
+ * Airside.Tool.BuildSession.SelectionChangedFiresOncePerChange
  */
 struct FSelection
 {
 	ESelectionKind Kind = ESelectionKind::None;
 	int32 Id = 0;
 
+	/**
+	 * The GENERATION of the slot Id indexes, for the kinds whose Id is a slot index (Stand, Runway, Taxiway); 0 for an aircraft, and for a
+	 * selection written with no network to read it from (FBuildSession::Select's default). A slot map reuses an index once its item is
+	 * removed and bumps the generation when it does, so (Id, Generation) names ONE item where Id alone named whatever later lived there: a
+	 * selected stand, deleted, and another placed in its slot, used to be silently selected instead. Real generations start at 1, so 0 is free
+	 * to mean "not recorded" - FSelectTool::IsStale skips the check for it rather than call every code-made selection stale.
+	 */
+	int32 Generation = 0;
+
 	bool IsSet() const { return Kind != ESelectionKind::None; }
-	void Clear() { Kind = ESelectionKind::None; Id = 0; }
+
+	/** The same thing selected - kind, slot and generation. What "a real change" is compared by. */
+	bool operator==(const FSelection& Other) const { return Kind == Other.Kind && Id == Other.Id && Generation == Other.Generation; }
+	bool operator!=(const FSelection& Other) const { return !(*this == Other); }
+	/** Raw clear, for a value a caller holds. A SESSION'S selection is cleared through the door, never with this - see SelectionDoor. */
+	void Clear() { Kind = ESelectionKind::None; Id = 0; Generation = 0; }
 };
+
+/**
+ * The selection changed: what it was, and what it is now. Fired by SelectionDoor::Write after the new value is in place, so a subscriber
+ * that reads the session's selection sees the new one. Native, not a dynamic delegate: FBuildSession is not a UObject, and its
+ * subscriber is the controller (ARoadBuildController::OnSelectionChanged, which forwards to the inspector), bound by UObject weak pointer,
+ * which this supports. The inspector does not subscribe itself.
+ */
+DECLARE_MULTICAST_DELEGATE_TwoParams(FOnSelectionChanged, const FSelection& /*Old*/, const FSelection& /*New*/);
+
+namespace SelectionDoor
+{
+	/**
+	 * THE ONE WRITE: sets *Slot to Wanted and tells Listeners what it was and what it is, and does NOTHING when Wanted is what is already
+	 * selected - so a re-click on the selected stand is not a change. A null Slot writes nothing (a context with no session); a null
+	 * Listeners writes without announcing (a headless test's bare FSelection, which has nobody to tell). None is normalised: a
+	 * selection of nothing has no id and no generation, however the caller spelled it. True when it changed.
+	 *
+	 * HERE, AS A FREE FUNCTION OVER A POINTER PAIR, because the writers are not one class: FToolContext::SetSelection (the tools) and
+	 * FBuildSession (Select, SelectTool, OnNetworkReplaced) both write the session's one FSelection, and two copies of "compare, store,
+	 * announce" are two chances to announce twice or not at all.
+	 */
+	inline bool Write(FSelection* Slot, FOnSelectionChanged* Listeners, FSelection Wanted)
+	{
+		if (Slot == nullptr)
+		{
+			return false;
+		}
+		if (Wanted.Kind == ESelectionKind::None)
+		{
+			Wanted.Clear();
+		}
+		if (*Slot == Wanted)
+		{
+			return false;
+		}
+		const FSelection Old = *Slot;
+		*Slot = Wanted;
+		if (Listeners != nullptr)
+		{
+			Listeners->Broadcast(Old, Wanted);
+		}
+		return true;
+	}
+}

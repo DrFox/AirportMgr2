@@ -19,7 +19,7 @@ bool FInspectorTurnaround::Refresh(const UFlight& Of, double Now)
 	// minutes left or late - GameTimeText::Duration's own rounding of the flight's ContractSecondsLeft.
 	const double Left = Of.ContractSecondsLeft(Now);
 	const bool bNowLate = Of.IsLate(Now);
-	const int32 NowMinutes = FMath::RoundToInt(FMath::Abs(Left) / 60.0);
+	const int32 NowMinutes = GameTimeText::WholeMinutes(FMath::Abs(Left));
 	if (Flight.Get() == &Of && Contract == Of.ContractSeconds && bLate == bNowLate && Minutes == NowMinutes)
 	{
 		return false;

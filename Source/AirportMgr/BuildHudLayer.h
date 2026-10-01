@@ -156,6 +156,15 @@ public:
 	/** How many standing alerts the alerts window holds - the Alerts button's count. 0 with no panel. */
 	int32 AlertCount() const;
 
+	/**
+	 * Opens the inspector's Unstick popup - the selection.unstick row's Execute, through the layer that owns the inspector (#446). It was a
+	 * COUNTER on the controller that the inspector compared with the last it had seen, every tick, beside two panels the same controller
+	 * already called directly. An agent card only: a request made with no inspector, no popup or nothing shown is spent, not kept for the
+	 * next card. No inspector (a headless test, the editor mode): nothing.
+	 * ENFORCED BY: AirportMgr.Inspector.UnstickRowOpensTheMenuWithoutATick, Check-Architecture rule 74 (the counter's name is gone)
+	 */
+	void OpenUnstickMenu();
+
 private:
 	/**
 	 * ConfiguredClass if set, else T's own C++ class; makes the widget, adds it to Owner's

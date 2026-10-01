@@ -1786,7 +1786,7 @@ bool FDepotIsPickedByItsGroundTest::RunTest(const FString& Parameters)
 	FSelectTool Select;
 	FSelection Selection;
 	FToolContext Context = TestTool::ContextAt(*Actor, FVector2D(2800.0, 2200.0), ERoadSnapKind::Free, Radius);
-	Context.Selection = &Selection;
+	Context.BindSelection(Selection);
 	Select.OnClick(Context);
 	TestTrue(TEXT("the click selects the depot"),
 		Selection.Kind == ESelectionKind::Stand && Selection.Id == Depot);

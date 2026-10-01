@@ -214,11 +214,20 @@ void UOfferInboxWidget::RefreshWith(UOpsRuntime& Runtime, ARoadNetworkActor& Tar
 	{
 		return;
 	}
-	Inbox->Refresh(*Runtime.GetFlightBoard(), *Traffic, *Target.Network, *Runtime.GetClock(), Runtime.GetAirlines());
-
-	RefreshDemand(Runtime.GetAirlineOffers(), *Runtime.GetClock(), Runtime.GetOfferGenerator());
+	// THE ROW SET AND THE COUNT, folded or not: the window's title bar still shows how many offers wait. The rows' fields, the demand strip and
+	// the paint are for a body somebody can see - a folded window is still ticked by the host (RunPanelTick), and used to refresh and paint every
+	// row every tick for a body nobody could see (#446).
+	// ENFORCED BY: AirportMgr.UI.OfferInbox.FoldedPanelComposesNothing
+	Inbox->SyncRows(*Runtime.GetFlightBoard(), *Traffic, *Target.Network, *Runtime.GetClock(), Runtime.GetAirlines());
 	// ENFORCED BY: AirportMgr.UI.OfferInbox.RefreshReadsTheStatus
 	ShowAirportStatus(Runtime.GetAirport()->Status());
+	if (IsFolded())
+	{
+		PaintBadge();
+		return;
+	}
+	Inbox->RefreshRows(*Runtime.GetFlightBoard(), *Traffic, *Target.Network, *Runtime.GetClock(), Runtime.GetAirlines());
+	RefreshDemand(Runtime.GetAirlineOffers(), *Runtime.GetClock(), Runtime.GetOfferGenerator());
 	PaintRows();
 }
 
@@ -293,27 +302,39 @@ bool UOfferInboxWidget::RefreshDemand(TArrayView<const FAirlineOffers> Airlines,
 	return true;
 }
 
+void UOfferInboxWidget::PaintBadge()
+{
+	const int32 Pending = Inbox != nullptr ? Inbox->GetPendingCount() : 0;
+	const int32 Capacity = Inbox != nullptr ? Inbox->GetCapacity() : 0;
+	if (Pending == BadgedPending && Capacity == BadgedCapacity)
+	{
+		return;
+	}
+	BadgedPending = Pending;
+	BadgedCapacity = Capacity;
+	++Composes;
+	// AGAINST THE CAP when there is one - "3/8" says how close the inbox is to turning
+	// offers away (spec ruling 6). Without one, "none" rather than "0" - the player is being
+	// told a STATE, and a zero is a value - and "1 waiting" rather than "1": under the window's
+	// "Offers" title a bare number is the debug-readout look the heading row's comment forbids
+	// (UI library final review 2026-09-28).
+	const FText Badge = Capacity > 0
+		? FText::Format(NSLOCTEXT("AirportMgr", "InboxOfCap", "{0}/{1}"), FText::AsNumber(Pending), FText::AsNumber(Capacity))
+		: Pending == 0 ? NSLOCTEXT("AirportMgr", "InboxNone", "none")
+		: FText::Format(NSLOCTEXT("AirportMgr", "InboxWaiting", "{0} waiting"), FText::AsNumber(Pending));
+	if (BadgeText != nullptr)
+	{
+		BadgeText->SetText(Badge);
+	}
+	// AND ON THE WINDOW'S TITLE, which is what still shows when the window is folded.
+	SetWindowBadge(Badge);
+}
+
 void UOfferInboxWidget::PaintRows()
 {
 	const TArray<UOfferViewModel*>& Rows = Inbox->GetOffers();
 
-	if (BadgeText != nullptr)
-	{
-		// AGAINST THE CAP when there is one - "3/8" says how close the inbox is to turning
-		// offers away (spec ruling 6). Without one, "none" rather than "0" - the player is being
-		// told a STATE, and a zero is a value - and "1 waiting" rather than "1": under the window's
-		// "Offers" title a bare number is the debug-readout look the heading row's comment forbids
-		// (UI library final review 2026-09-28).
-		const int32 Pending = Inbox->GetPendingCount();
-		const int32 Capacity = Inbox->GetCapacity();
-		const FText Badge = Capacity > 0
-			? FText::Format(NSLOCTEXT("AirportMgr", "InboxOfCap", "{0}/{1}"), FText::AsNumber(Pending), FText::AsNumber(Capacity))
-			: Pending == 0 ? NSLOCTEXT("AirportMgr", "InboxNone", "none")
-			: FText::Format(NSLOCTEXT("AirportMgr", "InboxWaiting", "{0} waiting"), FText::AsNumber(Pending));
-		BadgeText->SetText(Badge);
-		// AND ON THE WINDOW'S TITLE, which is what still shows when the window is folded.
-		SetWindowBadge(Badge);
-	}
+	PaintBadge();
 
 	// NO UListView PATH (removed #447): it handed each entry widget its UOfferViewModel and returned, skipping the demand strip - and the
 	// entry could read the row but never answer it (see the class comment), so a Blueprint that used it showed offers the player could not
@@ -359,8 +380,11 @@ void UOfferInboxWidget::PaintRows()
 		}
 	}
 
-	// Text and enabled state are repainted every refresh, because the ETA counts down and a
-	// stand freeing makes a greyed-out offer acceptable again without the count changing.
+	// A ROW'S TEXT AND ENABLED STATE ARE REPAINTED WHEN ITS VIEW-MODEL ROW CHANGED (#446), which is when an input of a sentence moved: a stand
+	// freeing makes a greyed-out offer acceptable again (the verdict), the airline's mood moves, the fee. The ETA is the one thing that
+	// counts down every tick, and it is a number: the seconds text below is composed when its whole seconds moved, and the bar and the colours
+	// - which are not composed - are written each tick. These used to recompose every field of every row on every tick, about a dozen
+	// FText::Format a row, folded or not.
 	for (int32 Index = 0; Index < Rows.Num() && Index < Entries.Num(); ++Index)
 	{
 		const UOfferViewModel* Row = Rows[Index];
@@ -370,25 +394,12 @@ void UOfferInboxWidget::PaintRows()
 			continue;
 		}
 
-		// EACH FIELD IN ITS OWN WIDGET. These four used to be one FText::Format joined by
-		// double spaces - "Cumbria Air  PA-46-500TP Meridian  in 9 min  " - which gave the
-		// airline, the airframe and the countdown identical weight and read as a log line
-		// rather than as something with an answer expected.
-		if (Entry->AirlineText != nullptr)
+		if (Entry->PaintedRevision != Row->GetRevision())
 		{
-			const FText Who = Row->GetCallsign().IsEmpty() ? Row->GetAirline()
-				: FText::Format(NSLOCTEXT("AirportMgr", "OfferWho", "{0}  {1}"), Row->GetCallsign(), Row->GetAirline());
-			// HOW THE AIRLINE FEELS, beside its name - the one place the player sees that answering its
-			// offers late or not at all has a cost (spec 2026-09-29-ops-event-bus section 3).
-			Entry->AirlineText->SetText(Row->GetSatisfaction().IsEmpty() ? Who
-				: FText::Format(NSLOCTEXT("AirportMgr", "OfferWhoMood", "{0}  \u00B7  {1}"), Who, Row->GetSatisfaction()));
+			Entry->PaintedRevision = Row->GetRevision();
+			++Composes;
+			PaintRowTexts(*Style, *Row, *Entry);
 		}
-		if (Entry->TypeText != nullptr)
-		{
-			Entry->TypeText->SetText(Row->GetFee().IsEmpty() ? Row->GetTypeName()
-				: FText::Format(NSLOCTEXT("AirportMgr", "OfferWhat", "{0}  \u00B7  {1}"), Row->GetTypeName(), Row->GetFee()));
-		}
-		if (Entry->ContractText != nullptr) { Entry->ContractText->SetText(Row->GetContract()); }
 
 		// THE COUNTDOWN: seconds and a draining bar, amber then red-and-pulsing as it runs out,
 		// because an offer that lapses unseen is money the player never knew they lost.
@@ -401,7 +412,12 @@ void UOfferInboxWidget::PaintRows()
 		}
 		if (Entry->CountdownText != nullptr)
 		{
-			Entry->CountdownText->SetText(FText::Format(NSLOCTEXT("AirportMgr", "OfferSecondsLeft", "{0} s"), FText::AsNumber(Left)));
+			if (Entry->PaintedSeconds != Left)
+			{
+				Entry->PaintedSeconds = Left;
+				++Composes;
+				Entry->CountdownText->SetText(FText::Format(NSLOCTEXT("AirportMgr", "OfferSecondsLeft", "{0} s"), FText::AsNumber(Left)));
+			}
 			Entry->CountdownText->SetColorAndOpacity(FSlateColor(TimeColour));
 		}
 		if (Entry->CountdownBar != nullptr)
@@ -409,54 +425,77 @@ void UOfferInboxWidget::PaintRows()
 			Entry->CountdownBar->SetPercent(Row->GetTimeLeftFraction());
 			Entry->CountdownBar->SetFillColorAndOpacity(TimeColour);
 		}
-		if (Entry->FuelChip != nullptr)
-		{
-			// LITRES AND WHETHER THEY CAN BE GIVEN; hidden for a flight that wants none.
-			Entry->FuelChip->SetVisibility(Row->GetFuelText().IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
-			Entry->FuelChip->SetText(FText::Format(NSLOCTEXT("AirportMgr", "OfferFuelChip", "{0} {1}"),
-				Row->GetFuelText(), Row->IsFuelServable()
-					? FText::FromString(TEXT("\u2713")) : FText::FromString(TEXT("\u2717"))));
-			Entry->FuelChip->SetColorAndOpacity(FSlateColor(Row->IsFuelServable() ? Style->Positive : Style->Warning));
-		}
-		if (Entry->TugChip != nullptr)
-		{
-			Entry->TugChip->SetVisibility(Row->NeedsTug() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-		}
-		// "Accept (no fuel)" - the one caption on the card that changes. Through the button's own
-		// label (UUiButton::GetLabel), gated, since SetText has no early-out.
-		if (Entry->AcceptButton != nullptr)
-		{
-			const UTextBlock* Caption = Entry->AcceptButton->GetLabel();
-			if (Caption == nullptr || !Caption->GetText().EqualTo(Row->GetAcceptLabel()))
-			{
-				Entry->AcceptButton->SetLabel(Row->GetAcceptLabel());
-			}
-		}
+	}
+}
 
-		if (Entry->RefusalText != nullptr)
+void UOfferInboxWidget::PaintRowTexts(const UUIStyle& Style, const UOfferViewModel& Row, UOfferRowEntry& Entry)
+{
+	// EACH FIELD IN ITS OWN WIDGET. These four used to be one FText::Format joined by
+	// double spaces - "Cumbria Air  PA-46-500TP Meridian  in 9 min  " - which gave the
+	// airline, the airframe and the countdown identical weight and read as a log line
+	// rather than as something with an answer expected.
+	if (Entry.AirlineText != nullptr)
+	{
+		const FText Who = Row.GetCallsign().IsEmpty() ? Row.GetAirline()
+			: FText::Format(NSLOCTEXT("AirportMgr", "OfferWho", "{0}  {1}"), Row.GetCallsign(), Row.GetAirline());
+		// HOW THE AIRLINE FEELS, beside its name - the one place the player sees that answering its
+		// offers late or not at all has a cost (spec 2026-09-29-ops-event-bus section 3).
+		Entry.AirlineText->SetText(Row.GetSatisfaction().IsEmpty() ? Who
+			: FText::Format(NSLOCTEXT("AirportMgr", "OfferWhoMood", "{0}  \u00B7  {1}"), Who, Row.GetSatisfaction()));
+	}
+	if (Entry.TypeText != nullptr)
+	{
+		Entry.TypeText->SetText(Row.GetFee().IsEmpty() ? Row.GetTypeName()
+			: FText::Format(NSLOCTEXT("AirportMgr", "OfferWhat", "{0}  \u00B7  {1}"), Row.GetTypeName(), Row.GetFee()));
+	}
+	if (Entry.ContractText != nullptr) { Entry.ContractText->SetText(Row.GetContract()); }
+	if (Entry.FuelChip != nullptr)
+	{
+		// LITRES AND WHETHER THEY CAN BE GIVEN; hidden for a flight that wants none.
+		Entry.FuelChip->SetVisibility(Row.GetFuelText().IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
+		Entry.FuelChip->SetText(FText::Format(NSLOCTEXT("AirportMgr", "OfferFuelChip", "{0} {1}"),
+			Row.GetFuelText(), Row.IsFuelServable()
+				? FText::FromString(TEXT("\u2713")) : FText::FromString(TEXT("\u2717"))));
+		Entry.FuelChip->SetColorAndOpacity(FSlateColor(Row.IsFuelServable() ? Style.Positive : Style.Warning));
+	}
+	if (Entry.TugChip != nullptr)
+	{
+		Entry.TugChip->SetVisibility(Row.NeedsTug() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
+	// "Accept (no fuel)" - the one caption on the card that changes. Through the button's own
+	// label (UUiButton::GetLabel), gated, since SetText has no early-out.
+	if (Entry.AcceptButton != nullptr)
+	{
+		const UTextBlock* Caption = Entry.AcceptButton->GetLabel();
+		if (Caption == nullptr || !Caption->GetText().EqualTo(Row.GetAcceptLabel()))
 		{
-			// COLLAPSED, not blanked: an empty text block still takes its line height, so a
-			// card would change height when a stand freed and jog the whole stack.
-			const bool bShow = !Row->IsAcceptable() && !Row->GetRefusal().IsEmpty();
-			Entry->RefusalText->SetVisibility(
-				bShow ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-			if (bShow)
-			{
-				Entry->RefusalText->SetText(Row->GetRefusal());
-			}
+			Entry.AcceptButton->SetLabel(Row.GetAcceptLabel());
 		}
+	}
 
-		if (Entry->AcceptButton != nullptr)
+	if (Entry.RefusalText != nullptr)
+	{
+		// COLLAPSED, not blanked: an empty text block still takes its line height, so a
+		// card would change height when a stand freed and jog the whole stack.
+		const bool bShow = !Row.IsAcceptable() && !Row.GetRefusal().IsEmpty();
+		Entry.RefusalText->SetVisibility(
+			bShow ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		if (bShow)
 		{
-			// DISABLED, not hidden: the player needs to see the offer and the reason it
-			// cannot be taken, which is what tells them to build another stand.
-			//
-			// ACCEPT IS THE ONE THING ON THIS CARD THAT TAKES ACCENT. The bar spends that
-			// colour on the armed tool and nothing else; here it is the affirmative verb,
-			// and the two never share a screen region. The Primary KIND carries that now, and
-			// UUiButton::LookFor dims a disabled Primary to Control rather than leave it shouting.
-			Entry->AcceptButton->SetState(Row->IsAcceptable(), false);
+			Entry.RefusalText->SetText(Row.GetRefusal());
 		}
+	}
+
+	if (Entry.AcceptButton != nullptr)
+	{
+		// DISABLED, not hidden: the player needs to see the offer and the reason it
+		// cannot be taken, which is what tells them to build another stand.
+		//
+		// ACCEPT IS THE ONE THING ON THIS CARD THAT TAKES ACCENT. The bar spends that
+		// colour on the armed tool and nothing else; here it is the affirmative verb,
+		// and the two never share a screen region. The Primary KIND carries that now, and
+		// UUiButton::LookFor dims a disabled Primary to Control rather than leave it shouting.
+		Entry.AcceptButton->SetState(Row.IsAcceptable(), false);
 	}
 }
 

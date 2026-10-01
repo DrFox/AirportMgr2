@@ -85,7 +85,7 @@ namespace
 		FRoadSnapResult NoSnap; NoSnap.Position = Cursor;
 		C.SetCursor(Cursor, NoSnap);
 		C.HoverAgent = HoverAgent;
-		C.Selection = &Selection;
+		C.BindSelection(Selection);
 		return C;
 	}
 }
@@ -265,6 +265,59 @@ bool FSelectToolPicksTaxiwayTest::RunTest(const FString& Parameters)
 
 	Tool.OnClick(SelToolContext(Actor, Sel, FVector2D(5000.0, 30000.0), 0));
 	TestFalse(TEXT("a service road has no card - a click on one selects nothing"), Sel.IsSet());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSelectToolReusedSlotIsStaleTest,
+	"Airside.Tool.SelectTool.ReusedSlotIsStale",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSelectToolReusedSlotIsStaleTest::RunTest(const FString& Parameters)
+{
+	// #446 PIN: the selection is a slot INDEX, and a slot map reuses an index once its item is removed. A selected stand, deleted, and another
+	// placed into its slot used to leave the selection naming the newcomer - alive at that index, so PositionOf found it and Tick kept it. The
+	// generation recorded at the pick is what tells the two items apart.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 40000.0));
+	URoadNetwork& Net = *Actor->Network;
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId First = Net.PlaceEntity(StandDef, StandDef->Anchors, FVector2D(5000.0, 0.0), 0.0);
+	if (!TestTrue(TEXT("setup: a stand placed"), First.IsSet())) { return false; }
+
+	FSelection Sel = FSelectTool::MakeSelection(&Net, ESelectionKind::Stand, First.Index);
+	TestEqual(TEXT("the pick records the slot's generation"), Sel.Generation, First.Generation);
+	TestFalse(TEXT("a live stand is not stale"), FSelectTool::IsStale(&Net, Sel));
+
+	if (!TestTrue(TEXT("setup: the stand removed"), Net.RemoveEntity(First))) { return false; }
+	TestTrue(TEXT("a removed stand is stale"), FSelectTool::IsStale(&Net, Sel));
+
+	const FEntityInstanceId Second = Net.PlaceEntity(StandDef, StandDef->Anchors, FVector2D(9000.0, 0.0), 0.0);
+	if (!TestEqual(TEXT("setup: the newcomer took the freed slot"), Second.Index, First.Index)) { return false; }
+	TestTrue(TEXT("setup: and the slot is ALIVE again, which is what PositionOf would see"), Net.GetEntities()[Second.Index].bAlive);
+	TestNotEqual(TEXT("under another generation"), Second.Generation, First.Generation);
+	TestTrue(TEXT("a slot reused by another stand is stale: the selection no longer names what was picked"), FSelectTool::IsStale(&Net, Sel));
+
+	// THROUGH THE TOOL, the way a frame meets it: Tick clears it, and says so once.
+	FToolContext Context = SelToolContext(Actor, Sel, FVector2D::ZeroVector, 0);
+	FSelectTool Tool;
+	Tool.Tick(Context);
+	TestFalse(TEXT("the select tool's Tick drops it instead of letting it retarget"), Sel.IsSet());
+
+	// A SELECTION WITH NO RECORDED GENERATION is judged by the slot being alive alone, so a code-made selection (a test's, an alert's with no
+	// network) is not called stale for a thing it never stamped.
+	FSelection Unstamped;
+	Unstamped.Kind = ESelectionKind::Stand;
+	Unstamped.Id = Second.Index;
+	TestFalse(TEXT("an unstamped selection of a live slot is not stale"), FSelectTool::IsStale(&Net, Unstamped));
+	Unstamped.Id = 57;
+	TestTrue(TEXT("but one of a slot that does not exist is"), FSelectTool::IsStale(&Net, Unstamped));
+	FSelection Agent;
+	Agent.Kind = ESelectionKind::Aircraft;
+	Agent.Id = 99;
+	TestFalse(TEXT("an aircraft is never stale by slot - an agent id is not reused; whether it has gone is PositionOf's question"), FSelectTool::IsStale(&Net, Agent));
 	return true;
 }
 

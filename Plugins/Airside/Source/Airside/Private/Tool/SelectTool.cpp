@@ -153,50 +153,49 @@ bool FSelectTool::PositionOf(const FToolContext& Context, ESelectionKind Kind, i
 
 void FSelectTool::OnClick(const FToolContext& Context)
 {
-	SelectionRef = Context.Selection;
-	if (Context.Selection == nullptr)
+	SelectionRef = Context.CurrentSelection();
+	if (Context.CurrentSelection() == nullptr)
 	{
 		UE_LOG(LogAirside, Warning, TEXT("Select: click with no selection to write to - the driver built a context without one."));
 		return;
 	}
-	FSelection& Sel = *Context.Selection;
+	// WRITTEN THROUGH THE CONTEXT'S DOOR (#446), once, with the slot's generation recorded by MakeSelection: a click that lands on what is
+	// already selected is not a change and announces nothing.
+	const URoadNetwork* Network = Context.Network();
 
 	if (Context.HoverAgent != 0)
 	{
-		Sel.Kind = ESelectionKind::Aircraft;
-		Sel.Id = Context.HoverAgent;
+		Context.SetSelection(MakeSelection(Network, ESelectionKind::Aircraft, Context.HoverAgent));
 	}
 	else if (Context.Target != nullptr)
 	{
 		const int32 Stand = Context.Target->FindEntityAt(Context.Cursor, Context.SnapRadius);
 		if (Stand != INDEX_NONE)
 		{
-			Sel.Kind = ESelectionKind::Stand;
-			Sel.Id = Stand;
+			Context.SetSelection(MakeSelection(Network, ESelectionKind::Stand, Stand));
 		}
 		else if (const FRoadSegmentId Runway = Context.Network() != nullptr
 			? RunwayQuery::RunwaySegmentAt(*Context.Network(), Context.Cursor) : FRoadSegmentId(); Runway.IsSet())
 		{
 			// LAST, after aircraft and stand: a runway is under most of the airport's clicks
 			// that matter, and an aircraft rolling on it must still be the thing picked.
-			Sel.Kind = ESelectionKind::Runway;
-			Sel.Id = Runway.Index;
+			Context.SetSelection(MakeSelection(Network, ESelectionKind::Runway, Runway.Index));
 		}
 		else if (const FRoadSegmentId Taxiway = Context.Network() != nullptr
 			? TaxiwaySegmentAt(*Context.Network(), Context.Cursor) : FRoadSegmentId(); Taxiway.IsSet())
 		{
 			// LAST OF ALL (strip stage 6): a taxiway is under most of an airport's clicks, and a
 			// stand, a runway or an aircraft on it must still be the thing picked.
-			Sel.Kind = ESelectionKind::Taxiway;
-			Sel.Id = Taxiway.Index;
+			Context.SetSelection(MakeSelection(Network, ESelectionKind::Taxiway, Taxiway.Index));
 		}
 		else
 		{
 			// A click on nothing deselects, as it does in every Cities-style game: the
 			// panel closing is how the player knows the click registered.
-			Sel.Clear();
+			Context.ClearSelection();
 		}
 	}
+	const FSelection& Sel = *Context.CurrentSelection();
 	UE_LOG(LogAirside, Log, TEXT("Select: %s %d"),
 		Sel.Kind == ESelectionKind::Aircraft ? TEXT("aircraft") : Sel.Kind == ESelectionKind::Stand ? TEXT("stand")
 			: Sel.Kind == ESelectionKind::Runway ? TEXT("runway segment")
@@ -206,29 +205,83 @@ void FSelectTool::OnClick(const FToolContext& Context)
 
 void FSelectTool::OnCancel(const FToolContext& Context)
 {
-	SelectionRef = Context.Selection;
-	if (Context.Selection != nullptr)
-	{
-		Context.Selection->Clear();
-	}
+	SelectionRef = Context.CurrentSelection();
+	Context.ClearSelection();
 }
 
 void FSelectTool::Tick(const FToolContext& Context)
 {
-	SelectionRef = Context.Selection;
-	if (Context.Selection == nullptr || !Context.Selection->IsSet())
+	SelectionRef = Context.CurrentSelection();
+	if (Context.CurrentSelection() == nullptr || !Context.CurrentSelection()->IsSet())
 	{
 		return;
 	}
 	// Polled, not subscribed: a tool has no delegate lifetime to manage, and this runs
 	// every frame anyway for the preview. A selected aircraft that has flown away or a
 	// stand that was deleted under another tool must not leave the panel showing a ghost.
+	// STALE BEFORE GONE (#446): a slot whose item was removed and whose index was reused is ALIVE, so PositionOf finds it and the
+	// selection would quietly retarget; the generation recorded at the pick is what tells the two items apart.
 	FVector2D Unused;
-	if (!PositionOf(Context, Context.Selection->Kind, Context.Selection->Id, Unused))
+	if (IsStale(Context.Network(), *Context.CurrentSelection()) || !PositionOf(Context, Context.CurrentSelection()->Kind, Context.CurrentSelection()->Id, Unused))
 	{
-		UE_LOG(LogAirside, Log, TEXT("Select: selection %d no longer exists; cleared."), Context.Selection->Id);
-		Context.Selection->Clear();
+		UE_LOG(LogAirside, Log, TEXT("Select: selection %d no longer exists; cleared."), Context.CurrentSelection()->Id);
+		Context.ClearSelection();
 	}
+}
+
+FSelection FSelectTool::MakeSelection(const URoadNetwork* Network, ESelectionKind Kind, int32 Id)
+{
+	FSelection Out;
+	Out.Kind = Kind;
+	Out.Id = Kind == ESelectionKind::None ? 0 : Id;
+	if (Network == nullptr)
+	{
+		return Out;
+	}
+	switch (Kind)
+	{
+	case ESelectionKind::Stand:
+		Out.Generation = Network->EntityIdAt(Id).Generation;
+		break;
+	case ESelectionKind::Runway:
+	case ESelectionKind::Taxiway:
+		Out.Generation = Network->SegmentIdAt(Id).Generation;
+		break;
+	default:
+		break;
+	}
+	return Out;
+}
+
+bool FSelectTool::IsStale(const URoadNetwork* Network, const FSelection& Selection)
+{
+	if (Network == nullptr)
+	{
+		return false;
+	}
+	int32 LiveGeneration = 0;
+	bool bLive = false;
+	switch (Selection.Kind)
+	{
+	case ESelectionKind::Stand:
+	{
+		const FEntityInstanceId Id = Network->EntityIdAt(Selection.Id);
+		bLive = Id.IsSet();
+		LiveGeneration = Id.Generation;
+		break;
+	}
+	case ESelectionKind::Runway:
+	case ESelectionKind::Taxiway:
+	{
+		const FRoadSegmentId Id = Network->SegmentIdAt(Selection.Id);
+		bLive = Id.IsSet();
+		LiveGeneration = Id.Generation;
+		break;
+	}
+	default:
+		return false;
+	}
+	return !bLive || (Selection.Generation != 0 && Selection.Generation != LiveGeneration);
 }
 
 void FSelectTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const
@@ -260,20 +313,20 @@ void FSelectTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 		}
 	}
 
-	if (Context.Selection != nullptr && Context.Selection->IsSet()
-		&& PositionOf(Context, Context.Selection->Kind, Context.Selection->Id, At))
+	if (Context.CurrentSelection() != nullptr && Context.CurrentSelection()->IsSet()
+		&& PositionOf(Context, Context.CurrentSelection()->Kind, Context.CurrentSelection()->Id, At))
 	{
-		if (Context.Selection->Kind == ESelectionKind::Stand && Context.Network() != nullptr)
+		if (Context.CurrentSelection()->Kind == ESelectionKind::Stand && Context.Network() != nullptr)
 		{
-			DrawEntity(*Context.Network(), Context.Selection->Id, EPreviewStyle::Selected, Sink);
+			DrawEntity(*Context.Network(), Context.CurrentSelection()->Id, EPreviewStyle::Selected, Sink);
 		}
-		else if (Context.Selection->Kind == ESelectionKind::Runway && Context.Network() != nullptr)
+		else if (Context.CurrentSelection()->Kind == ESelectionKind::Runway && Context.Network() != nullptr)
 		{
-			DrawRunway(*Context.Network(), Context.Selection->Id, EPreviewStyle::Selected, Sink);
+			DrawRunway(*Context.Network(), Context.CurrentSelection()->Id, EPreviewStyle::Selected, Sink);
 		}
-		else if (Context.Selection->Kind == ESelectionKind::Taxiway && Context.Network() != nullptr)
+		else if (Context.CurrentSelection()->Kind == ESelectionKind::Taxiway && Context.Network() != nullptr)
 		{
-			DrawTaxiway(*Context.Network(), Context.Selection->Id, EPreviewStyle::Selected, Sink);
+			DrawTaxiway(*Context.Network(), Context.CurrentSelection()->Id, EPreviewStyle::Selected, Sink);
 		}
 		else
 		{
@@ -282,14 +335,14 @@ void FSelectTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 
 		// The selected aircraft's remaining route, in the style the Route tool used: the one
 		// useful picture that tool drew, kept.
-		if (Context.Selection->Kind == ESelectionKind::Aircraft)
+		if (Context.CurrentSelection()->Kind == ESelectionKind::Aircraft)
 		{
 			const UGroundTraffic* Traffic = Context.Target->GetGroundTraffic();
 			if (Traffic != nullptr)
 			{
 				// In RUNS, each in its meaning's style: cyan forward, amber where it backs up
 				// (spec 2026-09-26 §5).
-				for (const FRouteRun& Run : Traffic->RemainingRouteRuns(Context.Selection->Id))
+				for (const FRouteRun& Run : Traffic->RemainingRouteRuns(Context.CurrentSelection()->Id))
 				{
 					Sink.Polyline(Run.Points, Run.bReverse ? EPreviewStyle::ReverseRoute : EPreviewStyle::Route);
 				}

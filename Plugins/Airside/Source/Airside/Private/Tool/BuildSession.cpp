@@ -364,8 +364,13 @@ void FBuildSession::SelectTool(int32 Index, const FToolContext& DeactivateContex
 	// with the panel when one opens, and does not come back when it is cancelled.
 	if (Index != SelectToolIndex)
 	{
-		Selection.Clear();
+		WriteSelection(FSelection());
 	}
+}
+
+void FBuildSession::Select(ESelectionKind Kind, int32 Id, const URoadNetwork* Network) const
+{
+	WriteSelection(FSelectTool::MakeSelection(Network, Kind, Id));
 }
 
 bool FBuildSession::ResolveSnap(const URoadNetwork* Network, const FRoadSnapQuery& Query,
@@ -393,7 +398,7 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	FToolContext Context;
 	Context.Target = Target;
 	Context.HoverAgent = Input.HoverAgent;
-	Context.Selection = &Selection;
+	Context.BindSelection(Selection, &SelectionChanged);
 	Context.Limits = Tunables.Limits;
 	Context.Envelopes = Tunables.Envelopes;
 	Context.ServiceRoadHalfWidth = Tunables.ServiceRoadHalfWidth;
@@ -618,8 +623,15 @@ void FBuildSession::OnNetworkReplaced(const FToolContext& Context, ENetworkRepla
 	{
 		// EVERY SELECTION KIND IS AN INDEX OR AN AGENT ID (FSelection), and neither survives a
 		// network with no history in common with this one - see the header.
-		Selection.Clear();
+		WriteSelection(FSelection());
 		return;
+	}
+	// AN UNDO'S OWN ANSWER (#446): the placement it took back has no slot, and the selection that named it is dropped NOW, not at the
+	// select tool's next Tick - see the header. An undo that touched nothing selected leaves the selection alone.
+	if (FSelectTool::IsStale(Context.Network(), Selection))
+	{
+		UE_LOG(LogAirside, Log, TEXT("Select: selection %d is stale on the replacement network; cleared."), Selection.Id);
+		WriteSelection(FSelection());
 	}
 	// OnDeactivate abandons the tool's stage, and the network under every cached context just
 	// changed - neither is visible to GetFrameContext's key (CancelActiveGesture's reason).

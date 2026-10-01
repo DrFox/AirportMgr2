@@ -53,6 +53,9 @@ public:
 	/** Re-read the board and repaint - NativeTick's work, callable by a headless test. */
 	void Refresh();
 
+	/** How many rows' texts PaintRows has set, in total - the widget's half of the fold pin (the view model's is UArrivalsViewModel::ComposeCountForTest). */
+	int32 PaintCountForTest() const { return RowPaints; }
+
 protected:
 	virtual void BuildOnce(const UUIStyle& Style) override;
 	virtual void TickPanel(float DeltaTime) override;
@@ -65,6 +68,19 @@ private:
 	UPROPERTY() TArray<TObjectPtr<UTextBlock>> Titles;
 	UPROPERTY() TArray<TObjectPtr<UTextBlock>> Statuses;
 	UPROPERTY() TArray<TObjectPtr<UTextBlock>> Details;
+
+	/**
+	 * The stamp (UArrivalRowViewModel::GetRevision) each slot last painted: a slot whose row has not recomposed since is left alone - no
+	 * SetText, no colour, no visibility write (#446: they ran every tick for every row). Reset with the slots above.
+	 */
+	TArray<int32> PaintedRevisions;
+
+	/** The row count the window's badge last showed, so a still tick formats nothing (FText::AsNumber is a format, and SetBadge has no early-out). -1: none yet. */
+	int32 BadgedCount = -1;
+	int32 RowPaints = 0;
+
+	/** The title bar's count - all a FOLDED window still shows. Written only when the count moved. */
+	void PaintBadge();
 
 	void PaintRows(const UUIStyle& Style);
 };

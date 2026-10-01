@@ -13,6 +13,41 @@ class URoadNetwork;
 class USimClock;
 struct FAirlineOffers;
 class UAirlineDefinition;
+class UPricing;
+
+/**
+ * EVERY INPUT of how an airline's mood is worded (#446): the percentage (rounded the way it prints), whether there is a newest change to
+ * name, which way it went, and why. DescribeMood is a function of THIS and nothing else, so a row that memoises its mood sentence on the
+ * key cannot part from the sentence - there is no second rounding to disagree with.
+ */
+struct FOfferMoodKey
+{
+	bool bStanding = false;
+	int32 Percent = -1;
+	bool bRecent = false;
+	bool bUp = false;
+	FString Cause;
+
+	bool operator==(const FOfferMoodKey& Other) const = default;
+};
+
+/**
+ * EVERY INPUT of the sentences a flight fixes at the offer - who is asking, what it pays, what it wants, the contract - which used to be
+ * composed again every tick for every row (about a dozen FText::Format a row). They move only if the flight's own figures or the pricing
+ * that words the fee do, and this key is those. The callsign, the airline's name and the type are not figures but the flight's IDENTITY - fixed
+ * at the offer - so they ride on the Flight pointer: a row bound to another flight differs in the key and recomposes them.
+ */
+struct FOfferFixedKey
+{
+	TWeakObjectPtr<const UFlight> Flight;
+	TWeakObjectPtr<const UPricing> Pricing;
+	double LeadTimeSeconds = -1.0;
+	double ContractSeconds = -1.0;
+	double LandingFee = -1.0;
+	double FuelLitres = -1.0;
+
+	bool operator==(const FOfferFixedKey& Other) const = default;
+};
 
 /**
  * One row of the offer inbox.
@@ -39,10 +74,23 @@ public:
 	/** The flight this row shows. WEAK: the board owns flights and retires them. */
 	UPROPERTY(Transient) TWeakObjectPtr<UFlight> Flight;
 
-	/** Pull every field from the flight and the board's verdict - and, given the roster, how its
-	 *  airline feels (null: no satisfaction line, as in a test that does not care). */
-	void Refresh(const UFlightBoard& Board, const UGroundTraffic& Traffic,
+	/**
+	 * Pull every field from the flight and the board's verdict - and, given the roster, how its
+	 * airline feels (null: no satisfaction line, as in a test that does not care).
+	 *
+	 * EACH SENTENCE IS COMPOSED ONLY WHEN ITS INPUTS MOVED (#446): the fixed ones on FOfferFixedKey, the mood on FOfferMoodKey, the refusal and
+	 * the two verdict flags on themselves. What still changes every call is a number - the seconds left and the bar's fraction - which is
+	 * not composed. True when a sentence or a verdict flag changed, i.e. when GetRevision moved.
+	 */
+	bool Refresh(const UFlightBoard& Board, const UGroundTraffic& Traffic,
 		const URoadNetwork& Network, const USimClock& Clock, const UAirlineRoster* Airlines = nullptr);
+
+	/**
+	 * The stamp of the last Refresh that changed a sentence or a verdict flag - UNIQUE ACROSS ROWS (one counter for all of them), so a panel
+	 * that remembers the stamp it painted in a SLOT repaints when a different row lands there as well as when its own row changes. 0 before
+	 * the first. The panel paints a row's texts when this has moved, and its seconds-left when THAT has (GetSecondsLeft).
+	 */
+	int32 GetRevision() const { return Revision; }
 
 	FText GetCallsign() const { return Callsign; }
 	FText GetAirline() const { return Airline; }
@@ -68,6 +116,12 @@ public:
 	 * empty for none (the debug flight's, or no roster). Static so a test can ask it of a row.
 	 */
 	static FText DescribeSatisfaction(const FAirlineStanding* Standing);
+
+	/** Standing reduced to what DescribeMood reads - the row's memo key. */
+	static FOfferMoodKey MoodKeyOf(const FAirlineStanding* Standing);
+
+	/** The mood sentence from its key: DescribeSatisfaction's body, so the key and the sentence are one function's input and output. */
+	static FText DescribeMood(const FOfferMoodKey& Mood);
 
 	/**
 	 * "lands in 15 min - airborne within 1 h 10 min", from the flight's lead time and contract.
@@ -118,6 +172,16 @@ private:
 
 	/** See GetSatisfaction. */
 	UPROPERTY(Transient) FText Satisfaction;
+
+	/** What each memoised group of sentences was last composed from, and whether it ever was. Not saved. */
+	FOfferFixedKey FixedKey;
+	bool bFixedValid = false;
+	FOfferMoodKey MoodKey;
+	bool bMoodValid = false;
+	/** The refusal's source sentence - the plan's own words - and whether the verdict fields below were ever set from a quote. */
+	FString RefusalSentence;
+	bool bVerdictValid = false;
+	int32 Revision = 0;
 };
 
 /**
@@ -145,13 +209,25 @@ public:
 	 * SET - which flights have an offer at all - is rebuilt only when UFlightBoard::Revision
 	 * has moved since the last call: Board.Offers() allocates a fresh array on every call,
 	 * and diffing it against Rows was the same cost again for a tick where nothing happened.
-	 * Each row's OWN fields (the ETA text, and the acceptable/refusal pair gated on its own
-	 * three revisions - see UOfferViewModel) still refresh every call: bookkeeping about the
-	 * OFFER SET is cheap to gate here, but each row already knows how to gate what is
-	 * actually expensive.
+	 * Each row's OWN fields still refresh every call, and each row composes only what its inputs moved (UOfferViewModel::Refresh: the flight's
+	 * fixed figures, the airline's mood, the verdict; the seconds left are a number and are not composed) - bookkeeping about the OFFER SET is
+	 * cheap to gate here, but each row already knows how to gate what is actually expensive.
 	 */
 	void Refresh(UFlightBoard& Board, UGroundTraffic& Traffic, const URoadNetwork& Network,
 		const USimClock& Clock, const UAirlineRoster* Airlines = nullptr);
+
+	/**
+	 * Refresh's two halves, apart so a FOLDED window can keep the first (#446). SyncRows: the row SET (rebuilt only when the board's
+	 * revision moved), the pending count and the cap - what the window's title-bar badge reads - and the handles Accept and Decline
+	 * refresh through. RefreshRows: every row's fields, each composing only what moved. Refresh is both, in that order.
+	 */
+	void SyncRows(UFlightBoard& Board, UGroundTraffic& Traffic, const URoadNetwork& Network,
+		const USimClock& Clock, const UAirlineRoster* Airlines = nullptr);
+	void RefreshRows(UFlightBoard& Board, UGroundTraffic& Traffic, const URoadNetwork& Network,
+		const USimClock& Clock, const UAirlineRoster* Airlines = nullptr);
+
+	/** How many row Refreshes have changed a sentence or a verdict flag, in total - a delta across ticks is what a pin reads. */
+	int32 ComposeCountForTest() const { return Composes; }
 
 	/**
 	 * The rows, as the raw pointers Blueprint wants (and the inbox's UListView path, removed in #447, did). Built ON DEMAND from
@@ -209,6 +285,9 @@ private:
 
 	/** See GetCapacity. Read off the board's generator each refresh. */
 	int32 Capacity = 0;
+
+	/** See ComposeCountForTest. */
+	int32 Composes = 0;
 
 	/** What Accept and Decline call. Set by Refresh; weak for the usual lifetime reason. */
 	UPROPERTY(Transient) TWeakObjectPtr<UFlightBoard> Board;

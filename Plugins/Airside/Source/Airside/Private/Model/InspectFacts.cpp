@@ -281,8 +281,20 @@ namespace InspectFacts
 		return FString();
 	}
 
+	namespace
+	{
+		/** See DescribeRunwayCountForTest. Game thread only. Prefixed for the unity build. */
+		int32 GDescribeRunwayCalls = 0;
+	}
+
+	int32 DescribeRunwayCountForTest()
+	{
+		return GDescribeRunwayCalls;
+	}
+
 	bool DescribeRunway(const URoadNetwork& Network, int32 SegmentIndex, FRunwayCardFacts& Out)
 	{
+		++GDescribeRunwayCalls;
 		const FRoadSegmentId Segment = Network.SegmentIdAt(SegmentIndex);
 		const FRoadSegment* Found = Segment.IsSet() ? Network.GetSegment(Segment) : nullptr;
 		const FRoadNode* A = Found != nullptr ? Network.GetNode(Found->A) : nullptr;
