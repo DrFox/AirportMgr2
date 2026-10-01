@@ -108,7 +108,8 @@ namespace LandChoices
 	 * frame - and the open panel paid it on EVERY occupancy move. The failing searches are the permanent refusals; an
 	 * admitted type planned in ~0.1 ms on a 30-stand line. What this does not bound: rows refused NoFreeStand on a full
 	 * field are failing searches too, and are re-quoted - the planner's reachable-stand search is the cost to cut there.
-	 * ENFORCED BY: AirportMgr.UI.LandPanelRequotesOnlyWhatOccupancyCanChange, AirportMgr.UI.LandPanelCostOnAScaleField
+	 * ENFORCED BY: AirportMgr.UI.LandPanelRequotesOnlyWhatOccupancyCanChange, AirportMgr.UI.LandPanelCostOnAScaleField;
+	 * AirportMgr.UI.LandPanelBuildsOnlyOnChange for "every edit moves another field" (one step per field)
 	 */
 	AIRPORTMGR_API int32 RequoteForOccupancy(TArray<FLandChoice>& Rows, TFunctionRef<FArrivalQuote(const FAirframe&)> Quote);
 

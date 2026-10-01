@@ -556,8 +556,8 @@ public:
 	 * that order - a refused one given up and re-held, an Inbound flight with no stand (or a gone one) re-held. HoldLast
 	 * is the load's re-queued flights (DemoteRestoredMidFlight).
 	 *
-	 * IT WAS OnGraphRebuilt, named for a rebuild it no longer serves: since PR D's review (I1) an edit's rebuild keeps
-	 * the holds inside Airside, and the load is this one's only caller (#442). NOT AN EDIT'S REACTION: an edit's refusal
+	 * IT WAS OnGraphRebuilt, named for a rebuild it stopped serving when PR D's review (I1) kept an edit's holds inside
+	 * Airside; it is the load's step now (#442). NOT AN EDIT'S REACTION: an edit's refusal
 	 * reaches ReconcileStandHolds through the queue pass the edit's FNetworkChangedEvent runs.
 	 */
 	void RestoreStandHolds(UGroundTraffic& Traffic, const URoadNetwork& Network, const TArray<UFlight*>& HoldLast = TArray<UFlight*>());
@@ -865,12 +865,12 @@ private:
 	 * the flight cannot reach guarantees nothing).
 	 *
 	 * EVERY RE-HOLD IS THIS - the queue's (ReconcileStandHolds, from TickQueue), a load's (the same, from
-	 * RestoreStandHolds), a failed dispatch's (DispatchNow). Each called UStandAllocator::Reserve, the smallest admitted
-	 * unheld stand with no reach check: an unconnected small stand beat a connected bigger one, and the queue's "every
-	 * queued flight has somewhere to go" held by size only. A full plan per re-hold is the cost - paid only by a flight
-	 * that has no hold, never by one that has.
-	 * ENFORCED BY: AirportOps.Model.FlightBoard.Rehold.LoadTakesTheReachableStand, .QueueTakesTheReachableStand,
-	 * .FailedDispatchTakesTheReachableStand (each red with the smallest-fit choice back)
+	 * RestoreStandHolds), a failed dispatch's (DispatchNow).
+	 * ENFORCED BY: Check-Architecture rule 4 (both 'UStandAllocator::Hold' rows), AirportOps.Model.FlightBoard.Rehold.
+	 * LoadTakesTheReachableStand, .QueueTakesTheReachableStand, .FailedDispatchTakesTheReachableStand (each red with the
+	 * smallest-fit choice back). Each used to call UStandAllocator::Reserve, the smallest admitted unheld stand with no
+	 * reach check: an unconnected small stand beat a connected bigger one, and the queue's "every queued flight has
+	 * somewhere to go" held by size only. A full plan per re-hold is the cost - paid by a flight that has no hold.
 	 */
 	bool Rehold(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight);
 

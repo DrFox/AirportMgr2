@@ -41,6 +41,7 @@ public:
 	 * Hold THIS stand for the flight - the one an arrival plan chose (FArrivalPlan::StandNode), which UFlightBoard passes
 	 * from TryAccept and Rehold - after the checks a stand must pass to be held at all: live, a stand, admitted
 	 * (StandAdmission::Judge), and not held by another. Writes UFlight::Stand and returns true, or changes nothing.
+	 * ENFORCED BY: Check-Architecture rule 4 (both 'UStandAllocator::Hold' rows: FlightBoard.cpp alone, a plan's stand alone)
 	 */
 	bool Hold(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight, FEntityInstanceId Stand);
 
@@ -68,8 +69,8 @@ public:
 	 * Re-make every hold from UFlight::Stand after a LOAD - in Held's order, so the earlier wins a stand two flights name.
 	 *
 	 * A load's network rebuild regenerated the guideline graph, and with it went every node claim
-	 * (FTrafficOccupancy::ReleaseGuidelineClaims); the table is not saved, so UFlight::Stand is the only record left
-	 * and the claims are re-made from it. The flight's saved truth is the stand ENTITY, whose handle survives a
+	 * (FTrafficOccupancy::ReleaseGuidelineClaims), and the claims are re-made from UFlight::Stand, the board's saved
+	 * copy. The flight's saved truth is the stand ENTITY, whose handle survives a
 	 * rebuild, so the pose node can be looked up again on the new graph.
 	 *
 	 * AN EDIT DOES NOT COME HERE: Airside's own rebuild re-makes the claims it dropped (UGroundTraffic::OnGraphRebuilt,
