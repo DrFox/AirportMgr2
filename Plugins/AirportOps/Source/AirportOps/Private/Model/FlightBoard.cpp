@@ -729,6 +729,12 @@ bool UFlightBoard::DispatchNow(UGroundTraffic& Traffic, const URoadNetwork& Netw
 		// not a standing condition - retried next frame, never dropped.
 		// THROUGH Rehold (#471): the stand a plan taxis it to, not the smallest that fits by size.
 		const bool bReheld = Rehold(Traffic, Network, Flight);
+		if (!bReheld)
+		{
+			// THE HOLD WAS GIVEN BACK ABOVE, so a copy still naming it would be a stand the table no longer holds for this
+			// flight - and Reconcile's next pass would say "another holder has it" of a stand nobody took (#497 review).
+			Flight.Stand = FEntityInstanceId();
+		}
 		UE_LOG(LogAirportOps, Warning,
 			TEXT("Flight %d could not be cleared to land; still holding%s"), Flight.Id,
 			bReheld ? TEXT(", stand re-held") : TEXT(" WITH NO STAND - no admitting stand was free to re-hold"));
@@ -1341,8 +1347,24 @@ bool UFlightBoard::Rehold(UGroundTraffic& Traffic, const URoadNetwork& Network, 
 	// offer's, kept while the flight is one, and this flight's offer is long answered. Its own hold does not count against
 	// it (ExcludingHolder), which matters to nothing here - a flight re-held has none - but is the clearance gate's rule
 	// for the same plan, so the two cannot disagree about which stand this flight could reach.
+	// NOT AGAIN UNTIL SOMETHING MOVED - see FReholdMiss: a stand-less flight is offered this every queue pass.
+	FReholdMiss Now;
+	Now.Network = &Network;
+	Now.GuidelineAt = Network.GetGuidelineRevision();
+	Now.OccupancyAt = Traffic.OccupancyRevision();
+	Now.StandChurnAt = Traffic.StandHoldChangeCount();
+	if (const FReholdMiss* Missed = ReholdMisses.Find(Flight.Id); Missed != nullptr && *Missed == Now)
+	{
+		return false;
+	}
 	const FArrivalQuote Plan = PlanQuote(Traffic, Network, Flight.Airframe, Flight.RunwayPreference, Flight.HolderId());
-	return Plan.Stand.IsSet() && Allocator->Hold(Traffic, Network, Flight, Plan.Stand);
+	if (Plan.Stand.IsSet() && Allocator->Hold(Traffic, Network, Flight, Plan.Stand))
+	{
+		ReholdMisses.Remove(Flight.Id);
+		return true;
+	}
+	ReholdMisses.Add(Flight.Id, Now);
+	return false;
 }
 
 void UFlightBoard::ReconcileStandHolds(UGroundTraffic& Traffic, const URoadNetwork& Network, TConstArrayView<UFlight*> InOrder)
@@ -1362,6 +1384,7 @@ void UFlightBoard::DisarmEveryArrival(USimClock& Clock)
 	ArrivalHandles.Reset();
 	Verdicts.Reset();
 	Clearances.Reset();
+	ReholdMisses.Reset();
 }
 
 void UFlightBoard::RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& Network,
@@ -1682,6 +1705,7 @@ void UFlightBoard::MoveToHistory(UFlight& Flight, double Now)
 	History.Add(&Flight);
 	Verdicts.Remove(Flight.Id);
 	Clearances.Remove(Flight.Id);
+	ReholdMisses.Remove(Flight.Id);
 
 	if (Flight.AgentId != INDEX_NONE)
 	{

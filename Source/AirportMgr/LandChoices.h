@@ -108,6 +108,9 @@ namespace LandChoices
 	 * frame - and the open panel paid it on EVERY occupancy move. The failing searches are the permanent refusals; an
 	 * admitted type planned in ~0.1 ms on a 30-stand line. What this does not bound: rows refused NoFreeStand on a full
 	 * field are failing searches too, and are re-quoted - the planner's reachable-stand search is the cost to cut there.
+	 * AFTER THE #497 REVIEW the planner asks for an admitted stand before searching from any exit, and a whole re-quote there
+	 * measured 78-125 ms - still above a frame, so the panel keeps its rows per runway (ULandAircraftPanelWidget::
+	 * JudgedByRunway) and a camera pan back onto a judged runway quotes nothing. A first open and an edit still pay it.
 	 * ENFORCED BY: AirportMgr.UI.LandPanelRequotesOnlyWhatOccupancyCanChange, AirportMgr.UI.LandPanelCostOnAScaleField;
 	 * AirportMgr.UI.LandPanelBuildsOnlyOnChange for "every edit moves another field" (one step per field)
 	 */

@@ -2,6 +2,7 @@
 #include "AirsideTestFixtures.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
+#include "Model/DeparturePlanner.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RunwayAdmission.h"
@@ -90,6 +91,20 @@ bool FRunwayAdmissionTest::RunTest(const FString& Parameters)
 	// figure a player choosing an aeroplane can use. Exact, so a unit dropped from either figure is red.
 	TestEqual(TEXT("and the sentence says it in metres, both figures"), RunwayAdmission::Describe(Landing),
 		FString(TEXT("the runway is 800 m; this aircraft's field length is 900 m")));
+	// #497 REVIEW: NEVER A TIE. Rounded to nearest, 899.6 m of runway against 900.2 m needed printed "900 m; 900 m" - a
+	// refusal that reads as a pass. What the strip HAS rounds down and what the aircraft NEEDS rounds up.
+	FRunwayAdmission Close;
+	Close.Why = ERunwayRefusal::TooShort;
+	Close.RunwayLength = 89960.0;
+	Close.FieldLength = 90020.0;
+	TestEqual(TEXT("a near miss never prints as a tie"), RunwayAdmission::Describe(Close),
+		FString(TEXT("the runway is 899 m; this aircraft's field length is 901 m")));
+	// AND THE DEPARTURE'S SENTENCE in metres too, its requirement rounded up.
+	FDeparturePlan NoRoute;
+	NoRoute.Why = EDepartureRefusal::NoRoute;
+	NoRoute.Needed = 43010.0;
+	TestTrue(FString::Printf(TEXT("the departure says metres: '%s'"), *DeparturePlanner::Describe(NoRoute)),
+		DeparturePlanner::Describe(NoRoute).Contains(TEXT("with 431 m left to roll")));
 	TestEqual(TEXT("the same aircraft taking off needs 700 m and is admitted"),
 		RunwayAdmission::Check(*ShortNet, Short, LandsLong, false).Why, ERunwayRefusal::None);
 	FAirframe RollsLong = Piper;

@@ -768,6 +768,28 @@ private:
 		bool bValid = false;
 	};
 	TMap<int32, FClearance> Clearances;
+
+	/**
+	 * A RE-HOLD THAT FOUND NO STAND, DATED (#497 review), by flight id - so the queue pass does not plan again, every pass, for
+	 * a flight that has none until something a plan reads has moved: ClearanceFor's two stamps; UGroundTraffic::
+	 * StandHoldChangeCount, because a body rolling off a stand's pose moves no OccupancyRevision (the blind spot
+	 * AirportOps.Model.ArrivalQueue.StandFreedByChurnIsNotStale pins); and the network itself, VerdictFor's reason. Session
+	 * state, never saved: a load starts it empty, one plan away from right.
+	 * ENFORCED BY: AirportOps.Model.FlightBoard.Rehold.FailedReholdIsDated
+	 */
+	struct FReholdMiss
+	{
+		FWeakObjectPtr Network;
+		uint32 GuidelineAt = 0;
+		uint32 OccupancyAt = 0;
+		uint32 StandChurnAt = 0;
+		bool operator==(const FReholdMiss& Other) const
+		{
+			return Network == Other.Network && GuidelineAt == Other.GuidelineAt && OccupancyAt == Other.OccupancyAt
+				&& StandChurnAt == Other.StandChurnAt;
+		}
+	};
+	TMap<int32, FReholdMiss> ReholdMisses;
 	int32 TickQueueCalls = 0;
 
 	/** Set by a clearance, cleared by BeginQueueFrame - see there. bQueueFramed: a frame has ever begun. Session state, never saved. */
@@ -866,11 +888,12 @@ private:
 	 *
 	 * EVERY RE-HOLD IS THIS - the queue's (ReconcileStandHolds, from TickQueue), a load's (the same, from
 	 * RestoreStandHolds), a failed dispatch's (DispatchNow).
-	 * ENFORCED BY: Check-Architecture rule 4 (both 'UStandAllocator::Hold' rows), AirportOps.Model.FlightBoard.Rehold.
+	 * ENFORCED BY: Check-Architecture rule 84 (stand-hold-is-a-plans-stand), AirportOps.Model.FlightBoard.Rehold.
 	 * LoadTakesTheReachableStand, .QueueTakesTheReachableStand, .FailedDispatchTakesTheReachableStand (each red with the
 	 * smallest-fit choice back). Each used to call UStandAllocator::Reserve, the smallest admitted unheld stand with no
 	 * reach check: an unconnected small stand beat a connected bigger one, and the queue's "every queued flight has
-	 * somewhere to go" held by size only. A full plan per re-hold is the cost - paid by a flight that has no hold.
+	 * somewhere to go" held by size only. A full plan per re-hold is the cost - paid by a flight that has no hold, and not
+	 * again after a miss until something the plan reads has moved (FReholdMiss).
 	 */
 	bool Rehold(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight);
 

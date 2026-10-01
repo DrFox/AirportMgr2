@@ -1205,6 +1205,118 @@ bool FFlightBoardReholdDispatchTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardReholdAcceptedTest,
+	"AirportOps.Model.FlightBoard.Rehold.AcceptedWithNoStandIsRetried",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardReholdAcceptedTest::RunTest(const FString& Parameters)
+{
+	// #497 REVIEW: AN ACCEPTED FLIGHT WITH NO STAND - one whose re-hold found none - was not asked again until its ETA made it
+	// Inbound, so the next accept was free to take the stand it was owed. It is re-held on the queue pass now. NOT one whose
+	// stand is GONE: that Stand is the HeldStandLost alert's evidence, and stays until the flight is in the queue.
+	FlightBoardReholdTest::FField F;
+	if (!TestTrue(TEXT("the field: a connected stand, and a smaller unconnected one"), F.Build())) { return false; }
+	UEntityDefinition* Def = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Gone = F.Airport.Net->PlaceEntity(Def, Def->Anchors, FVector2D(-400000.0, -400000.0), 0.0,
+		1400.0, Def->PoseRole, Def->Trucks);
+	F.Airport.Net->RemoveEntity(Gone);
+	TestGraph::Rebuild(*F.Airport.Net);
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = MakeBoard();
+	auto Accepted = [&](FEntityInstanceId Stand)
+	{
+		UFlight* Flight = F.Flight();
+		Flight->SetPhaseForTest(EFlightPhase::Accepted);
+		Flight->ArrivesAt = 1.0e7;   // its ETA is nowhere near: only the reconcile can give it a stand
+		Flight->Stand = Stand;
+		Board->AddOffer(*Clock, Flight);
+		return Flight;
+	};
+	UFlight* NoStand = Accepted(FEntityInstanceId());
+	UFlight* OnGone = Accepted(Gone);
+
+	Board->TickQueue(*Traffic, *F.Airport.Net, *Clock);
+	TestEqual(TEXT("the accepted flight with no stand is held one - the one it can reach"), NoStand->Stand, F.Connected);
+	TestEqual(TEXT("the accepted flight whose stand is gone keeps it - the alert's evidence"), OnGone->Stand, Gone);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardReholdDispatchClearsTest,
+	"AirportOps.Model.FlightBoard.Rehold.FailedDispatchWithNoStandClearsTheCopy",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardReholdDispatchClearsTest::RunTest(const FString& Parameters)
+{
+	// #497 REVIEW: DispatchNow gives the hold back before it asks, and when the re-hold after a refusal found nothing, the copy
+	// still named the stand - which the next reconcile then reported as lost to "another holder" nobody was. Forced here: the
+	// dispatcher refuses, and in the same breath another holder takes the only stand.
+	FlightBoardReholdTest::FField F;
+	if (!TestTrue(TEXT("the field"), F.Build())) { return false; }
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = MakeBoard();
+	const FGuidelineNodeId Pose = F.Airport.Pose(F.Connected);
+	const FGuidelineNodeId FarPose = F.Airport.Net->GetEntity(F.Unconnected)->PoseNode;
+	Board->Dispatcher = [&](const FVector2D&, const FAirframe&)
+	{
+		Traffic->HoldStand(-77, Pose);
+		Traffic->HoldStand(-78, FarPose);
+		return false;
+	};
+	UFlight* Flight = F.Flight();
+	Flight->LeadTimeSeconds = 0.0;
+	Board->AddOffer(*Clock, Flight);
+	if (!TestTrue(TEXT("accepted onto the stand it can reach"), Board->Accept(*Traffic, *F.Airport.Net, *Clock, *Flight))) { return false; }
+
+	AddExpectedMessagePlain(TEXT("could not be cleared to land"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 0);
+	Clock->Advance(1.0);
+	Board->TickQueue(*Traffic, *F.Airport.Net, *Clock);
+	if (!TestEqual(TEXT("PRECONDITION: refused, still holding"), Flight->GetPhase(), EFlightPhase::Inbound)) { return false; }
+	TestFalse(TEXT("the copy names no stand - the table holds none for it"), Flight->Stand.IsSet());
+	TestFalse(TEXT("so nothing reads as lost"), UStandAllocator::HoldIsLost(*Flight, *Traffic, *F.Airport.Net));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardReholdDatedTest,
+	"AirportOps.Model.FlightBoard.Rehold.FailedReholdIsDated",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardReholdDatedTest::RunTest(const FString& Parameters)
+{
+	// #497 REVIEW: a stand-less holding flight is offered a re-hold every queue pass, and each was a whole plan - with nothing
+	// free, the same refusal, planned again and again. A miss is dated now (FReholdMiss): no plan until something it reads
+	// moves; a stand freed is such a thing, and the flight takes it.
+	FlightBoardReholdTest::FField F;
+	if (!TestTrue(TEXT("the field"), F.Build())) { return false; }
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	Clock->SetSpeed(ESimSpeed::Paused);   // the pass re-holds before its paused exit, and dispatches nothing after it
+	UFlightBoard* Board = MakeBoard();
+	Traffic->HoldStand(-77, F.Airport.Pose(F.Connected));
+	Traffic->HoldStand(-78, F.Airport.Net->GetEntity(F.Unconnected)->PoseNode);
+	UFlight* Flight = F.Flight();
+	Flight->SetPhaseForTest(EFlightPhase::Inbound);
+	Board->AddOffer(*Clock, Flight);
+
+	const int32 Before = Board->GetWhyNotAcceptableCallsForTest();
+	Board->TickQueue(*Traffic, *F.Airport.Net, *Clock);
+	if (!TestEqual(TEXT("PRECONDITION: every stand held, the first pass plans once and holds nothing"),
+		Board->GetWhyNotAcceptableCallsForTest() - Before, 1) || !TestFalse(TEXT("(nothing held)"), Flight->Stand.IsSet())) { return false; }
+	Board->TickQueue(*Traffic, *F.Airport.Net, *Clock);
+	Board->TickQueue(*Traffic, *F.Airport.Net, *Clock);
+	TestEqual(TEXT("two more passes with nothing moved plan nothing"), Board->GetWhyNotAcceptableCallsForTest() - Before, 1);
+
+	Traffic->ReleaseHold(-77);
+	Board->TickQueue(*Traffic, *F.Airport.Net, *Clock);
+	TestEqual(TEXT("a stand freed: planned again"), Board->GetWhyNotAcceptableCallsForTest() - Before, 2);
+	TestEqual(TEXT("and held"), Flight->Stand, F.Connected);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFlightBoardVerdictDatedByEditTest,
 	"AirportOps.Model.FlightBoard.VerdictIsDatedByTheEdit",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

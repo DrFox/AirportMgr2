@@ -108,12 +108,32 @@ void ULandAircraftPanelWidget::RefreshFor(const ARoadBuildController* C, const U
 	{
 		return;
 	}
-	// ONLY THE OCCUPANCY MOVED (#471): re-quote just the rows it can change - see LandChoices::RequoteForOccupancy for the
-	// measurement that made this a gate. Anything else in the key, or a new set of types, judges every row afresh.
-	const bool bOccupancyOnly = bJudged && Types.Num() == JudgedTypeCount && Key.SameButOccupancy(JudgedKey);
+	// A NEW NETWORK OR A NEW SET OF TYPES makes every runway's rows somebody else's: forget them all.
+	if (!bJudged || Types.Num() != JudgedTypeCount || Key.Network != JudgedKey.Network)
+	{
+		JudgedByRunway.Reset();
+	}
 	JudgedKey = Key;
 	JudgedTypeCount = Types.Num();
 	bJudged = true;
+
+	// THE ROWS FOR THE RUNWAY THE PLANNER ASKS FIRST FROM HERE (#497 review) - kept per runway, so a pan back onto one judged on
+	// this very graph and traffic quotes NOTHING. Measured on #256's scale field (AirportMgr.UI.LandPanelCostOnAScaleField):
+	// a whole re-quote is still 78-125 ms after the planner stopped searching from every exit when no stand was admitted, and
+	// a pan between two runways paid it every time the first runway changed.
+	FJudgedRows& Judged = JudgedByRunway.FindOrAdd(Key.FirstRunway);
+	if (Judged.bValid && Judged.Key == Key)
+	{
+		// JUDGED ON EXACTLY THIS - nothing to quote, and no judgement counted.
+		PaintIfChanged(Judged.Rows);
+		return;
+	}
+	// ONLY THE OCCUPANCY MOVED since this runway was judged (#471): re-quote just the rows it can change - see
+	// LandChoices::RequoteForOccupancy for the measurement that made this a gate. Anything else in the key judges every
+	// row afresh.
+	const bool bOccupancyOnly = Judged.bValid && Key.SameButOccupancy(Judged.Key);
+	Judged.Key = Key;
+	Judged.bValid = true;
 
 	++BuildCalls;
 	// THE GAME'S VERDICT PER TYPE (#432): UOpsRuntime::QuoteLanding - the plan and the airport's gate TryAccept asks - at
@@ -134,7 +154,7 @@ void ULandAircraftPanelWidget::RefreshFor(const ARoadBuildController* C, const U
 	};
 	if (bOccupancyOnly)
 	{
-		LandChoices::RequoteForOccupancy(JudgedChoices, Quote);
+		LandChoices::RequoteForOccupancy(Judged.Rows, Quote);
 	}
 	else
 	{
@@ -144,10 +164,13 @@ void ULandAircraftPanelWidget::RefreshFor(const ARoadBuildController* C, const U
 		{
 			Raw.Add(Type.Get());
 		}
-		JudgedChoices = LandChoices::Build(Raw, Quote);
+		Judged.Rows = LandChoices::Build(Raw, Quote);
 	}
-	const TArray<FLandChoice>& Choices = JudgedChoices;
+	PaintIfChanged(Judged.Rows);
+}
 
+void ULandAircraftPanelWidget::PaintIfChanged(const TArray<FLandChoice>& Choices)
+{
 	// THE GATE - see PaintedRefusals.
 	TArray<FString> Refusals;
 	Refusals.Reserve(Choices.Num());

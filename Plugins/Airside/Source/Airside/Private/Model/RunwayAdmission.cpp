@@ -154,6 +154,16 @@ namespace RunwayAdmission
 		return Longest;
 	}
 
+	double HaveMetres(double Uu)
+	{
+		return FMath::FloorToDouble(Uu / 100.0);
+	}
+
+	double NeedMetres(double Uu)
+	{
+		return FMath::CeilToDouble(Uu / 100.0);
+	}
+
 	FString Describe(const FRunwayAdmission& Admission)
 	{
 		// IN METRES (#471), 100 uu to the metre: since #470 the Land panel's rows and every toast show this sentence, and
@@ -180,12 +190,14 @@ namespace RunwayAdmission
 				RunwayApproachName(Admission.Required.ApproachNeeded));
 
 		case ERunwayRefusal::TooShort:
+			// HAVE DOWN, NEED UP - see HaveMetres: a refusal must never print as a tie.
 			return FString::Printf(TEXT("the runway is %.0f m; this aircraft's field length is %.0f m"),
-				Admission.RunwayLength / 100.0, Admission.FieldLength / 100.0);
+				HaveMetres(Admission.RunwayLength), NeedMetres(Admission.FieldLength));
 
 		case ERunwayRefusal::TooNarrow:
+			// The same rule at a tenth of a metre: the strip's limit down, the aircraft's span up.
 			return FString::Printf(TEXT("the runway admits a %.1f m wingspan; this aircraft's is %.1f m"),
-				Admission.MaxWingspan / 100.0, Admission.Wingspan / 100.0);
+				HaveMetres(Admission.MaxWingspan * 10.0) / 10.0, NeedMetres(Admission.Wingspan * 10.0) / 10.0);
 
 		case ERunwayRefusal::NoDepartureRunway:
 			return TEXT("every runway is set to arrivals only - set one to departures or mixed");

@@ -865,28 +865,6 @@ $AllowedCallers = @(
         TestExempt  = $true
         ProdReason  = 'only ARoadNetworkActor::ResolveProfile marks its fallback - see URoadProfile::bActorFallback'
     },
-    @{
-        # A HOLD IS THE PLAN'S STAND (#431, #471): UFlightBoard::TryAccept holds the stand its accept's plan taxis to, and
-        # UFlightBoard::Rehold - every re-hold (the queue, a load, a failed dispatch, a hold an edit lost) - the stand a fresh
-        # plan taxis to. Reserve, the smallest admitted stand with NO reach check, was the re-holds' door until #471 removed
-        # it; a caller of UStandAllocator::Hold anywhere but the board would choose a stand some other way and bring that
-        # back. The pattern is a Hold call with four or more arguments: FTestTwoRunways::Hold takes three.
-        Name        = 'UStandAllocator::Hold (a hold is the plan''s stand)'
-        Pattern     = '(\.|->)Hold\s*\(\s*\*?\w+\s*,\s*\*?\w+\s*,\s*\*?\w+\s*,'
-        ProdAllowed = @('Private\Model\FlightBoard.cpp')
-        TestExempt  = $true
-        ProdReason  = 'hold through UFlightBoard::TryAccept or UFlightBoard::Rehold, which hold the stand a plan taxis to (#471)'
-    },
-    @{
-        # AND INSIDE THE BOARD, ONLY A PLAN'S STAND (#471): both of the board's Hold calls pass the stand an FArrivalQuote names
-        # (TryAccept's Quote, Rehold's Plan). A Hold handed any other stand - one picked by size, by name, by the flight's own
-        # last Stand - is a re-hold that skipped the plan, which is the reach-blind shape again. Nowhere is allowed.
-        Name        = 'UStandAllocator::Hold of a stand no plan chose'
-        Pattern     = '(\.|->)Hold\s*\((?![^)]*,\s*(Quote|Plan)\.Stand\s*\))\s*\*?\w+\s*,\s*\*?\w+\s*,\s*\*?\w+\s*,'
-        ProdAllowed = @()
-        TestExempt  = $true
-        ProdReason  = 'hold the stand an arrival plan chose - FArrivalQuote::Stand, from PlanQuote or the cached verdict (#471)'
-    },
     # ONE DERIVATION (#438). The routing graph's passes - the solve, the restriction, the guideline builder, the anchor
     # links - and the Derived stamp are called from AirsideDerivation::Derive and nowhere else in production, so a pass
     # added there reaches every door at once: the presenter, TestGraph, the upgrade tool's what-if, the ops tests. Before
@@ -4750,8 +4728,9 @@ $modelLineBudget = [ordered]@{
     # 2026-10-01: a flight's lifecycle - offers, quotes, accept, the arrival queue, cancels, restore, fees (50 member
     # definitions); one class's state machine, not yet split. RAISED 1746 -> 1779 the same day by #497: UFlightBoard::Rehold
     # (every re-hold a plan's stand) and the queue pass's call into the stand-hold rule - the rule itself went to
-    # UStandAllocator::Reconcile; #442 item 4's UArrivalQueue is where the queue's share belongs.
-    'Plugins\AirportOps\Source\AirportOps\Private\Model\FlightBoard.cpp'      = 1779
+    # UStandAllocator::Reconcile; #442 item 4's UArrivalQueue is where the queue's share belongs. AND 1779 -> 1803 by the #497
+    # review: a failed re-hold dated (FReholdMiss) and a failed dispatch's re-hold clearing its copy.
+    'Plugins\AirportOps\Source\AirportOps\Private\Model\FlightBoard.cpp'      = 1803
     # 2026-10-01: one agent's follower - engine, gear, taxi, tow, pushback and reverse legs (32 member definitions); one
     # struct's motion, not yet split. RAISED 1583 -> 1610 the same day by #444: the wait's one door (WaitFor/EndWait, in place
     # of three flag mutators and a bare write) and the exhaustive-switch reasons on DescribeMotion and Advance (a phase added is
@@ -4768,7 +4747,9 @@ $modelLineBudget = [ordered]@{
     # driving are already JobBoardBid.cpp and JobBoardDrive.cpp.
     'Plugins\AirportOps\Source\AirportOps\Private\Model\JobBoard.cpp'         = 1048
     # 2026-10-01: the ArrivalPlanner namespace - runway, exit and stand choice for one arrival; one planner, not yet split.
-    'Plugins\Airside\Source\Airside\Private\Model\ArrivalPlanner.cpp'         = 943
+    # RAISED 943 -> 957 the same day by the #497 review: WhyEveryStandRefused asked before the exits' searches (the Land panel's
+    # hitch) and the wording helpers asked reach without occupancy, each with its reason.
+    'Plugins\Airside\Source\Airside\Private\Model\ArrivalPlanner.cpp'         = 957
 }
 $modelLineFiles = @()
 foreach ($pluginDir in (Get-ChildItem -LiteralPath (Join-Path $Root 'Plugins') -Directory)) {
@@ -4813,6 +4794,78 @@ foreach ($key in $modelLineBudget.Keys) {
     }
 }
 $ranRules.Add('model-line-budget')
+
+# --- 84. A STAND HOLD IS A PLAN'S STAND - JUDGED BY STATEMENT, NOT BY LINE (#471, #497 review) ---------------------------
+# UStandAllocator::Hold(Traffic, Network, Flight, Stand) is called by UFlightBoard alone - TryAccept with its quote's stand,
+# Rehold with a fresh plan's - and with nothing but an FArrivalQuote's Stand: a stand picked any other way (by size, by name,
+# by the flight's own last Stand) is a re-hold that skipped the plan, the reach-blind shape #471 removed with Reserve. These
+# were two rule-4 rows until the #497 review, and a row matches ONE LINE, so a call wrapped over two lines, or one with a dotted
+# argument (`*Rig.Net`), passed both. Now each production ops and game file's code (comments and strings stripped) is JOINED
+# into statements the way rule 58 joins them (to `;`, `{`, `}` or `:`, at most eight lines); every `.Hold(` / `->Hold(` call's
+# arguments are split at bracket depth 0; and a call of FOUR - FTestTwoRunways::Hold takes three - must be in FlightBoard.cpp
+# with a last argument of `Quote.Stand` or `Plan.Stand`. Tests are exempt: they hold a fixture's stand by hand.
+# DOES NOT SEE: a Hold reached through a member pointer, a plan's stand copied into a local of another name first (or any other
+# stand put in a local NAMED Plan), a template argument list with a comma inside it, a statement longer than eight lines.
+# Mutation-checked 2026-10-01: a call outside the board, a call wrapped over two lines with a dotted argument, and a by-size
+# stand each FAIL. The rule fails when it sees no four-argument Hold call at all - the board's two are its shape.
+$holdTrees = @($ops, (Join-Path $Root 'Source\AirportMgr'))
+$holdCallsSeen = 0
+foreach ($holdTree in $holdTrees) {
+    foreach ($file in Get-Sources $holdTree @('.cpp', '.h')) {
+        if ($file.Name -like '*Test.cpp' -or $file.Name -like '*Test.h' -or $file.FullName -match '[\\/](Testing|AirportOpsTests)[\\/]') { continue }
+        $holdLines = Get-Content -LiteralPath $file.FullName
+        $holdInBlock = $false
+        $holdStatement = ''
+        $holdStart = 0
+        $holdCount = 0
+        for ($i = 0; $i -le $holdLines.Count; $i++) {
+            $holdFlush = $false
+            if ($i -eq $holdLines.Count) {
+                $holdFlush = $holdStatement -ne ''
+            } else {
+                $trimmed = (Strip-ArchCode $holdLines[$i] ([ref]$holdInBlock)).Trim()
+                if ($trimmed -eq '') {
+                    $holdFlush = $holdStatement -ne ''
+                } else {
+                    if ($holdStatement -eq '') { $holdStart = $i }
+                    $holdStatement += ' ' + $trimmed
+                    $holdCount++
+                    $holdFlush = ($trimmed -match '[;{}:]$') -or ($holdCount -ge 8)
+                }
+            }
+            if (-not $holdFlush) { continue }
+            foreach ($call in [regex]::Matches($holdStatement, '(?:\.|->)\s*Hold\s*\(')) {
+                $holdArgs = New-Object System.Collections.Generic.List[string]
+                $depth = 0
+                $current = ''
+                for ($k = $call.Index + $call.Length; $k -lt $holdStatement.Length; $k++) {
+                    $ch = $holdStatement[$k]
+                    if ($ch -eq '(' -or $ch -eq '[' -or $ch -eq '{') { $depth++ }
+                    elseif ($ch -eq ')' -or $ch -eq ']' -or $ch -eq '}') {
+                        if ($depth -eq 0) { $holdArgs.Add($current.Trim()); break }
+                        $depth--
+                    }
+                    elseif ($ch -eq ',' -and $depth -eq 0) { $holdArgs.Add($current.Trim()); $current = ''; continue }
+                    $current += $ch
+                }
+                if ($holdArgs.Count -ne 4) { continue }
+                $holdCallsSeen++
+                if ($file.Name -ne 'FlightBoard.cpp') {
+                    $failures.Add("stand-hold-is-a-plans-stand: $($file.FullName):$($holdStart + 1) calls UStandAllocator::Hold outside UFlightBoard - hold through TryAccept or Rehold, which hold the stand a plan taxis to (#471): $($holdStatement.Trim())")
+                }
+                elseif ($holdArgs[3] -notmatch '^(Quote|Plan)\.Stand$') {
+                    $failures.Add("stand-hold-is-a-plans-stand: $($file.FullName):$($holdStart + 1) holds a stand no arrival plan chose ($($holdArgs[3])) - hold an FArrivalQuote's Stand, from PlanQuote or the cached verdict (#471): $($holdStatement.Trim())")
+                }
+            }
+            $holdStatement = ''
+            $holdCount = 0
+        }
+    }
+}
+if ($holdCallsSeen -eq 0) {
+    $failures.Add("stand-hold-is-a-plans-stand: rule 84 found no four-argument Hold call - UFlightBoard::TryAccept and Rehold make two; the rule checks nothing, update it (#471)")
+}
+$ranRules.Add('stand-hold-is-a-plans-stand')
 
 # --- 78. "A TURNAROUND BEGAN" IS ONE DERIVATION, READ BY BOTH BOARDS (#427) ------------------------------------------------
 # UFlightBoard (does a Parked flight enter Turnaround, and on which stand) and UJobBoard (does a Parked aircraft open a

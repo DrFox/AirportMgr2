@@ -135,10 +135,12 @@ int32 UStandAllocator::Reconcile(const UGroundTraffic& Traffic, const URoadNetwo
 			}
 			continue;
 		}
-		if (Each->GetPhase() == EFlightPhase::Inbound && (!Each->Stand.IsSet() || HeldStandIsGone(*Each, Network)) && Rehold(*Each))
+		// NO STAND AT ALL, either phase (#497 review: an Accepted flight whose re-hold found none waited for its ETA to be asked
+		// again); A GONE ONE only once Inbound - on an Accepted flight it is the HeldStandLost alert's evidence (see Reapply).
+		if ((!Each->Stand.IsSet() || (Each->GetPhase() == EFlightPhase::Inbound && HeldStandIsGone(*Each, Network))) && Rehold(*Each))
 		{
-			UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) holding: stand %d held again"),
-				Each->Id, *Each->Callsign, Each->Stand.Index);
+			UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) %s: stand %d held again"),
+				Each->Id, *Each->Callsign, Each->GetPhase() == EFlightPhase::Inbound ? TEXT("holding") : TEXT("accepted"), Each->Stand.Index);
 		}
 	}
 	return GivenUp;

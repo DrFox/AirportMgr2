@@ -400,11 +400,12 @@ namespace IcaoCode
 	 * whose captured span happens to read 3410, even though both are ordinary Code C
 	 * aeroplanes and the stand fits either. See Airside.Solve.StandAdmitsComparesLetters.
 	 *
-	 * ONE RULE, TWO CALLERS: ArrivalPlanner::ChooseStand (live dispatch, shortest taxi among
-	 * admitted stands) and UStandAllocator::Reserve (holding a stand for an accepted flight
-	 * before it lands) used to each compare the raw spans their own way, and had started to
+	 * ONE RULE, ONE CALLER: StandAdmission::Judge, which ArrivalPlanner::ChooseStand (live dispatch) and
+	 * UStandAllocator::Hold (holding a stand for an accepted flight) both ask. ChooseStand and the
+	 * allocator's old Reserve (removed by #471) used to each compare the raw spans their own way, and had started to
 	 * disagree - a legacy-span stand admitted a 737 in one and refused it in the other, same
 	 * aircraft, same stand. Moved here so there is exactly one place this can be decided.
+	 * ENFORCED BY: Check-Architecture rule 4 row 'IcaoCode::StandAdmits' (StandAdmission and IcaoCode alone)
 	 *
 	 * UNKNOWN ADMITS ANYTHING, EITHER SIDE: StandDesignSpanUu <= 0 (a stand nobody measured -
 	 * FEntityInstance::DesignWingspan's own "unknown") or AircraftSpanUu <= 0 (an airframe

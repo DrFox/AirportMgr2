@@ -3,7 +3,16 @@
 
 void UOpsEvents::NotifyArrivalRefused(EArrivalRefusal Why, const FString& Sentence)
 {
-	UE_LOG(LogAirportOps, Log, TEXT("Arrival refused: %s (%s)"), *UEnum::GetValueAsString(Why), *Sentence);
+	// THE SENTENCE ALREADY SAYS "Arrival refused: ..." (#497 review): prefixed again it read "Arrival refused: NotAdmitted (Arrival
+	// refused: ...)". The reason's name follows it, for a grep.
+	if (Sentence.IsEmpty())
+	{
+		UE_LOG(LogAirportOps, Log, TEXT("Arrival refused: %s"), *UEnum::GetValueAsString(Why));
+	}
+	else
+	{
+		UE_LOG(LogAirportOps, Log, TEXT("%s [%s]"), *Sentence, *UEnum::GetValueAsString(Why));
+	}
 	OnArrivalRefused.Broadcast(Why, Sentence);
 }
 

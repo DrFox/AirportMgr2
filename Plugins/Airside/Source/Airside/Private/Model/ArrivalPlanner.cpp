@@ -149,7 +149,7 @@ namespace ArrivalPlanner
 		FRoutePlan* OutRoute, bool* bOutSawHeld, double EdgeSpan, bool bLog)
 	{
 		// Every live STAND's pose node - never a depot's, even though a depot has a pose node
-		// too (FEntityInstance::IsStandCandidate, the ONE filter UStandAllocator::Reserve also
+		// too (FEntityInstance::IsStandCandidate, the ONE filter UStandAllocator::Hold also
 		// calls; PoseRole captured at placement) - in
 		// FEntityInstance ENUMERATION ORDER. The tie-break below ("first minimum wins")
 		// depends on Candidates keeping GetEntities()'s own order, exactly as the old
@@ -175,8 +175,9 @@ namespace ArrivalPlanner
 			}
 		}
 
-		// RANK STILL COMES FROM IcaoCode::StandRank - the ONE rule UStandAllocator::Reserve
-		// also calls, so a legacy stand's captured DesignWingspan and an aircraft's Wingspan
+		// RANK STILL COMES FROM IcaoCode::StandRank - the ONE rule (the allocator's old Reserve
+		// ranked by it too, until #471 made every hold a plan's stand), so a legacy stand's
+		// captured DesignWingspan and an aircraft's Wingspan
 		// are always compared by LETTER, in exactly one place, never against each other as raw
 		// doubles here or anywhere else. ADMISSION now comes from StandAdmission::Judge, the
 		// one rule that also asks pavement and service - see its own comment for why surface
@@ -223,7 +224,7 @@ namespace ArrivalPlanner
 			// "held" in the sense that word reports to the player (wait, or build another - see
 			// NoFreeStand's wording). StandAdmission::Judge is the ONE rule - surface, then
 			// size (IcaoCode::StandAdmits' "unknown admits anything" and "wider than F is never
-			// admitted"), then service - UStandAllocator::Reserve also calls.
+			// admitted"), then service - UStandAllocator::Hold also calls.
 			const FStandAdmission Admission = StandAdmission::Judge(Network, *CandidateStand[Index], Airframe);
 			if (!Admission.IsAdmitted())
 			{
@@ -309,15 +310,19 @@ namespace ArrivalPlanner
 		 * to land that way. The same exit list and the same ChooseStand the plan itself uses,
 		 * from the reversed end: a second opinion built from different rules would be a
 		 * sentence about an airport the planner does not see.
+		 *
+		 * REACH ALONE - NO OCCUPANCY (#497 review): both refusals it words are PERMANENT (only an edit clears them), so their
+		 * sentence must not move with a held stand - it did, and LandChoices::RequoteForOccupancy, which skips a permanent row
+		 * on an occupancy change, left the old wording standing. "Would reach a stand" is a fact about pavement.
+		 * ENFORCED BY: AirportMgr.UI.LandPanelGatedWordingMatchesAFreshBuild
 		 */
-		bool OtherEndServes(const URoadNetwork& Network, const FRunwayEnd& End, double SlowedBy,
-			const FAirframe& Airframe, const FTrafficOccupancy* Occupancy, int32 ExcludingHolder)
+		bool OtherEndServes(const URoadNetwork& Network, const FRunwayEnd& End, double SlowedBy, const FAirframe& Airframe)
 		{
 			const FRunwayEnd Other = End.Reversed();
 			for (const FGuidelineNodeId& Exit : Network.RunwayExitNodes(Other.Seed, Other.Threshold, Other.Direction, SlowedBy))
 			{
 				FRoutePlan Route;
-				ChooseStand(Network, Exit, Airframe, Occupancy, ExcludingHolder, &Route);
+				ChooseStand(Network, Exit, Airframe, /*Occupancy*/ nullptr, 0, &Route);
 				if (Route.IsValid())
 				{
 					return true;
@@ -336,9 +341,11 @@ namespace ArrivalPlanner
 		 * first edge this aircraft's wings do not fit: the one a pilot would meet first, not
 		 * necessarily the only one. FindToGoals has no TooWide retry of its own
 		 * (RouteSearch::Find's), which is why this second search lives here.
+		 * REACH ALONE - NO OCCUPANCY (#497 review), OtherEndServes' reason: NoRouteToStand turned TaxiwayTooNarrow only
+		 * while the stand the probe found was free, a permanent refusal changing its reason with the traffic.
+		 * ENFORCED BY: AirportMgr.UI.LandPanelGatedWordingMatchesAFreshBuild
 		 */
-		FString NarrowTaxiwayOnRoute(const URoadNetwork& Network, const FRunwayEnd& End, double SlowedBy,
-			const FAirframe& Airframe, const FTrafficOccupancy* Occupancy, int32 ExcludingHolder)
+		FString NarrowTaxiwayOnRoute(const URoadNetwork& Network, const FRunwayEnd& End, double SlowedBy, const FAirframe& Airframe)
 		{
 			if (Airframe.Wingspan <= 0.0)
 			{
@@ -347,7 +354,7 @@ namespace ArrivalPlanner
 			for (const FGuidelineNodeId& Exit : Network.RunwayExitNodes(End.Seed, End.Threshold, End.Direction, SlowedBy))
 			{
 				FRoutePlan Route;
-				ChooseStandFor(Network, Exit, Airframe, Occupancy, ExcludingHolder, &Route, nullptr,
+				ChooseStandFor(Network, Exit, Airframe, /*Occupancy*/ nullptr, 0, &Route, nullptr,
 					/*EdgeSpan=*/0.0, /*bLog=*/false);
 				if (!Route.IsValid())
 				{
@@ -548,8 +555,43 @@ namespace ArrivalPlanner
 		if (Exits.Num() == 0)
 		{
 			Out.Why = EArrivalRefusal::NoExit;
-			Out.bOtherEndWouldServe = OtherEndServes(Network, Out.End, SlowedBy, Airframe, Occupancy, ExcludingHolder);
+			Out.bOtherEndWouldServe = OtherEndServes(Network, Out.End, SlowedBy, Airframe);
 			return Out;
+		}
+
+		// 2a. NO STAND THIS AIRCRAFT MAY USE AT ALL - asked BEFORE the exits' searches (#497 review), not after them: ChooseStand
+		//     only routes to admitted stands, so with none every per-exit multi-goal search could only fail, and each failing one
+		//     explores the whole graph - measured 13-21 ms a type on #256's scale field (AirportMgr.UI.LandPanelCostOnAScaleField),
+		//     the Land panel's hitch. The answer is the same as when it was asked last: a stand refusal speaks only when nothing was
+		//     reachable, which with nothing admitted is every time.
+		//     Four refusals for four fixes: every stand too small means draw a bigger one; every
+		//     stand paved too weakly means pave one; every stand serviceable-blocked means fix
+		//     the service, not the stand; no stand reachable at all means build a taxiway; every
+		//     reachable stand held means wait, or build a stand. The three stand refusals are
+		//     asked BEFORE reach and held, and among themselves SERVICE, then SURFACE, then SIZE
+		//     (WhyEveryStandRefused's priority ACROSS stands - see its comment; Judge's own
+		//     per-stand order is the other way round), because each is a fact about the ground
+		//     that no taxiway or waiting changes - and admission used to fall through to
+		//     NoRouteToStand, sending the player to build a taxiway that already reached every
+		//     stand (final review I6). Held cannot also be true then: a stand is only counted
+		//     held once it has admitted.
+		switch (WhyEveryStandRefused(Network, Airframe, Out.StandRefusal))
+		{
+		case EStandRefusal::TooSmall:
+			Out.Why = EArrivalRefusal::NoStandBigEnough;
+			return Out;
+		case EStandRefusal::Surface:
+			Out.Why = EArrivalRefusal::NoStandPavedEnough;
+			return Out;
+		case EStandRefusal::Service:
+			Out.Why = EArrivalRefusal::NoStandServiceable;
+			return Out;
+		case EStandRefusal::InsideStrip:
+			Out.Why = EArrivalRefusal::NoStandClearOfStrip;
+			return Out;
+		case EStandRefusal::None:
+		default:
+			break;
 		}
 
 		// 3. WHICH STAND. Shortest route, the user's rule - and taken from the FIRST exit that
@@ -614,47 +656,19 @@ namespace ArrivalPlanner
 
 		if (!Out.TaxiIn.IsValid())
 		{
-			// Four refusals for four fixes: every stand too small means draw a bigger one; every
-			// stand paved too weakly means pave one; every stand serviceable-blocked means fix
-			// the service, not the stand; no stand reachable at all means build a taxiway; every
-			// reachable stand held means wait, or build a stand. The three stand refusals are
-			// asked BEFORE reach and held, and among themselves SERVICE, then SURFACE, then SIZE
-			// (WhyEveryStandRefused's priority ACROSS stands - see its comment; Judge's own
-			// per-stand order is the other way round), because each is a fact about the ground
-			// that no taxiway or waiting changes - and admission used to fall through to
-			// NoRouteToStand, sending the player to build a taxiway that already reached every
-			// stand (final review I6). Held cannot also be true then: a stand is only counted
-			// held once it has admitted.
-			switch (WhyEveryStandRefused(Network, Airframe, Out.StandRefusal))
-			{
-			case EStandRefusal::TooSmall:
-				Out.Why = EArrivalRefusal::NoStandBigEnough;
-				return Out;
-			case EStandRefusal::Surface:
-				Out.Why = EArrivalRefusal::NoStandPavedEnough;
-				return Out;
-			case EStandRefusal::Service:
-				Out.Why = EArrivalRefusal::NoStandServiceable;
-				return Out;
-			case EStandRefusal::InsideStrip:
-				Out.Why = EArrivalRefusal::NoStandClearOfStrip;
-				return Out;
-			case EStandRefusal::None:
-			default:
-				break;
-			}
+			// SOME STAND IS ADMITTED (2a above), so the choice is between the two the exits' searches tell apart.
 			Out.Why = bSawHeldStand ? EArrivalRefusal::NoFreeStand : EArrivalRefusal::NoRouteToStand;
 			if (Out.Why == EArrivalRefusal::NoRouteToStand)
 			{
 				// THE SHAPE samples/deadlock.png's field refuses in when flipped: its one connector
 				// is behind the touchdown, the strip's own dead-end node is the only "exit" left,
 				// and no stand is reachable from that.
-				Out.bOtherEndWouldServe = OtherEndServes(Network, Out.End, SlowedBy, Airframe, Occupancy, ExcludingHolder);
+				Out.bOtherEndWouldServe = OtherEndServes(Network, Out.End, SlowedBy, Airframe);
 
 				// JOINED UP BUT TOO NARROW (strip stage 6): every taxiway limits aircraft to its
 				// letter, so "no route" may only mean "not for wings this wide". The player's fix
 				// is an upgrade or a cleared strip, not a new taxiway.
-				Out.NarrowTaxiway = NarrowTaxiwayOnRoute(Network, Out.End, SlowedBy, Airframe, Occupancy, ExcludingHolder);
+				Out.NarrowTaxiway = NarrowTaxiwayOnRoute(Network, Out.End, SlowedBy, Airframe);
 				if (!Out.NarrowTaxiway.IsEmpty())
 				{
 					Out.Why = EArrivalRefusal::TaxiwayTooNarrow;
@@ -889,14 +903,14 @@ namespace ArrivalPlanner
 			return FString::Printf(
 				TEXT("Arrival refused: the runway is %.0f m and this aircraft needs %.0f m to ")
 				TEXT("stop. Draw a longer runway."),
-				Plan.End.Length / 100.0, Plan.Needed / 100.0);
+				RunwayAdmission::HaveMetres(Plan.End.Length), RunwayAdmission::NeedMetres(Plan.Needed));
 
 		case EArrivalRefusal::NoExit:
 			return FString::Printf(
 				TEXT("Arrival refused: landing %s, nothing joins the runway beyond %.0f m, so ")
 				TEXT("there is no exit this aircraft could take. Connect a taxiway further down it, ")
 				TEXT("or change the runway in use.%s"),
-				*RunwayDesignator::ToText(RunwayDesignator::Designate(Plan.End.Direction)), Plan.Needed / 100.0,
+				*RunwayDesignator::ToText(RunwayDesignator::Designate(Plan.End.Direction)), RunwayAdmission::NeedMetres(Plan.Needed),
 				*OtherEndSentence(Plan));
 
 		case EArrivalRefusal::NoRouteToStand:

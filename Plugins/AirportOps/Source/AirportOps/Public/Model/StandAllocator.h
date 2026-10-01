@@ -24,7 +24,7 @@ class URoadNetwork;
  * stand nothing could taxi to while the flight waited NoFreeStand for the one it could, and the queue spec's ruling 2
  * ("every queued flight has somewhere to go") held by size only. It went with its last caller. Smallest-fit is still
  * the rule - ArrivalPlanner::ChooseStand's, which ranks the reachable stands by letter.
- * ENFORCED BY: Check-Architecture rule 4 ('UStandAllocator::Hold (a hold is the plan's stand)' - FlightBoard.cpp only)
+ * ENFORCED BY: Check-Architecture rule 84 (stand-hold-is-a-plans-stand: FlightBoard.cpp only, an FArrivalQuote's stand only)
  *
  * THE TABLE IS THE RECORD (#442): a hold is a claim in FTrafficOccupancy under the flight's negative holder id, and
  * UFlight::Stand is the board's saved copy of it. The two are re-made apart - Airside's rebuild re-makes the claims on
@@ -41,7 +41,7 @@ public:
 	 * Hold THIS stand for the flight - the one an arrival plan chose (FArrivalPlan::StandNode), which UFlightBoard passes
 	 * from TryAccept and Rehold - after the checks a stand must pass to be held at all: live, a stand, admitted
 	 * (StandAdmission::Judge), and not held by another. Writes UFlight::Stand and returns true, or changes nothing.
-	 * ENFORCED BY: Check-Architecture rule 4 (both 'UStandAllocator::Hold' rows: FlightBoard.cpp alone, a plan's stand alone)
+	 * ENFORCED BY: Check-Architecture rule 84 (stand-hold-is-a-plans-stand: FlightBoard.cpp alone, a plan's stand alone)
 	 */
 	bool Hold(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight, FEntityInstanceId Stand);
 
@@ -87,9 +87,10 @@ public:
 	 *  - A flight whose copy names a live stand the table does not hold for it (HoldIsLost - its hold was refused when it
 	 *    was re-made, by Airside's rebuild on an edit or by Reapply on a load) GIVES IT UP and is re-held at once, whatever
 	 *    its phase: the accept promised it a stand, and the next accept must not take the last one first.
-	 *  - An Inbound flight with no stand, or a gone one, is re-held (the queue's rule since review I1): it is next to land.
-	 * A gone stand on an Accepted flight is LEFT - the HeldStandLost alert's evidence (see Reapply) - until its ETA puts it
-	 * in the queue. Rehold is the BOARD's (UFlightBoard::Rehold): the stand a fresh plan taxis the flight to - this class
+	 *  - A flight with no stand is re-held - Inbound (the queue's rule since review I1: it is next to land) and Accepted
+	 *    alike (#497 review: one whose re-hold found nothing was not asked again until its ETA).
+	 *  - An Inbound flight with a GONE stand is re-held too. On an Accepted flight a gone stand is LEFT - the HeldStandLost
+	 *    alert's evidence (see Reapply) - until its ETA puts it in the queue. Rehold is the BOARD's (UFlightBoard::Rehold): the stand a fresh plan taxis the flight to - this class
 	 * holds, a plan chooses. Returns how many flights gave a lost stand up, so the board can bump the revision its rows read.
 	 *
 	 * PATTERN: RECONCILIATION AGAINST A SYSTEM OF RECORD - the board observes the table, rather than Airside announcing which

@@ -132,6 +132,16 @@ namespace RunwayAdmission
 	/** The widest wingspan a strip of TotalWidth admits by ICAO code, uu. */
 	AIRSIDE_API double MaxWingspanForWidth(double TotalWidth);
 
-	/** The sentence for a refusal: "the surface is grass; this aircraft needs tarmac". Empty when admitted. */
+	/** The sentence for a refusal: "the surface is grass; this aircraft needs tarmac". Empty when admitted. In metres. */
 	AIRSIDE_API FString Describe(const FRunwayAdmission& Admission);
+
+	/**
+	 * A length the airport HAS, uu, as whole metres for a refusal's sentence - rounded DOWN; and one the aircraft NEEDS -
+	 * rounded UP (#497 review). A refusal says have < need, and rounding both to nearest printed "900 m; 900 m" for 899.6
+	 * against 900.2 - a refusal that reads as a pass. Floor and ceiling keep the printed pair in the order of the real one.
+	 * The arrival and departure sentences use these, so every player-facing length rounds the same way.
+	 * ENFORCED BY: Airside.Model.RunwayAdmission ("never a tie")
+	 */
+	AIRSIDE_API double HaveMetres(double Uu);
+	AIRSIDE_API double NeedMetres(double Uu);
 }

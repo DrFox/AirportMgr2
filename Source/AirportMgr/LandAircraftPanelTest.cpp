@@ -23,6 +23,9 @@
 #include "Model/GroundTraffic.h"
 #include "Model/LandingRun.h"
 #include "Model/RoadTraffic.h"
+#include "Entities/EntityDefinition.h"
+#include "Model/RoadEntity.h"
+#include "Solve/IcaoCode.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -710,6 +713,131 @@ bool FLandPanelRequotesOnlyWhatOccupancyCanChangeTest::RunTest(const FString& Pa
 	// CONTROL: ANYTHING ELSE IN THE KEY STILL JUDGES EVERY ROW - here a new network.
 	Actor->ClearNetwork();
 	TestEqual(TEXT("a new network: every row quoted again"), QuotesFor([]() {}), Rows);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandPanelGatedWordingTest,
+	"AirportMgr.UI.LandPanelGatedWordingMatchesAFreshBuild",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandPanelGatedWordingTest::RunTest(const FString& Parameters)
+{
+	// #497 REVIEW: RequoteForOccupancy skips a PERMANENTLY refused row on an occupancy change, which is exact only if nothing
+	// about that row moves with occupancy. Its WORDING did: NoRouteToStand became TaxiwayTooNarrow only while the stand the
+	// span-blind probe found was free, so a row judged while it was held kept "no route" after it freed. The field: a Code C
+	// 737, a C stand, and the one taxiway to it restricted to Code B by a service road at its edge (the Airside
+	// TaxiwayTooNarrow test's field). Judged with the stand HELD, re-quoted for the occupancy when it frees, then compared
+	// with a fresh Build.
+	UAircraftType* Type = NewObject<UAircraftType>(GetTransientPackage());
+	UAircraftType::Build737(Type);
+	const FAirframe Airframe = Type->Airframe();
+	if (!TestTrue(TEXT("PRECONDITION: the 737 is a Code C span"), Airframe.Wingspan > IcaoCode::MaxWingspanForLetter(EIcaoCode::B)
+		&& Airframe.Wingspan <= IcaoCode::MaxWingspanForLetter(EIcaoCode::C))) { return false; }
+	const double Needed = FMath::Max3(FLandingRun::RequiredLandingDistance(Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach)
+		* FLandingRun::LandingMargin, Airframe.Requirements.LandingFieldLength, Airframe.Requirements.TakeoffFieldLength);
+	const double RunwayLength = Needed * 1.5;
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
+	URoadProfile* Road = URoadProfile::MakeServiceRoadTransient();
+	const FVector2D ThresholdAt(0.0, 0.0);
+	const FVector2D ExitAt(RunwayLength * 0.8, 0.0);
+	const FRoadNodeId Exit = Net->AddNode(ExitAt);
+	Net->AddStraightSegment(Net->AddNode(ThresholdAt), Exit, TestProfiles::Runway());
+	Net->AddStraightSegment(Exit, Net->AddNode(FVector2D(RunwayLength, 0.0)), TestProfiles::Runway());
+	Net->AddStraightSegment(Exit, Net->AddNode(ExitAt + FVector2D(0.0, -20000.0)), Taxiway);
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Stand = Net->PlaceEntity(StandDef, StandDef->Anchors, ExitAt + FVector2D(9000.0, -10000.0), 0.0,
+		IcaoCode::DesignSpanForLetter(EIcaoCode::C), StandDef->PoseRole, StandDef->Trucks);
+	const double ReachB = Taxiway->GetMaxHalfWidth() + IcaoCode::TaxiwayStripFor(EIcaoCode::B, Taxiway->GetTotalWidth());
+	const double ReachC = Taxiway->GetMaxHalfWidth() + IcaoCode::TaxiwayStripFor(EIcaoCode::C, Taxiway->GetTotalWidth());
+	const double RoadX = ExitAt.X - (0.5 * (ReachB + ReachC) + Road->GetMaxHalfWidth());
+	Net->AddStraightSegment(Net->AddNode(FVector2D(RoadX, -8000.0)), Net->AddNode(FVector2D(RoadX, -12000.0)), Road);
+	TestGraph::Rebuild(*Net);
+	const FEntityInstance* StandAt = Net->GetEntity(Stand);
+	if (!TestTrue(TEXT("the stand has a pose"), StandAt != nullptr && StandAt->PoseNode.IsSet())) { return false; }
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	// THE PANEL'S QUOTE WITHOUT THE RUNTIME: the board's PlanQuote, a busy runway queued.
+	const auto Quote = [&](const FAirframe& Frame)
+	{
+		const FArrivalPlan Plan = ArrivalPlanner::Plan(*Net, ThresholdAt, Frame, &Traffic->GetOccupancy(), ERunwayBusy::Queue);
+		FArrivalQuote Out;
+		Out.Why = Plan.Why;
+		Out.Sentence = Plan.IsValid() ? FString() : ArrivalPlanner::DescribeRefusal(Plan);
+		return Out;
+	};
+	const TArray<UAircraftType*> Types{ Type };
+	const TArray<FLandChoice> Free = LandChoices::Build(Types, Quote);
+	if (!TestTrue(FString::Printf(TEXT("PRECONDITION: the stand free, the row is TaxiwayTooNarrow ('%s')"), Free.Num() == 1 ? *Free[0].Refusal : TEXT("")),
+		Free.Num() == 1 && Free[0].Why == EArrivalRefusal::TaxiwayTooNarrow)) { return false; }
+
+	Traffic->HoldStand(-5, StandAt->PoseNode);
+	TArray<FLandChoice> Gated = LandChoices::Build(Types, Quote);
+	Traffic->ReleaseHold(-5);
+	TestEqual(TEXT("a permanent refusal is not re-quoted for an occupancy change"), LandChoices::RequoteForOccupancy(Gated, Quote), 0);
+	const TArray<FLandChoice> Fresh = LandChoices::Build(Types, Quote);
+	TestEqual(TEXT("the gated row's reason is a fresh build's"), Gated[0].Why, Fresh[0].Why);
+	TestEqual(TEXT("and so is its sentence - it did not move with the held stand"), Gated[0].Refusal, Fresh[0].Refusal);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandPanelPanBackTest,
+	"AirportMgr.UI.LandPanelPanBackQuotesNothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandPanelPanBackTest::RunTest(const FString& Parameters)
+{
+	// #497 REVIEW: A WHOLE RE-QUOTE IS STILL 78-125 ms ON A BUILT-OUT FIELD, and FLandChoicesKey's FirstRunway moves with the
+	// camera - a pan between two runways paid it on every crossing. The rows are kept per runway now: back onto a runway judged
+	// on this very graph and traffic quotes nothing, and one judged before a stand was held re-quotes only the rows occupancy
+	// can change.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-300000.0, -300000.0));
+	const FTestTwoRunways Field = FTestTwoRunways::Build(UAirsideSettings::ResolveDefaultAirframe(), Actor->Network);
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(Actor);
+	ULandAircraftPanelWidget* Panel = CreateWidget<ULandAircraftPanelWidget>(TestWorld.World, ULandAircraftPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+	UOpsRuntime* Runtime = LandPanelRuntime(*Actor);
+	UGroundTraffic* Traffic = Actor->GetGroundTraffic();
+	if (!TestNotNull(TEXT("traffic"), Traffic)) { return false; }
+
+	auto QuotesFor = [&](TFunctionRef<void()> Change)
+	{
+		const int32 Before = Panel->RowQuoteCountForTest();
+		Change();
+		Panel->RefreshFor(C, Runtime);
+		return Panel->RowQuoteCountForTest() - Before;
+	};
+	auto FocusAt = [C](const FVector2D& At)
+	{
+		FAlertFocus Focus;
+		Focus.Kind = EAlertFocusKind::Point;
+		Focus.Point = At;
+		C->SelectAndFocus(Focus);
+	};
+	const FVector2D OnA(1000.0, 0.0);
+	const FVector2D OnB(1000.0, -40000.0);
+	const int32 Rows = QuotesFor([&]() { FocusAt(OnA); });
+	if (!TestTrue(TEXT("opened on runway A: every row quoted"), Rows > 0 && Rows == Panel->RowWidgetCountForTest())) { return false; }
+	TestEqual(TEXT("onto runway B: every row quoted for it"), QuotesFor([&]() { FocusAt(OnB); }), Rows);
+	TestEqual(TEXT("BACK ONTO A, nothing having moved: nothing quoted"), QuotesFor([&]() { FocusAt(OnA); }), 0);
+	TestEqual(TEXT("and back onto B: nothing"), QuotesFor([&]() { FocusAt(OnB); }), 0);
+
+	const int32 Held = QuotesFor([&]() { Traffic->HoldStand(-97, Field.Pose(0)); });
+	TestTrue(FString::Printf(TEXT("a stand held while on B: only the rows it can change (%d of %d)"), Held, Rows), Held > 0 && Held < Rows);
+	const int32 BackToA = QuotesFor([&]() { FocusAt(OnA); });
+	TestTrue(FString::Printf(TEXT("onto A, judged before the hold: its occupancy rows only, not every row (%d of %d)"), BackToA, Rows),
+		BackToA > 0 && BackToA < Rows);
+
+	// CONTROL: AN EDIT judges every row - here a new network.
+	TestEqual(TEXT("a new network: every row quoted again"), QuotesFor([&]() { Actor->ClearNetwork(); }), Rows);
 	return true;
 }
 

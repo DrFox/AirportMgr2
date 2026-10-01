@@ -168,11 +168,24 @@ private:
 	int32 RowQuotes = 0;
 
 	/**
-	 * The rows as last JUDGED, with each one's reason - what an occupancy-only change re-quotes in place (#471: see
-	 * LandChoices::RequoteForOccupancy, which measured why). PaintedRefusals is the painted output; this is the input to
-	 * the next judgement. The raw Type pointers are held alive by Types above.
+	 * The rows as last JUDGED, with each one's reason, PER RUNWAY THE PLANNER ASKS FIRST (FLandChoicesKey::FirstRunway) and
+	 * dated by the whole key they were judged at (#497 review): a pan back onto a runway judged on this very graph and
+	 * traffic reuses its rows and quotes nothing, and one whose only change since is the occupancy re-quotes in place (#471:
+	 * see LandChoices::RequoteForOccupancy, which measured why). Forgotten on a new network or a new set of types; at most
+	 * one entry per runway. PaintedRefusals is the painted output; this is the input to the next judgement. The raw Type
+	 * pointers are held alive by Types above.
+	 * ENFORCED BY: AirportMgr.UI.LandPanelPanBackQuotesNothing
 	 */
-	TArray<FLandChoice> JudgedChoices;
+	struct FJudgedRows
+	{
+		FLandChoicesKey Key;
+		TArray<FLandChoice> Rows;
+		bool bValid = false;
+	};
+	TMap<int32, FJudgedRows> JudgedByRunway;
+
+	/** The paint half of RefreshFor: rebuild the row widgets only when what they show differs - see PaintedRefusals. */
+	void PaintIfChanged(const TArray<FLandChoice>& Choices);
 
 	void PaintRows(const TArray<FLandChoice>& Choices);
 
