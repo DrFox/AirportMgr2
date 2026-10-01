@@ -113,7 +113,7 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 			// AN ACCEPTED FLIGHT TOO (#445): one accepted when the airport could take it, whose airport was then changed so it never
 			// can - the exit deleted, the runway set to departures only - used to be alerted only once its ETA had brought it into
 			// the queue, minutes of game time after the player did it. The same judgement, the same IsPermanentRefusal: the queue
-			// pass judges an accepted flight when the network changes (UFlightBoard::JudgeUnarrived), so this reads a cache either way.
+			// pass judges an accepted flight when the network changes (FArrivalQueue::JudgeUnarrived), so this reads a cache either way.
 			// ENFORCED BY: AirportOps.Model.Alerts.AcceptedFlightThatCanNeverLandIsAlertedBeforeItsEta
 			const EArrivalRefusal Unlandable = Sources.Network != nullptr ? Sources.Flights->UnlandableWhy(*Flight, *Sources.Network)
 				: EArrivalRefusal::None;

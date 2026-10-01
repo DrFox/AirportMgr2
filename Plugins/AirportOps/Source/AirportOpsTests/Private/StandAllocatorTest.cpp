@@ -47,7 +47,7 @@ namespace
 }
 
 // NO "TakesTheSmallestThatFits" ANY MORE (#471): it pinned UStandAllocator::Reserve's own smallest-fit walk, which went
-// with its last caller - every re-hold is a plan's stand now (UFlightBoard::Rehold). Smallest-fit is ArrivalPlanner::
+// with its last caller - every re-hold is a plan's stand now (FArrivalQueue::Rehold). Smallest-fit is ArrivalPlanner::
 // ChooseStand's rule, pinned there (Airside.Model.StandChoice.SmallestLetterBeatsNearer, .FallsThroughToBigger). The
 // tests below were Reserve's too, and pin what Hold asks of the ONE stand it is handed - the checks Reserve asked of
 // every stand it walked, which Hold kept.

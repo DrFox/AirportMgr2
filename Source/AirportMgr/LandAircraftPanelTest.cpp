@@ -21,6 +21,7 @@
 #include "Model/Airport.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/GroundTraffic.h"
+#include "Model/TrafficOccupancy.h"
 #include "Model/LandingRun.h"
 #include "Model/RoadTraffic.h"
 #include "Entities/EntityDefinition.h"
@@ -790,7 +791,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FLandPanelPanBackTest::RunTest(const FString& Parameters)
 {
-	// #497 REVIEW: A WHOLE RE-QUOTE IS STILL 78-125 ms ON A BUILT-OUT FIELD, and FLandChoicesKey's FirstRunway moves with the
+	// #497 REVIEW: A WHOLE RE-QUOTE IS STILL 60-114 ms ON A BUILT-OUT FIELD (2026-10-01; LandChoices::RequoteForOccupancy's figure),
+	// and FLandChoicesKey's FirstRunway moves with the
 	// camera - a pan between two runways paid it on every crossing. The rows are kept per runway now: back onto a runway judged
 	// on this very graph and traffic quotes nothing, and one judged before a stand was held re-quotes only the rows occupancy
 	// can change.
@@ -838,6 +840,120 @@ bool FLandPanelPanBackTest::RunTest(const FString& Parameters)
 
 	// CONTROL: AN EDIT judges every row - here a new network.
 	TestEqual(TEXT("a new network: every row quoted again"), QuotesFor([&]() { Actor->ClearNetwork(); }), Rows);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandPanelOtherEndWordingTest,
+	"AirportMgr.UI.LandPanelOtherEndWordingIgnoresAHeldStand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandPanelOtherEndWordingTest::RunTest(const FString& Parameters)
+{
+	// #497 RE-REVIEW: ArrivalPlanner's OtherEndServes words a permanent NoExit/NoRouteToStand with "Landing N would reach a stand",
+	// and asks it of REACH ALONE so the sentence cannot move with the traffic - RequoteForOccupancy skips a permanent row on an
+	// occupancy change, and a sentence that did move would stand stale. Its ENFORCED BY named LandPanelGatedWordingMatchesAFreshBuild,
+	// whose field never asks the other end. This one does: Airside.Model.RunwayInUse.NoExitAheadNamesTheFix's field - the far end
+	// pulled in to 1.6 N, so landing 18 the one exit is behind the touchdown and only landing 36 reaches the stand - with that stand,
+	// the only one and so the only one the other end reaches, HELD while the row is judged. Released, the row is not re-quoted, and
+	// its sentence must still be a fresh Build's, the flip advice included. RED with OtherEndServes asked with the plan's occupancy.
+	UAircraftType* Type = NewObject<UAircraftType>(GetTransientPackage());
+	UAircraftType::Build737(Type);
+	const FAirframe Airframe = Type->Airframe();
+	const FTestAirport A = FTestAirport::Build(Airframe);
+	URoadNetwork& Net = *A.Net;
+	FRunwayEnd Drawn;
+	if (!TestTrue(TEXT("PRECONDITION: the field has a runway end"), Net.NearestRunwayThreshold(A.Threshold, Drawn))) { return false; }
+	const double N = Drawn.Length / 3.0;
+	for (int32 Index = 0; Index < Net.GetNodes().Num(); ++Index)
+	{
+		const FRoadNodeId Id = Net.NodeIdAt(Index);
+		if (Id.IsSet() && Net.GetNodes()[Index].Position.Equals(Drawn.FarEnd(), 1.0))
+		{
+			Net.SetNodePosition(Id, FVector2D(1.6 * N, 0.0));
+		}
+	}
+	TestGraph::Rebuild(Net);
+	FRunwayFacts Facts = Net.RunwayFactsFor(A.ThresholdSegment);
+	Facts.InUse = 18;
+	Net.SetRunwayFacts(A.ThresholdSegment, Facts);
+	const FEntityInstance* StandAt = Net.GetEntity(A.Stands[0]);
+	if (!TestTrue(TEXT("the stand has a pose"), StandAt != nullptr && StandAt->PoseNode.IsSet())) { return false; }
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	const FVector2D Focus = A.Threshold - FVector2D(1000.0, 0.0);
+	// THE PANEL'S QUOTE WITHOUT THE RUNTIME: the board's PlanQuote, a busy runway queued - LandPanelGatedWordingMatchesAFreshBuild's.
+	const auto Quote = [&](const FAirframe& Frame)
+	{
+		const FArrivalPlan Plan = ArrivalPlanner::Plan(Net, Focus, Frame, &Traffic->GetOccupancy(), ERunwayBusy::Queue);
+		FArrivalQuote Out;
+		Out.Why = Plan.Why;
+		Out.Sentence = Plan.IsValid() ? FString() : ArrivalPlanner::DescribeRefusal(Plan);
+		return Out;
+	};
+	const TArray<UAircraftType*> Types{ Type };
+	const TArray<FLandChoice> Free = LandChoices::Build(Types, Quote);
+	if (!TestTrue(FString::Printf(TEXT("PRECONDITION: the stand free, the row is refused permanently and offers the flip ('%s')"),
+		Free.Num() == 1 ? *Free[0].Refusal : TEXT("")), Free.Num() == 1 && ArrivalPlanner::IsPermanentRefusal(Free[0].Why)
+		&& Free[0].Refusal.Contains(TEXT("would reach a stand")))) { return false; }
+
+	Traffic->HoldStand(-5, StandAt->PoseNode);
+	TArray<FLandChoice> Gated = LandChoices::Build(Types, Quote);
+	Traffic->ReleaseHold(-5);
+	TestEqual(TEXT("a permanent refusal is not re-quoted for an occupancy change"), LandChoices::RequoteForOccupancy(Gated, Quote), 0);
+	const TArray<FLandChoice> Fresh = LandChoices::Build(Types, Quote);
+	TestEqual(TEXT("the gated row's reason is a fresh build's"), Gated[0].Why, Fresh[0].Why);
+	TestEqual(TEXT("and so is its sentence - the other end's advice did not go with the held stand"), Gated[0].Refusal, Fresh[0].Refusal);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandPanelBodyTakesTheStandTest,
+	"AirportMgr.UI.LandPanelRequotesWhenABodyTakesTheStand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandPanelBodyTakesTheStandTest::RunTest(const FString& Parameters)
+{
+	// #497 RE-REVIEW: FLandChoicesKey was dated on OccupancyRevision alone, and a body the per-tick claim pass rolls onto a stand's
+	// pose moves no revision - only UGroundTraffic::StandHoldChangeCount. The rows stayed admitted while an aircraft sat on every
+	// stand, and the click each offered was refused. LandPanelRequotesOnlyWhatOccupancyCanChange's field and widget, but the stands
+	// taken by BODIES (claims straight into the table, no hold, no revision) rather than by holds: the panel must re-quote the rows
+	// occupancy can change, and grey every admitted one.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-300000.0, -300000.0));
+	const FTestTwoRunways Field = FTestTwoRunways::Build(UAirsideSettings::ResolveDefaultAirframe(), Actor->Network);
+	if (!TestEqual(TEXT("two stands"), Field.Stands.Num(), 2)) { return false; }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(Actor);
+	ULandAircraftPanelWidget* Panel = CreateWidget<ULandAircraftPanelWidget>(TestWorld.World, ULandAircraftPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+	UOpsRuntime* Runtime = LandPanelRuntime(*Actor);
+	UGroundTraffic* Traffic = Actor->GetGroundTraffic();
+	if (!TestNotNull(TEXT("traffic"), Traffic)) { return false; }
+
+	Panel->RefreshFor(C, Runtime);
+	const int32 Rows = Panel->RowWidgetCountForTest();
+	TArray<int32> Admitted;
+	for (int32 Row = 0; Row < Rows; ++Row)
+	{
+		if (Panel->IsRowEnabledForTest(Row)) { Admitted.Add(Row); }
+	}
+	if (!TestTrue(TEXT("PRECONDITION: some rows admitted"), Admitted.Num() > 0)) { return false; }
+
+	const uint32 Revision = Traffic->OccupancyRevision();
+	const int32 Before = Panel->RowQuoteCountForTest();
+	Traffic->OccupancyForTest().Assert(FTrafficClaim::Make(77, FTrafficResource::OfNode(Field.Pose(0)), /*bOccupied*/ true, 2));
+	Traffic->OccupancyForTest().Assert(FTrafficClaim::Make(78, FTrafficResource::OfNode(Field.Pose(1)), /*bOccupied*/ true, 2));
+	Traffic->Advance(0.05, Actor->Network);
+	if (!TestEqual(TEXT("PRECONDITION: bodies on both stands moved no occupancy revision - the blind spot"), Traffic->OccupancyRevision(), Revision)) { return false; }
+	Panel->RefreshFor(C, Runtime);
+	TestTrue(TEXT("the panel re-quoted on the bodies"), Panel->RowQuoteCountForTest() > Before);
+	bool bAllGreyed = true;
+	for (const int32 Row : Admitted) { bAllGreyed &= !Panel->IsRowEnabledForTest(Row); }
+	TestTrue(TEXT("and every admitted row greys - a body on every stand, nowhere to park"), bAllGreyed);
 	return true;
 }
 

@@ -1,4 +1,7 @@
 #include "CoreMinimal.h"
+#include "AirportOpsLog.h"
+#include "HAL/PlatformTime.h"
+#include "Model/OpsDesignDefaults.h"
 #include "Entities/EntityDefinition.h"
 #include "Math/RandomStream.h"
 #include "Misc/AutomationTest.h"
@@ -1377,6 +1380,96 @@ bool FFlightBoardVerdictNamesNetworkTest::RunTest(const FString& Parameters)
 	const FOfferVerdict& OnSecond = Board->VerdictFor(*Traffic, *Second, *Flight);
 	TestEqual(TEXT("another network with equal numbers is planned afresh"), Board->GetWhyNotAcceptableCallsForTest(), PlansBefore + 1);
 	TestTrue(TEXT("and the verdict now names it"), OnSecond.Network.Get() == Second);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardVerdictDatedByChurnTest,
+	"AirportOps.Model.FlightBoard.VerdictIsDatedByStandChurn",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardVerdictDatedByChurnTest::RunTest(const FString& Parameters)
+{
+	// #506 REVIEW: THE OFFER'S VERDICT WAS DATED BY OccupancyRevision, and a body the per-tick claim pass rolls onto or off a stand's
+	// pose moves only UGroundTraffic::StandHoldChangeCount - which the queue's clearance and the Land panel read since the #497
+	// re-review, so the inbox disagreed with both. A stale yes made every accept click a refused hold, a Warning a click, until
+	// something unrelated moved; a stale NoFreeStand greyed the row, and an offer lapsing under it was NeverAcceptable, not Ignored -
+	// which the airline scores differently. ClearanceIsDatedByStandChurn's shape: a body onto the only stand, then off it.
+	FAirframe Airframe;
+	Airframe.Wingspan = 3400.0;
+	const FTestAirport Field = FTestAirport::Build(Airframe);
+	URoadNetwork* Net = Field.Net;
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = MakeBoard();
+	UFlight* Flight = BoardFlightNeeding(3400.0);
+	Flight->RunwayPreference = Field.Threshold;
+	Flight->LeadTimeSeconds = 100.0;
+	Board->AddOffer(*Clock, Flight);
+	if (!TestEqual(TEXT("CONTROL: with the stand empty the offer can be accepted"), Board->VerdictFor(*Traffic, *Net, *Flight).Why, EArrivalRefusal::None)) { return false; }
+
+	const uint32 Revision = Traffic->OccupancyRevision();
+	const uint32 Churn = Traffic->StandHoldChangeCount();
+	Traffic->OccupancyForTest().Assert(FTrafficClaim::Make(77, FTrafficResource::OfNode(Field.Pose(Field.Stands[0])), /*bOccupied*/ true, 2));
+	Traffic->Advance(0.05, Net);
+	if (!TestEqual(TEXT("PRECONDITION: a body rolled onto the only stand with no occupancy revision - the blind spot"), Traffic->OccupancyRevision(), Revision)) { return false; }
+	if (!TestTrue(TEXT("PRECONDITION: but the stand churn counted it"), Traffic->StandHoldChangeCount() != Churn)) { return false; }
+	TestEqual(TEXT("the verdict is judged again on the churn: NoFreeStand, not the stale yes"), Board->VerdictFor(*Traffic, *Net, *Flight).Why, EArrivalRefusal::NoFreeStand);
+	TestFalse(TEXT("so an accept is refused by the quote - no hold tried, no Warning"), Board->Accept(*Traffic, *Net, *Clock, *Flight));
+	TestFalse(TEXT("and the flight names no stand"), Flight->Stand.IsSet());
+
+	Traffic->OccupancyForTest().ReleaseAll(77);
+	Traffic->Advance(0.05, Net);
+	if (!TestEqual(TEXT("PRECONDITION: the body rolled off with no occupancy revision either"), Traffic->OccupancyRevision(), Revision)) { return false; }
+	TestEqual(TEXT("and judged again when it leaves: the yes is back - a stale NoFreeStand would lapse it NeverAcceptable"),
+		Board->VerdictFor(*Traffic, *Net, *Flight).Why, EArrivalRefusal::None);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardStandChurnCostTest,
+	"AirportOps.Model.FlightBoard.StandChurnReplansEachOfferOnce",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardStandChurnCostTest::RunTest(const FString& Parameters)
+{
+	// #506 REVIEW'S COST: dating the verdict by the stand churn means a change of the held-stand set re-plans EVERY pending offer -
+	// once each, and nothing on a quiet frame. Counted (the plan counter) and timed, with a full inbox (OpsDesignDefaults::
+	// MaxPendingOffers) on the Land panel cost test's 30-stand line, where each offer's plan is a real route search to a free stand.
+	// The figure is logged ("StandChurnCost:") for FOfferVerdict::StandChurnAt's comment; only the counts are asserted.
+	FAirframe Airframe;
+	Airframe.Wingspan = 3400.0;
+	FTestAirportOptions ThirtyStands;
+	ThirtyStands.StandCount = 30;
+	const FTestAirport Field = FTestAirport::Build(Airframe, ThirtyStands);
+	URoadNetwork* Net = Field.Net;
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = MakeBoard();
+	const int32 Pending = OpsDesignDefaults::MaxPendingOffers;
+	TArray<UFlight*> Offers;
+	for (int32 Index = 0; Index < Pending; ++Index)
+	{
+		UFlight* Flight = BoardFlightNeeding(3400.0);
+		Flight->RunwayPreference = Field.Threshold;
+		Board->AddOffer(*Clock, Flight);
+		Offers.Add(Flight);
+	}
+	for (UFlight* Flight : Offers) { Board->VerdictFor(*Traffic, *Net, *Flight); }
+	const int32 Primed = Board->GetWhyNotAcceptableCallsForTest();
+	for (UFlight* Flight : Offers) { Board->VerdictFor(*Traffic, *Net, *Flight); }
+	TestEqual(TEXT("a quiet re-ask plans nothing - the churn stamp costs no plan on its own"), Board->GetWhyNotAcceptableCallsForTest(), Primed);
+
+	Traffic->OccupancyForTest().Assert(FTrafficClaim::Make(77, FTrafficResource::OfNode(Field.Pose(Field.Stands[0])), /*bOccupied*/ true, 2));
+	Traffic->Advance(0.05, Net);
+	const double Start = FPlatformTime::Seconds();
+	for (UFlight* Flight : Offers) { Board->VerdictFor(*Traffic, *Net, *Flight); }
+	const double Ms = (FPlatformTime::Seconds() - Start) * 1000.0;
+	TestEqual(TEXT("a stand-set change re-plans every pending offer, once"), Board->GetWhyNotAcceptableCallsForTest(), Primed + Pending);
+	for (UFlight* Flight : Offers) { Board->VerdictFor(*Traffic, *Net, *Flight); }
+	TestEqual(TEXT("and not again until the next change"), Board->GetWhyNotAcceptableCallsForTest(), Primed + Pending);
+	UE_LOG(LogAirportOps, Log, TEXT("StandChurnCost: %d pending offer(s) re-planned on one stand-set change in %.2f ms (30-stand line)"), Pending, Ms);
+	AddInfo(FString::Printf(TEXT("%d pending offers re-planned on one stand-set change: %.2f ms"), Pending, Ms));
 	return true;
 }
 

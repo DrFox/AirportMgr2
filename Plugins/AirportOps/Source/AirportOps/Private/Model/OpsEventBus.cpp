@@ -187,6 +187,12 @@ FString FFlightInboundEvent::Describe() const
 	return FString::Printf(TEXT("flight %d, airline %s"), FlightId, *AirlineId.ToString());
 }
 
+FString FFlightPhaseChangedEvent::Describe() const
+{
+	// THE PHASES BY NAME (FlightPhase::Name - "TaxiIn", not the enum's qualified string), so a grep for a flight's life reads it.
+	return FString::Printf(TEXT("flight %d, %s -> %s at %.0f"), FlightId, *FlightPhase::Name(From), *FlightPhase::Name(To), At);
+}
+
 FString FAirlineAdmissionChangedEvent::Describe() const
 {
 	return bCouldCome ? FString::Printf(TEXT("airline %s can use the airport"), *AirlineId.ToString())

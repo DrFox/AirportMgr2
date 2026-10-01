@@ -309,4 +309,35 @@ bool FDeparturePlannerNotAdmittedTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDepartureSuccessLineRoundsToNearestTest,
+	"Airside.Model.DeparturePlanner.SuccessLineRoundsToNearest",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDepartureSuccessLineRoundsToNearestTest::RunTest(const FString& Parameters)
+{
+	// #497 RE-REVIEW: the success line borrowed the REFUSAL's rounding - what the strip has down, what the aircraft needs up, so a
+	// refusal can never print as a tie. A plan that passed has no tie to hide, and floor/ceil printed figures neither the strip nor
+	// the aircraft has. Hand-made figures a tenth of a metre either side of a whole metre: nearest says 2000 and 1800, floor/ceil
+	// said 1999 and 1801.
+	FDeparturePlan Passed;
+	Passed.Why = EDepartureRefusal::None;
+	Passed.EntryOffset = 0.0;
+	Passed.Available = 199960.0;
+	Passed.End.Length = 250040.0;
+	Passed.Needed = 180020.0;
+	const FString Sentence = DeparturePlanner::Describe(Passed);
+	TestTrue(FString::Printf(TEXT("the strip's figures round to nearest: '%s'"), *Sentence),
+		Sentence.Contains(TEXT("2000 m available of 2500")));
+	TestTrue(FString::Printf(TEXT("and so does the need: '%s'"), *Sentence), Sentence.Contains(TEXT("1800 needed")));
+
+	// CONTROL: A REFUSAL KEEPS ITS OWN RULE - the need rounds UP, so a short strip never reads as enough.
+	FDeparturePlan NoRoute;
+	NoRoute.Why = EDepartureRefusal::NoRoute;
+	NoRoute.Needed = 180020.0;
+	TestTrue(FString::Printf(TEXT("a refusal's need still rounds up: '%s'"), *DeparturePlanner::Describe(NoRoute)),
+		DeparturePlanner::Describe(NoRoute).Contains(TEXT("with 1801 m left to roll")));
+	return true;
+}
+
 #endif

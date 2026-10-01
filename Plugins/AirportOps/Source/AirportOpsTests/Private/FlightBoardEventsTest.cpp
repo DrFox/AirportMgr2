@@ -34,6 +34,8 @@ namespace
 		TArray<FOfferDeclinedEvent> Declined;
 		TArray<FFlightAirborneEvent> Airborne;
 		TArray<FOfferAcceptedEvent> Accepted;
+		/** Every phase change the board announced (#442 item 4) - what the billing reaction hears. */
+		TArray<FFlightPhaseChangedEvent> Changed;
 
 		FFbEventsFixture()
 		{
@@ -51,6 +53,7 @@ namespace
 			Bus.Subscribe<FOfferDeclinedEvent>(EOpsTier::Sim, TEXT("test"), [this](const FOfferDeclinedEvent& E) { Declined.Add(E); });
 			Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Sim, TEXT("test"), [this](const FFlightAirborneEvent& E) { Airborne.Add(E); });
 			Bus.Subscribe<FOfferAcceptedEvent>(EOpsTier::Sim, TEXT("test"), [this](const FOfferAcceptedEvent& E) { Accepted.Add(E); });
+			Bus.Subscribe<FFlightPhaseChangedEvent>(EOpsTier::Sim, TEXT("test"), [this](const FFlightPhaseChangedEvent& E) { Changed.Add(E); });
 			Bus.EndWiring();
 		}
 
@@ -183,6 +186,54 @@ bool FOfferCarriesAirlineTest::RunTest(const FString&)
 	if (!TestNotNull(TEXT("an offer is made"), Flight)) { return false; }
 	TestEqual(TEXT("the flight carries its airline's KEY - the definition's name, not its display text"),
 		Flight->AirlineId, FName(TEXT("TestAir")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightBoardEveryChangePublishedTest, "AirportOps.Model.FlightBoard.EveryChangeIsPublishedOnce",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFlightBoardEveryChangePublishedTest::RunTest(const FString&)
+{
+	// #442 ITEM 4: TransitionTo announces EVERY phase change it makes, ONCE, with the phase left, the phase entered and the time the
+	// change was dated - the billing reaction's whole input, so a change it missed is a fee never posted and one it doubled is a fee
+	// posted twice. A decline (a terminal row, filed in History first), then a flight driven from Landing to Departing by agent events:
+	// one event per change, chained (each From the last To), and an agent event that moves the flight nowhere announces nothing.
+	FFbEventsFixture F;
+	UFlight* Declined = F.Offer(TEXT("Cumbria"));
+	F.Board->Decline(*F.Clock, *Declined);
+	F.Bus.Drain();
+	if (TestEqual(TEXT("a decline is one change"), F.Changed.Num(), 1))
+	{
+		TestEqual(TEXT("naming the flight"), F.Changed[0].FlightId, Declined->Id);
+		TestTrue(TEXT("from Offered to Declined"), F.Changed[0].From == EFlightPhase::Offered && F.Changed[0].To == EFlightPhase::Declined);
+		TestTrue(TEXT("and the flight is found by its id when it is heard - filed, not forgotten"), F.Board->FlightById(Declined->Id) == Declined);
+	}
+
+	F.Changed.Reset();
+	UFlight* Flight = F.DepartAt(/*Now*/ 7200.0, /*AcceptedAt*/ 0.0, /*ContractSeconds*/ 3600.0);
+	F.Bus.Drain();
+	if (!TestEqual(TEXT("PRECONDITION: the flight reached Departing"), Flight->GetPhase(), EFlightPhase::Departing)) { return false; }
+	if (!TestTrue(TEXT("its changes were announced"), F.Changed.Num() >= 2)) { return false; }
+	TestEqual(TEXT("the first leaves where the fixture staged it"), F.Changed[0].From, EFlightPhase::Landing);
+	TestEqual(TEXT("the last enters Departing"), F.Changed.Last().To, EFlightPhase::Departing);
+	TestEqual(TEXT("dated the change - the clock at take-off"), F.Changed.Last().At, 7200.0, 1e-6);
+	bool bChained = true;
+	bool bAllChanges = true;
+	bool bAllThisFlight = true;
+	for (int32 Index = 0; Index < F.Changed.Num(); ++Index)
+	{
+		bAllChanges &= F.Changed[Index].From != F.Changed[Index].To;
+		bAllThisFlight &= F.Changed[Index].FlightId == Flight->Id;
+		bChained &= Index == 0 || F.Changed[Index].From == F.Changed[Index - 1].To;
+	}
+	TestTrue(TEXT("every event is a change - none from a phase to itself"), bAllChanges);
+	TestTrue(TEXT("all of this flight's"), bAllThisFlight);
+	TestTrue(TEXT("and each picks up where the last left off: none missed, none doubled"), bChained);
+
+	// AN EVENT THAT MOVES THE FLIGHT NOWHERE - a second line-up while already Departing - announces nothing.
+	const int32 Before = F.Changed.Num();
+	F.Board->OnAgentPhase(*F.Net, *F.Clock, OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Departing, EAgentEvent::LinedUp));
+	F.Bus.Drain();
+	TestEqual(TEXT("no change, no event"), F.Changed.Num(), Before);
 	return true;
 }
 

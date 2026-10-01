@@ -6,6 +6,7 @@
 #include "Model/OpsEventBus.h"
 #include "OpsSaveTestHelpers.h"
 #include "Model/Flight.h"
+#include "Model/FlightBilling.h"
 #include "Model/FlightBoard.h"
 #include "Model/JobBoard.h"
 #include "Model/GroundTraffic.h"
@@ -203,7 +204,6 @@ bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
 	ULedger* Ledger = NewObject<ULedger>(GetTransientPackage());
 	Ledger->Clock = Clock;
 	UFlightBoard* Board = SaveTestBoard();
-	Board->Ledger = Ledger;
 	Board->Dispatcher = [Traffic, Net](const FVector2D& Near, const FAirframe& Frame)
 	{
 		return Traffic->DispatchArrival(*Net, Near, Frame, 1.0) != 0;
@@ -219,6 +219,12 @@ bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
 	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("FlightBoard"), [&](const FAgentPhaseEvent& E)
 	{
 		LiveBoard->OnAgentPhase(*Net, *LiveClock, E);
+	});
+	// THE BILLING REACTION, on whichever board is live (#442 item 4): the landing fee this test counts is posted there now, a round
+	// after the change - as UOpsRuntime::WireBus subscribes it.
+	Bus.Subscribe<FFlightPhaseChangedEvent>(EOpsTier::Sim, TEXT("Billing"), [&](const FFlightPhaseChangedEvent& E)
+	{
+		FlightBilling::OnFlightPhaseChanged(Ledger, *LiveBoard, E);
 	});
 	Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Reaction, TEXT("test"), [&Scored](const FFlightAirborneEvent&) { ++Scored; });
 	Bus.Subscribe<FFlightCancelledEvent>(EOpsTier::Reaction, TEXT("test"), [&Scored](const FFlightCancelledEvent&) { ++Scored; });
@@ -262,9 +268,18 @@ bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
 	OnStand->AirlineId = TEXT("SaveTestAirline");
 	OnStand->AgentId = 4242;
 	OnStand->SetPhaseForTest(EFlightPhase::Turnaround);
+	// PARKED AND PRICED, so a billing that reacted to the load's retire (Departed) would have hours and a rate to charge (#506 review).
+	OnStand->ParkedAt = 0.5 * Clock->Now();   // after the advance above, so set, and before the load's Now: a stay to bill
+	OnStand->ParkingRatePerHour = 120.0;
 	Board->AddOffer(*Clock, OnStand);
 
 	UJobBoard* Fuel = NewObject<UJobBoard>(GetTransientPackage());
+	const auto FeeRows = [Ledger]()
+	{
+		return Ledger->Entries().FilterByPredicate([](const FLedgerEntry& E)
+			{ return E.Category == ELedgerCategory::LandingFee || E.Category == ELedgerCategory::ParkingFee; }).Num();
+	};
+	const int32 FeeRowsAtSave = FeeRows();
 	FOpsSnapshot Snapshot;
 	OpsSave::Capture(OpsSaveTest::Persistents(*Clock, *Board, *Fuel), *Net, Snapshot);
 	const double SavedAt = Clock->Now();
@@ -276,7 +291,6 @@ bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
 	USimClock* RestoredClock = NewObject<USimClock>(GetTransientPackage());
 	UFlightBoard* Restored = SaveTestBoard();
 	UJobBoard* RestoredFuel = NewObject<UJobBoard>(GetTransientPackage());
-	Restored->Ledger = Ledger;
 	Restored->Bus = &Bus;
 	Restored->Dispatcher = Board->Dispatcher;
 	if (!TestTrue(TEXT("restore succeeds"),
@@ -303,6 +317,10 @@ bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("dated the load"), Retired->TerminatedAt, SavedAt, 1e-9);
 	Bus.Drain();
 	TestEqual(TEXT("nothing the roster would score was published - the save system is not the player's fault"), Scored, 0);
+	// AND NOTHING BILLED (#506 review): the load's changes - the re-queue's Inbound, the retire's Departed - are announced like any
+	// change (FFlightPhaseChangedEvent), and the billing reaction heard them in the drain above. It bills Landing, Turnaround and
+	// TaxiOut only, so the parked, priced flight retired here pays no parking and the re-queued one no second landing.
+	TestEqual(TEXT("the load posted no fee - neither a landing nor the retired flight's parking"), FeeRows(), FeeRowsAtSave);
 
 	// THE HOLDS RE-MADE AND THE ARRIVALS RE-ARMED by the same call - then the queue must clear it.
 	const FEntityInstance* Stand = Net->GetEntity(Again->Stand);
@@ -465,7 +483,7 @@ bool FFlightUnchargedLandingTest::RunTest(const FString& Parameters)
 	FRequeueRig Rig;
 	ULedger* Ledger = NewObject<ULedger>(GetTransientPackage());
 	Ledger->Clock = Rig.Clock;
-	Rig.Board->Ledger = Ledger;
+	FOpsTestBilling Billing(*Rig.Board, Ledger);   // the reaction that charges the landing (#442 item 4), drained below
 	UGroundTraffic* Traffic = Rig.Traffic;
 	URoadNetwork* Net = Rig.Field.Net;
 	Rig.Board->Dispatcher = [Traffic, Net](const FVector2D& Near, const FAirframe& Frame)
@@ -481,9 +499,12 @@ bool FFlightUnchargedLandingTest::RunTest(const FString& Parameters)
 	Rig.Clock->Advance(1.0);
 	Rig.Board->TickQueue(*Traffic, *Net, *Rig.Clock);
 	if (!TestEqual(TEXT("it lands again"), Flight->GetPhase(), EFlightPhase::Landing)) { return false; }
-	// THE ARRIVING THE BUS WOULD DELIVER, twice: the second is the "more than one phase maps to Landing" case.
+	Billing.Bus.Drain();
+	// THE ARRIVING THE BUS WOULD DELIVER, twice: the second is the "more than one phase maps to Landing" case. Neither changes the
+	// phase, so neither is billed since #442 item 4 - the landing was, once, on entering it; they stay to show a repeat charges nothing.
 	Rig.Board->OnAgentPhase(*Net, *Rig.Clock, OpsTestTransition(Flight->AgentId, EAgentPhase::Gone, EAgentPhase::Arriving, EAgentEvent::Dispatched));
 	Rig.Board->OnAgentPhase(*Net, *Rig.Clock, OpsTestTransition(Flight->AgentId, EAgentPhase::Gone, EAgentPhase::Arriving, EAgentEvent::Dispatched));
+	Billing.Bus.Drain();
 	const int32 Rows = Ledger->Entries().FilterByPredicate([](const FLedgerEntry& E) { return E.Category == ELedgerCategory::LandingFee; }).Num();
 	TestEqual(TEXT("saved uncharged, it is charged exactly once when it lands"), Rows, 1);
 	return true;
@@ -537,7 +558,6 @@ bool FFlightSaveRestoresByValueTest::RunTest(const FString& Parameters)
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 		Ledger->Clock = Clock;
 		Ledger->Pricing = Pricing;
-		Board->Ledger = Ledger;
 		Board->Pricing = Pricing;
 		Fuel->Ledger = Ledger;
 		Fuel->Pricing = Pricing;
@@ -585,7 +605,6 @@ bool FFlightSaveRestoresByValueTest::RunTest(const FString& Parameters)
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	Ledger->Clock = Clock;
 	Ledger->Pricing = Pricing;
-	Board->Ledger = Ledger;
 	Board->Pricing = Pricing;
 	Fuel->Ledger = Ledger;
 	Fuel->Pricing = Pricing;
@@ -597,7 +616,7 @@ bool FFlightSaveRestoresByValueTest::RunTest(const FString& Parameters)
 	// THE WIRING IS NOT STATE: each pointer stays what this session wired, not a path to the last session's object.
 	TestTrue(TEXT("the board keeps its own allocator - #425 left it null, and Accept refused every offer silently"),
 		Board->Allocator.Get() == OwnAllocator && OwnAllocator != nullptr);
-	TestTrue(TEXT("and its own ledger and pricing"), Board->Ledger.Get() == Ledger && Board->Pricing.Get() == Pricing);
+	TestTrue(TEXT("and its own pricing - it holds no ledger since #506's review: billing is handed the runtime's"), Board->Pricing.Get() == Pricing);
 	TestTrue(TEXT("the ledger keeps its own clock and pricing"), Ledger->Clock.Get() == Clock && Ledger->Pricing.Get() == Pricing);
 	TestTrue(TEXT("the job board keeps its own ledger and pricing"), Fuel->Ledger.Get() == Ledger && Fuel->Pricing.Get() == Pricing);
 	TestTrue(TEXT("the generator keeps its own pricing"), Generator->Pricing.Get() == Pricing);

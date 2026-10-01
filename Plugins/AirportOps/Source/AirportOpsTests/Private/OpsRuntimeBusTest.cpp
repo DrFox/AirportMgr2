@@ -325,10 +325,12 @@ bool FOpsBusLandingFeeTest::RunTest(const FString&)
 {
 	// THE LANDING FEE, charged through the path play takes (stage 1 review, finding 2). The dispatcher
 	// runs UGroundTraffic::DispatchArrival, whose Admit broadcasts Gone -> Arriving INSIDE the dispatch
-	// - before UFlightBoard::DispatchNow has recorded which agent is the flight's. Handled there, the
+	// - before FArrivalQueue::DispatchNow has recorded which agent is the flight's. Handled there, the
 	// board could not find the flight and the fee (posted when a flight reaches Landing) was never
 	// charged; through the bus it is handled after DispatchNow returns. Wired here as WireBus and the
-	// Airside relay wire it, so the ORDER is the real one.
+	// Airside relay wire it, so the ORDER is the real one. SINCE #442 item 4 the fee is the "Billing"
+	// reaction to the Landing the dispatch's TransitionTo announces, a round later in the same drain -
+	// subscribed below as WireBus subscribes it, so a billing that missed the dispatch's Landing is red here.
 	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
 	const FTestAirport Airport = FTestAirport::Build(Airframe);
 	URoadNetwork* Net = Airport.Net;
@@ -338,7 +340,6 @@ bool FOpsBusLandingFeeTest::RunTest(const FString&)
 	Ledger->Clock = Clock;
 	UFlightBoard* Board = NewObject<UFlightBoard>(GetTransientPackage());
 	Board->Allocator = NewObject<UStandAllocator>(GetTransientPackage());
-	Board->Ledger = Ledger;
 	Board->Dispatcher = [Traffic, Net](const FVector2D& Near, const FAirframe& Frame)
 	{
 		return Traffic->DispatchArrival(*Net, Near, Frame, 1.0) != 0;
@@ -350,7 +351,9 @@ bool FOpsBusLandingFeeTest::RunTest(const FString&)
 	{
 		Board->OnAgentPhase(*Net, *Clock, E);
 	});
+	OpsTestSubscribeBilling(Bus, *Board, Ledger);
 	Bus.EndWiring();
+	Board->Bus = &Bus;
 	Traffic->OnAgentPhaseChanged.AddLambda([&Bus](const FAgentTransition& Transition)
 	{
 		Bus.Publish(FAgentPhaseEvent{ Transition });
@@ -933,6 +936,10 @@ namespace
 			{
 				Board->OnAgentPhase(*Field.Net, *Clock, E);
 			});
+			// THE BILLING REACTION, as WireBus wires it (#442 item 4): the parking clock the tests below read starts there, on the
+			// Turnaround the board announces - so the board publishes onto this bus too.
+			OpsTestSubscribeBilling(Bus, *Board, /*Ledger*/ nullptr);   // the parking clock, not the money
+			Board->Bus = &Bus;
 			Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Reaction, TEXT("test"), [this](const FTurnaroundEndedEvent& E) { Ended.Add(E); });
 			Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Reaction, TEXT("Airlines"),
 				[this](const FTurnaroundEndedEvent& E) { Airlines->OnTurnaroundEnded(E, Board); });
@@ -1475,7 +1482,7 @@ bool FOpsRuntimePausedEditAlertTest::RunTest(const FString&)
 	// guideline graph, so the flight's cached clearance is older than it and UnlandableWhy reads None - the alert cleared - and with the clock
 	// paused the queue pass did not re-judge (TickQueue's pause exit comes first). On the resume only the queue pass ran, re-judged the flight as
 	// permanent, and marked nothing: with no aircraft on the ground nothing ever woke the alerts pass again, and the alert and its Cancel row
-	// stayed gone. The queue now re-dates its unarrived flights on a graph change before the pause exit (UFlightBoard::JudgeUnarrived), so the alert
+	// stayed gone. The queue now re-dates its unarrived flights on a graph change before the pause exit (FArrivalQueue::JudgeUnarrived), so the alert
 	// never clears - and the queue pass marks the alerts pass after every run it decides (the belt).
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }

@@ -2,6 +2,8 @@
 
 #include "CoreMinimal.h"
 #include "Model/ArrivalPlanner.h"
+#include "Model/ArrivalQueue.h"
+#include "Model/OfferInbox.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadEntity.h"
 #include "UObject/Object.h"
@@ -16,7 +18,6 @@ class UGroundTraffic;
 class UOfferGenerator;
 class URoadNetwork;
 class UStandAllocator;
-class ULedger;
 class FOpsEventBus;
 class USimClock;
 enum class EAgentPhase : uint8;
@@ -25,106 +26,8 @@ enum class ECancelReason : uint8;
 enum class EFlightPhase : uint8;
 struct FTransitionCause;
 
-/**
- * Whether an offer can be accepted right now, and whether the airport can serve it.
- *
- * CACHED ON FOUR REVISIONS, TWO ANSWERS (issue #169, moved from UOfferViewModel 2026-09-28; split by #443). Why is a
- * full ArrivalPlanner::Plan - a route search over every stand, then every runway exit - so it
- * is recomputed only when something it depends on has moved: the board itself
- * (UFlightBoard::Revision - added/accepted/declined/expired), the guideline graph
- * (URoadNetwork::GetGuidelineRevision - an edit changed the taxiways), or occupancy
- * (UGroundTraffic::OccupancyRevision - a stand claimed or freed, a runway taken or cleared). bFuelServable is
- * CouldServe, which reads the airport's shape, the fleet's COMPOSITION and which of its vehicles are STRANDED (it is
- * handed the traffic model to ask, #443 - a stranded vehicle never counts) and nothing else: it is dated by the
- * guideline graph and by UJobBoard::GetFleetCompositionRevision (a vehicle added, withdrawn, seeded by the "FleetSeed"
- * pass, sold or a load replacing the fleet, and a vehicle's agent stranding or moving again), and by NEITHER the board
- * (the airframe is the flight's own) NOR occupancy (it judges no traffic's whereabouts) NOR any vehicle state but being
- * stranded. Before #443 the whole verdict hung on the counter that moves on every vehicle TRANSITION
- * (dispatched, arrived, serving, refilled - #428 made each one bump it), so a truck arriving or finishing a refill
- * re-planned every pending offer's full arrival plan, which reads no fleet. A few integer compares replace the
- * search on every frame where none of them moved.
- * AND THE NETWORK ITSELF, AND ITS EDIT REVISION (#471), the way FLandChoicesKey is keyed: since #431 the verdict's stand
- * is the one an accept HOLDS, so a stale yes is no longer a wrong row but a wrong hold. A drag moves the road (EditRevision)
- * a whole gesture before the guideline graph catches up at the drop, and a pre-drag yes served from the cache let the inbox
- * accept onto a graph the planner itself refuses mid-edit (GraphBeingEdited). A clear or a load is a NEW network counting
- * its revisions from zero, so equal numbers on another object are not the same graph - weak, so a recycled address is not
- * mistaken for the old network either.
- * ENFORCED BY: AirportOps.Model.FlightBoard.VehicleTransitionsDoNotReplanOffers,
- * AirportOps.Fuel.CouldServe.StrandingMovesTheCompositionAndTheVerdict (the stranded clause),
- * AirportOps.Model.FlightBoard.VerdictIsDatedByTheEdit, AirportOps.Model.FlightBoard.VerdictNamesTheNetwork
- */
-struct FOfferVerdict
-{
-	EArrivalRefusal Why = EArrivalRefusal::None;
-	/** The plan's own sentence for Why - ArrivalPlanner::DescribeRefusal(Plan), with its figures and its admission - or
-	 *  empty when None. The row shows THIS, not the reason-only wording, which reads "not admitted to that runway" for
-	 *  an arrivals-only field whose real reason is that nothing can take the departure (#456 review). */
-	FString Sentence;
-	/** The stand the plan taxis to when Why is None - what TryAccept holds (#431). Unset otherwise. */
-	FEntityInstanceId Stand;
-
-	/** Could a depot fuel this airframe on a stand it would take? True when nothing checks
-	 *  (no fuel service wired, as in most board tests). A MISSING service does not block the
-	 *  accept (spec ruling 5) - the row says so and C scores it. */
-	bool bFuelServable = true;
-
-	/** What Why was judged at. The guideline stamp and the network date bFuelServable too: an edit re-judges both. */
-	uint32 BoardAt = 0;
-	uint32 GuidelineAt = 0;
-	uint32 OccupancyAt = 0;
-	/** URoadNetwork::GetEditRevision when Why was judged - the plan's alone: CouldServe reads only the derived graph, which
-	 *  a drag does not move until the drop's guideline revision, and its answer holds nothing. */
-	uint32 EditAt = 0;
-	/** The network both answers were judged on - compared, never dereferenced; weak, so a new network at a recycled address is not this one. */
-	FWeakObjectPtr Network;
-	/** UJobBoard::GetFleetCompositionRevision when bFuelServable was judged - a vehicle bought, sold, seeded (by the
-	 *  "FleetSeed" pass) or withdrawn changes it (facility-upgrades spec), and so does a vehicle's agent stranding or moving
-	 *  again (#443: a stranded vehicle does not count), but a vehicle changing any other STATE does not (#443: this was the
-	 *  transition counter, which moved on every one and re-planned every offer's Why with it).
-	 *  ENFORCED BY: AirportOps.Model.Fleet.OfferVerdictIsDatedByTheFleet,
-	 *  AirportOps.Fuel.CouldServe.StrandingMovesTheCompositionAndTheVerdict */
-	uint32 FleetAt = 0;
-	bool bValid = false;
-};
-
-/**
- * THE ANSWER TO "MAY THIS ARRIVAL BE ACCEPTED NOW" (#431, #432): the arrival plan (ArrivalPlanner::Plan, a busy runway
- * queued), then the airport's gate (UAirport::AdmitsArrivals) - one evaluator for the inbox, key 7 and the Land panel.
- * Why, the sentence the refusal is worded with (the plan's own, or the gate's), and the stand an accept would hold.
- * Plain C++: an answer, not state.
- */
-struct FArrivalQuote
-{
-	EArrivalRefusal Why = EArrivalRefusal::NoRunway;
-	FString Sentence;
-	FEntityInstanceId Stand;
-	bool IsAccepted() const { return Why == EArrivalRefusal::None; }
-};
-
-/**
- * What one UFlightBoard::TickQueue did - read by UOpsRuntime's "ArrivalQueue" pass, which decides from it whether to
- * look again (bRetry), whether the safety net stays armed (Waiting) and whether a safety run found work nobody's event
- * covered (Cleared). Plain C++: a pass result, not state.
- */
-struct FQueueTick
-{
-	/** Flights holding when the tick began, cleared one included. Counted paused too: holding is not paused. */
-	int32 Waiting = 0;
-	/** The flight cleared to land this tick, or null - at most one (ONE CLEARANCE A FRAME, see TickQueue). */
-	UFlight* Cleared = nullptr;
-	/** The sequencer chose a flight and the dispatch refused it - a same-frame race, retried next frame. */
-	bool bRetry = false;
-	/** The airport admits no arrivals (AdmitsArrivals): nothing was cleared, and nothing can be until it opens -
-	 *  so the pass keeps no safety net ticking for the flights still Waiting (whole-stack review I1). */
-	bool bClosed = false;
-	/**
-	 * A flight was already cleared in this queue frame (BeginQueueFrame), so nothing was decided: the pass asks again next frame
-	 * (#445 - the one-clearance-a-frame rule is the queue's own, and this is how it says "not yet" without the runtime counting
-	 * frames). Waiting and the rest of this result are NOT filled - a deferred tick looked at nothing - so the pass leaves its
-	 * safety-net wish as it was.
-	 */
-	bool bDeferred = false;
-};
+// FOfferVerdict and FArrivalQuote live in OfferInbox.h, FQueueTick in ArrivalQueue.h (#442 item 4) - each beside the owner that
+// makes it. Included above, so every reader of this header still sees all three.
 
 /**
  * Every live flight, and the ONLY thing that dispatches an arrival.
@@ -138,6 +41,18 @@ struct FQueueTick
  * called directly, so the schedule can be proved to fire without a UWorld. Everything in
  * this class is world-free by construction; if a change here needs a world, it belongs in
  * Present/.
+ *
+ * THE REGISTRY AND THE TRANSITION OWNER, AND THE DOOR ONTO TWO OWNERS (#442 item 4). It carried seven jobs - the inbox's countdown
+ * and lapse, the verdict cache, accept/decline/cancel, the queue/clearance/dispatch, the agent-phase mapping, billing and the load -
+ * in 1803 + 954 lines. What stays here is the flight registry (Flights, History, the indices, the ids, the save), the ONE writer of a
+ * phase (TransitionTo) with every door that names a transition (the cancels, OnAgentPhase's mapping, the load's steps), and the quote
+ * both owners ask (PlanQuote, Gated). FOfferInbox owns the offers - countdown, verdicts, lapse, accept, decline; FArrivalQueue owns
+ * the arrivals - the clock's handles, the queue, the clearances, the dispatch and every re-hold; and BILLING is a reaction to the phase
+ * on the ops bus (FlightBilling, FFlightPhaseChangedEvent) that this board no longer calls - NOR KNOWS OF: the ledger is the
+ * runtime's, handed to the reaction, and the board holds no money pointer at all (#506 review). Each owner's public names stay here
+ * as forwarders, so no caller changed. See each owner's class comment for the pattern and its forced deviations.
+ * ENFORCED BY: Check-Architecture rule 77 (FlightBoard.cpp's line budget), rule 96 (what the owners may reach of this board),
+ * AirportOps.Present.FlightBoardOwnersAreWired, AirportOps.Present.Bus.BillingIsWired
  */
 UCLASS()
 class AIRPORTOPS_API UFlightBoard : public UObject, public IOpsPersistent
@@ -194,7 +109,7 @@ public:
 	 *
 	 * DISCARDED, NOT FOLDED like ULedger::RollUp's BroughtForward entry: a flight has no
 	 * summable amount to fold into a stand-in, and the money it earned already lives on
-	 * permanently in ULedger's own rows (see PostLandingFee/PostParkingFee) - keeping a copy
+	 * permanently in ULedger's own rows (see FlightBilling::PostLandingFee/PostParkingFee) - keeping a copy
 	 * here would only be a second, decaying record of the same fact.
 	 */
 	UPROPERTY() int32 MaxDays = 30;
@@ -244,7 +159,7 @@ public:
 	uint32 Revision() const { return RevisionCount; }
 
 	/**
-	 * THE WIRING, TRANSIENT - this and the five pointers below (#425). Each is one of UOpsRuntime's own subobjects, set
+	 * THE WIRING, TRANSIENT - this and the four pointers below (#425; the ledger was a fifth until #506's review gave it to billing). Each is one of UOpsRuntime's own subobjects, set
 	 * once by its constructor, and none is state. Saved, each was a PATH to that subobject, which a later session's
 	 * load resolved to null - silently, since null is a working state for every one of them: with no Allocator,
 	 * Accept refuses every offer. A test's own board wires them by hand, and a load now leaves them as wired.
@@ -252,18 +167,15 @@ public:
 	 */
 	UPROPERTY(Transient) TObjectPtr<UStandAllocator> Allocator = nullptr;
 
-	/** Who of the holding flights is cleared next. Null = strict first come. See UArrivalSequencer. */
+	/** Who of the holding flights is cleared next. Null = strict first come. See UArrivalSequencer. Read by FArrivalQueue::Tick:
+	 *  the board keeps the wiring, the queue the state the policy is over (#442 item 4). */
 	UPROPERTY(Transient) TObjectPtr<UArrivalSequencer> Sequencer = nullptr;
 	UPROPERTY(Transient) TObjectPtr<UOfferGenerator> Generator = nullptr;
 
-	/**
-	 * The money, or null in a test that does not care about it. Set by UOpsRuntime's constructor (#425; was Attach).
-	 *
-	 * NULL IS A WORKING STATE, not a bug to guard against at every call: dozens of existing
-	 * board tests drive flights through their whole lifecycle and have no interest in fees, and
-	 * making them all construct a ledger would be churn for nothing.
-	 */
-	UPROPERTY(Transient) TObjectPtr<ULedger> Ledger = nullptr;
+	// NO LEDGER HERE since #506's review: the money was a board pointer the board itself never posted to after #442 item 4 - only the
+	// billing reaction read it, off the board it was handed. The runtime hands FlightBilling its own ledger now, so this board does
+	// not know money exists. (Its reason for being nullable - board tests with no interest in fees - travelled to FlightBilling.h.)
+	// ENFORCED BY: Check-Architecture rule 4 ('landing and parking fees posted outside FlightBilling', 'fee posters called outside FlightBilling')
 
 	/**
 	 * What things cost, for the inbox row's fee text (OfferViewModels formats the flight's LandingFee through it). THE BOARD NO
@@ -280,22 +192,16 @@ public:
 
 	/**
 	 * Where this board publishes what happened to its flights - an offer lapsing or declined, a flight
-	 * airborne. Set by UOpsRuntime::Attach. NULL IS A WORKING STATE, for Ledger's reason above: every
-	 * publish checks. Raw: the runtime owns both this board and the bus.
+	 * airborne. Set by UOpsRuntime::Attach. NULL IS A WORKING STATE, not a bug to guard against at every call: dozens of board
+	 * tests drive flights through their whole lifecycle with no interest in what is announced, and every publish checks. Raw: the
+	 * runtime owns both this board and the bus.
 	 */
 	FOpsEventBus* Bus = nullptr;
 
-	/**
-	 * Bank the landing fee this flight was OFFERED at. Idempotent - a flight lands once.
-	 *
-	 * PUBLIC so a test can post a fee without driving a whole agent through its phases; the
-	 * production caller is OnAgentPhase, and there is only the one.
-	 */
-	void PostLandingFee(double Now, UFlight& Flight);
-
-	/** Bank the parking fee for the hours actually occupied, at the rate the flight was OFFERED at (UFlight::
-	 *  ParkingRatePerHour), and record it on the flight. */
-	void PostParkingFee(double Now, UFlight& Flight);
+	// NO PostLandingFee / PostParkingFee HERE since #506's review: their production caller went with #442 item 4 (billing is the bus's
+	// reaction, posting through FlightBilling::PostLandingFee/PostParkingFee itself), and a forwarder needs the ledger the board no
+	// longer holds - so the tests that posted a fee by hand call FlightBilling's, which take the ledger, and these were removed rather
+	// than kept as a test-only door into money on a class that must not know it.
 
 	/**
 	 * The DEFAULT runway preference for the next generated offer (was ApproachFocus, #442) - UOpsRuntime writes it before
@@ -334,75 +240,35 @@ public:
 	 */
 	void AddOffer(USimClock& Clock, UFlight* Offer);
 
-	/**
-	 * Drain every offer's REAL-seconds countdown and lapse the ones that reach zero.
-	 *
-	 * REAL SECONDS, AND ONLY WHILE UNPAUSED (spec 2026-09-28 ruling 3). It replaced a
-	 * Clock.At callback at a GAME-time ExpiresAt, which made the window shrink with the speed
-	 * setting: 600 game seconds was eight real seconds at x1. A plain seconds-left field also
-	 * saves as itself, so there is no load-time re-arm to get wrong.
-	 *
-	 * EACH OFFER'S VERDICT IS REFRESHED HERE TOO (see VerdictFor), which is what lets a lapse
-	 * say whether the player could ever have taken it - UFlight::LapseReason - with no inbox
-	 * open. Called from UOpsRuntime::Tick; tests call it directly.
-	 */
+	// --- THE OFFERS: FORWARDERS to FOfferInbox (#442 item 4), where each rule and its reasons live ----------------------------
+
+	/** Drain every offer's real-seconds countdown and lapse what reaches zero. FORWARDS to FOfferInbox::TickOffers. */
 	void TickOffers(const UGroundTraffic& Traffic, const URoadNetwork& Network,
 		const USimClock& Clock, double RealDeltaSeconds);
 
-	/**
-	 * Can this offer be accepted right now, and can the airport serve it - CACHED.
-	 *
-	 * MOVED HERE FROM UOfferViewModel (issue #169's cache): the board is what classifies a
-	 * lapse, so it has to know the answer whether or not a row is on screen, and one cache
-	 * both the board and the row read is one evaluator rather than two. Recomputed only when
-	 * the board, the guideline graph or the occupancy has moved since - see FOfferVerdict.
-	 */
+	/** Can this offer be accepted right now, and can the airport serve it - CACHED. FORWARDS to FOfferInbox::VerdictFor. */
 	const FOfferVerdict& VerdictFor(const UGroundTraffic& Traffic, const URoadNetwork& Network,
 		const UFlight& Flight) const;
 
 	/** The id the next offer should carry. The board owns numbering; see UOfferGenerator. */
 	int32 TakeNextId();
 
-	/**
-	 * WHERE EVERY ACCEPT IS DECIDED (#431). QuoteFor - the cached plan verdict, then the airport's gate - and on a yes,
-	 * the stand THAT PLAN taxis to is held (UStandAllocator::Hold) and the arrival goes on the clock. Returns the
-	 * quote: None and the held stand, or the refusal it actually hit, worded.
-	 *
-	 * BEFORE THIS, Accept was the airport's status plus UStandAllocator::Reserve - the smallest fitting stand, reachable
-	 * or not - while the inbox, the lapse classifier and the queue asked ArrivalPlanner::Plan. Two evaluators: key 7
-	 * accepted flights the planner refused (no exit, no route) and they held for ever, AcceptImmediate reported a refusal
-	 * by asking the OTHER evaluator, and a hold could sit on a stand nothing could taxi to while the flight waited for
-	 * the one it could.
-	 *
-	 * A refusal before the plan - not an offer, no stand allocator, no airframe - is NotAdmitted with a sentence saying
-	 * which, and logged: a caller's bug or a fixture's, never a player's. So is the gate's closure. NotAdmitted because
-	 * EArrivalRefusal (the planner's enum, in Airside) has no value for either: it is the nearest reason, and the quote's
-	 * Sentence carries the real one - a reader of Why alone must not word it.
-	 * ENFORCED BY: AirportOps.Model.FlightBoard.AcceptHoldsTheReachableStand, AirportOps.Present.LandWithNoRouteHoldsNothing
-	 */
+	/** WHERE EVERY ACCEPT IS DECIDED (#431): the quote, then the plan's stand held and the arrival armed. FORWARDS to
+	 *  FOfferInbox::TryAccept. */
 	FArrivalQuote TryAccept(UGroundTraffic& Traffic, const URoadNetwork& Network, USimClock& Clock, UFlight& Flight);
 
 	/** TryAccept, answered yes or no - the tests' spelling. A FORWARDER, so nothing accepts a second way. */
 	bool Accept(UGroundTraffic& Traffic, const URoadNetwork& Network, USimClock& Clock,
 		UFlight& Flight);
 
-	/**
-	 * VerdictFor's plan answer, then the airport's gate - what TryAccept asks, and the inbox row shows. The gate is NOT in
-	 * the cached verdict: the lapse classifier reads the verdict alone, and a flight that lapses while the player has
-	 * closed the airport was ignored, not unacceptable.
-	 * ENFORCED BY: AirportOps.Model.Offers.Countdown.LapseReadsThePlanNotTheGate
-	 */
+	/** The cached plan verdict, then the airport's gate - what TryAccept asks. FORWARDS to FOfferInbox::QuoteFor. */
 	FArrivalQuote QuoteFor(const UGroundTraffic& Traffic, const URoadNetwork& Network, const UFlight& Flight) const;
 
-	/**
-	 * The same quote for an arrival that is not a flight yet - Airframe, aimed at Focus - UNCACHED. What the Land panel
-	 * asks per type (UOpsRuntime::QuoteLanding, #432): the SAME plan and the SAME gate AcceptImmediate's accept will
-	 * ask, so a row the panel lights is a click the game takes.
-	 */
+	/** The same quote for an arrival that is not a flight yet, UNCACHED - the Land panel's. FORWARDS to FOfferInbox::QuoteArrival. */
 	FArrivalQuote QuoteArrival(const UGroundTraffic& Traffic, const URoadNetwork& Network, const FAirframe& Airframe,
 		const FVector2D& Focus) const;
 
-	/** Retires the offer at once; free (spec ruling 8) - only a lapse will cost anything, in C. */
+	/** Retires the offer at once; free. FORWARDS to FOfferInbox::Decline. */
 	void Decline(USimClock& Clock, UFlight& Flight);
 
 	/**
@@ -454,50 +320,16 @@ public:
 	 */
 	bool CancelByPlayer(UGroundTraffic& Traffic, USimClock& Clock, int32 FlightId);
 
-	/**
-	 * WHY A HOLDING FLIGHT CAN NEVER LAND, or None (#442): the refusal its cached clearance (ClearanceFor - the plan minus
-	 * the runway, which TickQueue asks) holds, when that refusal is one the player must build or change something to clear
-	 * (ArrivalPlanner::IsPermanentRefusal). What the FlightCannotLand alert is derived from. An ACCEPTED flight is judged too
-	 * (#445; JudgeUnarrived, the queue pass's own - the plan with no occupancy, the question the offer generator asks), so the alert
-	 * does not wait for its ETA. None for a flight that is neither Accepted nor Inbound, that the queue has not judged yet, whose refusal will
-	 * clear on its own, or whose cached judgement is OLDER THAN THE GUIDELINE GRAPH.
-	 *
-	 * READS THE CACHE AND NEVER FILLS IT: an alert pass that planned would be a route search per holding flight per
-	 * recompute. And it trusts the cache only while it is dated by Network's guideline revision: a judgement older than the graph says nothing
-	 * - not a guess either way - so after the player fixes the airport its old "no exit" cannot keep the alert up. The queue pass keeps the cache
-	 * CURRENT (JudgeUnarrived re-dates every unarrived flight on a graph change, runway busy or clock paused or not), so "older than the graph"
-	 * is the window between an edit and the pass that runs for it - inside one drain, the pass running before the alerts'.
-	 * ENFORCED BY: AirportOps.Model.Alerts.UnlandableHoldingFlightRaisesAnAlert,
-	 * AirportOps.Model.Alerts.FixedAirportClearsTheAlertBehindABusyRunway,
-	 * AirportOps.Model.Alerts.HoldingFlightAlertSurvivesAnUnrelatedEditBehindABusyRunway
-	 */
+	/** WHY A HOLDING FLIGHT CAN NEVER LAND, or None - read off the queue's cached clearance, never planned here. FORWARDS to
+	 *  FArrivalQueue::UnlandableWhy (#442 item 4), where the rule and its reasons live. */
 	EArrivalRefusal UnlandableWhy(const UFlight& Flight, const URoadNetwork& Network) const;
 
-	/**
-	 * Make a flight from an airframe, aim it at Focus, and accept it on the spot - the debug
-	 * land key's whole job, and previously done by hand at the call site (issue #96).
-	 *
-	 * Its lead time is zero, so ArrivesAt is Clock.Now(): this exists to put an aeroplane on the field
-	 * THIS SECOND, not to queue a normal offer. Focus travels onto the flight itself - see
-	 * UFlight::RunwayPreference - so it never has to touch the board's own field, which the
-	 * generator also writes and would otherwise fight over.
-	 *
-	 * Returns EArrivalRefusal::None on success, or the refusal TryAccept HIT - returned by the gate that refused, not
-	 * re-derived by asking the plan again (#431: a closure, a null allocator or a span-0 airframe used to come back as
-	 * None, "success"). OutSentence, when given, receives its words. The flight is left in the inbox on refusal, exactly
-	 * as a generated offer nobody could accept yet is.
-	 */
+	/** Make a flight from an airframe, aim it at Focus, and accept it on the spot - key 7. FORWARDS to
+	 *  FOfferInbox::AcceptImmediate. */
 	EArrivalRefusal AcceptImmediate(UGroundTraffic& Traffic, const URoadNetwork& Network,
 		USimClock& Clock, const FAirframe& Airframe, const FVector2D& Focus, FText Airline, FString* OutSentence = nullptr);
 
-	/**
-	 * Why this offer could not be accepted this instant, or EArrivalRefusal::None.
-	 *
-	 * The REAL ArrivalPlanner::Plan against the live occupancy, so the inbox's greyed-out
-	 * reason is the same sentence the arrival itself would print - ArrivalPlanner::
-	 * DescribeRefusal renders it. A second, cheaper guess here would be a second source of
-	 * truth about whether an aeroplane can land.
-	 */
+	/** Why this offer could not be accepted this instant, or None - the real plan. FORWARDS to FOfferInbox::WhyNotAcceptable. */
 	EArrivalRefusal WhyNotAcceptable(const UGroundTraffic& Traffic, const URoadNetwork& Network,
 		const UFlight& Flight) const;
 
@@ -529,6 +361,13 @@ public:
 	UFlight* FindByIdForTest(int32 Id) const { return FindById(Id); }
 
 	/**
+	 * The flight with this id, live or in History until RollUp forgets it, or null - what the billing reaction resolves an
+	 * FFlightPhaseChangedEvent's FlightId through (#442 item 4): an event names a flight by id, never by a UObject that may be
+	 * gone by the time the queue drains. Mutable, because billing writes what the flight was paid (bLandingFeePaid, ParkedAt).
+	 */
+	UFlight* FlightById(int32 Id) const { return FindById(Id); }
+
+	/**
 	 * THE ORACLE those two are checked against: an O(n) scan of Flights (and, for an id,
 	 * History too - see FindById's own comment on why an id keeps answering after the flight
 	 * has gone terminal). Kept expressly so a maintained index that drifted from Flights/
@@ -539,27 +378,22 @@ public:
 	UFlight* FindByIdLinearForTest(int32 Id) const;
 
 	/**
-	 * TAKES THE CLOCK because the fees posted here are dated, and a ledger entry that could not
-	 * say when it happened would break the roll-up and the determinism test both. The sibling
-	 * UJobBoard::OnAgentPhase already takes one, so this is the neighbouring shape rather
+	 * TAKES THE CLOCK because the phase changes made here are dated, and a change that could not say when it happened would
+	 * leave the billing reaction nothing to price a fee by (FFlightPhaseChangedEvent::At) and the roll-up and the determinism
+	 * test nothing to age. The sibling UJobBoard::OnAgentPhase already takes one, so this is the neighbouring shape rather
 	 * than a second way of getting at the time.
 	 *
 	 * NO TRAFFIC MODEL since #436: the flight's phase follows the transition's Cause (FlightPhaseFromTransition) and
 	 * the stand it parked on is its GoalAtEvent. It used to take the model to read the live agent - Phase, GoalNode,
 	 * bDepartureArmed - a drain after the change, and an unused parameter is an invitation to read it again.
+	 *
+	 * NO MONEY since #442 item 4: the fees it posted after every event it heard are FlightBilling's reaction to the phase change
+	 * this makes (FFlightPhaseChangedEvent), a round later in the same drain.
 	 */
 	void OnAgentPhase(const URoadNetwork& Network, const USimClock& Clock, const FAgentTransition& Transition);
 
-	/**
-	 * A LOAD'S STAND HOLDS, step 3 of RestoreAfterLoad: re-make every Accepted and Inbound flight's hold from its saved
-	 * UFlight::Stand (UStandAllocator::Reapply), HoldLast's after all the others, then ReconcileStandHolds over them in
-	 * that order - a refused one given up and re-held, an Inbound flight with no stand (or a gone one) re-held. HoldLast
-	 * is the load's re-queued flights (DemoteRestoredMidFlight).
-	 *
-	 * IT WAS OnGraphRebuilt, named for a rebuild it stopped serving when PR D's review (I1) kept an edit's holds inside
-	 * Airside; it is the load's step now (#442). NOT AN EDIT'S REACTION: an edit's refusal
-	 * reaches ReconcileStandHolds through the queue pass the edit's FNetworkChangedEvent runs.
-	 */
+	/** A LOAD'S STAND HOLDS, step 3 of RestoreAfterLoad. FORWARDS to FArrivalQueue::RestoreStandHolds (#442 item 4), where every
+	 *  re-hold now lives. Public for the tests that pin a load's holds on their own. */
 	void RestoreStandHolds(UGroundTraffic& Traffic, const URoadNetwork& Network, const TArray<UFlight*>& HoldLast = TArray<UFlight*>());
 
 	/**
@@ -623,14 +457,8 @@ public:
 	 */
 	int32 CancelUnarrivedAtLoad(double Now, UGroundTraffic* Traffic = nullptr, USimClock* Clock = nullptr);
 
-	/**
-	 * Re-arm the clock for every Accepted flight's arrival.
-	 *
-	 * CALLED AFTER A LOAD, and it is not optional: USimClock deliberately does not save its
-	 * callback queue, so a restored flight has an ETA and nothing armed. Without this an
-	 * accepted flight never arrives - and nothing anywhere says so. Offers need nothing: their
-	 * countdown is a saved seconds-left figure TickOffers resumes (snapshot v5).
-	 */
+	/** Re-arm the clock for every Accepted flight's arrival - CALLED AFTER A LOAD, and not optional. FORWARDS to
+	 *  FArrivalQueue::RearmSchedules (#442 item 4). */
 	void RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& Network, USimClock& Clock);
 
 	/**
@@ -651,43 +479,20 @@ public:
 	 */
 	TArray<UFlight*> Offers() const;
 
-	/**
-	 * The flights holding for the runway (phase Inbound), in the order they joined -
-	 * HoldingSince, ties by id. DERIVED from Flights every call, never stored: see Enqueue.
-	 */
+	/** The flights holding for the runway, in the order they joined - derived, never stored. FORWARDS to FArrivalQueue::Queue. */
 	TArray<UFlight*> Queue() const;
 
-	/**
-	 * Clear at most one holding flight whose runway is free - UArrivalSequencer picks which -
-	 * and dispatch it. Nothing while paused. Run by UOpsRuntime's "ArrivalQueue" bus pass when an
-	 * event dirties it (ops batch 3 §5) - no longer every frame from UOpsRuntime::Tick.
-	 *
-	 * A REFUSED DISPATCH STAYS QUEUED with its stand re-held (see DispatchNow): the flight that
-	 * used to be lost at a busy ETA is now always landed eventually - FQueueTick::bRetry asks the
-	 * pass to look again next frame.
-	 * ENFORCED BY: AirportOps.Model.ArrivalQueue.DueWhileBusyWaitsThenLands
-	 */
+	/** Clear at most one holding flight whose runway is free, and dispatch it - the "ArrivalQueue" pass's one call. FORWARDS to
+	 *  FArrivalQueue::Tick (#442 item 4). Rule 33 reads THIS name: the pass alone calls it in production.
+	 *  ENFORCED BY: AirportOps.Model.ArrivalQueue.DueWhileBusyWaitsThenLands, Check-Architecture rule 33 (queue-is-a-pass) */
 	FQueueTick TickQueue(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
-	/**
-	 * A NEW FRAME FOR ONE CLEARANCE A FRAME (#445): the aircraft just cleared claims the runway on its first motion tick, so a
-	 * second clearance in the frame of the first would be decided before that claim exists - on two runways, onto a strip the first
-	 * is about to hold. The rule is the QUEUE'S, so its state is here: TickQueue clears at most one flight between two calls of this,
-	 * and says bDeferred when asked for another. UOpsRuntime::Tick calls it once per frame before the drain - the drain runs the
-	 * arrival pass more than once when a clearance's own Arriving event wakes it again, which is exactly the case - and it counted
-	 * the frames itself (DrainFrame, QueueClearedFrame) until this moved. THE RULE APPLIES ONLY ONCE A FRAME HAS BEGUN: a caller
-	 * that never calls this (a world-free test driving TickQueue by hand) sets its own pace and is not limited - a board that cleared one
-	 * flight and then refused for ever would be a trap for whoever called it without knowing.
-	 * ENFORCED BY: AirportOps.Present.ArrivalQueue.SecondRunwayNextFrame, AirportOps.Model.FlightBoard.OneClearanceAFrameIsTheQueuesRule
-	 */
-	void BeginQueueFrame()
-	{
-		bQueueFramed = true;
-		bClearedThisQueueFrame = false;
-	}
+	/** A NEW FRAME FOR ONE CLEARANCE A FRAME (#445) - the queue's own rule. FORWARDS to FArrivalQueue::BeginFrame.
+	 *  ENFORCED BY: AirportOps.Present.ArrivalQueue.SecondRunwayNextFrame, AirportOps.Model.FlightBoard.OneClearanceAFrameIsTheQueuesRule */
+	void BeginQueueFrame() { Arrivals.BeginFrame(); }
 
 	/** How many times TickQueue has run. For the runtime-wiring test. */
-	int32 TickQueueCallsForTest() const { return TickQueueCalls; }
+	int32 TickQueueCallsForTest() const { return Arrivals.TickCalls(); }
 
 	/** Everything accepted and not yet departed. */
 	TArray<UFlight*> Live() const;
@@ -700,9 +505,27 @@ public:
 	int32 PendingOfferCount() const { return OfferedCount; }
 
 	/** How many times TickOffers has copied Flights to walk them - its early-out's counter. */
-	int32 OfferSnapshotCountForTest() const { return OfferSnapshots; }
+	int32 OfferSnapshotCountForTest() const { return Inbox.OfferSnapshotCount(); }
 
 private:
+	/**
+	 * THE TWO OWNERS (#442 item 4), held by value - see each one's class comment. FRIENDS, as FTurnarounds is UJobBoard's: an
+	 * owner changes a phase only through TransitionTo, moves the one RevisionCount, and walks Flights; what else it may reach is
+	 * held by Check-Architecture rule 96, not by access (a friend sees everything). Declared before the members they read, so a
+	 * reader of this section meets the owners first.
+	 */
+	friend class FOfferInbox;
+	friend class FArrivalQueue;
+	FOfferInbox Inbox;
+	FArrivalQueue Arrivals;
+
+	/**
+	 * THE OWNERS' READ OF THE REGISTRY (#506 review): Flights, CONST - so "a friend only reads the live list" is the compiler's to hold,
+	 * not a regex's. Rule 96 refuses a reach of Flights itself from an owner's files; this is the one door.
+	 * ENFORCED BY: the compiler (a const reference), Check-Architecture rule 96 ('Flights' is not on the owners' list)
+	 */
+	const TArray<TObjectPtr<UFlight>>& LiveFlights() const { return Flights; }
+
 	/**
 	 * Every flight not yet in a terminal phase: offered, accepted, or anywhere between landing
 	 * and departing. TERMINAL flights (Declined, Expired, Departed, Cancelled, Withdrawn) are moved into History the
@@ -736,80 +559,6 @@ private:
 	mutable int32 WhyNotAcceptableCallsForTest = 0;
 
 	/**
-	 * Clock handles by flight id, so an accepted flight can be un-scheduled.
-	 *
-	 * NOT a UPROPERTY and NOT saved, on purpose: USimClock does not save its queue either,
-	 * and a handle restored against a queue that no longer holds it would cancel somebody
-	 * else's callback. UFlight::ArrivesAt is the saved truth; RearmSchedules rebuilds this.
-	 */
-	TMap<int32, int32> ArrivalHandles;
-
-	/** See VerdictFor. By flight id; MUTABLE because VerdictFor is const and caching an answer
-	 *  is bookkeeping about the board, not a change to what it holds. Not saved: a load starts
-	 *  every verdict invalid, one recompute away from correct. */
-	mutable TMap<int32, FOfferVerdict> Verdicts;
-
-	/**
-	 * Could a holding flight land, runway aside - the rest of the plan (exit, route, stand),
-	 * excluding its own stand hold - by flight id, cached on the guideline and occupancy
-	 * revisions like FOfferVerdict. The runway itself is asked live in TickQueue.
-	 *
-	 * THE CLEARANCE GATE (review C1/C2, 2026-09-28): the queue used to ask only "is the runway
-	 * busy" and hand everything else to the dispatcher, which refused - with a toast, four log
-	 * lines, a stand release and a board revision - every frame, for as long as the reason
-	 * lasted, and one stuck flight at the head blocked the rest. Now nothing is dispatched that
-	 * the plan would refuse, and a refusal is logged once, when its reason changes.
-	 */
-	struct FClearance
-	{
-		EArrivalRefusal Why = EArrivalRefusal::None;
-		uint32 GuidelineAt = 0;
-		uint32 OccupancyAt = 0;
-		bool bValid = false;
-	};
-	TMap<int32, FClearance> Clearances;
-
-	/**
-	 * A RE-HOLD THAT FOUND NO STAND, DATED (#497 review), by flight id - so the queue pass does not plan again, every pass, for
-	 * a flight that has none until something a plan reads has moved: ClearanceFor's two stamps; UGroundTraffic::
-	 * StandHoldChangeCount, because a body rolling off a stand's pose moves no OccupancyRevision (the blind spot
-	 * AirportOps.Model.ArrivalQueue.StandFreedByChurnIsNotStale pins); and the network itself, VerdictFor's reason. Session
-	 * state, never saved: a load starts it empty, one plan away from right.
-	 * ENFORCED BY: AirportOps.Model.FlightBoard.Rehold.FailedReholdIsDated
-	 */
-	struct FReholdMiss
-	{
-		FWeakObjectPtr Network;
-		uint32 GuidelineAt = 0;
-		uint32 OccupancyAt = 0;
-		uint32 StandChurnAt = 0;
-		bool operator==(const FReholdMiss& Other) const
-		{
-			return Network == Other.Network && GuidelineAt == Other.GuidelineAt && OccupancyAt == Other.OccupancyAt
-				&& StandChurnAt == Other.StandChurnAt;
-		}
-	};
-	TMap<int32, FReholdMiss> ReholdMisses;
-	int32 TickQueueCalls = 0;
-
-	/** Set by a clearance, cleared by BeginQueueFrame - see there. bQueueFramed: a frame has ever begun. Session state, never saved. */
-	bool bClearedThisQueueFrame = false;
-	bool bQueueFramed = false;
-
-	/**
-	 * Judges every flight still to arrive - accepted or holding - against the current guideline graph (#445), once per graph revision: the plan
-	 * with no occupancy (what the field could EVER take, as UOfferGenerator::CouldEverAdmit asks) into Clearances, so UnlandableWhy has an answer
-	 * for a flight that has not joined the queue AND one for a holding flight whatever the runway or the clock is doing - ClearanceFor is asked only
-	 * with the runway free and the clock running, which left a verdict older than the graph after any edit made while paused or behind a busy
-	 * runway (the FlightCannotLand alert cleared, and was raised again with a fresh toast). Run by TickQueue, first, which the pass runs when the
-	 * network changes. A TRANSIENT verdict (GraphBeingEdited) is not kept: see ClearanceFor.
-	 */
-	void JudgeUnarrived(const URoadNetwork& Network);
-
-	/** See Clearances. Logs on a change of reason; never bumps the revision. */
-	EArrivalRefusal ClearanceFor(const UGroundTraffic& Traffic, const URoadNetwork& Network, const UFlight& Flight);
-
-	/**
 	 * FindByAgent's and FindById's O(1) answer (issue #188 item 2).
 	 *
 	 * ByAgent is maintained at the sites that set or clear UFlight::AgentId: DispatchNow adds,
@@ -820,8 +569,8 @@ private:
 	 * place an entry actually leaves this map.
 	 *
 	 * NOT UPROPERTYs: a restored flight's own Id/AgentId fields are the saved truth, and these
-	 * are rebuilt from Flights and History in OnAfterRestore - the same split ArrivalHandles
-	 * above already uses for the clock's handles. (And in Serialize's load, since #425: the flights they
+	 * are rebuilt from Flights and History in OnAfterRestore - the same split FArrivalQueue's
+	 * ArrivalHandles already uses for the clock's handles. (And in Serialize's load, since #425: the flights they
 	 * pointed at are replaced there, and a map left naming the pre-load objects would answer with them.)
 	 */
 	TMap<int32, TObjectPtr<UFlight>> ByAgent;
@@ -830,9 +579,6 @@ private:
 	/** PendingOfferCount's O(1) answer. Maintained at every entry into and exit from the
 	 *  Offered phase; not a UPROPERTY, rebuilt in OnAfterRestore like the maps above. */
 	int32 OfferedCount = 0;
-
-	/** See OfferSnapshotCountForTest. A session counter, not saved. */
-	int32 OfferSnapshots = 0;
 
 	/**
 	 * THE ONE WRITER OF UFlight::Phase, AND THE OWNER OF WHAT A PHASE CHANGE DOES (#442). Thirteen sites wrote the phase and
@@ -852,13 +598,14 @@ private:
 	 *                the source is a Load; into History.
 	 *   Departed   - into History.
 	 * AND THE EFFECTS THAT DEPEND ON THE PHASE LEFT, not the one entered: leaving Offered drops the pending-offer count,
-	 * leaving Accepted disarms the arrival, leaving the ground lets go of the aeroplane (unhooks ByAgent and AgentId).
-	 * EVERY CHANGE bumps the revision once. A change to the phase the flight is already in is nothing, and says nothing.
+	 * leaving Accepted disarms the arrival (FArrivalQueue::Disarm), leaving the ground lets go of the aeroplane (unhooks ByAgent
+	 * and AgentId). EVERY CHANGE bumps the revision once, AND PUBLISHES FFlightPhaseChangedEvent once (#442 item 4) - what the
+	 * billing reaction hears. A change to the phase the flight is already in is nothing, and says nothing.
 	 *
 	 * WHAT IS NOT HERE, on purpose: the LOGS stay at each door (they carry the door's own context - the agent, the closure's
-	 * reason), the money stays in OnAgentPhase (PostLandingFee/PostParkingFee - billing is its own job, the issue's
-	 * Part 2), and DispatchNow's stand release stays before its dispatch (the planner must not see the hold), so the Landing
-	 * row does not release.
+	 * reason), the money is FlightBilling's REACTION to the publish above (it was OnAgentPhase's, inline, until #442 item 4 -
+	 * billing is its own job), and DispatchNow's stand release stays before its dispatch (the planner must not see the hold), so
+	 * the Landing row does not release.
 	 *
 	 * THE SWITCH ON THE PHASE ENTERED IS EXHAUSTIVE (AIRSIDE_EXHAUSTIVE_SWITCH): a new phase is a build error here, at the
 	 * one place that must say what entering it does.
@@ -873,42 +620,8 @@ private:
 	friend struct FFlightBoardTestAccess;
 
 	/** Cancel every arrival the clock holds for a flight and forget them, with the verdict and clearance caches keyed on the same
-	 *  ids: RearmSchedules's first half, and a load's step 0. */
+	 *  ids: RearmSchedules's first half, and a load's step 0. Both owners' share - FArrivalQueue::DisarmEvery, FOfferInbox::ForgetAll. */
 	void DisarmEveryArrival(USimClock& Clock);
-
-	/** Release the hold and put it on final, Now being the game time the change is dated. False, flight still Inbound and
-	 *  stand re-held (Rehold), if refused. */
-	bool DispatchNow(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight, double Now);
-
-	/**
-	 * THE ONE RE-HOLD (#471): hold Flight the stand a fresh plan taxis it to - PlanQuote, a busy runway queued, its own
-	 * hold not counting - through UStandAllocator::Hold, exactly as TryAccept holds its plan's stand. False, Flight
-	 * unchanged, when the plan names no stand (none free and reachable, or the plan refuses outright: a hold on a stand
-	 * the flight cannot reach guarantees nothing).
-	 *
-	 * EVERY RE-HOLD IS THIS - the queue's (ReconcileStandHolds, from TickQueue), a load's (the same, from
-	 * RestoreStandHolds), a failed dispatch's (DispatchNow).
-	 * ENFORCED BY: Check-Architecture rule 84 (stand-hold-is-a-plans-stand), AirportOps.Model.FlightBoard.Rehold.
-	 * LoadTakesTheReachableStand, .QueueTakesTheReachableStand, .FailedDispatchTakesTheReachableStand (each red with the
-	 * smallest-fit choice back). Each used to call UStandAllocator::Reserve, the smallest admitted unheld stand with no
-	 * reach check: an unconnected small stand beat a connected bigger one, and the queue's "every queued flight has
-	 * somewhere to go" held by size only. A full plan per re-hold is the cost - paid by a flight that has no hold, and not
-	 * again after a miss until something the plan reads has moved (FReholdMiss).
-	 */
-	bool Rehold(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight);
-
-	/**
-	 * THE BOARD'S DOOR ONTO THE ONE CONFLICT RULE (#442) - UStandAllocator::Reconcile, which states the rule and the pattern
-	 * (the occupancy table is the record of a flight's hold, UFlight::Stand the saved copy brought back to it) - with
-	 * Rehold as its re-hold and a revision bump when a copy changed. From TickQueue (after its closed exit, before its
-	 * paused one: a paused edit is reconciled too) and RestoreStandHolds; InOrder is who wins a contested stand.
-	 * ENFORCED BY: AirportOps.Present.RuntimeEdit.RefusedReholdAgreesWithTheTable, AirportOps.Model.FlightSave.RequeueDoesNotTakeAnAcceptedStand
-	 */
-	void ReconcileStandHolds(UGroundTraffic& Traffic, const URoadNetwork& Network, TConstArrayView<UFlight*> InOrder);
-
-	/** Into the queue: phase Inbound, HoldingSince = Since, stand kept. From the ETA callback and a load. */
-	void Enqueue(UFlight& Flight, double Since);
-	void Schedule(UGroundTraffic& Traffic, USimClock& Clock, UFlight& Flight);
 
 	/**
 	 * Retires Flight out of the live list: stamps TerminatedAt, moves it Flights -> History,
@@ -938,7 +651,8 @@ private:
 	 * THE PLAN HALF OF A QUOTE - ArrivalPlanner::Plan for Airframe at Focus, a busy runway queued (an accepted flight
 	 * waits for it, spec 2026-09-28-arrival-queue), ExcludingHolder's own stand hold not counting against it - with the
 	 * plan's sentence and the stand it taxis to. Counted in WhyNotAcceptableCallsForTest: it IS the expensive call.
-	 * VerdictFor caches it for a flight; QuoteArrival asks it uncached for an arrival that is not a flight yet.
+	 * VerdictFor caches it for a flight; QuoteArrival asks it uncached for an arrival that is not a flight yet. ON THE BOARD,
+	 * NOT AN OWNER (#442 item 4): the inbox's accept and the queue's re-hold both ask it, so neither may own it.
 	 */
 	FArrivalQuote PlanQuote(const UGroundTraffic& Traffic, const URoadNetwork& Network, const FAirframe& Airframe,
 		const FVector2D& Focus, int32 ExcludingHolder) const;

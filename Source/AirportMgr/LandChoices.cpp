@@ -85,6 +85,8 @@ FLandChoicesKey LandChoices::KeyFor(const URoadNetwork* Network, const UGroundTr
 	Key.bAdmits = bAdmits;
 	Key.bQuotes = bQuotes;
 	Key.OccupancyRevision = Traffic != nullptr ? Traffic->OccupancyRevision() : 0;
+	// AND THE BODIES ON STANDS (#497 re-review) - see FLandChoicesKey::StandChurn: the revision does not see one roll on.
+	Key.StandChurn = Traffic != nullptr ? Traffic->StandHoldChangeCount() : 0;
 	if (Network == nullptr)
 	{
 		return Key;

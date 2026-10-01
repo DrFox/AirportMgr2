@@ -418,4 +418,97 @@ bool FQueueDeadStandTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+namespace
+{
+	/**
+	 * Every LogAirportOps Warning saying a cleared flight's dispatch was refused, while registered. UNBUFFERED
+	 * (CanBeUsedOnMultipleThreads), or the dedicated log thread delivers the line after the spy is gone - the #216 reason.
+	 */
+	struct FQueueRefusalSpy : public FOutputDevice
+	{
+		int32 Lines = 0;
+		FQueueRefusalSpy() { GLog->AddOutputDevice(this); }
+		virtual ~FQueueRefusalSpy() override { GLog->RemoveOutputDevice(this); }
+		virtual bool CanBeUsedOnMultipleThreads() const override { return true; }
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category) override
+		{
+			if (Category == FName(TEXT("LogAirportOps")) && (Verbosity & ELogVerbosity::VerbosityMask) == ELogVerbosity::Warning
+				&& FCString::Strstr(V, TEXT("could not be cleared to land")) != nullptr)
+			{
+				++Lines;
+			}
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FQueueClearanceChurnTest, "AirportOps.Model.ArrivalQueue.ClearanceIsDatedByStandChurn",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FQueueClearanceChurnTest::RunTest(const FString& Parameters)
+{
+	// #497 RE-REVIEW: the clearance cache (FArrivalQueue's FClearance) was dated by the guideline and occupancy revisions alone, and a
+	// body the per-tick claim pass rolls onto or off a stand's pose moves NEITHER - only UGroundTraffic::StandHoldChangeCount, which
+	// FReholdMiss already reads. With an allocator the stand-less flight's re-hold bumps the revision first and hides the gap
+	// (StandFreedByChurnIsNotStale); with NO allocator there is no re-hold, so this measures the cache's own date: a body on the only
+	// stand, the clearance judged NoFreeStand, the body rolls off - and the next pass must judge again and clear it.
+	FQueueRig Rig;
+	Rig.Board->Allocator = nullptr;
+	UFlight* Flight = Holding(Rig, QueueAirframe().Wingspan, 1.0);
+	const FGuidelineNodeId Pose = Rig.Airport.Net->GetEntity(Rig.Airport.Stands[0])->PoseNode;
+	Rig.Traffic->OccupancyForTest().Assert(FTrafficClaim::Make(77, FTrafficResource::OfNode(Pose), /*bOccupied*/ true, 2));
+	Rig.Traffic->Advance(0.05, Rig.Airport.Net);
+	Rig.Tick();
+	if (!TestEqual(TEXT("PRECONDITION: a body on the only stand - nothing cleared"), Rig.Dispatched, 0)) { return false; }
+
+	const uint32 Revision = Rig.Traffic->OccupancyRevision();
+	const uint32 Churn = Rig.Traffic->StandHoldChangeCount();
+	Rig.Traffic->OccupancyForTest().ReleaseAll(77);
+	Rig.Traffic->Advance(0.05, Rig.Airport.Net);
+	if (!TestEqual(TEXT("PRECONDITION: the body rolled off with no occupancy revision - the blind spot"), Rig.Traffic->OccupancyRevision(), Revision)) { return false; }
+	if (!TestTrue(TEXT("PRECONDITION: but the stand churn counted it"), Rig.Traffic->StandHoldChangeCount() != Churn)) { return false; }
+	Rig.Tick();
+	TestEqual(TEXT("the clearance is judged again on the churn and the flight cleared - not the cached NoFreeStand"), Rig.Dispatched, 1);
+	TestEqual(TEXT("and it lands"), Flight->GetPhase(), EFlightPhase::Landing);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FQueueBodyOnStandQuietTest, "AirportOps.Model.ArrivalQueue.BodyOnTheStandRefusesNoDispatch",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FQueueBodyOnStandQuietTest::RunTest(const FString& Parameters)
+{
+	// #497 RE-REVIEW's FEAR: a body rolling ONTO a stand while the clearance is cached None would let the queue dispatch every frame
+	// into a refusal - a "could not be cleared to land" Warning a frame. Measured with the REAL dispatcher (DispatchArrival): the
+	// accepted flight's only stand gains a body while it holds for a busy runway, the runway frees, and thirty passes run. The
+	// clearance is re-judged (the plan sees the body: NoFreeStand), nothing is dispatched, and not one refusal is logged. Green before
+	// the churn date was added too: a None is never cached across a pass - the pass that judges it clears the flight in the same call,
+	// and a refused dispatch's release moves the occupancy revision - so the flood did not reproduce; this keeps it that way.
+	FQueueRig Rig;
+	UGroundTraffic* Traffic = Rig.Traffic;
+	URoadNetwork* Net = Rig.Airport.Net;
+	Rig.Board->Dispatcher = [Traffic, Net](const FVector2D& Near, const FAirframe& Frame)
+	{
+		return Traffic->DispatchArrival(*Net, Near, Frame, 1.0) != 0;
+	};
+	UFlight* Flight = Rig.Accepted(1.0);
+	if (!TestNotNull(TEXT("accepted"), Flight)) { return false; }
+	Rig.HoldRunway();
+	Rig.Clock->Advance(2.0);
+	Rig.Tick();
+	if (!TestEqual(TEXT("PRECONDITION: holding behind the busy runway"), Flight->GetPhase(), EFlightPhase::Inbound)) { return false; }
+
+	FQueueRefusalSpy Spy;
+	const FGuidelineNodeId Pose = Net->GetEntity(Rig.Airport.Stands[0])->PoseNode;
+	Traffic->OccupancyForTest().Assert(FTrafficClaim::Make(77, FTrafficResource::OfNode(Pose), /*bOccupied*/ true, 2));
+	Traffic->Advance(0.05, Net);
+	Rig.FreeRunway();
+	for (int32 Pass = 0; Pass < 30; ++Pass)
+	{
+		Rig.Clock->Advance(1.0 / 30.0);
+		Rig.Tick();
+	}
+	TestEqual(TEXT("a body on its stand: still holding"), Flight->GetPhase(), EFlightPhase::Inbound);
+	TestEqual(TEXT("nothing dispatched into the refusal"), Traffic->GetAgentCount(), 0);
+	TestEqual(TEXT("and no refused-dispatch Warning, let alone one a pass"), Spy.Lines, 0);
+	return true;
+}
+
 #endif
