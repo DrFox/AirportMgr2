@@ -390,6 +390,18 @@ public:
 	 */
 	UDynamicMeshComponent* GetLayerComponentForTest(ESurfaceLayer Layer) const { return GetLayerComponent(Layer); }
 
+	/**
+	 * Every triangle of the DRAWN ground surfaces, in world XY: the Road layer (roads,
+	 * taxiways, runways of every pavement, junctions) and the Apron layer (aprons, stand pads).
+	 * What the ground-cover grass keeps off (spec 2026-10-01-ground-cover-grass-design.md, 4.4).
+	 *
+	 * READ BACK FROM THE COMPONENTS, NOT RE-DERIVED: the mesh on screen is the footprint by
+	 * definition, so there is no second evaluator of the surface to drift from the first - the
+	 * same reason the guideline graph samples once. Paint layers lie on these and add nothing;
+	 * the ghost is a preview, not ground. Valid after a rebuild - OnNetworkChanged fires after.
+	 */
+	void ForEachSurfaceTriangle(TFunctionRef<void(const FVector2D&, const FVector2D&, const FVector2D&)> Visit) const;
+
 private:
 	/**
 	 * Rebuild and RebuildSurfaceOnly are one body (issue #165): both solve and build the road

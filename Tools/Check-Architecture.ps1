@@ -1867,7 +1867,8 @@ $ranRules.Add('turn-index-pairing')
 # plotted depot) - see the rule's own comment above for why each one is safe. Every other file
 # in the tree may still call IsPlotted(), but ONLY on a line that also names IsDepot() or
 # IsStand() - stating the kind explicitly, not leaning on IsPlotted() to mean one.
-$isPlottedAllowFiles = @('RoadEntity.h', 'RoadSurfacePresenter.cpp', 'RoadEditFacadeSurfaces.cpp', 'SelectTool.cpp', 'StagedPlotTool.cpp')
+# AirsideGroundCoverActor.cpp (2026-10-01): kind-neutral - grass keeps off a plotted stand's ground exactly as off a depot's.
+$isPlottedAllowFiles = @('RoadEntity.h', 'RoadSurfacePresenter.cpp', 'RoadEditFacadeSurfaces.cpp', 'SelectTool.cpp', 'StagedPlotTool.cpp', 'AirsideGroundCoverActor.cpp')
 foreach ($tree in $trees) {
     foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
         if ($isPlottedAllowFiles -contains $file.Name) { continue }
