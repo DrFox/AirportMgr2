@@ -114,8 +114,11 @@ public:
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnAgentPhaseChanged, const FAgentTransition& /*Transition*/);
 	FOnAgentPhaseChanged OnAgentPhaseChanged;
 
-	/** Fired when DispatchArrival refuses, with the planner's reason. The log line stays too. */
-	DECLARE_MULTICAST_DELEGATE_OneParam(FOnArrivalRefused, EArrivalRefusal);
+	/** Fired when DispatchArrival refuses, with the planner's reason and the plan's own sentence (ArrivalPlanner::
+	 *  DescribeRefusal(Plan) - its figures and admission, the line the log already writes). THE SENTENCE TRAVELS (#471):
+	 *  the reason alone reads "not admitted to that runway" for an arrivals-only field whose real reason is that nothing
+	 *  can take the departure, and a listener holding only the enum cannot recover the plan's figures. */
+	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnArrivalRefused, EArrivalRefusal /*Why*/, const FString& /*Sentence*/);
 	FOnArrivalRefused OnArrivalRefused;
 
 	/**

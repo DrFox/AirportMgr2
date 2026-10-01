@@ -1,10 +1,10 @@
 #include "Model/OpsEvents.h"
 #include "AirportOpsLog.h"
 
-void UOpsEvents::NotifyArrivalRefused(EArrivalRefusal Why)
+void UOpsEvents::NotifyArrivalRefused(EArrivalRefusal Why, const FString& Sentence)
 {
-	UE_LOG(LogAirportOps, Log, TEXT("Arrival refused: %s"), *UEnum::GetValueAsString(Why));
-	OnArrivalRefused.Broadcast(Why);
+	UE_LOG(LogAirportOps, Log, TEXT("Arrival refused: %s (%s)"), *UEnum::GetValueAsString(Why), *Sentence);
+	OnArrivalRefused.Broadcast(Why, Sentence);
 }
 
 void UOpsEvents::NotifySaveSlot(EOpsSaveOutcome Outcome, const FString& Slot)

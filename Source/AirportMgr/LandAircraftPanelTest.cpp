@@ -9,6 +9,8 @@
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
 #include "RoadBuildController.h"
+#include "RoadBuildLog.h"
+#include "HAL/PlatformTime.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Testing/AirsideTestGraph.h"
 #include "Model/OpsAlerts.h"
@@ -561,6 +563,153 @@ bool FLandWithNoRuntimeLandsNothingTest::RunTest(const FString& Parameters)
 	AddExpectedMessagePlain(TEXT("Land refused: no ops runtime"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
 	C->LandAircraftNearViewFocus(nullptr);
 	TestEqual(TEXT("nothing was dispatched onto the field"), Traffic->GetAgents().Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandPanelCostOnAScaleFieldTest,
+	"AirportMgr.UI.LandPanelCostOnAScaleField",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandPanelCostOnAScaleFieldTest::RunTest(const FString& Parameters)
+{
+	// #471 ITEM 5: WHAT ONE RE-QUOTE COSTS on a built-out field - every meshed type's whole arrival plan (UOpsRuntime::
+	// QuoteLanding, the panel's own lambda), which the open panel pays each time FLandChoicesKey moves, an occupancy change
+	// included. FTestAirport::BuildScale (#256's fixture: two runways, an 8x20 taxiway grid, 30 stands, 4 depots), twice:
+	// sized for the type with the SHORTEST landing field length (the small types plan to a stand, the big ones are refused
+	// at the runway) and for the LONGEST (no runway refuses on length, so every type searches the taxiways). Each type timed
+	// alone, so the log says which refusals cost what.
+	TArray<UAircraftType*> Types = LandChoices::EveryMeshedType();
+	if (!TestTrue(TEXT("meshed types to quote"), Types.Num() > 0)) { return false; }
+	UAircraftType* Shortest = Types[0];
+	UAircraftType* Longest = Types[0];
+	for (UAircraftType* Type : Types)
+	{
+		const double Field = Type->Airframe().Requirements.LandingFieldLength;
+		Shortest = Field < Shortest->Airframe().Requirements.LandingFieldLength ? Type : Shortest;
+		Longest = Field > Longest->Airframe().Requirements.LandingFieldLength ? Type : Longest;
+	}
+	// THE THIRD FIELD IS ONE THAT ADMITS: BuildScale's stands sit in its taxiways' strips, so on it every type that passes
+	// the runway is refused at the stand (NoStandClearOfStrip) and no whole successful plan is ever timed. FTestAirport's
+	// line of 30 stands beside one taxiway, sized for the shortest type, is.
+	for (int32 Variant = 0; Variant < 3; ++Variant)
+	{
+		UAircraftType* SizedFor = Variant == 1 ? Longest : Shortest;
+		FAirsideTestWorld TestWorld;
+		ARoadNetworkActor* Actor = TestWorld.Actor;
+		if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+		Actor->PlaceNode(FVector2D(-900000.0, -900000.0));
+		FTestAirportOptions ThirtyStands;
+		ThirtyStands.StandCount = 30;
+		ThirtyStands.bDerived = false;
+		const FTestAirport Field = Variant < 2
+			? FTestAirport::BuildScale(SizedFor->Airframe(), 20260921, /*bDerived=*/false, Actor->Network.Get())
+			: FTestAirport::Build(SizedFor->Airframe(), ThirtyStands, Actor->Network.Get());
+		Actor->RebuildMesh();
+		const UOpsRuntime* Runtime = LandPanelRuntime(*Actor);
+		if (!TestNotNull(TEXT("a runtime"), Runtime)) { return false; }
+
+		// THREE ROUNDS, the slowest kept per type: the frame a player feels is the worst one.
+		TMap<EArrivalRefusal, double> MsByWhy;
+		TMap<EArrivalRefusal, int32> CountByWhy;
+		double Total = 0.0;
+		for (UAircraftType* Type : Types)
+		{
+			double Worst = 0.0;
+			EArrivalRefusal Why = EArrivalRefusal::None;
+			for (int32 Round = 0; Round < 3; ++Round)
+			{
+				const double Start = FPlatformTime::Seconds();
+				Why = Runtime->QuoteLanding(Type->Airframe(), Field.Threshold).Why;
+				Worst = FMath::Max(Worst, (FPlatformTime::Seconds() - Start) * 1000.0);
+			}
+			MsByWhy.FindOrAdd(Why) += Worst;
+			++CountByWhy.FindOrAdd(Why);
+			Total += Worst;
+		}
+		FString ByWhy;
+		for (const TPair<EArrivalRefusal, int32>& Each : CountByWhy)
+		{
+			ByWhy += FString::Printf(TEXT(" %s x%d %.1f ms;"), *UEnum::GetValueAsString(Each.Key), Each.Value, MsByWhy[Each.Key]);
+		}
+		// AND WHAT THE GATE LEAVES OF IT: the occupancy-only re-quote (LandChoices::RequoteForOccupancy) over the same rows.
+		TArray<FLandChoice> Rows = LandPanelQuoted(*Runtime, Field.Threshold);
+		const double GateStart = FPlatformTime::Seconds();
+		const int32 Requoted = LandChoices::RequoteForOccupancy(Rows,
+			[Runtime, &Field](const FAirframe& Airframe) { return Runtime->QuoteLanding(Airframe, Field.Threshold); });
+		const double GateMs = (FPlatformTime::Seconds() - GateStart) * 1000.0;
+		const int32 Soft = Rows.FilterByPredicate([](const FLandChoice& Row) { return !ArrivalPlanner::IsPermanentRefusal(Row.Why); }).Num();
+		TestEqual(TEXT("an occupancy move re-quotes exactly the rows occupancy can change"), Requoted, Soft);
+
+		const TCHAR* FieldName = Variant < 2 ? TEXT("scale field") : TEXT("30-stand line");
+		UE_LOG(LogRoadBuild, Log, TEXT("LandPanelCost: %s sized for %s - %d types, %.1f ms per re-quote (worst of 3 per type):%s - an occupancy move re-quotes %d row(s), %.1f ms"),
+			FieldName, *SizedFor->GetName(), Types.Num(), Total, *ByWhy, Requoted, GateMs);
+		AddInfo(FString::Printf(TEXT("Land panel re-quote on the %s sized for %s: %.1f ms whole, %.1f ms on an occupancy move"),
+			FieldName, *SizedFor->GetName(), Total, GateMs));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandPanelRequotesOnlyWhatOccupancyCanChangeTest,
+	"AirportMgr.UI.LandPanelRequotesOnlyWhatOccupancyCanChange",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandPanelRequotesOnlyWhatOccupancyCanChangeTest::RunTest(const FString& Parameters)
+{
+	// #471 ITEM 5's GATE, through the widget: an occupancy move re-quotes only the rows it can change, and those rows still
+	// TRACK it - a row greyed is still exactly a click the game would refuse. Two stands: both held turns every admitted
+	// row to NoFreeStand; both freed admits them again. The permanently refused rows (a type the strips do not admit) are
+	// never re-quoted by either.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-300000.0, -300000.0));
+	const FTestTwoRunways Field = FTestTwoRunways::Build(UAirsideSettings::ResolveDefaultAirframe(), Actor->Network);
+	if (!TestEqual(TEXT("two stands"), Field.Stands.Num(), 2)) { return false; }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(Actor);
+	ULandAircraftPanelWidget* Panel = CreateWidget<ULandAircraftPanelWidget>(TestWorld.World, ULandAircraftPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+	UOpsRuntime* Runtime = LandPanelRuntime(*Actor);
+	UGroundTraffic* Traffic = Actor->GetGroundTraffic();
+	if (!TestNotNull(TEXT("traffic"), Traffic)) { return false; }
+
+	Panel->RefreshFor(C, Runtime);
+	const int32 Rows = Panel->RowWidgetCountForTest();
+	if (!TestTrue(TEXT("rows"), Rows > 0)) { return false; }
+	TArray<int32> Admitted;
+	for (int32 Row = 0; Row < Rows; ++Row)
+	{
+		if (Panel->IsRowEnabledForTest(Row)) { Admitted.Add(Row); }
+	}
+	if (!TestTrue(TEXT("PRECONDITION: some rows admitted and some refused - the case under test"), Admitted.Num() > 0 && Admitted.Num() < Rows)) { return false; }
+	TestEqual(TEXT("CONTROL: the first judgement quotes every row"), Panel->RowQuoteCountForTest(), Rows);
+
+	auto QuotesFor = [&](TFunctionRef<void()> Change)
+	{
+		const int32 Before = Panel->RowQuoteCountForTest();
+		Change();
+		Panel->RefreshFor(C, Runtime);
+		return Panel->RowQuoteCountForTest() - Before;
+	};
+	const int32 BothHeld = QuotesFor([&]() { Traffic->HoldStand(-98, Field.Pose(0)); Traffic->HoldStand(-99, Field.Pose(1)); });
+	TestTrue(FString::Printf(TEXT("both stands held: only the rows occupancy can change are re-quoted (%d of %d)"), BothHeld, Rows),
+		BothHeld > 0 && BothHeld < Rows);
+	bool bAllGreyed = true;
+	for (const int32 Row : Admitted) { bAllGreyed &= !Panel->IsRowEnabledForTest(Row); }
+	TestTrue(TEXT("and every admitted row now greys - nowhere to park"), bAllGreyed);
+
+	const int32 Freed = QuotesFor([&]() { Traffic->ReleaseHold(-98); Traffic->ReleaseHold(-99); });
+	TestEqual(TEXT("both freed: the same rows, and no more, are re-quoted"), Freed, BothHeld);
+	bool bAllBack = true;
+	for (const int32 Row : Admitted) { bAllBack &= Panel->IsRowEnabledForTest(Row); }
+	TestTrue(TEXT("and they are admitted again - NoFreeStand cleared on its own"), bAllBack);
+
+	// CONTROL: ANYTHING ELSE IN THE KEY STILL JUDGES EVERY ROW - here a new network.
+	Actor->ClearNetwork();
+	TestEqual(TEXT("a new network: every row quoted again"), QuotesFor([]() {}), Rows);
 	return true;
 }
 

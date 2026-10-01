@@ -156,7 +156,11 @@ namespace RunwayAdmission
 
 	FString Describe(const FRunwayAdmission& Admission)
 	{
-		// SAID AS THE DEPARTURE when it is one: "the runway is 40366 uu" alone would read as a
+		// IN METRES (#471), 100 uu to the metre: since #470 the Land panel's rows and every toast show this sentence, and
+		// "the runway is 60000 uu" is a sentence for the log, not for a player choosing an aeroplane - the rule the old
+		// panel kept for itself (LandChoiceRefusal), deleted with it. HERE, so every reader says metres at once rather than
+		// each converting a figure it was handed in uu.
+		// SAID AS THE DEPARTURE when it is one: "the runway is 404 m" alone would read as a
 		// landing refusal, and the landing fitted.
 		if (Admission.bForDeparture && !Admission.IsAdmitted())
 		{
@@ -176,12 +180,12 @@ namespace RunwayAdmission
 				RunwayApproachName(Admission.Required.ApproachNeeded));
 
 		case ERunwayRefusal::TooShort:
-			return FString::Printf(TEXT("the runway is %.0f uu; this aircraft's field length is %.0f"),
-				Admission.RunwayLength, Admission.FieldLength);
+			return FString::Printf(TEXT("the runway is %.0f m; this aircraft's field length is %.0f m"),
+				Admission.RunwayLength / 100.0, Admission.FieldLength / 100.0);
 
 		case ERunwayRefusal::TooNarrow:
-			return FString::Printf(TEXT("the runway admits a %.0f uu wingspan; this aircraft's is %.0f"),
-				Admission.MaxWingspan, Admission.Wingspan);
+			return FString::Printf(TEXT("the runway admits a %.1f m wingspan; this aircraft's is %.1f m"),
+				Admission.MaxWingspan / 100.0, Admission.Wingspan / 100.0);
 
 		case ERunwayRefusal::NoDepartureRunway:
 			return TEXT("every runway is set to arrivals only - set one to departures or mixed");

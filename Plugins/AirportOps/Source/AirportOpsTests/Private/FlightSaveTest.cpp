@@ -420,7 +420,7 @@ bool FFlightRequeueKeepsAcceptedStandTest::RunTest(const FString& Parameters)
 	Rig.Traffic->ReleaseHold(Promised->HolderId());
 
 	const TArray<UFlight*> Requeued = Rig.Board->DemoteRestoredMidFlight(Rig.Clock->Now());
-	Rig.Board->OnGraphRebuilt(*Rig.Traffic, *Rig.Field.Net, Requeued);
+	Rig.Board->RestoreStandHolds(*Rig.Traffic, *Rig.Field.Net, Requeued);
 
 	TestTrue(TEXT("the accepted flight keeps the stand it was promised"), Promised->Stand == PromisedStand && Rig.HeldBy(*Promised));
 	TestTrue(TEXT("the re-queued flight gave it up"), Requeue->Stand != PromisedStand);
@@ -445,7 +445,7 @@ bool FFlightRequeueOffDeadStandTest::RunTest(const FString& Parameters)
 
 	AddExpectedMessagePlain(TEXT("which is gone from the graph"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
 	const TArray<UFlight*> Requeued = Rig.Board->DemoteRestoredMidFlight(Rig.Clock->Now());
-	Rig.Board->OnGraphRebuilt(*Rig.Traffic, *Rig.Field.Net, Requeued);
+	Rig.Board->RestoreStandHolds(*Rig.Traffic, *Rig.Field.Net, Requeued);
 	TestTrue(TEXT("its dead stand is replaced, not kept as a hold on nothing"), Requeue->Stand != Dead);
 	TestTrue(TEXT("and the live one is reserved for it during the load"), Requeue->Stand == Alive && Rig.HeldBy(*Requeue));
 	return true;
@@ -477,7 +477,7 @@ bool FFlightUnchargedLandingTest::RunTest(const FString& Parameters)
 	Flight->bLandingFeePaid = false;
 
 	const TArray<UFlight*> Requeued = Rig.Board->DemoteRestoredMidFlight(Rig.Clock->Now());
-	Rig.Board->OnGraphRebuilt(*Traffic, *Net, Requeued);
+	Rig.Board->RestoreStandHolds(*Traffic, *Net, Requeued);
 	Rig.Clock->Advance(1.0);
 	Rig.Board->TickQueue(*Traffic, *Net, *Rig.Clock);
 	if (!TestEqual(TEXT("it lands again"), Flight->GetPhase(), EFlightPhase::Landing)) { return false; }

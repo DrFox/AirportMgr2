@@ -883,20 +883,22 @@ namespace ArrivalPlanner
 		//
 		// Only the branches that have FIGURES are spelled out here; the rest defer to the
 		// reason-only overload above, which is the one source for that wording.
+		// THE FIGURES IN METRES (#471) - a player reads this sentence on the Land panel and in a toast; see
+		// RunwayAdmission::Describe, which the NotAdmitted branch hands the rest to, for the same rule.
 		switch (Plan.Why)
 		{
 		case EArrivalRefusal::RunwayTooShort:
 			return FString::Printf(
-				TEXT("Arrival refused: the runway is %.0f uu and this aircraft needs %.0f to ")
+				TEXT("Arrival refused: the runway is %.0f m and this aircraft needs %.0f m to ")
 				TEXT("stop. Draw a longer runway."),
-				Plan.End.Length, Plan.Needed);
+				Plan.End.Length / 100.0, Plan.Needed / 100.0);
 
 		case EArrivalRefusal::NoExit:
 			return FString::Printf(
-				TEXT("Arrival refused: landing %s, nothing joins the runway beyond %.0f uu, so ")
+				TEXT("Arrival refused: landing %s, nothing joins the runway beyond %.0f m, so ")
 				TEXT("there is no exit this aircraft could take. Connect a taxiway further down it, ")
 				TEXT("or change the runway in use.%s"),
-				*RunwayDesignator::ToText(RunwayDesignator::Designate(Plan.End.Direction)), Plan.Needed,
+				*RunwayDesignator::ToText(RunwayDesignator::Designate(Plan.End.Direction)), Plan.Needed / 100.0,
 				*OtherEndSentence(Plan));
 
 		case EArrivalRefusal::NoRouteToStand:

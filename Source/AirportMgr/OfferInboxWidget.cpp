@@ -199,8 +199,9 @@ void UOfferInboxWidget::Refresh(ARoadNetworkActor* Target)
 	if (Runtime == nullptr || Traffic == nullptr || Runtime->GetFlightBoard() == nullptr
 		|| Runtime->GetClock() == nullptr)
 	{
-		// The editor mode has no game instance and so no runtime. Nothing to show, and
-		// nothing wrong: the inbox is a play-mode panel.
+		// NO RUNTIME ONLY IN A HEADLESS TEST that resolved none (OpsRuntimeResolver) - nothing to show, and nothing
+		// wrong. Not "the editor mode", which never builds the inbox: the HUD layer that does is ARoadBuildController's,
+		// and in PIE the runtime is a game-instance subsystem that always exists (#471).
 		return;
 	}
 

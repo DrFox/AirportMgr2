@@ -653,8 +653,8 @@ bool UJobBoard::CouldServe(const UGroundTraffic& Traffic, const URoadNetwork& Ne
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)
 	{
 		const FEntityInstance& Stand = Entities[Index];
-		// THE SAME TWO FILTERS UStandAllocator::Reserve applies, so "a stand it would take" means the
-		// stand the accept would actually hold.
+		// THE SAME TWO FILTERS UStandAllocator::Hold applies to every stand it holds (Reserve's, until #471 took Reserve
+		// away), so "a stand it would take" means a stand an accept could actually hold.
 		if (!Stand.IsStandCandidate() || !StandAdmission::Judge(Network, Stand, Airframe).IsAdmitted())
 		{
 			continue;

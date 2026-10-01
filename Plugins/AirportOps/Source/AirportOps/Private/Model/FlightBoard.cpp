@@ -248,18 +248,23 @@ const FOfferVerdict& UFlightBoard::VerdictFor(const UGroundTraffic& Traffic,
 	const uint32 BoardNow = Revision();
 	const uint32 GuidelineNow = Network.GetGuidelineRevision();
 	const uint32 OccupancyNow = Traffic.OccupancyRevision();
+	// THE NETWORK AND ITS EDIT CLOCK (#471) - FLandChoicesKey's two: a pre-drag yes must not be served mid-drag (the plan
+	// answers GraphBeingEdited then, and the stand it named is about to be held), and another network's equal numbers are
+	// not this graph. See FOfferVerdict.
+	const uint32 EditNow = Network.GetEditRevision();
+	const bool bSameNetwork = Verdict.Network.Get() == &Network;
 	// THE FLEET'S COMPOSITION, not its transitions (#443): CouldServe reads which vehicles exist, of what kind and where,
 	// and never a vehicle's state, so a truck arriving or finishing a refill must not re-plan the offer.
 	const uint32 FleetNow = Fuel != nullptr ? Fuel->GetFleetCompositionRevision() : 0;
 	// BOTH DECIDED BEFORE EITHER IS REDONE: the guideline stamp is shared, and the first recompute would write it.
-	const bool bPlanStale = !Verdict.bValid || Verdict.BoardAt != BoardNow || Verdict.GuidelineAt != GuidelineNow
-		|| Verdict.OccupancyAt != OccupancyNow;
+	const bool bPlanStale = !Verdict.bValid || !bSameNetwork || Verdict.BoardAt != BoardNow || Verdict.GuidelineAt != GuidelineNow
+		|| Verdict.OccupancyAt != OccupancyNow || Verdict.EditAt != EditNow;
 	// bFuelServable is CouldServe(Traffic, Network, Flight.Airframe): the airport's shape (the guideline graph - depots,
 	// roads, stands, modules) and the fleet's composition, which includes which vehicles are stranded (#443: the traffic model
 	// is asked who is, and the composition counter moves when one strands or moves again). Not the board (the airframe is the
 	// flight's own, fixed) and not occupancy (it judges no traffic's whereabouts).
 	// ENFORCED BY: AirportOps.Fuel.CouldServe.StrandingMovesTheCompositionAndTheVerdict
-	const bool bFuelStale = !Verdict.bValid || Verdict.GuidelineAt != GuidelineNow || Verdict.FleetAt != FleetNow;
+	const bool bFuelStale = !Verdict.bValid || !bSameNetwork || Verdict.GuidelineAt != GuidelineNow || Verdict.FleetAt != FleetNow;
 	if (bPlanStale)
 	{
 		// THE REAL PLAN, with the live occupancy. The greyed-out reason is the sentence the
@@ -271,6 +276,7 @@ const FOfferVerdict& UFlightBoard::VerdictFor(const UGroundTraffic& Traffic,
 		Verdict.Stand = Plan.Stand;
 		Verdict.BoardAt = BoardNow;
 		Verdict.OccupancyAt = OccupancyNow;
+		Verdict.EditAt = EditNow;
 	}
 	if (bFuelStale)
 	{
@@ -278,6 +284,7 @@ const FOfferVerdict& UFlightBoard::VerdictFor(const UGroundTraffic& Traffic,
 		Verdict.FleetAt = FleetNow;
 	}
 	Verdict.GuidelineAt = GuidelineNow;
+	Verdict.Network = &Network;
 	Verdict.bValid = true;
 	return Verdict;
 }
@@ -627,31 +634,38 @@ FQueueTick UFlightBoard::TickQueue(UGroundTraffic& Traffic, const URoadNetwork& 
 		Result.bClosed = true;
 		return Result;
 	}
-	if (Clock.IsPaused() || Waiting.Num() == 0)
-	{
-		return Result;
-	}
 
 	// A HOLDING FLIGHT WITH NO STAND TAKES ONE BACK the moment one is free (review I1): the
 	// stand is what makes an accept safe, and a holder without one could land on a stand the
-	// next accept was promised. Reserve is a stand walk, no route search.
+	// next accept was promised. AND ANY UNARRIVED FLIGHT WHOSE HOLD WAS LOST (#442) - an edit's rebuild that could
+	// not re-make it - gives the stand up and is re-held, so its Stand agrees with the table. ONE ROUTINE for both,
+	// the load's too: see ReconcileStandHolds.
 	//
 	// A DEAD STAND COUNTS AS NONE (PR C's follow-up, done in PR D): Reapply keeps a deleted stand on the flight as
 	// HeldStandLost's evidence, and a load that found no free stand leaves it there - so an Inbound flight naming a
-	// gone stand must take one back here, the first time a stand frees, exactly as OnGraphRebuilt's load-time pass
-	// does. Reserve overwrites the dead Stand, which clears the alert by the same test.
-	// ENFORCED BY: AirportOps.Model.ArrivalQueue.DeadStandReservesWhenOneFrees
-	if (Allocator != nullptr)
+	// gone stand must take one back here, the first time a stand frees, exactly as RestoreStandHolds' load-time pass
+	// does. The re-hold overwrites the dead Stand, which clears the alert by the same test.
+	// AFTER THE CLOSED EXIT, as it always was (a closed airport takes no stand for a flight it will not land), and NOW
+	// BEFORE THE PAUSED ONE (#442): the player edits paused, and a hold that edit lost must not wait for the clock -
+	// meanwhile the next accept could take the stand it is owed. The queue first, in its order (it lands sooner), then
+	// the accepted flights - a re-hold is a plan per flight that HAS no hold, nothing for one that has.
+	// ENFORCED BY: AirportOps.Model.ArrivalQueue.DeadStandReservesWhenOneFrees,
+	// AirportOps.Present.RuntimeEdit.RefusedReholdAgreesWithTheTable (paused, and an Accepted flight)
 	{
-		for (UFlight* Each : Waiting)
+		TArray<UFlight*> InOrder = Waiting;
+		for (const TObjectPtr<UFlight>& Each : Flights)
 		{
-			if ((!Each->Stand.IsSet() || UStandAllocator::HeldStandIsGone(*Each, Network))
-				&& Allocator->Reserve(Traffic, Network, *Each))
+			if (Each != nullptr && Each->GetPhase() == EFlightPhase::Accepted)
 			{
-				UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) holding: stand %d held again"),
-					Each->Id, *Each->Callsign, Each->Stand.Index);
+				InOrder.Add(Each);
 			}
 		}
+		ReconcileStandHolds(Traffic, Network, InOrder);
+	}
+
+	if (Clock.IsPaused() || Waiting.Num() == 0)
+	{
+		return Result;
 	}
 
 	// LIVE RUNWAY, CACHED REST - see ClearanceFor. Together they are exactly the Refuse plan the
@@ -714,7 +728,8 @@ bool UFlightBoard::DispatchNow(UGroundTraffic& Traffic, const URoadNetwork& Netw
 		// the flight Accepted with no stand for ever. RARE since the clearance gate: TickQueue
 		// only dispatches what the same plan just said yes to, so this is a same-frame race,
 		// not a standing condition - retried next frame, never dropped.
-		const bool bReheld = Allocator != nullptr && Allocator->Reserve(Traffic, Network, Flight);
+		// THROUGH Rehold (#471): the stand a plan taxis it to, not the smallest that fits by size.
+		const bool bReheld = Rehold(Traffic, Network, Flight);
 		UE_LOG(LogAirportOps, Warning,
 			TEXT("Flight %d could not be cleared to land; still holding%s"), Flight.Id,
 			bReheld ? TEXT(", stand re-held") : TEXT(" WITH NO STAND - no admitting stand was free to re-hold"));
@@ -977,7 +992,7 @@ void UFlightBoard::RestoreAfterLoad(UGroundTraffic* Traffic, const URoadNetwork&
 			Requeued.Num() + Cancelled);
 		return;
 	}
-	OnGraphRebuilt(*Traffic, Network, Requeued);
+	RestoreStandHolds(*Traffic, Network, Requeued);
 	RearmSchedules(*Traffic, Network, Clock);
 
 	UE_LOG(LogAirportOps, Log, TEXT("Load: flights restored - %d re-queued, %d cancelled at a closed airport, %d live"),
@@ -1018,7 +1033,7 @@ TArray<UFlight*> UFlightBoard::DemoteRestoredMidFlight(double Now)
 		{
 			// INBOUND, at the BACK of the queue (HoldingSince = now, not its old ETA: the flights that were already
 			// holding when the game was saved were waiting first). Its Stand is still the one it was accepted onto;
-			// OnGraphRebuilt holds it again AFTER every genuine holder, and finds it another if that one was taken.
+			// RestoreStandHolds holds it again AFTER every genuine holder, and finds it another if that one was taken.
 			// bLandingFeePaid IS LEFT AS SAVED rather than forced true: it is saved and set with the ledger post
 			// (PostLandingFee), so a flight that was charged stays charged and its second landing posts nothing - and
 			// one saved before its landing was heard is charged once, when it lands.
@@ -1053,7 +1068,7 @@ int32 UFlightBoard::CancelUnarrivedAtLoad(double Now, UGroundTraffic* Traffic, U
 	// were the first case found; an Accepted flight saved at the closed airport is the other. CANCELLED, UNSCORED:
 	// NOTHING IS PUBLISHED, so the roster charges neither ClosureCancelPenalty nor anything else; what closed the
 	// airport happened before the save, and its own cancellations were scored then. Called before RearmSchedules and
-	// OnGraphRebuilt, so no arrival is armed and no stand held for any of them - AND, SINCE #442, CORRECT WHEREVER IT IS
+	// RestoreStandHolds, so no arrival is armed and no stand held for any of them - AND, SINCE #442, CORRECT WHEREVER IT IS
 	// CALLED: it goes through the same Cancelled row a closure does, which releases the stand and disarms the arrival
 	// when given the means (Traffic, Clock) and publishes nothing for a Load source.
 	// ENFORCED BY: AirportOps.Present.RuntimeLoad.MidFlightAtClosedAirport, AirportOps.Present.Airport.ClosedLoadCancelsTheUnarrived,
@@ -1284,7 +1299,7 @@ void UFlightBoard::OnAgentPhase(const URoadNetwork& Network, const USimClock& Cl
 	}
 }
 
-void UFlightBoard::OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& Network, const TArray<UFlight*>& HoldLast)
+void UFlightBoard::RestoreStandHolds(UGroundTraffic& Traffic, const URoadNetwork& Network, const TArray<UFlight*>& HoldLast)
 {
 	if (Allocator == nullptr)
 	{
@@ -1308,14 +1323,65 @@ void UFlightBoard::OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& N
 	Allocator->Reapply(Traffic, Network, Holding);
 
 	// A HOLDING FLIGHT WITHOUT A STAND TAKES ONE NOW (review I1) - one Reapply just refused, or one whose stand is
-	// gone (Reapply keeps a dead Stand for the HeldStandLost alert; a Reserve overwrites it) - rather than on the
+	// gone (Reapply keeps a dead Stand for the HeldStandLost alert; a re-hold overwrites it) - rather than on the
 	// first frame's TickQueue, whose same pass this is: a load must not hand the next
-	// accept a stand the queue was owed. After every Reapply, so no genuine hold is beaten to its own stand.
+	// accept a stand the queue was owed. After every Reapply, so no genuine hold is beaten to its own stand - and in
+	// Holding's order, the genuine holds before the re-queued. THE SAME ROUTINE AN EDIT'S REFUSAL MEETS (#442): Reapply
+	// no longer settles a refusal itself, so one conflict has one outcome whichever door it came through.
 	// ENFORCED BY: AirportOps.Model.FlightSave.RequeueDoesNotTakeAnAcceptedStand, AirportOps.Model.FlightSave.RequeueOffADeadStandReserves
-	for (UFlight* Each : Holding)
+	ReconcileStandHolds(Traffic, Network, Holding);
+}
+
+bool UFlightBoard::Rehold(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight)
+{
+	if (Allocator == nullptr)
 	{
-		if (Each->GetPhase() == EFlightPhase::Inbound && (!Each->Stand.IsSet() || UStandAllocator::HeldStandIsGone(*Each, Network))
-			&& Allocator->Reserve(Traffic, Network, *Each))
+		return false;
+	}
+	// THE PLAN'S STAND, as TryAccept holds it (#471) - asked fresh, not read from VerdictFor's cache: that verdict is an
+	// offer's, kept while the flight is one, and this flight's offer is long answered. Its own hold does not count against
+	// it (ExcludingHolder), which matters to nothing here - a flight re-held has none - but is the clearance gate's rule
+	// for the same plan, so the two cannot disagree about which stand this flight could reach.
+	const FArrivalQuote Plan = PlanQuote(Traffic, Network, Flight.Airframe, Flight.RunwayPreference, Flight.HolderId());
+	return Plan.Stand.IsSet() && Allocator->Hold(Traffic, Network, Flight, Plan.Stand);
+}
+
+void UFlightBoard::ReconcileStandHolds(UGroundTraffic& Traffic, const URoadNetwork& Network, TConstArrayView<UFlight*> InOrder)
+{
+	if (Allocator == nullptr)
+	{
+		return;
+	}
+	for (UFlight* Each : InOrder)
+	{
+		if (Each == nullptr || !Each->IsUnarrived())
+		{
+			continue;
+		}
+		// THE COPY SAYS A STAND THE RECORD DOES NOT (see the header): given up, said, and re-held at once.
+		const bool bLost = UStandAllocator::HoldIsLost(*Each, Traffic, Network);
+		if (bLost)
+		{
+			const FEntityInstanceId Lost = Each->Stand;
+			Each->Stand = FEntityInstanceId();
+			// TWO LINES, not one with the outcome formatted in: a stand's index is for the log, never a string a player
+			// could be shown (Check-Architecture's text-not-compared-or-indexed, #447).
+			if (Rehold(Traffic, Network, *Each))
+			{
+				UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) no longer holds stand %d - another holder has it; stand %d held instead"),
+					Each->Id, *Each->Callsign, Lost.Index, Each->Stand.Index);
+			}
+			else
+			{
+				UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) no longer holds stand %d - another holder has it; no reachable stand is free, so it holds none until one frees"),
+					Each->Id, *Each->Callsign, Lost.Index);
+			}
+			++RevisionCount;
+			continue;
+		}
+		if (Each->GetPhase() == EFlightPhase::Inbound
+			&& (!Each->Stand.IsSet() || UStandAllocator::HeldStandIsGone(*Each, Network))
+			&& Rehold(Traffic, Network, *Each))
 		{
 			UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) holding: stand %d held again"),
 				Each->Id, *Each->Callsign, Each->Stand.Index);

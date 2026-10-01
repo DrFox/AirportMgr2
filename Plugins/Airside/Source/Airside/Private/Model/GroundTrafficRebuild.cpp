@@ -580,7 +580,11 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 	}
 	// AND THE FLIGHTS' HOLDS, on the same stands - after the agents' goals, which are bodies and routes already
 	// committed. A refusal would mean an agent's goal and a flight's hold named one stand before the rebuild too,
-	// which HoldStand refuses at the door; said as a Warning, not assumed away.
+	// which HoldStand refuses at the door; said as a Warning, not assumed away. AND NOT SETTLED HERE (#442): this
+	// model knows a holder id, not a flight. The table is the record; AirportOps' flight board reads it on the edit's
+	// own announcement and gives up and re-holds whatever a refusal left its copy naming (UFlightBoard::
+	// ReconcileStandHolds) - the same routine a load's refusal meets.
+	// ENFORCED BY: AirportOps.Present.RuntimeEdit.RefusedReholdAgreesWithTheTable
 	for (const TPair<int32, FEntityInstanceId>& Hold : StandHolds)
 	{
 		const FEntityInstance* Stand = Network.GetEntity(Hold.Value);

@@ -260,7 +260,7 @@ bool FQueueSurvivesSaveTest::RunTest(const FString& Parameters)
 	Loaded.Board->Allocator = NewObject<UStandAllocator>(GetTransientPackage());
 	Loaded.Board->Sequencer = NewObject<UArrivalSequencer>(GetTransientPackage());
 	Loaded.Board->Dispatcher = [&Loaded](const FVector2D&, const FAirframe&) { ++Loaded.Dispatched; return true; };
-	Loaded.Board->OnGraphRebuilt(*Loaded.Traffic, *Loaded.Airport.Net);
+	Loaded.Board->RestoreStandHolds(*Loaded.Traffic, *Loaded.Airport.Net);
 	Loaded.Board->RearmSchedules(*Loaded.Traffic, *Loaded.Airport.Net, *Loaded.Clock);
 
 	if (!TestEqual(TEXT("it comes back queued"), Loaded.Board->Queue().Num(), 1)) { return false; }
@@ -399,14 +399,22 @@ bool FQueueDeadStandTest::RunTest(const FString& Parameters)
 
 	const FEntityInstanceId Dead = Holding->Stand;
 	Rig.Airport.Net->RemoveEntity(Dead);
+	// AND THE GRAPH RE-DERIVED, as the deletion's own rebuild does in play: since #471 a re-hold is a plan, which refuses a
+	// graph behind the road (GraphBeingEdited) - the size-only re-hold it replaced read no graph at all.
+	TestGraph::Rebuild(*Rig.Airport.Net);
 	TestTrue(TEXT("its stand is gone"), UStandAllocator::HeldStandIsGone(*Holding, *Rig.Airport.Net));
 	Rig.Tick();
 	TestEqual(TEXT("no stand is free, so it keeps the dead one"), Holding->Stand, Dead);
 
+	// THE STAND FREES BEHIND THE BOARD'S BACK - the table lets go and Later's copy is left naming it. Since #442 the pass
+	// brings that copy back to the table too (ReconcileStandHolds): Later gives the stand up, after the holding flight - the
+	// queue is reconciled first - has taken it.
+	const FEntityInstanceId Freed = Later->Stand;
 	Rig.Traffic->ReleaseHold(Later->HolderId());
 	Rig.Tick();
-	TestEqual(TEXT("a stand frees: the holding flight takes it"), Holding->Stand, Later->Stand);
+	TestEqual(TEXT("a stand frees: the holding flight takes it"), Holding->Stand, Freed);
 	TestTrue(TEXT("and holds it"), Rig.StandHeldFor(*Holding));
+	TestFalse(TEXT("and the accepted flight whose hold went names it no more - its copy agrees with the table"), Later->Stand.IsSet());
 	return true;
 }
 

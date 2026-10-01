@@ -91,8 +91,12 @@ public:
 	/** What row Index last showed as its refusal, empty when admitted. */
 	FString RowRefusalForTest(int32 Index) const { return PaintedRefusals.IsValidIndex(Index) ? PaintedRefusals[Index] : FString(); }
 
-	/** How many times Refresh actually asked LandChoices::Build - FLandChoicesKey's gate's counter. */
+	/** How many times Refresh actually judged the rows - a whole LandChoices::Build, or an occupancy-only
+	 *  RequoteForOccupancy - FLandChoicesKey's gate's counter. */
 	int32 BuildCountForTest() const { return BuildCalls; }
+
+	/** How many single-row quotes (each a whole arrival plan) every judgement has asked for - the cost the gate saves. */
+	int32 RowQuoteCountForTest() const { return RowQuotes; }
 
 	/** Where the types come from, instead of LandChoices::EveryMeshedType - so a test can have none, then some. */
 	void SetTypeSourceForTest(TFunction<TArray<UAircraftType*>()> Source) { TypeSource = MoveTemp(Source); }
@@ -159,8 +163,16 @@ private:
 	/** See SetTypeSourceForTest. Unset: LandChoices::EveryMeshedType. */
 	TFunction<TArray<UAircraftType*>()> TypeSource;
 
-	/** See BuildCountForTest. */
+	/** See BuildCountForTest and RowQuoteCountForTest. */
 	int32 BuildCalls = 0;
+	int32 RowQuotes = 0;
+
+	/**
+	 * The rows as last JUDGED, with each one's reason - what an occupancy-only change re-quotes in place (#471: see
+	 * LandChoices::RequoteForOccupancy, which measured why). PaintedRefusals is the painted output; this is the input to
+	 * the next judgement. The raw Type pointers are held alive by Types above.
+	 */
+	TArray<FLandChoice> JudgedChoices;
 
 	void PaintRows(const TArray<FLandChoice>& Choices);
 

@@ -108,22 +108,21 @@ void ULandAircraftPanelWidget::RefreshFor(const ARoadBuildController* C, const U
 	{
 		return;
 	}
+	// ONLY THE OCCUPANCY MOVED (#471): re-quote just the rows it can change - see LandChoices::RequoteForOccupancy for the
+	// measurement that made this a gate. Anything else in the key, or a new set of types, judges every row afresh.
+	const bool bOccupancyOnly = bJudged && Types.Num() == JudgedTypeCount && Key.SameButOccupancy(JudgedKey);
 	JudgedKey = Key;
 	JudgedTypeCount = Types.Num();
 	bJudged = true;
 
-	TArray<UAircraftType*> Raw;
-	Raw.Reserve(Types.Num());
-	for (const TObjectPtr<UAircraftType>& Type : Types)
-	{
-		Raw.Add(Type.Get());
-	}
 	++BuildCalls;
 	// THE GAME'S VERDICT PER TYPE (#432): UOpsRuntime::QuoteLanding - the plan and the airport's gate TryAccept asks - at
 	// the view focus, the point the click lands at. NO RUNTIME, NOTHING LANDS: the land path is the flight board's, and
 	// without a board there is no landing to offer (the board-less fallback that used to take it went with #431).
-	const TArray<FLandChoice> Choices = LandChoices::Build(Raw, [Runtime, &Focus](const FAirframe& Airframe)
+	// ONE QUOTE for both judgements below, so a re-quoted row and a built one are the same answer.
+	const auto Quote = [this, Runtime, &Focus](const FAirframe& Airframe)
 	{
+		++RowQuotes;
 		if (Runtime != nullptr)
 		{
 			return Runtime->QuoteLanding(Airframe, Focus);
@@ -132,7 +131,22 @@ void ULandAircraftPanelWidget::RefreshFor(const ARoadBuildController* C, const U
 		NoGame.Why = EArrivalRefusal::NoRunway;
 		NoGame.Sentence = TEXT("No game running - landing needs the flight board.");
 		return NoGame;
-	});
+	};
+	if (bOccupancyOnly)
+	{
+		LandChoices::RequoteForOccupancy(JudgedChoices, Quote);
+	}
+	else
+	{
+		TArray<UAircraftType*> Raw;
+		Raw.Reserve(Types.Num());
+		for (const TObjectPtr<UAircraftType>& Type : Types)
+		{
+			Raw.Add(Type.Get());
+		}
+		JudgedChoices = LandChoices::Build(Raw, Quote);
+	}
+	const TArray<FLandChoice>& Choices = JudgedChoices;
 
 	// THE GATE - see PaintedRefusals.
 	TArray<FString> Refusals;

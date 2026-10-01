@@ -62,7 +62,9 @@ void UArrivalsPanelWidget::Refresh()
 	UOpsRuntime* Runtime = OpsRuntime();
 	if (Arrivals == nullptr || Runtime == nullptr || Runtime->GetFlightBoard() == nullptr || Runtime->GetClock() == nullptr)
 	{
-		// The editor mode has no game instance and so no runtime - a play-mode panel, like the inbox.
+		// NO RUNTIME ONLY IN A HEADLESS TEST that resolved none (OpsRuntimeResolver): this panel is built by the
+		// controller's HUD layer, which exists in PIE alone, where the runtime is a game-instance subsystem that always
+		// exists. Not "the editor mode" - it never builds this panel (#471; #470 corrected the controller's Land path).
 		return;
 	}
 	// THE ROW SET AND THE COUNT, folded or not: the count must still read on a folded window's title bar. The sentences and the paint are

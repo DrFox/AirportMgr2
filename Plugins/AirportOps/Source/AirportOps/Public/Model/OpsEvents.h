@@ -64,7 +64,7 @@ struct AIRPORTOPS_API FOpsPurchase
 	UPROPERTY(BlueprintReadOnly, Category = "Ops") FText Money;
 };
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsArrivalRefused, EArrivalRefusal, Why);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOpsArrivalRefused, EArrivalRefusal, Why, const FString&, Sentence);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOpsSaveSlot, EOpsSaveOutcome, Outcome, const FString&, SlotName);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsPurchased, const FOpsPurchase&, Purchase);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsAlertRaised, const FOpsAlert&, Alert);
@@ -144,7 +144,7 @@ public:
 	 */
 	UPROPERTY(BlueprintAssignable) FOpsBalanceSignChanged OnBalanceSignChanged;
 
-	void NotifyArrivalRefused(EArrivalRefusal Why);
+	void NotifyArrivalRefused(EArrivalRefusal Why, const FString& Sentence);
 	void NotifySaveSlot(EOpsSaveOutcome Outcome, const FString& Slot);
 	void NotifyPurchase(const FOpsPurchase& Purchase);
 };

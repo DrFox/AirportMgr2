@@ -1478,8 +1478,11 @@ namespace
 		{
 			// Says so rather than silently doing nothing: "pressing P does nothing" is the
 			// exact shape of bug CLAUDE.md warns about, and the reason is worth one line.
+			// NOT "the editor mode" (#471): it never creates this controller. In PIE the runtime is a game-instance
+			// subsystem that always exists, so this is a world with no game instance and no test override - a
+			// headless test - which is what the line now says.
 			UE_LOG(LogRoadBuild, Warning,
-				TEXT("No OpsRuntime: clock and save keys need a game instance (PIE), not the editor mode"));
+				TEXT("No OpsRuntime: clock and save keys need the game instance's runtime - none resolved for this world (a headless test with no override?)"));
 		}
 		return Runtime;
 	}

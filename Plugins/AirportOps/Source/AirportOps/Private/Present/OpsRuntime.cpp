@@ -598,7 +598,7 @@ void UOpsRuntime::WireBus()
 	// Sim tier, and every event has one. A delegate is added here WITH its listener.
 	// ENFORCED BY: AirportMgr.UI.EveryOpsEventDelegateHasAListener
 	Bus.Subscribe<FArrivalRefusedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
-		[this](const FArrivalRefusedEvent& E) { Events->NotifyArrivalRefused(E.Why); });
+		[this](const FArrivalRefusedEvent& E) { Events->NotifyArrivalRefused(E.Why, E.Sentence); });
 	// A SAVE OR A LOAD, BY CASE (#445 item 7): the face carries the outcome and the slot, and the toast words them.
 	Bus.Subscribe<FSaveSlotEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FSaveSlotEvent& E) { Events->NotifySaveSlot(E.Outcome, E.Slot); });
@@ -629,7 +629,7 @@ void UOpsRuntime::WireBus()
 	// only a sign change: the pass is coalesced, and only Overdrawn reads the balance.
 	Bus.Subscribe<FMoneyPostedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FMoneyPostedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 	// AN ACCEPT CHANGES BOARD STATE, so the pass that reads the board runs (batch 3 §2) - for the pass's own
-	// correctness, not for any alert today: no alert kind can be raised or cleared BY an accept (Reserve holds
+	// correctness, not for any alert today: no alert kind can be raised or cleared BY an accept (Hold holds
 	// only a stand with a pose, and HeldStandLost needs one without - review M2). It is here so the next
 	// condition about accepted flights is right without anyone remembering this line; the arrival queue's pass
 	// joins this event in PR D.
@@ -880,7 +880,7 @@ TArray<UOpsRuntime::FAirsideBridge> UOpsRuntime::AirsideBridges()
 		{
 			UGroundTraffic* Model = Actor.GetGroundTraffic();
 			return Model == nullptr ? FDelegateHandle() : Model->OnArrivalRefused.AddWeakLambda(&Runtime,
-				[&Runtime](EArrivalRefusal Why) { Runtime.Bus.Publish(FArrivalRefusedEvent{ Why }); });
+				[&Runtime](EArrivalRefusal Why, const FString& Sentence) { Runtime.Bus.Publish(FArrivalRefusedEvent{ Why, Sentence }); });
 		},
 		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UGroundTraffic* Model = Actor.GetGroundTraffic()) { Model->OnArrivalRefused.Remove(Handle); } } });
 

@@ -38,6 +38,7 @@ TArray<FLandChoice> LandChoices::Build(const TArray<UAircraftType*>& Types,
 		const FArrivalQuote Answer = Quote(Type->Airframe());
 		Choice.bAdmitted = Answer.IsAccepted();
 		Choice.Refusal = Answer.IsAccepted() ? FString() : Answer.Sentence;
+		Choice.Why = Answer.Why;
 		Out.Add(MoveTemp(Choice));
 	}
 
@@ -54,6 +55,26 @@ TArray<FLandChoice> LandChoices::Build(const TArray<UAircraftType*>& Types,
 		return A.Type->DisplayName.ToString() < B.Type->DisplayName.ToString();
 	});
 	return Out;
+}
+
+int32 LandChoices::RequoteForOccupancy(TArray<FLandChoice>& Rows, TFunctionRef<FArrivalQuote(const FAirframe&)> Quote)
+{
+	int32 Quoted = 0;
+	for (FLandChoice& Row : Rows)
+	{
+		// THE PLANNER'S OWN TEST of "only a build clears it" - the offer generator and the FlightCannotLand alert ask it too, so
+		// the three cannot disagree about which refusals an occupancy change can lift.
+		if (Row.Type == nullptr || ArrivalPlanner::IsPermanentRefusal(Row.Why))
+		{
+			continue;
+		}
+		const FArrivalQuote Answer = Quote(Row.Type->Airframe());
+		Row.bAdmitted = Answer.IsAccepted();
+		Row.Refusal = Answer.IsAccepted() ? FString() : Answer.Sentence;
+		Row.Why = Answer.Why;
+		++Quoted;
+	}
+	return Quoted;
 }
 
 FLandChoicesKey LandChoices::KeyFor(const URoadNetwork* Network, const UGroundTraffic* Traffic, const FVector2D& Near,

@@ -26,7 +26,12 @@ bool FArrivalRefusedEventTest::RunTest(const FString& Parameters)
 	// THE MODEL'S OWN DELEGATE, through the presenter's GetModel() - the presenter stopped relaying it (#445 item 6), so this is
 	// where AirportOps' bridge binds too.
 	TArray<EArrivalRefusal> Refusals;
-	Actor->GetTraffic()->GetModel()->OnArrivalRefused.AddLambda([&Refusals](EArrivalRefusal Why) { Refusals.Add(Why); });
+	TArray<FString> Sentences;
+	Actor->GetTraffic()->GetModel()->OnArrivalRefused.AddLambda([&Refusals, &Sentences](EArrivalRefusal Why, const FString& Sentence)
+	{
+		Refusals.Add(Why);
+		Sentences.Add(Sentence);
+	});
 
 	// THE REFUSAL IS AN EVENT, not only a log line. AirportOps' flight board has to divert a
 	// flight when the airfield cannot take it, and a warning in the log is not something code
@@ -37,6 +42,12 @@ bool FArrivalRefusedEventTest::RunTest(const FString& Parameters)
 	if (Refusals.Num() == 1)
 	{
 		TestEqual(TEXT("and names the reason the planner found"), Refusals[0], EArrivalRefusal::NoRunway);
+		// #471: AND THE PLAN'S OWN SENTENCE, on the model's own delegate - the line the model logs, so a listener (the ops
+		// toast, through its bridge) can say what the log says. Empty would mean the broadcast dropped it.
+		// No occupancy: a field with no runway is refused before the table is read, so the sentence is the same.
+		const FArrivalPlan Plan = ArrivalPlanner::Plan(*Actor->Network, FVector2D(1000.0, 0.0), UAirsideSettings::ResolveDefaultAirframe());
+		TestEqual(TEXT("with the plan's own sentence"), Sentences[0], ArrivalPlanner::DescribeRefusal(Plan));
+		TestFalse(TEXT("which is not empty"), Sentences[0].IsEmpty());
 	}
 	TestEqual(TEXT("no agent exists after a refusal"), Actor->GetTraffic()->GetAgentCount(), 0);
 	return true;

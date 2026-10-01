@@ -153,7 +153,7 @@ bool FStandChoiceTwoArrivalsTest::RunTest(const FString& Parameters)
 		[&]() { const FRoadAgent* P = Traffic->FindAgent(First); return P && P->Phase == EAgentPhase::Taxiing && RunwayFree(); }))) { return false; }
 
 	TArray<EArrivalRefusal> Refusals;
-	Traffic->OnArrivalRefused.AddLambda([&](EArrivalRefusal Why) { Refusals.Add(Why); });
+	Traffic->OnArrivalRefused.AddLambda([&](EArrivalRefusal Why, const FString&) { Refusals.Add(Why); });
 	const int32 Second = Traffic->DispatchArrival(*A.Net, A.Threshold, Piper, 1.0);
 	if (!TestTrue(FString::Printf(TEXT("second dispatched (refusals: %d)"), Refusals.Num()), Second > 0)) { return false; }
 	TestTrue(TEXT("two aircraft, two stands"),

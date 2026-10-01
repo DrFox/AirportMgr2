@@ -866,16 +866,26 @@ $AllowedCallers = @(
         ProdReason  = 'only ARoadNetworkActor::ResolveProfile marks its fallback - see URoadProfile::bActorFallback'
     },
     @{
-        # AN ACCEPT HOLDS THE STAND ITS PLAN CHOSE (#431): UFlightBoard::TryAccept -> UStandAllocator::Hold. Reserve picks
-        # the smallest fitting stand with NO reach check, and is left to the board's own re-holds (a flight whose hold was
-        # lost - the queue, a graph rebuild, a load), a gap tracked as #471. A caller anywhere else would bring back the
-        # hold on a stand nothing can taxi to. The pattern is a Reserve call with three or more arguments: TArray::Reserve
-        # takes one.
-        Name        = 'UStandAllocator::Reserve (reach-blind hold)'
-        Pattern     = '(\.|->)Reserve\s*\(\s*\*?\w+\s*,\s*\*?\w+\s*,'
+        # A HOLD IS THE PLAN'S STAND (#431, #471): UFlightBoard::TryAccept holds the stand its accept's plan taxis to, and
+        # UFlightBoard::Rehold - every re-hold (the queue, a load, a failed dispatch, a hold an edit lost) - the stand a fresh
+        # plan taxis to. Reserve, the smallest admitted stand with NO reach check, was the re-holds' door until #471 removed
+        # it; a caller of UStandAllocator::Hold anywhere but the board would choose a stand some other way and bring that
+        # back. The pattern is a Hold call with four or more arguments: FTestTwoRunways::Hold takes three.
+        Name        = 'UStandAllocator::Hold (a hold is the plan''s stand)'
+        Pattern     = '(\.|->)Hold\s*\(\s*\*?\w+\s*,\s*\*?\w+\s*,\s*\*?\w+\s*,'
         ProdAllowed = @('Private\Model\FlightBoard.cpp')
         TestExempt  = $true
-        ProdReason  = 'accept through UFlightBoard::TryAccept, which holds the stand its plan taxis to (UStandAllocator::Hold) - Reserve is reach-blind (#471)'
+        ProdReason  = 'hold through UFlightBoard::TryAccept or UFlightBoard::Rehold, which hold the stand a plan taxis to (#471)'
+    },
+    @{
+        # AND INSIDE THE BOARD, ONLY A PLAN'S STAND (#471): both of the board's Hold calls pass the stand an FArrivalQuote names
+        # (TryAccept's Quote, Rehold's Plan). A Hold handed any other stand - one picked by size, by name, by the flight's own
+        # last Stand - is a re-hold that skipped the plan, which is the reach-blind shape again. Nowhere is allowed.
+        Name        = 'UStandAllocator::Hold of a stand no plan chose'
+        Pattern     = '(\.|->)Hold\s*\((?![^)]*,\s*(Quote|Plan)\.Stand\s*\))\s*\*?\w+\s*,\s*\*?\w+\s*,\s*\*?\w+\s*,'
+        ProdAllowed = @()
+        TestExempt  = $true
+        ProdReason  = 'hold the stand an arrival plan chose - FArrivalQuote::Stand, from PlanQuote or the cached verdict (#471)'
     },
     # ONE DERIVATION (#438). The routing graph's passes - the solve, the restriction, the guideline builder, the anchor
     # links - and the Derived stamp are called from AirsideDerivation::Derive and nowhere else in production, so a pass
