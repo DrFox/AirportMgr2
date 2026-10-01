@@ -78,13 +78,14 @@ UOpsRuntime::UOpsRuntime()
 
 	// THE MONEY, wired in one breath, so none of these is the one somebody forgot to connect.
 	// Each of the three posts to the ledger for its own part of a flight: the generator prices
-	// the offer, the board banks landing and parking, the fuel service banks a completed fuelling.
+	// the offer, billing banks landing and parking, the fuel service banks a completed fuelling. BILLING'S LEDGER IS NOT
+	// WIRED HERE (#506 review): the "Billing" subscription in WireBus hands it this runtime's Ledger on every call, so the
+	// flight board holds no money pointer at all.
 	// HERE, NOT IN Attach, since #425: every pointer is one of this runtime's own subobjects, constant for its
 	// life, and Transient on the object that holds it - a save must not carry a path to it - so nothing sets it
 	// again after a load, and an unattached runtime is wired too. OfferGenerator->Airport, below, is the precedent.
 	// ENFORCED BY: AirportOps.Present.FlightBoardIsComposedByTheRuntime
 	OfferGenerator->Pricing = Pricing;
-	FlightBoard->Ledger = Ledger;
 	FlightBoard->Pricing = Pricing;
 	FlightBoard->Fuel = JobBoard;
 	JobBoard->Ledger = Ledger;
@@ -495,7 +496,8 @@ void UOpsRuntime::WireBus()
 	// ENFORCED BY: AirportOps.Present.Bus.BillingIsWired (red with this line gone), AirportOps.Model.FlightFees.BilledOnTheBusARoundLater
 	Bus.Subscribe<FFlightPhaseChangedEvent>(EOpsTier::Sim, TEXT("Billing"), [this](const FFlightPhaseChangedEvent& E)
 	{
-		FlightBilling::OnFlightPhaseChanged(*FlightBoard, E);
+		// THIS RUNTIME'S LEDGER, handed in (#506 review) - the board does not hold one, so it cannot be the one forgotten.
+		FlightBilling::OnFlightPhaseChanged(Ledger, *FlightBoard, E);
 	});
 
 	// THE ARRIVAL QUEUE, as a pass (ops batch 3 §5) - see RunArrivalQueue. After the job board's pass and before the

@@ -6,7 +6,8 @@
 #include "Model/OpsEventBus.h"
 
 // BILLING, A REACTION TO THE PHASE (#442 item 4) - see FlightBilling.h. PostLandingFee and PostParkingFee MOVED here unchanged from
-// UFlightBoard (the Ledger they post to is handed in rather than read off `this`); OnFlightPhaseChanged is OnAgentPhase's "THE
+// UFlightBoard (the Ledger they post to is handed in rather than read off `this` - the runtime's own since #506's review, which took
+// the pointer off the board); OnFlightPhaseChanged is OnAgentPhase's "THE
 // MONEY" block, asked of the event's phase instead of the flight's after the change.
 
 void FlightBilling::PostLandingFee(ULedger* Ledger, double Now, UFlight& Flight)
@@ -55,7 +56,7 @@ void FlightBilling::PostParkingFee(ULedger* Ledger, double Now, UFlight& Flight)
 		FText::Format(NSLOCTEXT("Ledger", "ParkingBy", "Parking: {0}"), Flight.AirlineName));
 }
 
-void FlightBilling::OnFlightPhaseChanged(UFlightBoard& Board, const FFlightPhaseChangedEvent& Event)
+void FlightBilling::OnFlightPhaseChanged(ULedger* Ledger, UFlightBoard& Board, const FFlightPhaseChangedEvent& Event)
 {
 	// THE FLIGHT, BY ID: an event never carries the UObject (spec 2026-09-29-ops-event-bus §4). An id that finds no flight - one
 	// RollUp has forgotten - pays nothing.
@@ -77,7 +78,7 @@ void FlightBilling::OnFlightPhaseChanged(UFlightBoard& Board, const FFlightPhase
 	const double Now = Event.At;
 	if (Event.To == EFlightPhase::Landing)
 	{
-		PostLandingFee(Board.Ledger, Now, *Flight);
+		PostLandingFee(Ledger, Now, *Flight);
 	}
 	else if (Event.To == EFlightPhase::Turnaround && Flight->ParkedAt <= 0.0)
 	{
@@ -94,6 +95,6 @@ void FlightBilling::OnFlightPhaseChanged(UFlightBoard& Board, const FFlightPhase
 		// the turnaround stamp by ParkedAt; this one had no guard. A PHASE EVENT IS AN ENTRY (#442 item 4): TransitionTo publishes
 		// FFlightPhaseChangedEvent only for a change, so the bChanged that guarded this inline is the event's own premise now.
 		// ENFORCED BY: AirportOps.Model.FlightFees.ParkingIsBilledOnceAcrossARedirect
-		PostParkingFee(Board.Ledger, Now, *Flight);
+		PostParkingFee(Ledger, Now, *Flight);
 	}
 }

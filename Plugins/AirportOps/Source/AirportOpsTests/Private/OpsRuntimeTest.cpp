@@ -979,7 +979,8 @@ bool FOpsRuntimeLoadRestoresFlightsByValueTest::RunTest(const FString& Parameter
 	TestEqual(TEXT("in the phase the save had - Offered"), Restored->GetPhase(), EFlightPhase::Offered);
 	TestEqual(TEXT("in the inbox"), Board->Offers().Num(), 1);
 	TestTrue(TEXT("the board keeps the runtime's own allocator"), Board->Allocator.Get() == Allocator && Allocator != nullptr);
-	TestTrue(TEXT("and the runtime's own ledger"), Board->Ledger.Get() == Runtime->GetLedger() && Runtime->GetLedger() != nullptr);
+	TestTrue(TEXT("and the runtime's own pricing (the ledger is billing's since #506's review, handed in by WireBus)"),
+		Board->Pricing.Get() == Runtime->GetPricing() && Runtime->GetPricing() != nullptr);
 	return true;
 }
 

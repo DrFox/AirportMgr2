@@ -90,8 +90,9 @@ public:
 	 *  - A flight with no stand is re-held - Inbound (the queue's rule since review I1: it is next to land) and Accepted
 	 *    alike (#497 review: one whose re-hold found nothing was not asked again until its ETA).
 	 *  - An Inbound flight with a GONE stand is re-held too. On an Accepted flight a gone stand is LEFT - the HeldStandLost
-	 *    alert's evidence (see Reapply) - until its ETA puts it in the queue. Rehold is the BOARD's (FArrivalQueue::Rehold): the stand a fresh plan taxis the flight to - this class
-	 * holds, a plan chooses. Returns how many flights gave a lost stand up, so the board can bump the revision its rows read.
+	 *    alert's evidence (see Reapply) - until its ETA puts it in the queue. The re-hold is the flight board's ARRIVAL QUEUE's
+	 *    (FArrivalQueue::Rehold, UFlightBoard's own until #442 item 4), handed in as Reheld: the stand a fresh plan taxis the flight
+	 *    to - this class holds, a plan chooses. Returns how many flights gave a lost stand up, so the board can bump the revision its rows read.
 	 *
 	 * PATTERN: RECONCILIATION AGAINST A SYSTEM OF RECORD - the board observes the table, rather than Airside announcing which
 	 * hold failed (#442's other option, a delegate per refusal). A refusal is one of several ways the copy and the record

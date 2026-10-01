@@ -779,6 +779,18 @@ $AllowedCallers = @(
         ProdReason  = 'post a flight fee through FlightBilling (PostLandingFee, PostParkingFee) - billing is one owner, reacting to the phase (#442)'
     },
     @{
+        # INLINE BILLING WOULD PASS THE TWO ROWS ABOVE (#506 review): a PostLandingFee( or PostParkingFee( call put back into
+        # UFlightBoard::OnAgentPhase, or anywhere else, names neither OnFlightPhaseChanged nor an ELedgerCategory. So the posters
+        # themselves are held: an unqualified call or declaration of either - `(?<![:\w])`, so FlightBilling's own qualified
+        # definitions are the declaration's, not a second caller - only in FlightBilling's two files. The board's forwarders of
+        # these went with its ledger in the same review, so FlightBoard.h is not on the list either.
+        Name        = 'fee posters called outside FlightBilling'
+        Pattern     = '(?<![:\w])Post(?:Landing|Parking)Fee\s*\('
+        ProdAllowed = @('Public\Model\FlightBilling.h', 'Private\Model\FlightBilling.cpp')
+        TestExempt  = $true
+        ProdReason  = 'a flight is billed by the "Billing" reaction to its phase (FlightBilling::OnFlightPhaseChanged), not by a call where the phase changes - billing inline again is the shape #442 item 4 took apart'
+    },
+    @{
         # ONE DOOR FOR A LOAD (#426): OpsSave::Restore writes INTO the live network, and only the facade's
         # RestoreInPlace announces that, repairs it and adopts it. UOpsRuntime::LoadFromSlot's lambda is the one
         # production restore; a second one is a load no driver hears about.
@@ -4887,8 +4899,9 @@ $modelLineBudget = [ordered]@{
     # transition (the cancels, OnAgentPhase's mapping, the load's steps) and the quote both owners ask. LOWERED 1803 -> 1112 the same
     # day by #442 item 4: the offers went to FOfferInbox (OfferInbox.cpp), the arrival queue, its clearances, the dispatch and every
     # re-hold to FArrivalQueue (ArrivalQueue.cpp), billing to FlightBilling.cpp as a bus reaction; what is left of the size is the
-    # save's by-value restore, TransitionTo's rows and the load's four steps, each with its reasons - no further cut named.
-    'Plugins\AirportOps\Source\AirportOps\Private\Model\FlightBoard.cpp'      = 1112
+    # save's by-value restore, TransitionTo's rows and the load's four steps, each with its reasons - no further cut named. LOWERED
+    # 1112 -> 1106 by the #506 review: the board's fee forwarders went with its ledger (billing is handed the runtime's).
+    'Plugins\AirportOps\Source\AirportOps\Private\Model\FlightBoard.cpp'      = 1106
     # 2026-10-01: one agent's follower - engine, gear, taxi, tow, pushback and reverse legs (32 member definitions); one
     # struct's motion, not yet split. RAISED 1583 -> 1610 the same day by #444: the wait's one door (WaitFor/EndWait, in place
     # of three flag mutators and a bare write) and the exhaustive-switch reasons on DescribeMotion and Advance (a phase added is
@@ -5171,16 +5184,19 @@ $ranRules.Add('turnaround-began-once')
 # may touch is held here, the way 78(c) holds FTurnarounds: every `R.X` / `R->X` in OfferInbox.{h,cpp} and ArrivalQueue.{h,cpp},
 # where R is `Board` or any name the four files declare as a `UFlightBoard&` / `UFlightBoard*` (a renamed parameter, the clock
 # callback's BoardPtr), names a member of $ownerBoardReach - the one writer (TransitionTo), the one revision (RevisionCount), the
-# shared quote (PlanQuote, Gated), the registry READ (Flights, FindById, AddOffer, Revision, PendingOfferCount), the load's helpers the queue's re-arm
-# owes the board (DisarmEveryArrival, RebuildIndices) and the board's wiring - AND Flights is never mutated through R (`R.Flights.Add(`,
-# `.Remove`, `.Reset`... or an assignment). The SHAPE removed is a second owner of the registry or of the money: History, ById, ByAgent,
-# NextFlightId, OfferedCount, MoveToHistory, Ledger and Bus are the board's (the money is FlightBilling's reaction, the publishes
-# TransitionTo's rows).
+# shared quote (PlanQuote, Gated), the registry READ (LiveFlights, FindById, AddOffer, Revision, PendingOfferCount), the load's helpers the
+# queue's re-arm owes the board (DisarmEveryArrival, RebuildIndices) and the board's wiring. THE REGISTRY IS READ THROUGH LiveFlights() AND
+# NOTHING ELSE (#506 review): it returns a const reference, so "the owners only read Flights" is the compiler's - Flights itself is not on
+# the list, and a mutation through the const reference does not build. FUEL IS TWO CALLS, NOT A POINTER (#506 review): `R.Fuel` must be a
+# null test or `->GetFleetCompositionRevision(` / `->CouldServe(` - `R.Fuel->Ledger` would be a second hop into the money through the job
+# board. The SHAPE removed is a second owner of the registry or of the money: History, ById, ByAgent, NextFlightId, OfferedCount,
+# MoveToHistory and Bus are the board's (the money is FlightBilling's reaction with the runtime's ledger, the publishes TransitionTo's rows).
 # WHAT NO REGEX SEES: a receiver reached through `auto&`, a member pointer, or a lambda's init-capture of another name - which is why
 # the queue's clock callback captures a NAMED `UFlightBoard* const BoardPtr`. MUTATION-CHECKED 2026-10-01 (the PR body has the output):
-# `Board.History.Add(` in OfferInbox.cpp, `BoardPtr->ById.Remove(` in ArrivalQueue.cpp, and `Board.Ledger` read in OfferInbox.cpp each FAIL.
+# `Board.History.Add(` in OfferInbox.cpp, `BoardPtr->ById.Remove(` in ArrivalQueue.cpp, and `Board.Ledger` read in OfferInbox.cpp each FAIL;
+# re-checked 2026-10-01 for the #506 review: `Board.Flights` read in ArrivalQueue.cpp and `Board.Fuel->Ledger` in OfferInbox.cpp each FAIL.
 # The rule fails when it finds no reach at all (the board is no longer handed in, so it checks nothing).
-$ownerBoardReach = @('TransitionTo', 'RevisionCount', 'PlanQuote', 'Gated', 'Flights', 'FindById', 'AddOffer', 'Revision', 'PendingOfferCount',
+$ownerBoardReach = @('TransitionTo', 'RevisionCount', 'PlanQuote', 'Gated', 'LiveFlights', 'FindById', 'AddOffer', 'Revision', 'PendingOfferCount',
     'DisarmEveryArrival', 'RebuildIndices', 'Allocator', 'Sequencer', 'Dispatcher', 'AdmitsArrivals', 'Fuel')
 $ownerFiles = @((Join-Path $ops 'Public\Model\OfferInbox.h'), (Join-Path $ops 'Private\Model\OfferInbox.cpp'),
     (Join-Path $ops 'Public\Model\ArrivalQueue.h'), (Join-Path $ops 'Private\Model\ArrivalQueue.cpp'))
@@ -5202,19 +5218,20 @@ foreach ($code in $ownerCode.Values) {
     }
 }
 $ownerReceiverPattern = '\b(' + (($ownerReceivers | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\s*(?:\.|->)\s*(\w+)'
-$ownerFlightsWrite = '\b(?:' + (($ownerReceivers | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\s*(?:\.|->)\s*Flights\s*(?:\.\s*(?:Add\w*|Remove\w*|Reset|Empty|Insert\w*|Emplace\w*|Append|Pop|Push|Sort\w*|Swap\w*|SetNum\w*)\s*\(|=(?!=)|\[)'
+# FUEL'S TWO FORMS: a null test, or one of the two questions VerdictFor asks of the job board.
+$ownerFuelUse = '^\s*(?:->\s*(?:GetFleetCompositionRevision|CouldServe)\s*\(|[!=]=\s*nullptr)'
 $ownerReachSeen = 0
 foreach ($ownerFile in $ownerCode.Keys) {
     $code = $ownerCode[$ownerFile]
     $short = Split-Path $ownerFile -Leaf
     for ($i = 0; $i -lt $code.Count; $i++) {
-        if ($code[$i] -match $ownerFlightsWrite) {
-            $failures.Add("flight-board-owners-reach: ${short}:$($i + 1) mutates the board's Flights - the registry is the board's (AddOffer in, TransitionTo's terminal rows out), its owners only read it (#442): $($code[$i].Trim())")
-        }
         foreach ($m in [regex]::Matches($code[$i], $ownerReceiverPattern)) {
             $ownerReachSeen++
             if ($ownerBoardReach -notcontains $m.Groups[2].Value) {
-                $failures.Add("flight-board-owners-reach: ${short}:$($i + 1) reaches $($m.Groups[1].Value).$($m.Groups[2].Value) - the flight board's owners are its friends for TransitionTo, RevisionCount, the quote and reading the registry; History, the indices, the ids, the money and the bus stay the board's (#442): $($code[$i].Trim())")
+                $failures.Add("flight-board-owners-reach: ${short}:$($i + 1) reaches $($m.Groups[1].Value).$($m.Groups[2].Value) - the flight board's owners are its friends for TransitionTo, RevisionCount, the quote and reading the registry (through LiveFlights); Flights itself, History, the indices, the ids and the bus stay the board's (#442): $($code[$i].Trim())")
+            }
+            elseif ($m.Groups[2].Value -eq 'Fuel' -and $code[$i].Substring($m.Index + $m.Length) -notmatch $ownerFuelUse) {
+                $failures.Add("flight-board-owners-reach: ${short}:$($i + 1) uses $($m.Groups[1].Value).Fuel for more than its null test, GetFleetCompositionRevision or CouldServe - a second hop through the job board (its Ledger, its vehicles) is not the inbox's (#506 review): $($code[$i].Trim())")
             }
         }
     }

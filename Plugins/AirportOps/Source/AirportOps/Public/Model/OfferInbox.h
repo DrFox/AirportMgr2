@@ -35,7 +35,8 @@ struct FAirframe;
  * a whole gesture before the guideline graph catches up at the drop, and a pre-drag yes served from the cache let the inbox
  * accept onto a graph the planner itself refuses mid-edit (GraphBeingEdited). A clear or a load is a NEW network counting
  * its revisions from zero, so equal numbers on another object are not the same graph - weak, so a recycled address is not
- * mistaken for the old network either.
+ * mistaken for the old network either. AND THE STAND CHURN (#506 review): UGroundTraffic::StandHoldChangeCount, the bodies on stands
+ * OccupancyRevision does not see - see StandChurnAt.
  * ENFORCED BY: AirportOps.Model.FlightBoard.VehicleTransitionsDoNotReplanOffers,
  * AirportOps.Fuel.CouldServe.StrandingMovesTheCompositionAndTheVerdict (the stranded clause),
  * AirportOps.Model.FlightBoard.VerdictIsDatedByTheEdit, AirportOps.Model.FlightBoard.VerdictNamesTheNetwork
@@ -62,6 +63,18 @@ struct FOfferVerdict
 	/** URoadNetwork::GetEditRevision when Why was judged - the plan's alone: CouldServe reads only the derived graph, which
 	 *  a drag does not move until the drop's guideline revision, and its answer holds nothing. */
 	uint32 EditAt = 0;
+	/**
+	 * UGroundTraffic::StandHoldChangeCount when Why was judged - the plan's alone (#506 review). A body the per-tick claim pass rolls
+	 * onto or off a stand's pose moves no OccupancyRevision, and the plan reads exactly that (IsHeld on the pose). Dated by occupancy
+	 * alone, a stale yes made every accept click a refused hold - a Warning a click - until something unrelated moved; a stale
+	 * NoFreeStand greyed the row, and an offer lapsing under it was NeverAcceptable rather than Ignored, which the airline scores
+	 * differently. The Land panel and the queue's clearance were dated by it already (#497 re-review), so the inbox disagreed with both.
+	 * THE COST: a change of the held-stand set re-plans every pending offer once - measured by
+	 * AirportOps.Model.FlightBoard.StandChurnReplansEachOfferOnce; the figure and its date are where the stamp is read
+	 * (FOfferInbox::VerdictFor).
+	 * ENFORCED BY: AirportOps.Model.FlightBoard.VerdictIsDatedByStandChurn
+	 */
+	uint32 StandChurnAt = 0;
 	/** The network both answers were judged on - compared, never dereferenced; weak, so a new network at a recycled address is not this one. */
 	FWeakObjectPtr Network;
 	/** UJobBoard::GetFleetCompositionRevision when bFuelServable was judged - a vehicle bought, sold, seeded (by the

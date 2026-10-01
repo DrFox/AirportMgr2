@@ -480,7 +480,8 @@ struct AIRPORTOPS_API FFlightInboundEvent
  *
  * At IS THE GAME TIME THE CHANGE WAS DATED (the transition's FTransitionCause::At), so a fee priced a round later is priced and
  * dated exactly as it was inline - not by whatever the clock reads when the event is heard.
- * ENFORCED BY: AirportOps.Model.FlightBoard.EveryChangeIsPublishedOnce, AirportOps.Present.Bus.BillingIsWired
+ * ENFORCED BY: AirportOps.Model.FlightBoard.EveryChangeIsPublishedOnce, AirportOps.Present.Bus.BillingIsWired,
+ * AirportOps.Model.FlightSave.MidFlightGoesRoundOrRetires (a load's changes post no fee)
  */
 struct AIRPORTOPS_API FFlightPhaseChangedEvent
 {

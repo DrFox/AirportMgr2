@@ -5,8 +5,6 @@
 #include "Model/OpsEventBus.h"
 #include "Model/AirsideCapability.h"
 #include "Model/Flight.h"
-#include "Model/FlightBilling.h"
-#include "Model/Ledger.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
@@ -543,7 +541,7 @@ TArray<UFlight*> UFlightBoard::DemoteRestoredMidFlight(double Now)
 			// holding when the game was saved were waiting first). Its Stand is still the one it was accepted onto;
 			// RestoreStandHolds holds it again AFTER every genuine holder, and finds it another if that one was taken.
 			// bLandingFeePaid IS LEFT AS SAVED rather than forced true: it is saved and set with the ledger post
-			// (PostLandingFee), so a flight that was charged stays charged and its second landing posts nothing - and
+			// (FlightBilling::PostLandingFee), so a flight that was charged stays charged and its second landing posts nothing - and
 			// one saved before its landing was heard is charged once, when it lands.
 			// ENFORCED BY: AirportOps.Model.FlightSave.UnchargedLandingIsChargedOnce
 			UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) restored mid-%s: re-queued (its aircraft, agent %d, was not saved)"),
@@ -558,8 +556,11 @@ TArray<UFlight*> UFlightBoard::DemoteRestoredMidFlight(double Now)
 		else if (FlightPhase::HasReachedStand(Each->GetPhase()))
 		{
 			// DEPARTED, UNSCORED: the save system is not the player's fault, so nothing the airline roster scores is
-			// published (no FlightAirborne, no TurnaroundEnded) and no parking fee is posted - the Departed row publishes
-			// nothing and the fees are OnAgentPhase's. The test reads FlightPhase::HasReachedStand: Turnaround,
+			// published (no FlightAirborne, no TurnaroundEnded) and no parking fee is posted: the Departed row publishes
+			// nothing of its own, and the FFlightPhaseChangedEvent every change publishes reaches a billing reaction
+			// (FlightBilling::OnFlightPhaseChanged) that does not react to Departed - it bills Landing, Turnaround and TaxiOut.
+			// ENFORCED BY: AirportOps.Model.FlightSave.MidFlightGoesRoundOrRetires ("the load posted no fee").
+			// The test reads FlightPhase::HasReachedStand: Turnaround,
 			// Manoeuvring, TaxiOut, Departing.
 			UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) restored mid-%s: retired as departed (its aircraft, agent %d, was not saved)"),
 				Each->Id, *Each->Callsign, *FlightPhase::Name(Each->GetPhase()), Each->AgentId);
@@ -641,18 +642,6 @@ void UFlightBoard::RebuildIndices()
 			ById.Add(Each->Id, Each);
 		}
 	}
-}
-
-// ---- THE FEES: FORWARDERS to FlightBilling (#442 item 4), where the rules live; the board's own Ledger is the one posted to. ------
-
-void UFlightBoard::PostLandingFee(double Now, UFlight& Flight)
-{
-	FlightBilling::PostLandingFee(Ledger, Now, Flight);
-}
-
-void UFlightBoard::PostParkingFee(double Now, UFlight& Flight)
-{
-	FlightBilling::PostParkingFee(Ledger, Now, Flight);
 }
 
 void UFlightBoard::OnAgentPhase(const URoadNetwork& Network, const USimClock& Clock, const FAgentTransition& Transition)
@@ -740,7 +729,9 @@ void UFlightBoard::OnAgentPhase(const URoadNetwork& Network, const USimClock& Cl
 	// NO MONEY HERE since #442 item 4: the landing fee, the parking clock and the parking fee are FlightBilling's REACTION to the
 	// FFlightPhaseChangedEvent the TransitionTo above published - a round later, in the same drain. The block that posted them after
 	// every event this heard moved there whole, its reasons with it (FlightBilling::OnFlightPhaseChanged).
-	// ENFORCED BY: AirportOps.Present.Bus.BillingIsWired, Check-Architecture rule 4 ('FlightBilling reaction')
+	// ENFORCED BY: AirportOps.Present.Bus.BillingIsWired, AirportOps.Model.FlightFees.BilledOnTheBusARoundLater (the change itself
+	// posts nothing), Check-Architecture rule 4 ('FlightBilling reaction'; 'fee posters called outside FlightBilling' - billing
+	// inline here again would be a PostLandingFee/PostParkingFee call)
 
 	// A CHANGE OF PHASE BUMPED THE REVISION IN ITS ROW; one that changed nothing still did something a row would miss - the Stand
 	// an agent parked on, a stranding the inbox shows - and OnAgentPhase has always bumped once for every event it heard.
@@ -888,8 +879,9 @@ void UFlightBoard::TransitionTo(UFlight& Flight, EFlightPhase To, const FTransit
 	case EFlightPhase::Turnaround:
 	case EFlightPhase::Manoeuvring:
 	case EFlightPhase::TaxiOut:
-		// THE AGENT DRIVES THESE and the flight follows: nothing to arm, hook or publish. The money they trigger (the
-		// parking clock on Turnaround, the parking fee on TaxiOut) is OnAgentPhase's billing, not a phase effect.
+		// THE AGENT DRIVES THESE and the flight follows: nothing to arm, hook or publish of their own. The money they trigger
+		// (the parking clock on Turnaround, the parking fee on TaxiOut) is billing's REACTION to the FFlightPhaseChangedEvent
+		// below (FlightBilling::OnFlightPhaseChanged), not a phase effect.
 		break;
 
 	case EFlightPhase::Departing:
@@ -907,7 +899,8 @@ void UFlightBoard::TransitionTo(UFlight& Flight, EFlightPhase To, const FTransit
 		break;
 
 	case EFlightPhase::Departed:
-		// TERMINAL, and nothing published: the airline scored the departure at Departing (FFlightAirborne). Filed below.
+		// TERMINAL, and nothing of its own published: the airline scored the departure at Departing (FFlightAirborne). Filed
+		// below; the FFlightPhaseChangedEvent every change publishes bills nothing for it.
 		break;
 
 	case EFlightPhase::Declined:
@@ -978,7 +971,8 @@ void UFlightBoard::TransitionTo(UFlight& Flight, EFlightPhase To, const FTransit
 	// FlightBilling's answer to THIS, a round later in the same drain. LAST, after the row's own publish and the move to History, so a
 	// listener that resolves the flight finds it where the change left it; dated by Cause.At, so a fee priced a round later is priced
 	// as of the change. Published for a load's changes too: none enters a phase billing reacts to (see FFlightPhaseChangedEvent).
-	// ENFORCED BY: AirportOps.Model.FlightBoard.EveryChangeIsPublishedOnce
+	// ENFORCED BY: AirportOps.Model.FlightBoard.EveryChangeIsPublishedOnce, AirportOps.Model.FlightSave.MidFlightGoesRoundOrRetires
+	// (a load's Inbound, Departed and Cancelled post no fee)
 	if (Bus != nullptr)
 	{
 		Bus->Publish(FFlightPhaseChangedEvent{ Flight.Id, From, To, Cause.At });

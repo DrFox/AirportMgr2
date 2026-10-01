@@ -18,7 +18,6 @@ class UGroundTraffic;
 class UOfferGenerator;
 class URoadNetwork;
 class UStandAllocator;
-class ULedger;
 class FOpsEventBus;
 class USimClock;
 enum class EAgentPhase : uint8;
@@ -49,8 +48,9 @@ struct FTransitionCause;
  * phase (TransitionTo) with every door that names a transition (the cancels, OnAgentPhase's mapping, the load's steps), and the quote
  * both owners ask (PlanQuote, Gated). FOfferInbox owns the offers - countdown, verdicts, lapse, accept, decline; FArrivalQueue owns
  * the arrivals - the clock's handles, the queue, the clearances, the dispatch and every re-hold; and BILLING is a reaction to the phase
- * on the ops bus (FlightBilling, FFlightPhaseChangedEvent) that this board no longer calls. Each owner's public names stay here as
- * forwarders, so no caller changed. See each owner's class comment for the pattern and its forced deviations.
+ * on the ops bus (FlightBilling, FFlightPhaseChangedEvent) that this board no longer calls - NOR KNOWS OF: the ledger is the
+ * runtime's, handed to the reaction, and the board holds no money pointer at all (#506 review). Each owner's public names stay here
+ * as forwarders, so no caller changed. See each owner's class comment for the pattern and its forced deviations.
  * ENFORCED BY: Check-Architecture rule 77 (FlightBoard.cpp's line budget), rule 96 (what the owners may reach of this board),
  * AirportOps.Present.FlightBoardOwnersAreWired, AirportOps.Present.Bus.BillingIsWired
  */
@@ -109,7 +109,7 @@ public:
 	 *
 	 * DISCARDED, NOT FOLDED like ULedger::RollUp's BroughtForward entry: a flight has no
 	 * summable amount to fold into a stand-in, and the money it earned already lives on
-	 * permanently in ULedger's own rows (see PostLandingFee/PostParkingFee) - keeping a copy
+	 * permanently in ULedger's own rows (see FlightBilling::PostLandingFee/PostParkingFee) - keeping a copy
 	 * here would only be a second, decaying record of the same fact.
 	 */
 	UPROPERTY() int32 MaxDays = 30;
@@ -159,7 +159,7 @@ public:
 	uint32 Revision() const { return RevisionCount; }
 
 	/**
-	 * THE WIRING, TRANSIENT - this and the five pointers below (#425). Each is one of UOpsRuntime's own subobjects, set
+	 * THE WIRING, TRANSIENT - this and the four pointers below (#425; the ledger was a fifth until #506's review gave it to billing). Each is one of UOpsRuntime's own subobjects, set
 	 * once by its constructor, and none is state. Saved, each was a PATH to that subobject, which a later session's
 	 * load resolved to null - silently, since null is a working state for every one of them: with no Allocator,
 	 * Accept refuses every offer. A test's own board wires them by hand, and a load now leaves them as wired.
@@ -172,17 +172,10 @@ public:
 	UPROPERTY(Transient) TObjectPtr<UArrivalSequencer> Sequencer = nullptr;
 	UPROPERTY(Transient) TObjectPtr<UOfferGenerator> Generator = nullptr;
 
-	/**
-	 * The money, or null in a test that does not care about it. Set by UOpsRuntime's constructor (#425; was Attach).
-	 *
-	 * NULL IS A WORKING STATE, not a bug to guard against at every call: dozens of existing
-	 * board tests drive flights through their whole lifecycle and have no interest in fees, and
-	 * making them all construct a ledger would be churn for nothing.
-	 *
-	 * WHAT THE BILLING REACTION POSTS TO (#442 item 4): FlightBilling::OnFlightPhaseChanged reads it from the board the runtime's
-	 * "Billing" handler hands it - the board itself posts nothing.
-	 */
-	UPROPERTY(Transient) TObjectPtr<ULedger> Ledger = nullptr;
+	// NO LEDGER HERE since #506's review: the money was a board pointer the board itself never posted to after #442 item 4 - only the
+	// billing reaction read it, off the board it was handed. The runtime hands FlightBilling its own ledger now, so this board does
+	// not know money exists. (Its reason for being nullable - board tests with no interest in fees - travelled to FlightBilling.h.)
+	// ENFORCED BY: Check-Architecture rule 4 ('landing and parking fees posted outside FlightBilling', 'fee posters called outside FlightBilling')
 
 	/**
 	 * What things cost, for the inbox row's fee text (OfferViewModels formats the flight's LandingFee through it). THE BOARD NO
@@ -199,25 +192,16 @@ public:
 
 	/**
 	 * Where this board publishes what happened to its flights - an offer lapsing or declined, a flight
-	 * airborne. Set by UOpsRuntime::Attach. NULL IS A WORKING STATE, for Ledger's reason above: every
-	 * publish checks. Raw: the runtime owns both this board and the bus.
+	 * airborne. Set by UOpsRuntime::Attach. NULL IS A WORKING STATE, not a bug to guard against at every call: dozens of board
+	 * tests drive flights through their whole lifecycle with no interest in what is announced, and every publish checks. Raw: the
+	 * runtime owns both this board and the bus.
 	 */
 	FOpsEventBus* Bus = nullptr;
 
-	/**
-	 * Bank the landing fee this flight was OFFERED at, into Ledger. FORWARDS to FlightBilling::PostLandingFee (#442 item 4), where
-	 * the rule lives. Idempotent - a flight lands once.
-	 *
-	 * PUBLIC so a test can post a fee without driving a whole agent through its phases - and since #442 item 4 only a test
-	 * does: play bills through the reaction (FlightBilling::OnFlightPhaseChanged), which posts through FlightBilling's own
-	 * PostLandingFee, not this. Kept as the forwarder the refactor contract asks for, so no caller changed.
-	 * ENFORCED BY: Check-Architecture rule 4 ('landing and parking fees posted outside FlightBilling')
-	 */
-	void PostLandingFee(double Now, UFlight& Flight);
-
-	/** Bank the parking fee for the hours actually occupied, at the rate the flight was OFFERED at (UFlight::
-	 *  ParkingRatePerHour), and record it on the flight. FORWARDS to FlightBilling::PostParkingFee (#442 item 4). */
-	void PostParkingFee(double Now, UFlight& Flight);
+	// NO PostLandingFee / PostParkingFee HERE since #506's review: their production caller went with #442 item 4 (billing is the bus's
+	// reaction, posting through FlightBilling::PostLandingFee/PostParkingFee itself), and a forwarder needs the ledger the board no
+	// longer holds - so the tests that posted a fee by hand call FlightBilling's, which take the ledger, and these were removed rather
+	// than kept as a test-only door into money on a class that must not know it.
 
 	/**
 	 * The DEFAULT runway preference for the next generated offer (was ApproachFocus, #442) - UOpsRuntime writes it before
@@ -534,6 +518,13 @@ private:
 	friend class FArrivalQueue;
 	FOfferInbox Inbox;
 	FArrivalQueue Arrivals;
+
+	/**
+	 * THE OWNERS' READ OF THE REGISTRY (#506 review): Flights, CONST - so "a friend only reads the live list" is the compiler's to hold,
+	 * not a regex's. Rule 96 refuses a reach of Flights itself from an owner's files; this is the one door.
+	 * ENFORCED BY: the compiler (a const reference), Check-Architecture rule 96 ('Flights' is not on the owners' list)
+	 */
+	const TArray<TObjectPtr<UFlight>>& LiveFlights() const { return Flights; }
 
 	/**
 	 * Every flight not yet in a terminal phase: offered, accepted, or anywhere between landing

@@ -248,9 +248,9 @@ private:
 
 	/**
 	 * A RE-HOLD THAT FOUND NO STAND, DATED (#497 review), by flight id - so the queue pass does not plan again, every pass, for
-	 * a flight that has none until something a plan reads has moved: ClearanceFor's two stamps; UGroundTraffic::
-	 * StandHoldChangeCount, because a body rolling off a stand's pose moves no OccupancyRevision (the blind spot
-	 * AirportOps.Model.ArrivalQueue.StandFreedByChurnIsNotStale pins); and the network itself, VerdictFor's reason. Session
+	 * a flight that has none until something a plan reads has moved: ClearanceFor's three stamps - the guideline and occupancy
+	 * revisions and UGroundTraffic::StandHoldChangeCount, because a body rolling off a stand's pose moves no OccupancyRevision (the
+	 * blind spot AirportOps.Model.ArrivalQueue.StandFreedByChurnIsNotStale pins) - and the network itself, VerdictFor's reason. Session
 	 * state, never saved: a load starts it empty, one plan away from right.
 	 * ENFORCED BY: AirportOps.Model.FlightBoard.Rehold.FailedReholdIsDated
 	 */

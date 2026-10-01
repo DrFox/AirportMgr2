@@ -39,8 +39,9 @@ bool FFlightBoardIsComposedByTheRuntimeTest::RunTest(const FString& Parameters)
 	// THE MONEY, WIRED HERE TOO (#425), not first at Attach: each of these is Transient now - a save must not carry a
 	// path to another session's subobject - so nothing but the constructor ever sets them, and a runtime that has
 	// never attached must already have them.
-	TestTrue(TEXT("the board banks into the runtime's ledger at its prices"),
-		Board->Ledger.Get() == Runtime->GetLedger() && Board->Pricing.Get() == Runtime->GetPricing() && Runtime->GetLedger() != nullptr);
+	// NO LEDGER ON THE BOARD since #506's review: billing is handed the runtime's own in WireBus - AirportOps.Present.Bus.BillingIsWired
+	// charges a landing through it.
+	TestTrue(TEXT("the board prices at the runtime's prices"), Board->Pricing.Get() == Runtime->GetPricing() && Runtime->GetLedger() != nullptr);
 	TestTrue(TEXT("and asks the runtime's job board about fuel"), Board->Fuel.Get() == Runtime->GetJobBoard());
 	TestTrue(TEXT("the generator prices offers at the runtime's prices"),
 		Runtime->GetOfferGenerator() != nullptr && Runtime->GetOfferGenerator()->Pricing.Get() == Runtime->GetPricing());

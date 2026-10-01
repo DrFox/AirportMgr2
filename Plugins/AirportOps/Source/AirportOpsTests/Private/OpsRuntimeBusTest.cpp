@@ -340,7 +340,6 @@ bool FOpsBusLandingFeeTest::RunTest(const FString&)
 	Ledger->Clock = Clock;
 	UFlightBoard* Board = NewObject<UFlightBoard>(GetTransientPackage());
 	Board->Allocator = NewObject<UStandAllocator>(GetTransientPackage());
-	Board->Ledger = Ledger;
 	Board->Dispatcher = [Traffic, Net](const FVector2D& Near, const FAirframe& Frame)
 	{
 		return Traffic->DispatchArrival(*Net, Near, Frame, 1.0) != 0;
@@ -352,7 +351,7 @@ bool FOpsBusLandingFeeTest::RunTest(const FString&)
 	{
 		Board->OnAgentPhase(*Net, *Clock, E);
 	});
-	OpsTestSubscribeBilling(Bus, *Board);
+	OpsTestSubscribeBilling(Bus, *Board, Ledger);
 	Bus.EndWiring();
 	Board->Bus = &Bus;
 	Traffic->OnAgentPhaseChanged.AddLambda([&Bus](const FAgentTransition& Transition)
@@ -939,7 +938,7 @@ namespace
 			});
 			// THE BILLING REACTION, as WireBus wires it (#442 item 4): the parking clock the tests below read starts there, on the
 			// Turnaround the board announces - so the board publishes onto this bus too.
-			OpsTestSubscribeBilling(Bus, *Board);
+			OpsTestSubscribeBilling(Bus, *Board, /*Ledger*/ nullptr);   // the parking clock, not the money
 			Board->Bus = &Bus;
 			Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Reaction, TEXT("test"), [this](const FTurnaroundEndedEvent& E) { Ended.Add(E); });
 			Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Reaction, TEXT("Airlines"),

@@ -10,7 +10,7 @@
 #include "Model/StandAllocator.h"
 
 // THE OFFERS' HALF OF UFlightBoard (#442 item 4) - see FOfferInbox's class comment for the pattern and its deviations. Every body
-// below MOVED here unchanged but for reaching the board through the Board it is handed (Board.TransitionTo, Board.Flights,
+// below MOVED here unchanged but for reaching the board through the Board it is handed (Board.TransitionTo, Board.LiveFlights(),
 // Board.PlanQuote, Board.Allocator...), where it used to be the board's own `this`.
 
 void FOfferInbox::TickOffers(UFlightBoard& Board, const UGroundTraffic& Traffic, const URoadNetwork& Network,
@@ -32,7 +32,7 @@ void FOfferInbox::TickOffers(UFlightBoard& Board, const UGroundTraffic& Traffic,
 	}
 
 	// SNAPSHOT: a lapse calls MoveToHistory, which removes from the array being walked.
-	const TArray<TObjectPtr<UFlight>> Snapshot = Board.Flights;
+	const TArray<TObjectPtr<UFlight>> Snapshot = Board.LiveFlights();
 	++OfferSnapshots;   // See OfferSnapshotCountForTest.
 	for (const TObjectPtr<UFlight>& Each : Snapshot)
 	{
@@ -72,13 +72,21 @@ const FOfferVerdict& FOfferInbox::VerdictFor(const UFlightBoard& Board, const UG
 	// answers GraphBeingEdited then, and the stand it named is about to be held), and another network's equal numbers are
 	// not this graph. See FOfferVerdict.
 	const uint32 EditNow = Network.GetEditRevision();
+	// AND THE STAND CHURN (#506 review) - see FOfferVerdict::StandChurnAt: a body on or off a stand's pose moves no OccupancyRevision,
+	// and this plan reads exactly that. The clearance and the Land panel read it already, so the inbox now agrees with both. THE COST is
+	// one plan per pending offer per change of the held-stand set: a full inbox (8, OpsDesignDefaults::MaxPendingOffers) re-planned in
+	// 0.84 ms on the 30-stand line, measured 2026-10-01 (AirportOps.Model.FlightBoard.StandChurnReplansEachOfferOnce, "StandChurnCost:").
+	// An offer refused NoFreeStand is a failing search, ~13-21 ms on #256's scale field (LandChoices::RequoteForOccupancy's figure), so
+	// a full inbox on a full big field could pay ~100-170 ms a change - but OccupancyRevision already re-planned every offer on the
+	// claim, hold and phase change that brings a body to a stand or takes it away, so this adds at most one re-plan beside each.
+	const uint32 StandChurnNow = Traffic.StandHoldChangeCount();
 	const bool bSameNetwork = Verdict.Network.Get() == &Network;
 	// THE FLEET'S COMPOSITION, not its transitions (#443): CouldServe reads which vehicles exist, of what kind and where,
 	// and never a vehicle's state, so a truck arriving or finishing a refill must not re-plan the offer.
 	const uint32 FleetNow = Board.Fuel != nullptr ? Board.Fuel->GetFleetCompositionRevision() : 0;
 	// BOTH DECIDED BEFORE EITHER IS REDONE: the guideline stamp is shared, and the first recompute would write it.
 	const bool bPlanStale = !Verdict.bValid || !bSameNetwork || Verdict.BoardAt != BoardNow || Verdict.GuidelineAt != GuidelineNow
-		|| Verdict.OccupancyAt != OccupancyNow || Verdict.EditAt != EditNow;
+		|| Verdict.OccupancyAt != OccupancyNow || Verdict.EditAt != EditNow || Verdict.StandChurnAt != StandChurnNow;
 	// bFuelServable is CouldServe(Traffic, Network, Flight.Airframe): the airport's shape (the guideline graph - depots,
 	// roads, stands, modules) and the fleet's composition, which includes which vehicles are stranded (#443: the traffic model
 	// is asked who is, and the composition counter moves when one strands or moves again). Not the board (the airframe is the
@@ -97,6 +105,7 @@ const FOfferVerdict& FOfferInbox::VerdictFor(const UFlightBoard& Board, const UG
 		Verdict.BoardAt = BoardNow;
 		Verdict.OccupancyAt = OccupancyNow;
 		Verdict.EditAt = EditNow;
+		Verdict.StandChurnAt = StandChurnNow;
 	}
 	if (bFuelStale)
 	{

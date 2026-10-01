@@ -11,7 +11,7 @@
 #include "Algo/StableSort.h"
 
 // THE ARRIVALS' HALF OF UFlightBoard (#442 item 4) - see FArrivalQueue's class comment for the pattern and its deviations. Every body
-// below MOVED here unchanged but for reaching the board through the Board it is handed (Board.TransitionTo, Board.Flights,
+// below MOVED here unchanged but for reaching the board through the Board it is handed (Board.TransitionTo, Board.LiveFlights(),
 // Board.Allocator, ++Board.RevisionCount...), where it used to be the board's own `this`; TickQueue's body is Tick's.
 
 void FArrivalQueue::Schedule(UFlightBoard& Board, UGroundTraffic& Traffic, USimClock& Clock, UFlight& Flight)
@@ -60,7 +60,7 @@ void FArrivalQueue::Enqueue(UFlightBoard& Board, UFlight& Flight, double Since)
 TArray<UFlight*> FArrivalQueue::Queue(const UFlightBoard& Board) const
 {
 	TArray<UFlight*> Out;
-	for (const TObjectPtr<UFlight>& Each : Board.Flights)
+	for (const TObjectPtr<UFlight>& Each : Board.LiveFlights())
 	{
 		if (Each != nullptr && Each->GetPhase() == EFlightPhase::Inbound)
 		{
@@ -146,7 +146,7 @@ EArrivalRefusal FArrivalQueue::UnlandableWhy(const UFlight& Flight, const URoadN
 void FArrivalQueue::JudgeUnarrived(const UFlightBoard& Board, const URoadNetwork& Network)
 {
 	const uint32 GuidelineNow = Network.GetGuidelineRevision();
-	for (const TObjectPtr<UFlight>& Each : Board.Flights)
+	for (const TObjectPtr<UFlight>& Each : Board.LiveFlights())
 	{
 		// EVERY FLIGHT STILL TO ARRIVE - accepted or holding (#445 review). A holding flight used to be judged only by ClearanceFor, which TickQueue asks
 		// only once the runway is found free and the clock is running: behind a busy runway, or while paused, a graph change left its verdict older than
@@ -245,7 +245,7 @@ FQueueTick FArrivalQueue::Tick(UFlightBoard& Board, UGroundTraffic& Traffic, con
 	// AirportOps.Present.RuntimeEdit.RefusedReholdAgreesWithTheTable (paused, and an Accepted flight)
 	{
 		TArray<UFlight*> InOrder = Waiting;
-		for (const TObjectPtr<UFlight>& Each : Board.Flights)
+		for (const TObjectPtr<UFlight>& Each : Board.LiveFlights())
 		{
 			if (Each != nullptr && Each->GetPhase() == EFlightPhase::Accepted)
 			{
@@ -352,7 +352,7 @@ void FArrivalQueue::RestoreStandHolds(UFlightBoard& Board, UGroundTraffic& Traff
 
 	TArray<UFlight*> Holding;
 	TArray<UFlight*> Last;
-	for (const TObjectPtr<UFlight>& Each : Board.Flights)
+	for (const TObjectPtr<UFlight>& Each : Board.LiveFlights())
 	{
 		// INBOUND TOO: a holding flight keeps its stand, and a graph rebuild takes every claim.
 		if (Each != nullptr && Each->IsUnarrived())
@@ -438,7 +438,7 @@ void FArrivalQueue::RearmSchedules(UFlightBoard& Board, UGroundTraffic& Traffic,
 
 	// SNAPSHOT, NOT A LIVE ITERATION: DispatchNow below mutates the board, and a range-based
 	// for over Flights must not see that happen under it.
-	const TArray<TObjectPtr<UFlight>> Loaded = Board.Flights;
+	const TArray<TObjectPtr<UFlight>> Loaded = Board.LiveFlights();
 	for (const TObjectPtr<UFlight>& Each : Loaded)
 	{
 		if (Each == nullptr)

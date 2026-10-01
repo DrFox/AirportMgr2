@@ -28,26 +28,34 @@ struct FFlightPhaseChangedEvent;
  * it. A NAMESPACE, not an owner object: billing holds no state of its own (what was paid is the FLIGHT's - bLandingFeePaid,
  * bParkingFeePaid, ParkedAt, all saved), so there is nothing to construct or wire but the subscription. The precedent is
  * ServiceText and ArrivalPlanner: rules with no state are functions.
- * ENFORCED BY: Check-Architecture rule 4 (FlightBilling::OnFlightPhaseChanged is called only by the runtime's wiring, and the
- * landing and parking fees are posted from FlightBilling.cpp alone)
+ * ENFORCED BY: Check-Architecture rule 4 (FlightBilling::OnFlightPhaseChanged is called only by the runtime's wiring; the
+ * landing and parking fees are posted from FlightBilling.cpp alone; and PostLandingFee/PostParkingFee are called from nowhere
+ * else - billing inline again would be a call to one of them)
  */
 namespace FlightBilling
 {
 	/**
 	 * THE REACTION: Event's flight, billed for the phase it entered - the landing fee on Landing, the parking clock started on
-	 * Turnaround, the parking fee on TaxiOut - against Board's Ledger. Nothing for any other phase, an unknown flight, or a
-	 * board with no ledger (a test that does not care about money). Resolves the flight by id through the board: an event
-	 * carries ids, never a UObject that may be gone by the time the queue drains (spec 2026-09-29-ops-event-bus §4).
+	 * Turnaround, the parking fee on TaxiOut - into Ledger. Nothing for any other phase (a load's Inbound, Departed or Cancelled
+	 * among them) or an unknown flight. Resolves the flight by id through the board: an event carries ids, never a UObject that
+	 * may be gone by the time the queue drains (spec 2026-09-29-ops-event-bus §4).
+	 *
+	 * THE LEDGER IS HANDED IN, the runtime's own (#506 review) - it was the flight board's pointer, which only this read, so the
+	 * board no longer knows money exists. NULL IS A WORKING STATE, not a bug to guard against at every call: dozens of board tests
+	 * drive flights through their whole lifecycle with no interest in fees, and making them all construct a ledger would be churn
+	 * for nothing - a null ledger posts nothing, and the parking clock still starts.
+	 * ENFORCED BY: AirportOps.Present.Bus.BillingIsWired (the runtime's ledger is the one charged),
+	 * AirportOps.Model.FlightSave.MidFlightGoesRoundOrRetires (a load's changes bill nothing)
 	 */
-	AIRPORTOPS_API void OnFlightPhaseChanged(UFlightBoard& Board, const FFlightPhaseChangedEvent& Event);
+	AIRPORTOPS_API void OnFlightPhaseChanged(ULedger* Ledger, UFlightBoard& Board, const FFlightPhaseChangedEvent& Event);
 
 	/**
 	 * Bank the landing fee this flight was OFFERED at. Idempotent - a flight lands once. Ledger may be null (nothing posted).
-	 * UFlightBoard::PostLandingFee forwards here.
+	 * UFlightBoard::PostLandingFee forwarded here until #506's review removed it with the board's ledger.
 	 */
 	AIRPORTOPS_API void PostLandingFee(ULedger* Ledger, double Now, UFlight& Flight);
 
 	/** Bank the parking fee for the hours actually occupied, at the rate the flight was OFFERED at (UFlight::
-	 *  ParkingRatePerHour), and record it on the flight. UFlightBoard::PostParkingFee forwards here. */
+	 *  ParkingRatePerHour), and record it on the flight. UFlightBoard::PostParkingFee forwarded here until #506's review. */
 	AIRPORTOPS_API void PostParkingFee(ULedger* Ledger, double Now, UFlight& Flight);
 }
