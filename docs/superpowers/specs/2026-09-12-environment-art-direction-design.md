@@ -180,7 +180,7 @@ exists.
 | A | Lighting, sky, post-process | yes |
 | B | Landscape + `M_Ground` | yes |
 | G | Sun tracks the game clock, floored at dusk | yes, after A and B |
-| C | Grass scatter - `LandscapeGrassType` + clump meshes | no |
+| C | Grass scatter - superseded 2026-10-01 by `2026-10-01-ground-cover-grass-design.md` (own scatterer, not `LandscapeGrassType`) | no |
 | D | The surround - farmland, hedgerows, trees past the fence | no |
 | E | Field-length compression (section 2.2) | no - own spec |
 | F | Camera `MaxViewDistance` 600 m -> ~1.5 km | no - own change |
@@ -555,7 +555,8 @@ the direction *living airport diorama* and points here and at the modelling conv
 
 ## 10. Out of scope, named so it is not forgotten
 
-- **Slice C**, grass scatter: `LandscapeGrassType` assets driven from an
+- **Slice C**, grass scatter. **Superseded 2026-10-01** by `2026-10-01-ground-cover-grass-design.md`,
+  which replaces the plan below with its own scatterer; kept for history. Was: `LandscapeGrassType` assets driven from an
   `M_Ground` Landscape Grass Output, plus low-poly clump meshes. Needs the
   `GeometryScripting` plugin enabled if the clumps are to be authored headlessly.
 - **Slice D**, the surround: farmland fields, hedgerows and trees beyond the plot, so the
