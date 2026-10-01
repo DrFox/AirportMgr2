@@ -196,6 +196,63 @@ namespace
 		}
 		return false;
 	}
+
+	/**
+	 * THE GROUND A BODY ON NO LIVE PLAN STANDS ON (#502): every live guideline edge within Radius of its centre, as the
+	 * occupied interval the disc cuts from it, and each such edge's ends within Radius - ASSERTED, as HoldRunwayOnly asserts
+	 * a strip (FTrafficOccupancy::Assert says why: a table cannot move an aeroplane that is already there). Geometric because
+	 * the body is on no route to claim by. Rank is its class's, as every claim the pass makes off a node's override.
+	 * A LINEAR SCAN of every live edge, sampled, per held push per tick - one or two held at a time, on a graph of 49 edges in
+	 * the 2026-09-28 report's airport. Index it (FGuidelineNodeIndex) before a held body becomes common.
+	 */
+	void HoldBodyFootprint(FTrafficOccupancy& Table, const FRoadAgent& Agent, const URoadNetwork& Network, double Radius)
+	{
+		// THE BODY'S CENTRE ON ITS OWN AXIS, from the steered axle the pose names: FClaimPass::CentreOf's offset in the plane
+		// rather than along a plan. The heading is the body's own, so a push needs no sign of its own here.
+		const double Ahead = Agent.Chassis().BodyCentreX - Agent.Chassis().SteerAxleX;
+		const FVector2D Centre = Agent.LastMotion.Position
+			+ FVector2D(FMath::Cos(Agent.LastMotion.Heading), FMath::Sin(Agent.LastMotion.Heading)) * Ahead;
+		const TArray<FGuidelineEdge>& Edges = Network.GetGuidelineEdges();
+		TArray<FVector2D> Points;
+		for (int32 Index = 0; Index < Edges.Num(); ++Index)
+		{
+			const FGuidelineEdgeId Id = Network.GuidelineEdgeIdAt(Index);
+			int32 Span = 0;
+			double Fraction = 0.0;
+			if (!Edges[Index].bAlive || !Network.SampleGuideline(Id, Points) || Points.Num() < 2
+				|| GuidelineGeom::NearestOnPolyline(Points, Centre, Span, Fraction) > Radius)
+			{
+				continue;
+			}
+			// EDGE DISTANCE FROM A, on the samples a plan walks - the distance every edge claim is measured in.
+			double Along = 0.0;
+			double Length = 0.0;
+			for (int32 P = 1; P < Points.Num(); ++P)
+			{
+				const double Piece = FVector2D::Distance(Points[P - 1], Points[P]);
+				Along += P - 1 < Span ? Piece : (P - 1 == Span ? Piece * Fraction : 0.0);
+				Length += Piece;
+			}
+			const FVector2D Foot = FMath::Lerp(Points[Span], Points[Span + 1], Fraction);
+			const double Half = FMath::Sqrt(FMath::Max(0.0, Radius * Radius - FVector2D::DistSquared(Foot, Centre)));
+			FTrafficClaim Claim;
+			Claim.AgentId = Agent.Id;
+			Claim.Resource = FTrafficResource::OfEdge(Id);
+			Claim.From = FMath::Max(0.0, Along - Half);
+			Claim.To = FMath::Min(Length, Along + Half);
+			Claim.bOccupied = true;
+			Claim.Rank = TraversalPriority(Agent.Class);
+			Table.Assert(Claim);
+			for (const FGuidelineNodeId End : { Edges[Index].A, Edges[Index].B })
+			{
+				const FGuidelineNode* Node = Network.GetGuidelineNode(End);
+				if (Node != nullptr && FVector2D::Distance(Node->Position, Centre) <= Radius)
+				{
+					Table.Assert(FTrafficClaim::Make(Agent.Id, FTrafficResource::OfNode(End), /*bOccupied*/ true, Claim.Rank));
+				}
+			}
+		}
+	}
 }
 
 void FClaimPass::HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Network)
@@ -1806,6 +1863,14 @@ void FClaimPass::Run(FRoadAgent& Agent, const URoadNetwork& Network)
 	if (!Plan.IsValid() || Plan.Steps.Num() == 0)
 	{
 		ReleaseForDeadPlan(Agent);
+		// A PUSH ON A DEAD PLAN IS A BODY THAT STAYS (#502), not a taxi about to be Stranded: it holds where it stands for a
+		// way out, and with every claim its route named given back, a line the player drew under it read free - a van drove
+		// through the aeroplane. So the ground under its body is claimed by geometry, half a footprint round its centre.
+		// ENFORCED BY: Airside.Model.Traffic.HeldPushClaimsItsFootprint
+		if (Agent.Phase == EAgentPhase::Manoeuvring)
+		{
+			HoldBodyFootprint(Table, Agent, Network, Rules.FootprintFor(Agent.Class) * 0.5);
+		}
 		ClaimGoalNode(Agent, Network);
 		return;
 	}

@@ -1,5 +1,6 @@
 #include "Model/PushbackRun.h"
 
+#include "Model/RouteJoin.h"
 #include "Solve/GuidelineGeom.h"
 
 bool FPushbackRun::Start(const FRoutePlan& InPlan, double InPushSpeed, double InPushAccel,
@@ -71,44 +72,43 @@ bool FPushbackRun::Rejoin(const FRoutePlan& Route, double Along, const FVector2D
 	{
 		return false;
 	}
-	FVector2D JoinAt = FVector2D::ZeroVector;
-	if (!GuidelineGeom::PointAtDistance(Route.Polyline, JoinTo, JoinAt, Tangent))
+	// THE LEG ITSELF IS RouteJoin::Prepend's (#502), the one join-leg shape the held taxi out's join shares: the polyline
+	// re-laid from where the aeroplane stands, every step re-based. Refused there, untouched here.
+	FRoutePlan Joined;
+	if (!RouteJoin::Prepend(Route, From, JoinTo, Joined))
 	{
 		return false;
 	}
-	// THE FIRST VERTEX PAST THE JOIN, by the arc length PointAtDistance and every EndDistance were measured with.
-	int32 Keep = Route.Polyline.Num();
-	double Walked = 0.0;
-	for (int32 Index = 1; Index < Route.Polyline.Num(); ++Index)
-	{
-		Walked += FVector2D::Distance(Route.Polyline[Index - 1], Route.Polyline[Index]);
-		if (Walked > JoinTo + UE_KINDA_SMALL_NUMBER)
-		{
-			Keep = Index;
-			break;
-		}
-	}
-
-	const double Leg = FVector2D::Distance(From, JoinAt);
-	FRoutePlan Joined = Route;
-	Joined.Polyline.Reset();
-	Joined.Polyline.Add(From);
-	Joined.Polyline.Add(JoinAt);
-	for (int32 Index = Keep; Index < Route.Polyline.Num(); ++Index)
-	{
-		Joined.Polyline.Add(Route.Polyline[Index]);
-	}
-	for (FRouteStep& Step : Joined.Steps)
-	{
-		// The first step may end AT the join (JoinTo clamped to it): its end is then the join's own vertex.
-		const bool bEndsAtJoin = Step.EndDistance <= JoinTo + UE_KINDA_SMALL_NUMBER;
-		Step.EndVertex = bEndsAtJoin ? 1 : Step.EndVertex - Keep + 2;
-		Step.EndDistance = bEndsAtJoin ? Leg : Leg + (Step.EndDistance - JoinTo);
-	}
-	Joined.Length = GuidelineGeom::PolylineLength(Joined.Polyline);
 	Plan = Joined;
 	Travelled = 0.0;
 	return true;
+}
+
+void FPushbackRun::AppendRemainingRun(bool bReverse, TArray<FRouteRun>& Out) const
+{
+	// BY THE ARC LENGTH Advance WALKS (PointAtDistance), so the run starts under the steered axle, where the pose is.
+	FVector2D At = FVector2D::ZeroVector;
+	double Tangent = 0.0;
+	if (HasArrived() || !GuidelineGeom::PointAtDistance(Plan.Polyline, Travelled, At, Tangent))
+	{
+		return;
+	}
+	FRouteRun Run;
+	Run.bReverse = bReverse;
+	Run.Points.Add(At);
+	double Walked = 0.0;
+	for (int32 Index = 1; Index < Plan.Polyline.Num(); ++Index)
+	{
+		Walked += FVector2D::Distance(Plan.Polyline[Index - 1], Plan.Polyline[Index]);
+		if (Walked > Travelled + UE_KINDA_SMALL_NUMBER)
+		{
+			Run.Points.Add(Plan.Polyline[Index]);
+		}
+	}
+	if (Run.Points.Num() >= 2)
+	{
+		Out.Add(MoveTemp(Run));
+	}
 }
 
 bool FPushbackRun::Advance(double DeltaSeconds, double StopWithin, bool bHasThrust,

@@ -104,4 +104,14 @@ struct AIRSIDE_API FPushbackRun
 	 * ENFORCED BY: Airside.Model.PushbackOnDeletedGroundStops
 	 */
 	bool HasArrived() const { return Plan.Result == ERouteResult::Unreachable || Plan.IsRunBy(Travelled); }
+
+	/**
+	 * Appends to Out, for drawing, ONE run of what is left of the push - the point the steered axle has reached, then every
+	 * vertex of Plan.Polyline past it - and NOTHING for a push that is over (HasArrived: run, cut short behind it, or
+	 * stranded by a rebuild), which is going nowhere along its line (#502). UGroundTraffic::RemainingRouteRuns drew the whole
+	 * line from the stand, and a stranded push's ran across the ground the player had just deleted. bReverse is the caller's:
+	 * which phases back is FAgentPhaseTraits' column, not this struct's to say.
+	 * ENFORCED BY: Airside.Model.Traffic.PushRouteDrawsOnlyWhatIsLeft
+	 */
+	void AppendRemainingRun(bool bReverse, TArray<FRouteRun>& Out) const;
 };

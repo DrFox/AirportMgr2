@@ -4893,8 +4893,10 @@ $modelLineBudget = [ordered]@{
     # responsibility). RAISED 1954 -> 1955 the same day by #497: the refusal's sentence handed to OnArrivalRefused (#471).
     'Plugins\Airside\Source\Airside\Private\Model\GroundTraffic.cpp'          = 1955
     # 2026-10-01: the claim arbiter, one algorithm (Run and its windows, crossings and ranking - 13 functions, long ones);
-    # splitting it would scatter one invariant across files.
-    'Plugins\Airside\Source\Airside\Private\Model\TrafficClaims.cpp'          = 1898
+    # splitting it would scatter one invariant across files. RAISED 1898 -> 1963 by #502 (2026-10-01): a push held on a dead
+    # plan claims the ground its body stands on (HoldBodyFootprint, a geometric claim for a body on no route) - what a body
+    # holds is the claim pass's own question, so it lives beside HoldRunwayOnly; with its reason and pin.
+    'Plugins\Airside\Source\Airside\Private\Model\TrafficClaims.cpp'          = 1963
     # 2026-10-01: the flight registry and the one transition owner - the save, the indices, TransitionTo and every door that names a
     # transition (the cancels, OnAgentPhase's mapping, the load's steps) and the quote both owners ask. LOWERED 1803 -> 1112 the same
     # day by #442 item 4: the offers went to FOfferInbox (OfferInbox.cpp), the arrival queue, its clearances, the dispatch and every
@@ -4916,10 +4918,11 @@ $modelLineBudget = [ordered]@{
     # under it (RejoinPush, PushRejoinRadius - #396's RejoinInPlace for the push - with a Rejoin's aftermath spelled out, since
     # FRouteChange::Rejoin is the follower's), and the three rebuild lines naming the plan; each with its reason and pin. The
     # rejoin's extraction to its own file is #502. No cut here: all of it is re-resolution after a rebuild, this file's job.
-    # LOWERED 1690 -> 1459 by #502 (2026-10-01): the rejoin search (RejoinNearby and its radii) and UGroundTraffic::
+    # LOWERED 1690 -> 1487 by #502 (2026-10-01): the rejoin search (RejoinNearby and its radii) and UGroundTraffic::
     # RescueStranded moved whole to GroundTrafficRejoin.cpp (held by the default), less #502's own push fixes here (the
-    # own-step rule and the push's re-route policy and length bound, each with its reason and pin).
-    'Plugins\Airside\Source\Airside\Private\Model\GroundTrafficRebuild.cpp'   = 1459
+    # own-step rule, the push's re-route policy and length bound, and each plan re-resolved to its own end - bOwnsGoal in
+    # place of the arms' hand re-points - each with its reason and pin).
+    'Plugins\Airside\Source\Airside\Private\Model\GroundTrafficRebuild.cpp'   = 1487
     # 2026-10-01: the route search (A* over the guideline graph, plan building, run description) - one algorithm.
     'Plugins\Airside\Source\Airside\Private\Model\RouteSearch.cpp'            = 1191
     # 2026-10-01: what #427 left of UJobBoard - the jobs, the vehicles' lifecycle and Step's one sequence; bidding and

@@ -87,7 +87,10 @@ struct FGraphRebuildSummary
  *                                (issue #429): the operations that CHOOSE which route change an
  *                                agent gets by its phase, so no caller outside this class does;
  *   - GroundTrafficWaiters.cpp   RetryWaiters, ReplanHeldTaxiOut and ReofferWaiter (issue #444):
- *                                the one retry pass for every stopped waiter, by FRoadAgent::GetWait.
+ *                                the one retry pass for every stopped waiter, by FRoadAgent::GetWait;
+ *   - GroundTrafficRejoin.cpp    the rejoin search (Model/GroundTrafficRejoin.h, a private header) and
+ *                                RescueStranded, its third caller (#502): moved out of the rebuild's
+ *                                file, whose re-resolve is the other two.
  *
  * UGroundTraffic keeps the registry, dispatch, tick order and events; it owns one FClaimPass
  * (constructed fresh per Arbitrate call - it carries no state of its own), one
@@ -704,11 +707,14 @@ public:
 	 * EVERY PHASE ON A ROUTE (FAgentPhaseTraits::bOnRoute, issue #444) - it answered Taxiing and Reversing by
 	 * name, so for the whole of a push the selected aeroplane had no route drawn. A PUSH is its own line, drawn
 	 * as a reverse run (bBodyBacks: the body backs along it), then the taxi out it hands over to - unless that
-	 * taxi out is waiting to be planned again (EAgentWait::ForTaxiOutRoute), when there is none to draw. While a
+	 * taxi out is waiting to be planned again (EAgentWait::ForTaxiOutRoute), when there is none to draw. THE PUSH
+	 * IS TRIMMED, unlike the follower's route: only what is left of it, from where the aeroplane is - and nothing for
+	 * a push that is over, stranded or cut short, which drew its whole dead line across deleted ground (#502;
+	 * FPushbackRun::RemainingLine). While a
 	 * TOW is backing, the run it is backing along is the path its solved trailer axle actually takes
 	 * (FTowReverseRun's samples), not the raw leg: what is drawn is what is driven. Empty for no such agent or
 	 * one on no route.
-	 * ENFORCED BY: Airside.Model.Traffic.PushRouteIsDrawn
+	 * ENFORCED BY: Airside.Model.Traffic.PushRouteIsDrawn, Airside.Model.Traffic.PushRouteDrawsOnlyWhatIsLeft
 	 */
 	TArray<FRouteRun> RemainingRouteRuns(int32 AgentId) const;
 

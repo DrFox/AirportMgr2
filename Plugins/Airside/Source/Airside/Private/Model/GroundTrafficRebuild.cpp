@@ -358,10 +358,10 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 			//
 			// RE-ROUTED TO ITS OWN END OR NOWHERE - see ReplanAt above for why a push has no other
 			// place to go. This said "NOT REPLANNED, only re-pointed", which was not true: a step
-			// that does not re-resolve is replanned by ReResolvePlan to Agent.GoalNode, and during a
+			// that does not re-resolve was replanned by ReResolvePlan to Agent.GoalNode, and during a
 			// push that is the runway entry DepartAgent gave the taxi out, so a deleted push end had
-			// the aeroplane pushed backwards up the taxiway onto the runway (#498's probe). Pointed
-			// at the push's own end first, a dead end fails that search and the push is cut back to
+			// the aeroplane pushed backwards up the taxiway onto the runway (#498's probe). Searched
+			// to the push's own end, a dead end fails that search and the push is cut back to
 			// its last live node or, when none survives, stranded; FPushbackRun::HasArrived then ends
 			// it early, where it stands, rather than never. A live end is still searched to - the one
 			// re-route a push gets, and the taxi out still begins where it arrives. A step UNDER it
@@ -369,16 +369,13 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 			// instead, and the push completes: ReResolvePlan's RejoinPush.
 			// ENFORCED BY: Airside.Model.PushbackEndGoneStopsShortOfTheRunway, Airside.Model.PushbackOnDeletedGroundStops
 			//
-			// ONLY A LIVE PUSH'S GOAL (#501 review): a push already stranded is skipped below as not
-			// valid, so pointing the goal at its dead end left a held departure naming that node, not
-			// its runway, after any later edit anywhere on the map.
+			// THE PUSH'S END IS ReResolvePlan's TO FIND NOW (#502), from the plan, and the agent's goal - the taxi out's
+			// runway entry - is not the push's to touch. #498 and #501 pointed the goal here by hand at the push's end, and
+			// only for a live push: a push already stranded is skipped below as not valid, so pointing the goal at its
+			// dead end left a held departure naming that node, not its runway, after any later edit anywhere on the map.
 			// ENFORCED BY: Airside.Model.PushbackOnDeletedGroundStops (a second, unrelated rebuild)
 			Plan = &Agent.Pushback.Plan;
 			FromStep = CurrentStep(Agent.Pushback.Plan, Agent.Pushback.Travelled);
-			if (Agent.Pushback.Plan.IsValid())
-			{
-				Agent.SetGoalFrom(Agent.Pushback.Plan);
-			}
 		}
 		else if (Agent.Phase == EAgentPhase::Arriving && Agent.TaxiInPlan.Steps.Num() > 0)
 		{
@@ -506,11 +503,12 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		// push ends, and it was never re-resolved - so an aeroplane pushed back while the
 		// player redrew its way out taxied along lines that no longer existed
 		// (Airside.Model.PushbackRebuildReResolvesTaxiOut). FROM 0, as TaxiInPlan is: not a
-		// metre of it has been driven. AFTER the push, whose re-resolve points the goal at the push's
-		// end - so it is pointed back at the taxi out's own end first, the entry DepartAgent gave it
-		// (#498): ReResolvePlan replans a plan whose end is gone to the AGENT's goal, and from the
-		// push's end that made a deleted entry a drive out and back to it, disarmed. To the dead entry
-		// the search fails, the taxi out truncates, and the push ends in the hold below.
+		// metre of it has been driven. TO ITS OWN END, the entry DepartAgent gave it (#498): when
+		// ReResolvePlan replanned a plan whose end is gone to the AGENT's goal, the push's re-resolve
+		// had just pointed that at the push's end, and a deleted entry became a drive out and back to it,
+		// disarmed. To the dead entry the search fails, the taxi out truncates, and the push ends in the
+		// hold below. ReResolvePlan derives the end from the plan itself since #502; the goal was pointed
+		// back here by hand before that.
 		// ENFORCED BY: Airside.Model.Traffic.HeldTaxiOut.MidPushRunwayLossHolds
 		//
 		// NOT IN THE SUMMARY'S COUNTS, which are one per AGENT (Considered, above): counting a
@@ -518,7 +516,6 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		// on its own line instead, when it did not survive.
 		if (Agent.Phase == EAgentPhase::Manoeuvring && Agent.TaxiOutPlan.IsValid() && !Agent.IsWaitingFor(EAgentWait::ForTaxiOutRoute))
 		{
-			Agent.SetGoalFrom(Agent.TaxiOutPlan);
 			const FPlanReResolver::EReResolve TaxiOut =
 				PlanReResolver.ReResolvePlan(Agent, Agent.TaxiOutPlan, 0, Context, NodeIndex);
 			if (TaxiOut == FPlanReResolver::EReResolve::Stranded || TaxiOut == FPlanReResolver::EReResolve::Truncated)
@@ -797,6 +794,13 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	// Airside.Model.PushbackEndGoneStopsShortOfTheRunway (named)
 	const bool bPush = !bDriving && Agent.Phase == EAgentPhase::Manoeuvring && &Plan != &Agent.TaxiOutPlan;
 
+	// WHETHER THE AGENT'S GOAL IS THIS PLAN'S END (#502): for every plan but a push, whose agent is going to the runway entry
+	// its taxi out ends at (DepartAgent's TakeGoal). A re-route below searches to the plan's own end whichever plan it is;
+	// only a plan the goal names writes the goal. The goal used to be the search's goal, read implicitly, and the
+	// Manoeuvring arm pointed it at the push's end by hand - a held departure's card then named a node, not its runway.
+	// ENFORCED BY: Airside.Model.PushbackOnDeletedGroundStops (the card), Airside.Model.Traffic.RebuildReResolvesToThePlansOwnEnd
+	const bool bOwnsGoal = !bPush;
+
 	// WHICH PLAN, BY NAME, in the three lines this writes - asked by address, as bDriving is, the push as bPush is. A
 	// push's and a taxi out's replans both printed "taxi-in" (#498's probe), which sent the reader of a log to the wrong
 	// one of four routes.
@@ -912,15 +916,20 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	// nothing, and the push needs none kept - its clearance was a check at DepartAgent (IsPushGroundFree), not a hold,
 	// and the next claim pass claims the rejoined line like any route. The arbitration fields and the stall clock reset
 	// (#429's reason: the wait is over by construction, and a deadlock pass would count the old one against the new
-	// line). The goal re-points at the rejoined push's end.
+	// line). The agent's goal is left alone: it is the taxi out's runway entry, not the push's end (#502 - #501 re-pointed it
+	// here at the rejoined push's end, which a held taxi out's card then named).
 	auto RejoinPush = [&Agent, &Plan, &Context, &Occupancy]()
 	{
 		FRoutePlan Rejoined;
 		double Along = 0.0;
 		FVector2D At = FVector2D::ZeroVector;
 		const FVector2D Here = Agent.LastMotion.Position;
-		if (!GroundTrafficRejoin::RejoinNearby(Agent, Plan, Context, GroundTrafficRejoin::PushRejoinRadius,
-				Rejoined, Along, At, FGuidelineNodeId(), nullptr, /*bPushed*/ true)
+		// TO THE PUSH'S OWN END (#502), never to the agent's goal, which RejoinNearby falls back on for every caller but a
+		// push: its last step's node while that lives; gone, RejoinNearby takes the node nearest where the push ended,
+		// arriving the way it arrived. The Manoeuvring arm's hand re-point put the same node in Agent.GoalNode for this.
+		const FGuidelineNodeId End = Plan.Steps.Num() > 0 ? Plan.Steps.Last().To : FGuidelineNodeId();
+		if (!GroundTrafficRejoin::RejoinNearby(Agent, Plan, Context, GroundTrafficRejoin::PushRejoinRadius, Rejoined, Along, At,
+				Context.Network.GetGuidelineNode(End) != nullptr ? End : FGuidelineNodeId(), nullptr, /*bPushed*/ true)
 			|| !Agent.Pushback.Rejoin(Rejoined, Along, Here))
 		{
 			return false;
@@ -929,7 +938,6 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		Occupancy.ReleaseGuidelineClaimsOf(Agent.Id);
 		Agent.ClearArbitration();
 		Agent.ResetStall();
-		Agent.SetGoalFrom(Agent.Pushback.Plan);
 		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("Agent %d's push rejoined the pavement under it after the rebuild: %.0f uu sideways, %.0f uu to go"),
 			Agent.Id, FVector2D::Distance(Here, At), Agent.Pushback.Plan.Length - Agent.Pushback.Travelled);
@@ -1111,7 +1119,12 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	const FGuidelineNodeId Goal = (Failed == Plan.Steps.Num() && Failed > FromStep)
 		? Plan.Steps.Last().To
 		: RouteSearch::FindNearestNode(Network, Plan.Polyline.Last(), Agent.Class, Radius, &NodeIndex);
-	if (Goal.IsSet())
+	// WHAT A RE-ROUTE BELOW SEARCHES TO: this plan's own end (#502), or the stand a gone one is retargeted to - never
+	// Agent.GoalNode, read implicitly. Unset when the end no longer resolves: nothing is searched, and the plan is cut back
+	// to its last live node - where a search to a dead goal ended too, and where a goal naming somewhere else used to send
+	// it instead (the push to its taxi out's runway entry, #498). Only a plan the goal names re-points the goal (bOwnsGoal).
+	FGuidelineNodeId SearchGoal = Goal;
+	if (Goal.IsSet() && bOwnsGoal)
 	{
 		Agent.SetGoal(Goal);
 	}
@@ -1135,7 +1148,9 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	// double wait two flags allowed. With one wait, the stand's would REPLACE the taxi out's. It is a departure; its own
 	// retry plans it a way out.
 	// ENFORCED BY: Airside.Model.Traffic.HeldTaxiOut.RebuildDoesNotRetargetItToAStand
-	if (!Goal.IsSet() && Agent.Class == ETraversalClass::Aircraft && Agent.AsAircraft() != nullptr
+	//
+	// NOR A PUSH (#502): its plan ends where its taxi out begins, never at a stand, and the agent's goal is not its to move.
+	if (!Goal.IsSet() && bOwnsGoal && Agent.Class == ETraversalClass::Aircraft && Agent.AsAircraft() != nullptr
 		&& !Agent.bDepartureArmed && !Agent.IsWaitingFor(EAgentWait::ForTaxiOutRoute)
 		&& Failed < Plan.Steps.Num())
 	{
@@ -1145,6 +1160,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		if (NewStand.IsSet())
 		{
 			Agent.SetGoal(NewStand);
+			SearchGoal = NewStand;
 			Agent.EndWait();
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d: its stand is gone; retargeting to the stand at node %d"),
 				Agent.Id, NewStand.Index);
@@ -1213,7 +1229,11 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		// AHEAD OF THE AGENT ONLY, by the branch above: ReplanAt's own precondition is that
 		// the splice is at or ahead of the step the agent is on, and it is now the caller
 		// that guarantees the strict half of that rather than the callee that tolerates it.
-		if (ReplanAt(Agent, Failed, FGuidelineEdgeId(), FGuidelineNodeId(), Context))
+		//
+		// TO SearchGoal: ReplanAt searches to Agent.GoalNode, which for the follower's plan IS SearchGoal - written just above
+		// (bOwnsGoal holds for every plan but a push). With no end to search to it is not asked, and the route is cut back.
+		// ENFORCED BY: Airside.Model.Traffic.RebuildReResolvesToThePlansOwnEnd
+		if (SearchGoal.IsSet() && ReplanAt(Agent, Failed, FGuidelineEdgeId(), FGuidelineNodeId(), Context))
 		{
 			return EReResolve::Replanned;
 		}
@@ -1246,7 +1266,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		// runway was pushed backwards down it.
 		// ENFORCED BY: Airside.Model.PushbackReRouteAlongAFreeRunwayHolds
 		const ERouteErrand Errand = bPush ? ERouteErrand::PushbackClear : ERouteErrand::RebuildReResolve;
-		FRouteQuery Query = QueryFor(Errand, UGroundTraffic::StepFromNode(Plan, Failed), Agent.GoalNode, Agent);
+		FRouteQuery Query = QueryFor(Errand, UGroundTraffic::StepFromNode(Plan, Failed), SearchGoal, Agent);
 
 		// The congestion term, as ReplanAt takes it: the guidelines that survived the rebuild
 		// by handle - every hand-drawn one - still carry real queues, and a re-routed arrival
@@ -1261,7 +1281,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		// A COPY, so a push's re-route can be refused on its length below with Plan exactly as it came in - SpliceReplan's
 		// all-or-nothing promise, kept one check further.
 		FRoutePlan Spliced = Plan;
-		const bool bSpliced = SpliceReplan(Network, Query, Failed, Spliced);
+		const bool bSpliced = SearchGoal.IsSet() && SpliceReplan(Network, Query, Failed, Spliced);
 
 		// AND NO LONGER THAN THE PUSH IT WAS, BY MORE THAN ONE CLEARANCE (#502). DepartAgent granted the push whole for the
 		// ground it would cover - the grant that makes a push no deadlock candidate - and a re-route round a long detour is a
@@ -1288,7 +1308,11 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 			// which is right for a fresh dispatch but wrong here - FRoutePlan::IsValid() does
 			// NOT guarantee Steps.Num() > 0, and a valid-but-empty splice must leave the goal
 			// exactly where it was rather than blank it out from under a later replan.
-			Agent.SetGoal(Plan.Steps.Num() > 0 ? Plan.Steps.Last().To : Agent.GoalNode);
+			// A push's is the taxi out's (bOwnsGoal, #502).
+			if (bOwnsGoal)
+			{
+				Agent.SetGoal(Plan.Steps.Num() > 0 ? Plan.Steps.Last().To : Agent.GoalNode);
+			}
 
 			UE_LOG(LogAirsideTraffic, Log,
 				TEXT("Agent %d's %s replanned by the rebuild at step %d: %.0f uu"),
@@ -1345,8 +1369,12 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	}
 	else
 	{
-		// A PLAN NO FOLLOWER IS ON (a taxi-in, a push, a reverse's remainder): only the goal follows it.
-		Agent.SetGoalFrom(Plan);
+		// A PLAN NO FOLLOWER IS ON (a taxi-in, a push, a reverse's remainder): only the goal follows it - and not a
+		// push's: the agent's goal is its taxi out's end (bOwnsGoal, #502).
+		if (bOwnsGoal)
+		{
+			Agent.SetGoalFrom(Plan);
+		}
 	}
 
 	UE_LOG(LogAirsideTraffic, Log,

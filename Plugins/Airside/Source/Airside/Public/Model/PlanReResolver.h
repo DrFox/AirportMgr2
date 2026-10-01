@@ -93,6 +93,17 @@ struct AIRSIDE_API FPlanReResolver
 	 * from here on searches to it: a goal handle left naming a freed slot would fail every
 	 * subsequent deadlock replan for the rest of the session, silently.
 	 *
+	 * THE GOAL IS THE PLAN'S OWN END, re-resolved by where it was - never Agent.GoalNode read
+	 * implicitly (#502). A re-route searches to it (or to the stand a gone one is retargeted
+	 * to), and a plan whose end no longer resolves is cut back, not sent wherever the agent's
+	 * goal points. The write above is made only for a plan whose end the agent's goal IS: every
+	 * plan but a push, whose agent is going to the runway its taxi out ends at (DepartAgent).
+	 * When the agent's goal was the search's, OnGraphRebuilt pointed it by hand at the push's end
+	 * and then at the taxi out's before each call (#498, #501) - a call site's fix for this shape.
+	 * ENFORCED BY: Airside.Model.Traffic.RebuildReResolvesToThePlansOwnEnd (the taxiing arm, its
+	 * goal elsewhere), Airside.Model.PushbackEndGoneStopsShortOfTheRunway (the push arm),
+	 * Airside.Model.Traffic.HeldTaxiOut.MidPushRunwayLossHolds (the taxi out's)
+	 *
 	 * NodeIndex IS THE #172 FIX: this calls RouteSearch::FindNearestNode for the from-node,
 	 * once per remaining step, and for the goal - A x S searches of a graph that could hold
 	 * thousands of nodes, on every committed edit, before this. A reference and not a

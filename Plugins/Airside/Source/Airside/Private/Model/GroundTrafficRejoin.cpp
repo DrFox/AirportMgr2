@@ -33,8 +33,11 @@ namespace GroundTrafficRejoin
 		// for the same reason the start is: the old lane end's position now holds the start of
 		// the lane running the other way. So: the nearest node the vehicle can ARRIVE at still
 		// heading the way the old plan arrived.
-		FGuidelineNodeId Goal = WantedGoal.IsSet() ? WantedGoal
-			: Network.GetGuidelineNode(Agent.GoalNode) != nullptr ? Agent.GoalNode : FGuidelineNodeId();
+		//
+		// NEVER A PUSHED AGENT'S GOAL (#502): that is the runway entry its taxi out ends at, and a push sent there was pushed
+		// backwards up the taxiway onto the runway (#498). RejoinPush names the push's own end, or leaves it to the fallback.
+		const bool bAgentGoal = !bPushed && Network.GetGuidelineNode(Agent.GoalNode) != nullptr;
+		FGuidelineNodeId Goal = WantedGoal.IsSet() ? WantedGoal : bAgentGoal ? Agent.GoalNode : FGuidelineNodeId();
 		if (!Goal.IsSet() && Plan.Polyline.Num() >= 2)
 		{
 			const FVector2D End = Plan.Polyline.Last();
