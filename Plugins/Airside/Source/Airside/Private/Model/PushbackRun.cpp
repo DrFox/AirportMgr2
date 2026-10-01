@@ -53,13 +53,24 @@ bool FPushbackRun::Rejoin(const FRoutePlan& Route, double Along, const FVector2D
 		return true;
 	}
 
-	// THE JOIN MEETS THE LINE AHEAD, not square across: JoinLead offsets ahead bounds the body's swing at atan(1/4), 14
-	// degrees, where a square join would turn it through 90 and back - the heading IS the line's tangent turned about (see
-	// the header), so a kink in the line is a kink in the pose. WITHIN THE FIRST STEP, so every step's end is still a
-	// vertex of the line it names and only the first step's span grows by the leg, as UGroundTraffic's held taxi out's
-	// join grows its first.
+	// THE JOIN MEETS THE LINE AHEAD, not square across: JoinLead offsets ahead of the projection, so the leg meets the line
+	// at atan(1/4), 14.04 degrees, where a square join would turn the body through 90 and back - the heading IS the
+	// line's tangent turned about (see the header), so a kink in the line is an instant yaw of the pose. Where the leg
+	// LEAVES, the turn is that plus or minus the angle between the old line and the new (1.4 degrees, toward, on
+	// PushbackJunctionMovedBehindItCompletes). WITHIN THE FIRST STEP, so every step's end is still a vertex of the line it
+	// names and only the first step's span grows by the leg, as UGroundTraffic's held taxi out's join grows its first.
+	//
+	// AND REFUSED when the first step has not JoinLead offsets left past the projection (#501 re-review). Clamping the
+	// join to the step's end met the line steeply (an arm shifted 5 m, 2 m from its end: 68 degrees), and a push already
+	// past the moved node projects onto the edge's END and the leg ran BACKWARD - a 180-degree flip in one frame. Refused,
+	// the push takes the strand-and-hold path: it stops where it is and a way out is planned from there.
+	// ENFORCED BY: Airside.Model.PushbackArmShiftedNearItsEndHolds, Airside.Model.PushbackPastTheMovedNodeHolds
 	constexpr double JoinLead = 4.0;
-	const double JoinTo = FMath::Min(Along + JoinLead * Offset, Route.Steps[0].EndDistance);
+	const double JoinTo = Along + JoinLead * Offset;
+	if (JoinTo > Route.Steps[0].EndDistance + UE_KINDA_SMALL_NUMBER)
+	{
+		return false;
+	}
 	FVector2D JoinAt = FVector2D::ZeroVector;
 	if (!GuidelineGeom::PointAtDistance(Route.Polyline, JoinTo, JoinAt, Tangent))
 	{

@@ -101,6 +101,13 @@ FUnstickVerdict UAgentRescue::Decide(const FRoadAgent& Agent, EUnstickAction Act
 		{
 			return FUnstickVerdict::No(LOCTEXT("OnStand", "Already parked"));
 		}
+		// A HELD PUSH IS A DEPARTURE (#501 re-review): Find stand would send it back to one, and Replan's sentence (the
+		// card's, from PhaseRefusal) answers a different question - this one says why there is no stand to seek.
+		// ENFORCED BY: AirportOps.Model.AgentRescue.HeldPushRefusalMatchesTheCard
+		if (Agent.Phase == EAgentPhase::Manoeuvring && Agent.IsHoldingForTaxiOut())
+		{
+			return FUnstickVerdict::No(LOCTEXT("HeldPushHome", "Departing - it waits for a way to the runway, not a stand"));
+		}
 		return FUnstickVerdict::No(PhaseRefusal(Agent));
 	}
 	return FUnstickVerdict::No(FText::GetEmpty());

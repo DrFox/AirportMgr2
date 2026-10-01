@@ -87,8 +87,10 @@ struct AIRSIDE_API FPushbackRun
 	 * push carries on FROM WHERE IT STANDS, Speed kept as the follower's Replace keeps it: a line a few metres off is met
 	 * by a straight join leg that reaches it AHEAD, never by a hop - a push has no steering to hide a sideways jump, and
 	 * PushbackStrandedTaxiOutReplans measures every frame for one. On the line already (a node moved along it), no join.
-	 * False, and NOTHING touched, for a route that is not drivable or an Along off it.
-	 * ENFORCED BY: Airside.Model.PushbackJunctionMovedBehindItCompletes (a join), Airside.Model.PushbackLeadInMovedAlongItCompletes (none)
+	 * False, and NOTHING touched, for a route that is not drivable or an Along off it - and for a join the first step
+	 * has no room for (see the .cpp: a steep or backward leg is an instant yaw, so that push strands and holds instead).
+	 * ENFORCED BY: Airside.Model.PushbackJunctionMovedBehindItCompletes (a join),
+	 * Airside.Model.PushbackLeadInMovedAlongItCompletes (none), Airside.Model.PushbackArmShiftedNearItsEndHolds (no room)
 	 */
 	bool Rejoin(const FRoutePlan& Route, double Along, const FVector2D& From);
 

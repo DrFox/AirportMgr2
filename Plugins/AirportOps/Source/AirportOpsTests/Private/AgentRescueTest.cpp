@@ -391,6 +391,10 @@ bool FAgentRescueHeldPushTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Replan is refused - the retry is what moves it, once a line reaches it"), Verdict.bAllowed);
 	TestTrue(FString::Printf(TEXT("in the card's words (card '%s', refusal '%s')"), *Card, *Verdict.Why.ToString()),
 		Card.StartsWith(TEXT("No way to the runway")) && Verdict.Why.ToString().StartsWith(TEXT("No way to the runway")));
+	// FIND STAND, ITS OWN WORDS (#501 re-review): it is a departure, and there is no stand to seek.
+	const FString Home = Rescue->CanUnstick(*Traffic, Id, EUnstickAction::SendHome).Why.ToString();
+	TestTrue(FString::Printf(TEXT("Find stand says it is departing, not why it cannot move ('%s')"), *Home),
+		Home.StartsWith(TEXT("Departing - it waits for a way to the runway")));
 	return true;
 }
 

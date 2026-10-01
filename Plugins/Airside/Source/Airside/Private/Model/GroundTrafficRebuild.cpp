@@ -779,7 +779,9 @@ namespace
 	 * How far from a pushing aeroplane a live line may run for its push to rejoin it, uu: 10 m (#498 review). Wider than
 	 * SplitRejoinRadius because a push does not hop - FPushbackRun::Rejoin drives a join leg - and because the edits that
 	 * leave a push off its line are a junction DRAGGED behind it, a few metres (5 m on both pins). Deleted ground still has
-	 * nothing this close running the push's way, and that push stops and holds (Airside.Model.PushbackOnDeletedGroundStops).
+	 * nothing this close running the push's way, and that push stops and holds.
+	 * ENFORCED BY: Airside.Model.PushbackJunctionMovedBehindItCompletes (5 m, rejoined),
+	 * Airside.Model.PushbackOnDeletedGroundStops (deleted, holds)
 	 */
 	constexpr double PushRejoinRadius = 1000.0;
 
@@ -1007,13 +1009,15 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 
 	// THE PUSH, BY PHASE: a manoeuvring agent's plan that is not its taxi out is its push (OnGraphRebuilt's Manoeuvring
 	// arm), and its address would be a fifth that agent-plan-address counts as a writer. RejoinPush and the log's name.
-	// ENFORCED BY: Airside.Model.PushbackJunctionMovedBehindItCompletes (a push rejoined), Airside.Model.PushbackEndGoneStopsShortOfTheRunway (named)
+	// ENFORCED BY: Airside.Model.PushbackJunctionMovedBehindItCompletes (a push rejoined),
+	// Airside.Model.PushbackEndGoneStopsShortOfTheRunway (named)
 	const bool bPush = !bDriving && Agent.Phase == EAgentPhase::Manoeuvring && &Plan != &Agent.TaxiOutPlan;
 
 	// WHICH PLAN, BY NAME, in the three lines this writes - asked by address, as bDriving is, the push as bPush is. A
 	// push's and a taxi out's replans both printed "taxi-in" (#498's probe), which sent the reader of a log to the wrong
 	// one of four routes.
-	// ENFORCED BY: Airside.Model.PushbackEndGoneStopsShortOfTheRunway (the push's line), Airside.Model.Traffic.HeldTaxiOut.MidPushRunwayLossHolds (the taxi out's)
+	// ENFORCED BY: Airside.Model.PushbackEndGoneStopsShortOfTheRunway (the push's line),
+	// Airside.Model.Traffic.HeldTaxiOut.MidPushRunwayLossHolds (the taxi out's)
 	const TCHAR* const Route = &Plan == &Agent.TaxiInPlan ? TEXT("taxi-in") : &Plan == &Agent.TaxiOutPlan ? TEXT("taxi-out")
 		: bPush ? TEXT("push") : TEXT("route");
 
@@ -1114,20 +1118,32 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	// Manoeuvring arm pointed it at, or the node nearest where that end was). A junction dragged a few metres behind a push
 	// fails the step match with the arm intact, and stranding it stopped the aeroplane mid-arm for good - no node within the
 	// held taxi out's 30 m - where on main it had played its old line out over the pavement and departed. FPushbackRun's
-	// Rejoin joins it from where it stands; the claims go as RejoinInPlace's do, and this rebuild re-makes them.
+	// Rejoin joins it from where it stands, or refuses a join with no room ahead (and the push strands, below).
 	// ENFORCED BY: Airside.Model.PushbackJunctionMovedBehindItCompletes, Airside.Model.PushbackLeadInMovedAlongItCompletes
+	//
+	// THE AFTERMATH IS A REJOIN'S, SPELLED HERE (#501 re-review): FRouteChange::Rejoin is the FOLLOWER's - RejoinTaxi puts
+	// the agent in Taxiing, which would end the push mid-arm - so ApplyRouteChange cannot take it, and its steps are
+	// these. The old route's reservations AND guideline claims go: they name handles the rebuild freed, so they protect
+	// nothing, and the push needs none kept - its clearance was a check at DepartAgent (IsPushGroundFree), not a hold,
+	// and the next claim pass claims the rejoined line like any route. The arbitration fields and the stall clock reset
+	// (#429's reason: the wait is over by construction, and a deadlock pass would count the old one against the new
+	// line). The goal re-points at the rejoined push's end.
 	auto RejoinPush = [&Agent, &Plan, &Context, &Occupancy]()
 	{
 		FRoutePlan Rejoined;
 		double Along = 0.0;
 		FVector2D At = FVector2D::ZeroVector;
 		const FVector2D Here = Agent.LastMotion.Position;
-		if (!RejoinNearby(Agent, Plan, Context, PushRejoinRadius, Rejoined, Along, At, FGuidelineNodeId(), nullptr, /*bPushed*/ true)
+		if (!RejoinNearby(Agent, Plan, Context, PushRejoinRadius, Rejoined, Along, At, FGuidelineNodeId(), nullptr,
+				/*bPushed*/ true)
 			|| !Agent.Pushback.Rejoin(Rejoined, Along, Here))
 		{
 			return false;
 		}
+		Occupancy.ReleaseReservations(Agent.Id);
 		Occupancy.ReleaseGuidelineClaimsOf(Agent.Id);
+		Agent.ClearArbitration();
+		Agent.ResetStall();
 		Agent.SetGoalFrom(Agent.Pushback.Plan);
 		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("Agent %d's push rejoined the pavement under it after the rebuild: %.0f uu sideways, %.0f uu to go"),
