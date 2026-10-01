@@ -117,7 +117,8 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	//    to assert 237.8 and -237.8 of BuildPiperMeridian, which is the number typed into the
 	//    builder read back out of it - it stays green however far the builder drifts from the
 	//    aeroplane it stands for). The builder is the content-less fallback's Meridian
-	//    (UAirsideSettings::ContentlessDefaultAirframe) and the fixture 122 call sites lean on,
+	//    (UAirsideSettings::ContentlessDefaultAirframe) and the fixture 132 call sites lean on
+	//    (git grep of TestAirframes::Piper(), 2026-10-01),
 	//    so what it must agree with is the SHIPPED asset, and that asset with the rig it was
 	//    measured from: the reference pose's left main wheel is where the mains are.
 	UAircraftType* Meridian = TestAirframes::PiperType();
