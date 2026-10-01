@@ -526,6 +526,22 @@ namespace RunwayQuery
 		return Occupancy->IsAnyHeld(Surfaces, 0, false);
 	}
 
+	bool AreRunwaysHeld(const URoadNetwork& Network, TConstArrayView<FRoadSegmentId> Seeds, const FTrafficOccupancy* Occupancy)
+	{
+		if (Occupancy == nullptr || Seeds.IsEmpty())
+		{
+			return false;
+		}
+		for (const FRoadSegmentId Seed : Seeds)
+		{
+			if (!IsChainHeld(Network, Seed, Occupancy))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
 	FRunwayRank RankRunway(const URoadNetwork& Network, const FRunwayEnd& End, ERunwayTraffic Traffic,
 		const FTrafficOccupancy* Occupancy, double TaxiLength)
 	{

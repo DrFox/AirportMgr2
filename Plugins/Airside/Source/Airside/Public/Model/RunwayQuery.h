@@ -312,6 +312,14 @@ namespace RunwayQuery
 	AIRSIDE_API bool IsChainHeld(TConstArrayView<FRoadSegmentId> ChainOrSeed, const FTrafficOccupancy* Occupancy);
 
 	/**
+	 * Is EVERY one of these strips held (the seed IsChainHeld of each) - ArrivalPlanner::IsRunwayBusy over every arrival
+	 * runway, and the arrival queue's gate over FArrivalPlan::UsableRunways, the strips that flight can use (2026-10-01).
+	 * One loop, so the two cannot disagree about what "all held" means. False for an empty list or no occupancy.
+	 */
+	AIRSIDE_API bool AreRunwaysHeld(const URoadNetwork& Network, TConstArrayView<FRoadSegmentId> Seeds,
+		const FTrafficOccupancy* Occupancy);
+
+	/**
 	 * The rank of the runway End for Traffic: held is IsChainHeld of its strip - the claim a movement makes at its
 	 * handover - dedicated is its ERunwayUse being set to exactly this kind of traffic (an unset use reads Mixed,
 	 * so is not dedicated), and Taxi is TaxiLength, which only the caller has (an arrival's taxi in from its exit,

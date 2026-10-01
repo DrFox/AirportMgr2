@@ -243,6 +243,8 @@ private:
 		uint32 OccupancyAt = 0;
 		uint32 StandChurnAt = 0;
 		bool bValid = false;
+		/** The plan's FArrivalPlan::UsableRunways: the strips TickQueue's live gate asks about. Dated with Why. */
+		TArray<FRoadSegmentId> Usable;
 	};
 	TMap<int32, FClearance> Clearances;
 

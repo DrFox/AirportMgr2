@@ -453,19 +453,12 @@ namespace ArrivalPlanner
 			return false;
 		}
 		int32 RunwayCount = 0;
-		const TArray<FRunwayEnd> Candidates = LandingRunways(Network, Near, RunwayCount);
-		if (Candidates.IsEmpty())
+		TArray<FRoadSegmentId> Seeds;
+		for (const FRunwayEnd& End : LandingRunways(Network, Near, RunwayCount))
 		{
-			return false;
+			Seeds.Add(End.Seed);
 		}
-		for (const FRunwayEnd& End : Candidates)
-		{
-			if (!IsChainHeld(Network, End.Seed, Occupancy))
-			{
-				return false;
-			}
-		}
-		return true;
+		return RunwayQuery::AreRunwaysHeld(Network, Seeds, Occupancy);
 	}
 
 	namespace
@@ -751,8 +744,12 @@ namespace ArrivalPlanner
 				BestRank = Rank;
 			}
 		}
+		// WHICH STRIPS WOULD DO, on whatever is returned - see FArrivalPlan::UsableRunways.
+		TArray<FRoadSegmentId> Usable;
+		for (const FArrivalPlan& Each : Tried) { if (Each.IsValid()) { Usable.Add(Each.End.Seed); } }
 		if (Best.IsValid())
 		{
+			Best.UsableRunways = MoveTemp(Usable);
 			return Best;
 		}
 
@@ -769,7 +766,9 @@ namespace ArrivalPlanner
 				}
 			}
 		}
-		return Transient != nullptr ? *Transient : Tried[0];
+		FArrivalPlan Refused = Transient != nullptr ? *Transient : Tried[0];
+		Refused.UsableRunways = MoveTemp(Usable);
+		return Refused;
 	}
 
 	AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN

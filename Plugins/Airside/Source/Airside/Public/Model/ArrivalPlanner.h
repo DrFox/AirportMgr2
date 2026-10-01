@@ -178,6 +178,16 @@ struct AIRSIDE_API FArrivalPlan
 	UPROPERTY() bool bOtherEndWouldServe = false;
 
 	/**
+	 * Every runway Plan found this airframe COULD land on, one seed per strip, the best among them or not - whatever
+	 * Plan's own verdict. Under ERunwayBusy::Queue that is "usable once free", which is what the arrival queue caches
+	 * so its live gate asks about THESE strips only (RunwayQuery::AreRunwaysHeld). Asking whether ANY arrival runway was free cleared
+	 * a flight onto a free strip it could not use, the dispatch refused it RunwayOccupied, and it went round again every
+	 * frame: about 200 refusals and toasts a second (samples/refused.png, 2026-10-01).
+	 * ENFORCED BY: AirportOps.Model.ArrivalQueue.FreeRunwayItCannotUseIsNoClearance
+	 */
+	UPROPERTY() TArray<FRoadSegmentId> UsableRunways;
+
+	/**
 	 * None means every step above succeeded and every other field is meaningful.
 	 *
 	 * DEFAULTS TO NoRunway, not None - fail closed. A default-constructed plan (one nobody
@@ -295,9 +305,10 @@ namespace ArrivalPlanner
 
 	/**
 	 * Is EVERY runway that takes arrivals held - when Plan, refusing on a busy strip, would find
-	 * none free; and the one test UArrivalSequencer asks before clearing a queued flight. False
-	 * with no runway or no occupancy to ask. ONE FUNCTION, so the queue and the dispatch cannot
-	 * disagree about whether a strip is free.
+	 * none free. False with no runway or no occupancy to ask. NOT the arrival queue's gate since
+	 * 2026-10-01: a free strip the flight cannot use passed it and the dispatch refused every frame
+	 * (samples/refused.png); the queue asks RunwayQuery::AreRunwaysHeld over FArrivalPlan::UsableRunways,
+	 * the same loop this runs over every arrival runway.
 	 * ENFORCED BY: Airside.Model.ArrivalQueue.IsRunwayBusyAgreesWithPlan
 	 */
 	AIRSIDE_API bool IsRunwayBusy(const URoadNetwork& Network, const FVector2D& Near,

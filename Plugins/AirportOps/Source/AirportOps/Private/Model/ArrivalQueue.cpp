@@ -6,6 +6,7 @@
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RunwayQuery.h"
 #include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
 #include "Algo/StableSort.h"
@@ -94,8 +95,9 @@ EArrivalRefusal FArrivalQueue::ClearanceFor(const UGroundTraffic& Traffic, const
 	// THE RUNWAY IS NOT CACHED HERE, it is asked live in TickQueue: OccupancyRevision does not
 	// move for a taxiing aircraft's runway crossing (see its own comment), so a cached "busy"
 	// could strand a quiet airport's queue until some unrelated claim happened to bump it.
-	const EArrivalRefusal Why = ArrivalPlanner::Plan(Network, Flight.RunwayPreference, Flight.Airframe,
-		&Traffic.GetOccupancy(), ERunwayBusy::Queue, Flight.HolderId()).Why;
+	FArrivalPlan Planned = ArrivalPlanner::Plan(Network, Flight.RunwayPreference, Flight.Airframe,
+		&Traffic.GetOccupancy(), ERunwayBusy::Queue, Flight.HolderId());
+	const EArrivalRefusal Why = Planned.Why;
 	// A DRAG IS NOT THE FLIGHT'S NEWS (#445): GraphBeingEdited is the planner's "not on a graph mid-edit", answered before anything
 	// else is read, and it clears when the player lets go. It is returned - nothing is cleared to land on a stale graph - but NOT
 	// KEPT: stored over a standing permanent verdict, it made UnlandableWhy read None for the length of the drag, the FlightCannotLand
@@ -117,6 +119,7 @@ EArrivalRefusal FArrivalQueue::ClearanceFor(const UGroundTraffic& Traffic, const
 	Clearance.GuidelineAt = GuidelineNow;
 	Clearance.OccupancyAt = OccupancyNow;
 	Clearance.StandChurnAt = StandChurnNow;
+	Clearance.Usable = MoveTemp(Planned.UsableRunways);
 	Clearance.bValid = true;
 	return Why;
 }
@@ -261,11 +264,18 @@ FQueueTick FArrivalQueue::Tick(UFlightBoard& Board, UGroundTraffic& Traffic, con
 	}
 
 	// LIVE RUNWAY, CACHED REST - see ClearanceFor. Together they are exactly the Refuse plan the
-	// dispatch will make, so nothing is dispatched that it would refuse.
+	// dispatch will make, so nothing is dispatched that it would refuse. THE RUNWAYS IT CAN USE, not
+	// every arrival runway: a free strip this airframe cannot land on is no clearance, and gating on
+	// "any runway free" dispatched into a RunwayOccupied refusal every frame (samples/refused.png).
+	// ENFORCED BY: AirportOps.Model.ArrivalQueue.FreeRunwayItCannotUseIsNoClearance
 	const auto CanClear = [this, &Traffic, &Network](const UFlight& F)
 	{
-		return !ArrivalPlanner::IsRunwayBusy(Network, F.RunwayPreference, &Traffic.GetOccupancy())
-			&& ClearanceFor(Traffic, Network, F) == EArrivalRefusal::None;
+		if (ClearanceFor(Traffic, Network, F) != EArrivalRefusal::None)
+		{
+			return false;
+		}
+		const FClearance* Cached = Clearances.Find(F.Id);
+		return Cached != nullptr && !RunwayQuery::AreRunwaysHeld(Network, Cached->Usable, &Traffic.GetOccupancy());
 	};
 	// NULL SEQUENCER IS STRICT FIRST COME, for a test that does not wire one.
 	UFlight* Next = Board.Sequencer != nullptr ? Board.Sequencer->Next(Waiting, CanClear)
