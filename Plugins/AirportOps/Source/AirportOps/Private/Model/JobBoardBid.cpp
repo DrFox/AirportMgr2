@@ -580,7 +580,7 @@ void UJobBoard::RebidQueued(UGroundTraffic& Traffic, const URoadNetwork& Network
 
 	for (const int32 JobId : Queued)
 	{
-		FServiceJob* Job = FindJob(JobId);
+		FServiceJob* Job = FindJobMutable(JobId);
 		FServiceVehicle* Holder = Job != nullptr ? FindVehicleMutable(Job->VehicleId) : nullptr;
 		if (Job == nullptr || Holder == nullptr || Job->State != EServiceJobState::Queued)
 		{

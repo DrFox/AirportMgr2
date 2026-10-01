@@ -2,6 +2,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/Airframe.h"
 #include "Model/JobBoard.h"
+#include "Model/ServiceText.h"
 #include "Model/OpsDefinition.h"
 #include "Present/OpsRuntime.h"
 
@@ -215,6 +216,72 @@ bool FFuelDescribeDepotSpansTest::RunTest(const FString& Parameters)
 	TestTrue(*FString::Printf(TEXT("the job's promise in the clock's words: '%s'"), *Backlog.Detail), Backlog.Detail.Contains(TEXT("+1 h 35 min")));
 	TestTrue(TEXT("and its lateness"), Backlog.Detail.Contains(TEXT("late 35 min")));
 	TestEqual(TEXT("and the summary's"), Backlog.Summary, FString(TEXT("1 job \u00B7 clears in 1 h 35 min \u00B7 1 late")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FServiceTextBoardForwardsTest, "AirportOps.Model.ServiceText.BoardForwardsEveryLine",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FServiceTextBoardForwardsTest::RunTest(const FString& Parameters)
+{
+	// #427 moved every vehicle, job and depot text into the ServiceText namespace and left UJobBoard's names - which the
+	// inspector, the shop and the alerts call - as forwarders. Each forwarder against what it forwards to, on a board with a
+	// vehicle out on a job and a turnaround behind it, and each answer checked non-empty first, so a forwarder that answered
+	// anything else (nothing, the other overload, another line) fails here by its name.
+	UJobBoard* Board = NewObject<UJobBoard>();
+	UOpsRuntime::ResolveVehicleCatalogue(*Board, *GetDefault<UScenario>());
+	FEntityInstanceId Depot;
+	Depot.Index = 1;
+	const double Now = 1000.0;
+	FServiceJob& Job = Board->AddJobForTest(1, EServiceJobState::Serving, EServiceRefusal::None, 0);
+	Job.Stand.Index = 3;
+	Job.QuantityOwed = 2900.0;
+	Job.TripQuantity = 1000.0;
+	Job.TripStartedAt = Now - 100.0;
+	Job.TripEndsAt = Now + 700.0;
+	Job.TankLitres = 1000.0;
+	Job.PromisedFinish = Now + 600.0;
+	const int32 JobId = Job.Id;
+	Board->AddTurnaroundForTest(1, Now + 300.0, JobId);
+	FServiceVehicle& Bowser = Board->AddVehicleForTest(TEXT("FUEL"), Depot, EServiceVehicleState::Serving, 9700.0);
+	Bowser.AgentId = 7;
+	Bowser.CurrentJob = JobId;
+	const int32 BowserId = Bowser.Id;
+	const_cast<FServiceJob*>(Board->FindJob(JobId))->VehicleId = BowserId;
+
+	// THE AIRCRAFT'S FUEL LINE, both overloads, and the clock flag the second one carries.
+	bool bForwarded = false;
+	bool bDirect = false;
+	const FString Line = ServiceText::DescribeAgent(*Board, 1, Now, bDirect, nullptr);
+	if (!TestFalse(TEXT("the aircraft has a fuel line to forward"), Line.IsEmpty())) { return false; }
+	TestEqual(TEXT("DescribeAgent forwards the aircraft's line"), Board->DescribeAgent(1, Now, nullptr), Line);
+	TestEqual(TEXT("its flagged overload forwards the same line"), Board->DescribeAgent(1, Now, bForwarded, nullptr), Line);
+	TestTrue(TEXT("pumping, the line moves with the clock"), bDirect);
+	TestEqual(TEXT("and the overload forwards the flag"), bForwarded, bDirect);
+
+	// THE VEHICLE'S OWN LINE, through the same seam.
+	bool bUnused = false;
+	const FString VehicleText = ServiceText::DescribeAgent(*Board, 7, Now, bUnused, nullptr);
+	if (!TestFalse(TEXT("the vehicle has a line to forward"), VehicleText.IsEmpty())) { return false; }
+	TestEqual(TEXT("DescribeAgent forwards the vehicle's line"), Board->DescribeAgent(7, Now, nullptr), VehicleText);
+	const FServiceVehicle* Found = Board->FindVehicle(BowserId);
+	if (!TestNotNull(TEXT("the bowser is on the board"), Found)) { return false; }
+	TestEqual(TEXT("VehicleLine forwards"), Board->VehicleLine(*Found, nullptr), ServiceText::VehicleLine(*Board, *Found, nullptr));
+
+	// THE DEPOT CARD.
+	const FDepotBacklog Direct = ServiceText::DescribeDepot(*Board, Depot, Now, nullptr);
+	const FDepotBacklog Forwarded = Board->DescribeDepot(Depot, Now, nullptr);
+	if (!TestEqual(TEXT("the depot has its one job"), Direct.Jobs, 1)) { return false; }
+	TestEqual(TEXT("DescribeDepot forwards the summary"), Forwarded.Summary, Direct.Summary);
+	TestEqual(TEXT("and the detail"), Forwarded.Detail, Direct.Detail);
+	TestEqual(TEXT("and the late count"), Forwarded.LateJobs, Direct.LateJobs);
+
+	// EVERY REFUSAL'S WORDS.
+	for (int32 Why = 0; Why <= static_cast<int32>(EServiceRefusal::UnknownVehicleKind); ++Why)
+	{
+		const EServiceRefusal Refusal = static_cast<EServiceRefusal>(Why);
+		TestEqual(*FString::Printf(TEXT("RefusalText forwards refusal %d"), Why),
+			FString(UJobBoard::RefusalText(Refusal)), FString(ServiceText::RefusalText(Refusal)));
+	}
 	return true;
 }
 

@@ -38,8 +38,8 @@ EFlightPhase FlightPhaseFromTransition(const FAgentTransition& Transition, EFlig
 	case EAgentEvent::Parked:
 		// #405: A TURNAROUND IS TIME ON A STAND. Parked on the fallback junction - or a Parked the agent has already
 		// left (ReofferStands redirected it in the same frame) - the flight is still taxiing in, so the re-offer that
-		// follows reads its taxi in rather than out. No parking clock, no turnaround: UJobBoard::OnAgentPhase opens none
-		// there either, by the same StandAtNode. bParkedAtStand is the EVENT's goal - the node it parked on - since
+		// follows reads its taxi in rather than out. No parking clock, no turnaround: FTurnarounds opens none
+		// there either, by the same derivation (FTurnarounds::BeganAt, #427). bParkedAtStand is the EVENT's goal - the node it parked on - since
 		// #436; it used to be the live agent's, asked a drain late, and was right only because the agent was asked
 		// whether it was STILL parked first. (Moved here from UFlightBoard::OnAgentPhase, which special-cased it.)
 		// ENFORCED BY: AirportOps.Model.Bus.FallbackParkStaysTaxiIn, AirportOps.Model.Bus.SameFrameRedirectStaysTaxiIn

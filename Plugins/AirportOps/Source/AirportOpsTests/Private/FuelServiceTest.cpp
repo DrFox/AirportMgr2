@@ -1454,6 +1454,13 @@ bool FFuelTurnaroundDepartsTest::RunTest(const FString& Parameters)
 	// cause from its own effect, since leaving is what drops it.
 	TestTrue(TEXT("once fuelled and out of time it departs by itself"),
 		Fixture.AdvanceUntil([&Phase] { return Phase() != EAgentPhase::Parked; }, 300.0));
+
+	// THE DEPARTURE PASS'S ANSWER, which the ops runtime reads after a run the safety net alone asked for (#427: the
+	// board's DepartedLastStep forwards to FTurnarounds, which clears it as each departure pass begins - it was cleared on
+	// Step's first line). The Step that sent the aircraft names it; the next Step, which sends nobody, names nobody.
+	TestTrue(TEXT("the Step that sent it names it"), Fixture.Service->DepartedLastStep().Contains(Aircraft));
+	Fixture.Advance(0.1);
+	TestEqual(TEXT("and the next Step, which sends nobody, names nobody"), Fixture.Service->DepartedLastStep().Num(), 0);
 	return true;
 }
 
@@ -4216,6 +4223,46 @@ bool FFleetUnknownKindServesNothingTest::RunTest(const FString& Parameters)
 	const FServiceVehicle* Vehicle = Fixture.Service->FindVehicle(Hovercraft);
 	if (!TestNotNull(TEXT("the vehicle is still on the board"), Vehicle)) { return false; }
 	TestEqual(TEXT("and it never left home"), static_cast<int32>(Vehicle->State), static_cast<int32>(EServiceVehicleState::Idle));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTurnaroundsEachOwnerHearsItsOwnAgentsTest, "AirportOps.Model.Turnarounds.EachOwnerHearsItsOwnAgents",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTurnaroundsEachOwnerHearsItsOwnAgentsTest::RunTest(const FString& Parameters)
+{
+	// #427's DISPATCH: UJobBoard::OnAgentPhase was one body of five cases and is now one question - whose agent changed
+	// phase - with an owner per answer: a vehicle's agent goes to the vehicle lifecycle (OnVehiclePhase), any other to the
+	// turnarounds (FTurnarounds::OnAircraftPhase). Two Parked events, one of each, through the fixture's bus: a dispatch that
+	// dropped either half, or sent one agent's change to the other owner, fails the line that names it.
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	const int32 Aircraft = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked at the stand"), Aircraft != 0)) { return false; }
+
+	// THE AIRCRAFT'S PARKED REACHED THE TURNAROUNDS: its turnaround opened at the stand it parked on, and asked the board for
+	// its fuel job (OpenJob), which it names.
+	const FTurnaround* Turnaround = Fixture.Service->TurnaroundFor(Aircraft);
+	if (!TestNotNull(TEXT("the aircraft's Parked reached the turnarounds: its turnaround opened"), Turnaround)) { return false; }
+	TestEqual(TEXT("at the stand it parked on"), Turnaround->Stand, Fixture.Stand);
+	if (!TestEqual(TEXT("and it names one job"), Turnaround->JobIds.Num(), 1)) { return false; }
+	const FServiceJob* Job = Fixture.Service->JobForAircraft(Aircraft);
+	if (!TestNotNull(TEXT("the board opened that job"), Job)) { return false; }
+	TestEqual(TEXT("the turnaround's job is the board's job"), Turnaround->JobIds[0], Job->Id);
+
+	// THE TRUCK'S PARKED REACHED THE VEHICLE LIFECYCLE: it arrived at the hydrant and began to serve (OnVehicleArrived, which
+	// OnVehiclePhase calls) and opened no turnaround of its own.
+	if (!TestTrue(TEXT("the truck's Parked reached the vehicle lifecycle: it began serving"),
+		Fixture.AdvanceUntil([&Fixture] { return Fixture.Service->GetJobs().Num() == 1
+			&& Fixture.Service->GetJobs()[0].State == EServiceJobState::Serving; }, 240.0))) { return false; }
+	const int32 Truck = Fixture.Service->AgentForJob(Fixture.Service->GetJobs()[0]);
+	if (!TestTrue(TEXT("a truck's agent is serving it"), Truck != 0)) { return false; }
+	const FServiceVehicle* Vehicle = Fixture.Service->VehicleForAgent(Truck);
+	if (!TestNotNull(TEXT("and it is a vehicle of the board"), Vehicle)) { return false; }
+	TestEqual(TEXT("in the Serving state its arrival set"), static_cast<int32>(Vehicle->State), static_cast<int32>(EServiceVehicleState::Serving));
+	TestNull(TEXT("the truck's Parked opened no turnaround - it is not the turnarounds' agent"), Fixture.Service->TurnaroundFor(Truck));
+	TestEqual(TEXT("one turnaround in all, the aircraft's"), Fixture.Service->GetTurnarounds().Num(), 1);
 	return true;
 }
 
