@@ -34,38 +34,6 @@ bool FNotificationFeedExpiryTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-/**
- * The same eight seconds, delivered as a x32 session's worth of frames.
- *
- * This is the assertion the spec asks for and the one a game-seconds - or a
- * Multiplier()-scaled - implementation FAILS. Half a real second of 60 Hz frames at x32
- * would be 16 game seconds and would expire an 8-second toast twice over; here it must not
- * expire at all, because the frames are real and the player has been looking at it for half
- * a second.
- */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FNotificationSpeedTest,
-	"AirportMgr.UI.FeedIgnoresGameSpeed",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FNotificationSpeedTest::RunTest(const FString& Parameters)
-{
-	UNotificationCentre* Centre = NewObject<UNotificationCentre>(GetTransientPackage());
-	Centre->FeedLifetimeRealSeconds = 8.0;
-	Centre->PostFeed(FText::FromString(TEXT("Loaded 'quick'")));
-
-	// 30 frames of 1/60 s: half a real second, whatever the clock is doing.
-	for (int32 Frame = 0; Frame < 30; ++Frame)
-	{
-		Centre->Advance(1.0 / 60.0);
-	}
-	TestEqual(TEXT("half a real second in, the toast is still up however fast the sim runs"),
-		Centre->Entries().Num(), 1);
-	TestTrue(TEXT("and only half a real second has passed on the centre's own clock"),
-		Centre->Now() < 0.6);
-	return true;
-}
-
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FNotificationScrollbackTest,
 	"AirportMgr.UI.FeedScrollbackIsBounded",

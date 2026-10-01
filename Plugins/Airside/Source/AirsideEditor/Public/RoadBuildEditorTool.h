@@ -10,6 +10,7 @@
 #include "RoadBuildEditorTool.generated.h"
 
 class ARoadNetworkActor;
+class FPrimitiveDrawInterface;
 
 /**
  * One label FViewportPreviewSink collected this frame - issue #304. A PrimitiveDrawInterface
@@ -135,15 +136,16 @@ public:
 	 * Stands in for what Render() does to populate PendingLabels every frame it actually runs -
 	 * same precedent as SetViewCentreDistanceForTest/HoverFrameContextForTest: a real
 	 * IToolsContextRenderAPI/FPrimitiveDrawInterface needs a live viewport this headless harness
-	 * does not have. Takes the active tool EXPLICITLY rather than through Sess().GetActiveTool(),
-	 * so a counting spy - no production IBuildTool exposes a BuildPreview call count -
-	 * can stand in for it; Airside.Editor.RenderCachesLabelsOnce is what actually counts,
-	 * proving DrawHUD's read of PendingLabels (CollectPreviewLabelTextForTest below) costs no
-	 * further calls - the bug review round 2 of issue #304 found (a SECOND, independent
-	 * BuildPreview running from DrawHUD every frame, discarding what Render's own call had
-	 * already produced).
+	 * does not have. IT RUNS RENDER'S OWN BODY, not a copy of it: both call DescribeFrame, this one
+	 * with no PDI, so a Render that stopped caching labels fails the test that reads them back.
+	 * (It used to take the active tool as a parameter, for a counting spy that
+	 * Airside.Editor.RenderCachesLabelsOnce passed; that test measured its own seam and was deleted
+	 * 2026-10 - "BuildPreview runs once per frame, from Render's DescribeFrame" is the lint rule
+	 * editor-preview-described-once now, which reads DrawHUD, the thing the test could not.)
+	 * ENFORCED BY: Check-Architecture rule 'editor-preview-described-once' (DescribeFrame( is called
+	 * from Render and from this seam alone)
 	 */
-	void CachePreviewLabelsForTest(IBuildTool& ActiveTool);
+	void CachePreviewLabelsForTest();
 
 	/**
 	 * The TEXT of every label DrawHUD would draw this frame, straight from PendingLabels -
@@ -242,6 +244,17 @@ public:
 	virtual void OnUpdateModifierState(int ModifierID, bool bIsOn) override;
 
 private:
+	/**
+	 * A FRAME'S WHOLE PREVIEW, DESCRIBED AND ITS LABELS CACHED - the one place BuildPreview is called from
+	 * (rule 'editor-preview-described-once'). Render calls it with the viewport's PDI; the headless seam
+	 * CachePreviewLabelsForTest with none, which the sink's Marker/Line/CrossMark guards allow. The committed
+	 * graph first, then the grid and the tool's intent on top, then PendingLabels is what the sink collected - or
+	 * emptied when there is no real hover. Takes the camera's figures rather than the sink because the sink is
+	 * a class private to the .cpp.
+	 */
+	void DescribeFrame(IBuildTool& Tool, FPrimitiveDrawInterface* PDI, const FVector& CameraPosition,
+		double PerDistance, double FixedRadius);
+
 	/**
 	 * RAII around GEditor->BeginTransaction/EndTransaction, calling Modify() on the actor
 	 * and its network together - the shape OnClickDrag, OnClickRelease and CancelGesture

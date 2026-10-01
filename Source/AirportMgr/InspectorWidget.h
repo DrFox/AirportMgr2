@@ -143,9 +143,6 @@ public:
 	/** Whether the Unstick button is lit (Selected) - the agent looks stuck. */
 	bool IsUnstickHighlightedForTest() const { return bUnstickHighlighted; }
 
-	/** The lines the Unstick popup would show now, as UUiMenuButton::Items would give them. */
-	TArray<FUiMenuItem> UnstickItemsForTest() const { return UnstickItems(); }
-
 	/**
 	 * The WaitingFor button's action: select - and move the camera to - the agent the shown one waits
 	 * for, through the alert Go's own ARoadBuildController::SelectAndFocus, so the card opens on it.

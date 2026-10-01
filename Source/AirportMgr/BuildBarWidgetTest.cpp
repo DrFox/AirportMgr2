@@ -166,22 +166,32 @@ bool FBarCachesStyleAcrossTicksTest::RunTest(const FString& Parameters)
 	// be safe to run against - same precedent as FPlayerTickBuildsOneContextTest.
 	C->InitInputSystem();
 
-	// CreateWidget(APlayerController*, ...) refuses a controller with no attached local
-	// player (this one has none - a bare SpawnActor, same as every other controller test in
-	// this file). Created against the World instead: AController::PostInitializeComponents
-	// added C to the world's PlayerControllerList regardless of possession, which is what
-	// UAirportMgrPanelWidget::Controller()'s GetFirstPlayerController() fallback reads.
+	// THE CONTROLLER IS REGISTERED BY HAND (2026-09-30 review: this test skipped it, so every tick returned at
+	// RefreshState's null controller and "zero ResolveStyle calls" held for the wrong reason). FAirsideTestWorld's
+	// bare UWorld::CreateWorld never calls InitializeActorsForPlay, so AController::PostInitializeComponents
+	// never ran and C never joined the world's PlayerControllerList - which is what
+	// UAirportMgrPanelWidget::Controller()'s GetFirstPlayerController() fallback reads (see
+	// UBuildBarWidget::RefreshStateFor). CreateWidget(APlayerController*, ...) refuses a controller with no
+	// local player, so the bar is created against the World.
+	TestWorld.World->AddController(C);
 	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
 	if (!TestNotNull(TEXT("the bar is created with no asset"), Bar)) { return false; }
 
 	// Construction (Initialize -> BuildOnce) has already resolved the style once - that call
 	// is not what this test is about, so the baseline is taken AFTER it.
 	const int32 Before = UAirportMgrUISettings::ResolveCallCountForTest();
-	for (int32 Tick = 0; Tick < 5; ++Tick)
+	const int32 ContextsBefore = FBuildActionContext::ConstructCountForTest();
+	constexpr int32 Ticks = 5;
+	for (int32 Tick = 0; Tick < Ticks; ++Tick)
 	{
 		Bar->NativeTickForTest(1.0f / 60.0f);
 	}
 	const int32 After = UAirportMgrUISettings::ResolveCallCountForTest();
+
+	// THE PREMISE, so the zero below is about the body and not about an early return: every tick that reaches
+	// RefreshStateFor builds its one FBuildActionContext (FBarTickBuildsOneActionContextTest's measurement).
+	if (!TestEqual(TEXT("premise: each of the five ticks reached RefreshState's body - one action context apiece"),
+		FBuildActionContext::ConstructCountForTest() - ContextsBefore, Ticks)) { return false; }
 
 	TestEqual(TEXT("five ticks with a controller present resolve the style zero times - it was "
 		"cached at construction, not re-asked from RefreshState or RefreshBalance"),
@@ -208,7 +218,8 @@ bool FBarCachesStyleAcrossTicksTest::RunTest(const FString& Parameters)
  * was a valid, spawned controller and GetFirstPlayerController() still came back null). A
  * NativeTickForTest-driven version of this test would measure RefreshState's early return, not
  * its body - see RefreshStateFor's own comment for the mechanism. FBarCachesStyleAcrossTicksTest
- * above never noticed, because its own assertion (zero ResolveStyle calls) holds either way.
+ * above never noticed, because its own assertion (zero ResolveStyle calls) held either way; it now
+ * registers the controller with the world (AddController) and asserts the ticks reached this body.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FBarTickBuildsOneActionContextTest,
@@ -337,27 +348,14 @@ bool FVariantRowFollowsToolTest::RunTest(const FString& Parameters)
 }
 
 /**
- * THE BAR PAINTS THROUGH UUiButton, so the armed tool is Accent with InkOnAccent and every other
- * tool Control with Ink - the rule has one home now, and a bar that bypassed it (a raw UButton
- * slipped back in) would fail here rather than drift quietly.
- */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBuildBarUsesUiButtonTest, "AirportMgr.Actions.BarToolsAreUiButtons",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FBuildBarUsesUiButtonTest::RunTest(const FString& Parameters)
-{
-	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
-	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
-	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
-	if (!TestNotNull(TEXT("the bar is created with no asset"), Bar)) { return false; }
-	TestTrue(TEXT("every tool button is a UUiButton with a label"), Bar->AllButtonsAreUiButtonsForTest());
-	return true;
-}
-
-/**
  * A MENU VERB IS BUILT AS A MENU: an action with MenuItems (game.airport) gets a UUiMenuButton - the popup its confirm
  * lives in - not a plain button whose click would run Execute. Counted against the registry, so a second menu verb
  * needs no edit here.
+ *
+ * AND THE BAR PAINTS THROUGH UUiButton (2026-10: this absorbed AirportMgr.Actions.BarToolsAreUiButtons, which asserted its
+ * last line verbatim on the identical fixture): the armed tool is Accent with InkOnAccent and every other tool Control with
+ * Ink - the rule has one home, UUiButton::LookFor - so a bar that bypassed it (a raw UButton slipped back in) fails the last
+ * assertion here rather than drifting quietly.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FBarBuildsMenusTest, "AirportMgr.Actions.BarBuildsMenuActionsAsMenus",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

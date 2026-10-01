@@ -143,9 +143,26 @@ bool FRoadBuildEdModeSessionTest::RunTest(const FString& Parameters)
 	// And the choice survives the tool object being rebuilt, which is the whole point: the
 	// same pointer, still at width 1, after a third activation.
 	URoadBuildEditorTool* Third = Cast<URoadBuildEditorTool>(Builder->BuildTool(State));
-	TestNotNull(TEXT("a third activation builds"), Third);
+	if (!TestNotNull(TEXT("a third activation builds"), Third))
+	{
+		return false;
+	}
+	// READ THROUGH THE THIRD TOOL, not through Mode->GetSession() (2026-09-30 review): the mode's session
+	// is not something BuildTool can change, so reading it here passed whatever the builder handed the new
+	// tool. What the player's next press reaches is the NEW tool's own session - the one that must still be
+	// at width 1, and still have the runway tool lit, for the width to have survived the rebuild.
+	const FBuildSession* ThirdSession = Third->SessionForTest();
+	if (!TestEqual(TEXT("the third tool drives the mode's session too"),
+		ThirdSession, static_cast<const FBuildSession*>(&Mode->GetSession())))
+	{
+		return false;
+	}
+	if (!TestEqual(TEXT("and the runway tool is still the lit one on it"), ThirdSession->GetActiveToolIndex(), RunwayIndex))
+	{
+		return false;
+	}
 	TestEqual(TEXT("the width chosen before it was rebuilt is still chosen"),
-		static_cast<FRunwayTool*>(Mode->GetSession().GetActiveTool())->WidthIndex, 1);
+		static_cast<FRunwayTool*>(ThirdSession->GetActiveTool())->WidthIndex, 1);
 	return true;
 }
 

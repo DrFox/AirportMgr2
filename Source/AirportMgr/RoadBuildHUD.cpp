@@ -430,7 +430,7 @@ void ARoadBuildHUD::DrawNodeIndices(const ARoadNetworkActor& Target)
 		return;
 	}
 
-	// The rings themselves come from GraphOverlay::Describe - see DrawHUD. Degree still
+	// The rings themselves come from GraphOverlay::DescribeNodes - see DrawHUD. Degree still
 	// decides the colour here so the label reads the same as the ring it labels.
 	const TArray<FRoadNode>& Nodes = Target.Network->GetNodes();
 
@@ -468,7 +468,7 @@ void ARoadBuildHUD::DrawAnchorIds(const ARoadNetworkActor& Target)
 		return;
 	}
 
-	// The anchor rings themselves come from GraphOverlay::Describe - see DrawHUD. This walks
+	// The anchor rings themselves come from GraphOverlay::DescribeStands - see DrawHUD. This walks
 	// the SAME ResolvedAnchors, read from the INSTANCE rather than recomputed from the
 	// definition, for the id text alone.
 	for (const FEntityInstance& Entity : Target.Network->GetEntities())

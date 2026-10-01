@@ -77,7 +77,7 @@ public:
 	/**
 	 * One frame of REAL seconds. Public because it is the seam NativeTick forwards to, and
 	 * a seam that nothing tests is a seam that can be left unwired - see the refactor
-	 * contract. AirportMgr.UI.ToastsSurviveAFastClock drives this directly.
+	 * contract. AirportMgr.UI.ToastLifetimeRunsOnRealSeconds drives this directly.
 	 */
 	void TickFeed(float RealDeltaSeconds);
 

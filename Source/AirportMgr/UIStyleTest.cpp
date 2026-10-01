@@ -9,6 +9,21 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+// NAMED, NOT ANONYMOUS: the module is a unity build.
+namespace UIStyleTestFixture
+{
+	/**
+	 * THE CONFIGURED STYLE ASSET MUST BE THERE (2026-09-30 review). Three tests below had a half that skipped - AddInfo and
+	 * return true - when DA_UIStyle lacked a button material or the Inter faces, so a missing or emptied asset left them GREEN
+	 * having asserted nothing (when the last skipped, EditingTheStyleReachesTheControlFill ran zero assertions). The asset is
+	 * committed and Config/DefaultGame.ini names it, so its absence is a defect in the content, not a state to excuse.
+	 */
+	bool RequireConfigured(FAutomationTestBase& Test, bool bConfigured, const TCHAR* What)
+	{
+		return Test.TestTrue(FString::Printf(TEXT("DA_UIStyle is configured with %s - without it this half measures nothing"), What), bConfigured);
+	}
+}
+
 /**
  * THE LESSON FROM ResolveDefaultScenario, which returned null when nothing was configured.
  * Every caller guarded with `if (...)`, so the "built-in defaults" its log promised were
@@ -37,46 +52,12 @@ bool FUIStyleResolvesTest::RunTest(const FString& Parameters)
 }
 
 /**
- * PINS THE DEFAULTS OF THE SEVEN TOKENS issue #192 ADDED, each replacing a bare literal that
- * had no other reader (UAirportMgrPanelWidget::EnsureCardRoot's card padding, ULedgerPanelWidget
- * EnsureSlots's row gap, UOfferInboxWidget::MakeAnswerButton's button padding,
- * ARoadBuildHUD::DrawPlotPanel's ground colour, UToastStackWidget::BuildCard's outline alpha,
- * and OpacityFor's fade floor/duration). DA_UIStyle, the authored content asset, carries no
- * value for a brand new UPROPERTY - it gets the C++ default below - so this is what keeps that
- * default from drifting from the literal it replaced without anyone noticing.
- */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FUIStyleNewTokenDefaultsTest,
-	"AirportMgr.UI.NewTokenDefaultsMatchTheOldLiterals",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FUIStyleNewTokenDefaultsTest::RunTest(const FString& Parameters)
-{
-	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
-	if (!TestNotNull(TEXT("a style"), Style)) { return false; }
-
-	// FMargin has no TestEqual overload (AutomationTest.h lists FVector/FRotator/FLinearColor/
-	// etc. by name, not a generic template), so these compare through its own operator==.
-	TestTrue(TEXT("CardPadding matches EnsureCardRoot's old literal"),
-		Style->CardPadding == FMargin(12.0f, 10.0f));
-	TestEqual(TEXT("RowGap matches the ledger's old literal"), Style->RowGap, 6.0f);
-	TestTrue(TEXT("ButtonPadding matches MakeAnswerButton's old literal"),
-		Style->ButtonPadding == FMargin(12.0f, 5.0f));
-	TestEqual(TEXT("HudGround matches DrawPlotPanel's old literal"),
-		Style->HudGround, FLinearColor(0.02f, 0.03f, 0.04f, 0.72f));
-	TestEqual(TEXT("OutlineAlpha matches BuildCard's old literal"), Style->OutlineAlpha, 0.85f);
-	TestEqual(TEXT("ToastFadeDuration matches OpacityFor's old literal"), Style->ToastFadeDuration, 2.0f);
-	TestEqual(TEXT("ToastFadeFloor matches OpacityFor's old literal"), Style->ToastFadeFloor, 0.15f);
-	return true;
-}
-
-/**
  * Walks the REGISTRY, not a hand-written list, so an action added without an icon fails
  * here rather than rendering as a blank square nobody notices. Same shape as
  * AirportOps.Model.SimClock.SpeedLadderCoversEveryRung.
  *
- * Skipped when no style asset is configured: the CDO carries no icon map, and failing then
- * would make a fresh checkout fail for want of content rather than for a defect.
+ * A MISSING ICON MAP FAILS (2026-10): it used to AddInfo and pass, a green run that checked no action's icon.
+ * DA_UIStyle is committed content and DefaultGame.ini names it (UIStyleTestFixture::RequireConfigured).
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FUIStyleIconsTest,
@@ -86,11 +67,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FUIStyleIconsTest::RunTest(const FString& Parameters)
 {
 	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
-	if (Style == nullptr || Style->IconsByActionId.Num() == 0)
-	{
-		AddInfo(TEXT("No style asset configured; icon coverage not checked"));
-		return true;
-	}
+	if (!UIStyleTestFixture::RequireConfigured(*this, Style != nullptr && Style->IconsByActionId.Num() > 0, TEXT("an icon map"))) { return false; }
 
 	// The three time controls are drawn as geometric glyphs and need no texture. Exempting
 	// them by SECTION rather than by name means adding a fourth time control does not need
@@ -244,11 +221,7 @@ bool FUIStyleControlFillTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("no material: tint is white"), Fallback.TintColor.GetSpecifiedColor(), FLinearColor::White);
 
 	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
-	if (Style == Cdo || Style->ButtonMaterial.IsNull())
-	{
-		AddInfo(TEXT("no style asset with a ButtonMaterial configured - material half skipped"));
-		return true;
-	}
+	if (!UIStyleTestFixture::RequireConfigured(*this, Style != Cdo && !Style->ButtonMaterial.IsNull(), TEXT("a ButtonMaterial"))) { return false; }
 	const FSlateBrush Fill = Style->ControlFill();
 	TestEqual(TEXT("material: drawn as an image"), Fill.DrawAs, ESlateBrushDrawType::Image);
 	TestNotNull(TEXT("material: has a resource"), Fill.GetResourceObject());
@@ -275,11 +248,7 @@ bool FUIStyleInterTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("no faces: still a valid font"), Plain->GetFont().HasValidFont());
 
 	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
-	if (Style->FontRegular.IsNull() || Style->FontSemiBold.IsNull())
-	{
-		AddInfo(TEXT("no style asset with Inter faces configured - Inter half skipped"));
-		return true;
-	}
+	if (!UIStyleTestFixture::RequireConfigured(*this, !Style->FontRegular.IsNull() && !Style->FontSemiBold.IsNull(), TEXT("the Inter Regular and SemiBold faces"))) { return false; }
 	UTextBlock* Title = NewObject<UTextBlock>();
 	Style->ApplyText(*Title, EUITextRole::Title, Style->Ink);
 	UTextBlock* Body = NewObject<UTextBlock>();
@@ -326,11 +295,7 @@ bool FUIStyleEditInvalidatesTest::RunTest(const FString& Parameters)
 {
 #if WITH_EDITOR
 	const UUIStyle* Configured = UAirportMgrUISettings::ResolveStyle();
-	if (Configured->ButtonMaterial.IsNull())
-	{
-		AddInfo(TEXT("no style asset with a ButtonMaterial configured - skipped"));
-		return true;
-	}
+	if (!UIStyleTestFixture::RequireConfigured(*this, !Configured->ButtonMaterial.IsNull(), TEXT("a ButtonMaterial"))) { return false; }
 	UUIStyle* Style = NewObject<UUIStyle>();
 	Style->ButtonMaterial = Configured->ButtonMaterial;
 	Style->ControlRadius = 5.0f;

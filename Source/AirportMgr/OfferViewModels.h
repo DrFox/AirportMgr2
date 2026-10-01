@@ -253,11 +253,6 @@ public:
 		const USimClock& Clock, double DemandFactor, int32 Count,
 		TFunctionRef<double(const UAirlineDefinition&)> AirlineFactorOf);
 
-	/** Rows itself, for a test asserting there is only the one list - see
-	 *  OfferViewModelsTest's OneList case. Not BlueprintCallable: GetOffers() is the shape
-	 *  Blueprint and the list view want, this is a test seam onto the source of truth. */
-	const TArray<TObjectPtr<UOfferViewModel>>& RowsForTest() const { return Rows; }
-
 	int32 GetPendingCount() const { return PendingCount; }
 
 	/** True if the board took it. False leaves the offer in the inbox with its reason shown. */

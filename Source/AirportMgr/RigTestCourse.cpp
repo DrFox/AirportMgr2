@@ -658,13 +658,6 @@ void ARigTestCourse::PassMarker(FRigCourseRunner& Runner, const FRoadAgent& Agen
 		? LegTimeoutSeconds(Vehicles[Runner.Slot], Runner.Markers[0].Length, LegTimeoutFactor) : Runner.Timeout;
 }
 
-uint32 ARigTestCourse::VehicleIdentity(const FVehicle& Vehicle)
-{
-	// FORWARDS (#301): the figures-hash itself now lives in Airside/Model/RoutePlanCache.h,
-	// shared with UJobBoard::DepotRoute. Kept at this name and signature - see the header.
-	return RoutePlanCache::VehicleIdentity(Vehicle);
-}
-
 bool ARigTestCourse::PlanBetween(const FRigCourseWaypoint& From, const FRigCourseWaypoint& To, int32 Slot,
 	FRoutePlan& OutPlan, FString& OutReason) const
 {
@@ -1146,8 +1139,10 @@ void ARigTestCourse::ContinueRoute(FRigCourseRunner& Runner, const FRoadAgent& A
 	// on the plan's first point - the lane end it has just stopped on - and leaves TowAxles, the
 	// fold and (for a tow) the cab's heading alone; StartDrive, which a redirect does not call, is
 	// where a chain is laid straight. So even the fallback does not re-lay the trailer.
-	// ENFORCED BY: AirportMgr.RigCourse.RanOutRestartsWithTheChain (extensions refused, every loop
-	// boundary taken from rest, one agent throughout, the chain never jumping)
+	// ENFORCED BY: AirportMgr.RigCourse.RanOutRestartsWithTheChain (extensions refused, the first loop
+	// boundary taken from rest, tick by tick: the axles do not move beyond the cab's across the restart,
+	// and one agent dispatched - the later boundaries were trimmed from the test 2026-10, 0.55 s for what
+	// the refusal flag and that first restart already show)
 	if (!bPlanned)
 	{
 		UE_LOG(LogRoadBuild, Warning, TEXT("RigCourse: %s loop %d: nothing drivable from waypoint %d; retired, and dispatched fresh at the next waypoint."),
