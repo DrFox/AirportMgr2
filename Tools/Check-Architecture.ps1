@@ -4916,7 +4916,10 @@ $modelLineBudget = [ordered]@{
     # under it (RejoinPush, PushRejoinRadius - #396's RejoinInPlace for the push - with a Rejoin's aftermath spelled out, since
     # FRouteChange::Rejoin is the follower's), and the three rebuild lines naming the plan; each with its reason and pin. The
     # rejoin's extraction to its own file is #502. No cut here: all of it is re-resolution after a rebuild, this file's job.
-    'Plugins\Airside\Source\Airside\Private\Model\GroundTrafficRebuild.cpp'   = 1690
+    # LOWERED 1690 -> 1459 by #502 (2026-10-01): the rejoin search (RejoinNearby and its radii) and UGroundTraffic::
+    # RescueStranded moved whole to GroundTrafficRejoin.cpp (held by the default), less #502's own push fixes here (the
+    # own-step rule and the push's re-route policy and length bound, each with its reason and pin).
+    'Plugins\Airside\Source\Airside\Private\Model\GroundTrafficRebuild.cpp'   = 1459
     # 2026-10-01: the route search (A* over the guideline graph, plan building, run description) - one algorithm.
     'Plugins\Airside\Source\Airside\Private\Model\RouteSearch.cpp'            = 1191
     # 2026-10-01: what #427 left of UJobBoard - the jobs, the vehicles' lifecycle and Step's one sequence; bidding and
