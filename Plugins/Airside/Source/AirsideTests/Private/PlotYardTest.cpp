@@ -141,8 +141,8 @@ bool FPlotYardStandsTheShedAtTheBackTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+	// (No bPlaced assertion: Reserve returns only stands it placed, so it was true by construction.)
 	const PlotYard::FReservedStand& First = Reservation.Stands[0];
-	TestTrue(TEXT("and it is placed, not a stand that failed"), First.bPlaced);
 
 	// SQUARE TO THE FRONTAGE, not jittered. The truck drives out of the shed, so its heading
 	// is functional - the one module that may not be turned for looks. Interior is +Y here,
@@ -205,6 +205,16 @@ bool FPlotYardStandsTheShedAtTheBackTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+
+	// STANDS[0] MUST BE THE RAY'S POSE, NOT A SAMPLED SHED (#462 review). On Reserve a back-fence scan that gives up on the
+	// slanted edge falls through to the fill sampler, which places a shed SOMEWHERE in the wedge - and y > 800 below is likely
+	// for a sampled one - so the corner and depth assertions alone stay green when the very scan they name has failed. The ray's
+	// pose is decided, not sampled: heading exactly square to the frontage (a sampled heading carries up to 0.21 rad of
+	// jitter) and a centre on the gate's own X.
+	TestEqual(TEXT("the wedge's first shed is the ray's: square to the frontage, not a jittered sampled heading"),
+		Slanted.Stands[0].Heading, UE_DOUBLE_HALF_PI);
+	TestTrue(*FString::Printf(TEXT("and it stands on the gate's ray (x %.0f against the gate's %.0f)"),
+		Slanted.Stands[0].Centre.X, Gate.X), FMath::Abs(Slanted.Stands[0].Centre.X - Gate.X) < 1.0);
 
 	TArray<FVector2D> Corners;
 	PlotYard::StandCorners(Slanted.Stands[0], Shed(), Corners);
@@ -297,16 +307,18 @@ bool FPlotYardKeepsModulesInsideThePlotTest::RunTest(const FString& Parameters)
 	// the containment test beside it never decides anything - deleting it left this green - and the whole claim is only measured by
 	// an outline whose edges are not axis-aligned: this one runs 24 m deep at its left corner and 10 m at its right, the shape the
 	// four-point gesture makes ordinary (see Airside.Solve.PlotYardStandsTheShedAtTheBack's wedge).
-	const TArray<FVector2D> Outlines[] = {
-		YardRect(2400.0, 1600.0),
-		{ FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0), FVector2D(2400.0, 1000.0), FVector2D(0.0, 2400.0) } };
+	struct FPlot { const TCHAR* Name; TArray<FVector2D> Outline; };
+	const FPlot Plots[] = {
+		{ TEXT("rectangle"), YardRect(2400.0, 1600.0) },
+		{ TEXT("wedge"), { FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0), FVector2D(2400.0, 1000.0), FVector2D(0.0, 2400.0) } } };
 
 	// SEVERAL SEEDS, not one. A sampler that happens to keep everything inside on seed 1234
 	// and hangs a tank over the fence on 1235 is exactly the bug this guards, and a
 	// single-seed test would ship it.
 	int32 Checked = 0;
-	for (const TArray<FVector2D>& Outline : Outlines)
+	for (const FPlot& Plot : Plots)
 	{
+		const TArray<FVector2D>& Outline = Plot.Outline;
 		for (int32 Seed = 1; Seed <= 8; ++Seed)
 		{
 			const PlotYard::FReservation Reservation = PlotYard::Reserve(
@@ -323,8 +335,8 @@ bool FPlotYardKeepsModulesInsideThePlotTest::RunTest(const FString& Parameters)
 					// EVERY CORNER, not the centre. A centre-only test accepts a module hanging
 					// out of the plot and the player watches a tank stand on the grass.
 					TestTrue(*FString::Printf(
-						TEXT("%d-sided plot, seed %d: module %d corner (%.0f, %.0f) is inside the plot"),
-						Outline.Num(), Seed, Index, Corner.X, Corner.Y),
+						TEXT("%s plot, seed %d: module %d corner (%.0f, %.0f) is inside the plot"),
+						Plot.Name, Seed, Index, Corner.X, Corner.Y),
 						RoadGeom::PointInPolygon(Outline, Corner));
 					++Checked;
 				}
@@ -456,6 +468,37 @@ bool FPlotYardVariesWithSeedTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("and stands in the same place in both"),
 		A.Stands[0].Centre == B.Stands[0].Centre);
 
+	return true;
+}
+
+/**
+ * THE SHED STILL STANDS ON A PLOT TOO SMALL FOR THE MIX (#462 review: the other claim of the deleted
+ * PlotYardDropsWhatWillNotFit, which asserted it through LayOut's dropped-stand list).
+ *
+ * One bay wide and one row deep: the shed alone fills it. THE SHED IS NOT ONE OF THE THINGS LOST. Its pose is decided rather
+ * than sampled, so a plot too small loses the things that were looking for space - never the one the truck needs. Reserve lists
+ * only what it placed, so "dropped" reads as a kit with no stand: the tank, which cannot fit beside a shed that fills the plot.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotYardKeepsTheShedOnATinyPlotTest,
+	"Airside.Solve.PlotYardKeepsTheShedOnATinyPlot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotYardKeepsTheShedOnATinyPlotTest::RunTest(const FString& Parameters)
+{
+	const TArray<PlotYard::FKitSpec> Kits = DepotMix();   // shed (kit 0), tank (kit 1), pump (kit 2)
+
+	const PlotYard::FReservation Reservation = PlotYard::Reserve(
+		YardRect(400.0, 800.0), FVector2D(0.0, 0.0), FVector2D(400.0, 0.0), FVector2D(200.0, 0.0), Kits, /*Seed=*/7);
+
+	TestTrue(TEXT("the shed still stands on a one-bay plot"), Reservation.CeilingFor(0) >= 1);
+	TestEqual(TEXT("and it is the ray's: the first stand reserved, square to the frontage"),
+		Reservation.Stands.Num() > 0 ? Reservation.Stands[0].KitIndex : INDEX_NONE, 0);
+	if (Reservation.Stands.Num() > 0)
+	{
+		TestEqual(TEXT("with the decided heading, not a sampled one"), Reservation.Stands[0].Heading, UE_DOUBLE_HALF_PI);
+	}
+	TestEqual(TEXT("and something had to be lost from a one-bay plot: the tank has no stand"), Reservation.CeilingFor(1), 0);
 	return true;
 }
 

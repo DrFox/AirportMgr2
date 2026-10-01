@@ -135,6 +135,7 @@ namespace
 			// what it placed, so no caller reads a dropped pose today and #462 deleted that
 			// assertion with LayOut. Kept as it was - a probe loop that writes as it goes is no
 			// dearer than one that does not - but nothing pins it any more.
+			// ENFORCED BY: Airside.Solve.PlotReserveNeverDrops (every reserved stand was placed)
 			OutStand.Heading = InwardBearing;
 
 			TArray<FVector2D> Corners;

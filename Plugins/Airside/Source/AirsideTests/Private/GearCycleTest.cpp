@@ -189,6 +189,7 @@ bool FGearWithoutATruckNeverTiltsTest::RunTest(const FString& Parameters)
 	FGearPerformance Gear;
 	Gear.TravelSeconds = 4.0;
 	Gear.TruckTiltSeconds = 0.0;
+	Gear.DoorSeconds = 0.0;   // the default, said aloud: the door assertions below are about exactly this input
 
 	TestEqual(TEXT("with no truck and no doors the cycle is the travel alone"),
 		Gear.CycleSeconds(), 4.0);

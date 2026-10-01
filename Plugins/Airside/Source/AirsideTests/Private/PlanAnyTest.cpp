@@ -88,7 +88,7 @@ bool FPlanAnyShortestTest::RunTest(const FString& Parameters)
 
 	// The alternative, priced: any plan to the N-S strip is longer.
 	FRunwayEnd OtherEnd;
-	A.Net->RunwayExtentAt(FVector2D(100000.0, -49990.0), OtherEnd);
+	if (!TestTrue(TEXT("the N-S strip resolves"), A.Net->RunwayExtentAt(FVector2D(100000.0, -49990.0), OtherEnd))) { return false; }
 	const FDeparturePlan Other = DeparturePlanner::Plan(*A.Net, A.StandNode,
 		OtherEnd.Threshold + OtherEnd.Direction * 10.0, Airframe, ETraversalClass::Aircraft);
 	UE_LOG(LogAirsideTests, Log, TEXT("N-S alternative: %s"), *DeparturePlanner::Describe(Other));

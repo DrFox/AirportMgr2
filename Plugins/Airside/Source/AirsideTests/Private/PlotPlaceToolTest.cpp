@@ -1464,10 +1464,11 @@ bool FPlotSpecsComeFromTheTargetTest::RunTest(const FString& Parameters)
 
 	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
 
-	// THE ANCHOR CLICK, built by hand rather than through OnRoad(): that helper reads the
-	// actor's own Network to fill Context.Snap, and this context's Target is the fake, not
-	// the actor - IRoadEditTarget::GetNetwork() must answer through the fake for Context.
-	// Network() to see the road at all (FToolContext::Network() reads Target->GetNetwork()).
+	// THE ANCHOR CLICK, built by hand rather than through OnRoad(): that helper builds its context
+	// on the real actor as Target, and this context's Target is the fake, not the actor -
+	// IRoadEditTarget::GetNetwork() must answer through the fake for Context.Network() to see the
+	// road at all (FToolContext::Network() reads Target->GetNetwork()). The Snap segment set below
+	// is only so the snap names the road it sits on: the anchor search asks the network itself.
 	FToolContext Anchor = TestTool::ContextAt(Fake, FVector2D(0.0, 200.0), ERoadSnapKind::Segment);
 	Anchor.Snap.Segment = Actor->Network->SegmentIdAt(0);
 	const FRoadSegment* Segment = Actor->Network->GetSegment(Anchor.Snap.Segment);

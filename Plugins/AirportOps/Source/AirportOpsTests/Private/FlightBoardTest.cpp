@@ -413,7 +413,8 @@ bool FFlightBoardDefaultRunwayPreferenceTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("its own threshold"), Focus, FVector2D(0.0, 0.0));
 
 	// A LONGER, separate runway - THE POINT OF THE TEST: the longest wins, not the first
-	// found or the last added, matching AirsideCapability's own LongestRunway().
+	// found or the last added - the longest of AirsideCapability::Summarise's Runways (its LongestRunway()
+	// helper was deleted by #462).
 	const FRoadNodeId B0 = Net->AddNode(FVector2D(0.0, 100000.0));
 	const FRoadNodeId B1 = Net->AddNode(FVector2D(60000.0, 100000.0));
 	Net->AddStraightSegment(B0, B1, Runway);

@@ -107,9 +107,9 @@ namespace
 /**
  * A reservation contains only what it placed, and the ceilings are what it placed.
  *
- * "NEVER DROPS" IS NOT THE CLAIM LayOut MAKES. LayOut is handed a list it must try to honour
- * and reports what it could not fit; Reserve decides the list itself, so a dropped stand is
- * not a refusal, it is a bug. Every ghosted slot the player is shown is a promise that the
+ * "NEVER DROPS" WAS NOT THE CLAIM THE OLD LayOut MADE (deleted by #462). It was handed a list it
+ * had to try to honour and reported what it could not fit; Reserve decides the list itself, so a
+ * dropped stand is not a refusal, it is a bug. Every ghosted slot the player is shown is a promise that the
  * module fits there, and this test is what makes the promise true.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -138,8 +138,8 @@ bool FPlotReserveNeverDropsTest::RunTest(const FString& Parameters)
 	}
 
 	// The ceilings are DERIVED from the stands, never counted alongside them: a second count
-	// is a second thing to keep in agreement, for the same reason FYard::DroppedCount is
-	// derived rather than stored.
+	// is a second thing to keep in agreement, for the same reason the deleted FYard::DroppedCount
+	// was derived rather than stored.
 	int32 Total = 0;
 	for (int32 Kit = 0; Kit < Specs.Num(); ++Kit)
 	{
@@ -343,7 +343,7 @@ bool FPlotReserveLeavesTheGateClearTest::RunTest(const FString& Parameters)
 		TArray<FVector2D> Corners;
 		for (const PlotYard::FReservedStand& Stand : Reservation.Stands)
 		{
-			// THE SHED IS EXEMPT, exactly as it is under LayOut: it stands ON the gate's ray
+			// THE SHED IS EXEMPT, exactly as it was under the deleted LayOut: it stands ON the gate's ray
 			// by construction, pushed as deep as the plot allows, and the corridor rule is
 			// what the SAMPLER obeys. Asserting it here would be asserting that the back
 			// fence is more than one truck length from the road, which is a claim about the

@@ -98,8 +98,8 @@ FAirframe UAirsideSettings::ContentlessDefaultAirframe()
 	// law where every UAircraftType defaults to RollingSteer, a steered final turn, no body centre
 	// and no TypeCode. Taxi and fit tests measured a vehicle no flight in the game is. Every
 	// FAirframe field added from now on arrives here through Airframe() with nothing to remember.
-	// Built per call: the callers are a Land with no chosen type and test fixtures, not a frame loop - 1 production
-	// caller (OpsRuntime.cpp LandNear), 2026-09-30.
+	// Built per call: the callers are ResolveDefaultAirframe (itself called by a Land with no chosen type -
+	// 1 production caller, OpsRuntime.cpp LandNear, 2026-09-30) and test fixtures, not a frame loop.
 	// A BRANCH OF ResolveDefaultAirframe, split out so a test can reach it whatever content is configured (#479) -
 	// the day #30 lands this is no longer what ResolveDefaultAirframe returns, and a test that could only compare
 	// through it would skip.
