@@ -23,14 +23,13 @@ void UAirsideTraffic::PostInitProperties()
 	// is bound HERE rather than in the constructor so it is bound to whichever model this
 	// object actually ends up with - IsBoundToObject because PostInitProperties can run more
 	// than once over a lifetime and a second bind would double every event.
+	// ONE BIND, guarded by its own IsBoundToObject (#445): the four pure relays that used to bind beside it were all guarded
+	// by THIS delegate's check, so a second bind of any of them alone could not have been seen. They are gone - see the
+	// header - and the guard now asks about the one delegate it binds.
 	Model = Cast<UGroundTraffic>(GetDefaultSubobjectByName(TEXT("GroundTraffic")));
 	if (Model != nullptr && !Model->OnAgentPhaseChanged.IsBoundToObject(this))
 	{
 		Model->OnAgentPhaseChanged.AddUObject(this, &UAirsideTraffic::OnModelPhaseChanged);
-		Model->OnArrivalRefused.AddUObject(this, &UAirsideTraffic::OnModelArrivalRefused);
-		Model->OnRunwayFreed.AddUObject(this, &UAirsideTraffic::OnModelRunwayFreed);
-		Model->OnStandsFreed.AddUObject(this, &UAirsideTraffic::OnModelStandsFreed);
-		Model->OnPushGroundFreed.AddUObject(this, &UAirsideTraffic::OnModelPushGroundFreed);
 	}
 }
 
@@ -47,28 +46,9 @@ void UAirsideTraffic::OnModelPhaseChanged(const FAgentTransition& Transition)
 	{
 		DestroyView(Transition.AgentId);
 	}
-	// THE MODEL'S VALUE, passed on whole - see OnAgentPhaseChanged's declaration.
+	// THE MODEL'S VALUE, passed on whole - see OnAgentPhaseChanged's declaration. AFTER the view, which is the whole of what
+	// this relay adds: a listener hears Gone -> X with the cube already standing, and X -> Gone with it already gone.
 	OnAgentPhaseChanged.Broadcast(Transition);
-}
-
-void UAirsideTraffic::OnModelArrivalRefused(EArrivalRefusal Why)
-{
-	OnArrivalRefused.Broadcast(Why);
-}
-
-void UAirsideTraffic::OnModelRunwayFreed(FRoadSegmentId Seed)
-{
-	OnRunwayFreed.Broadcast(Seed);
-}
-
-void UAirsideTraffic::OnModelStandsFreed(const TArray<FGuidelineNodeId>& PoseNodes)
-{
-	OnStandsFreed.Broadcast(PoseNodes);
-}
-
-void UAirsideTraffic::OnModelPushGroundFreed(int32 AgentId)
-{
-	OnPushGroundFreed.Broadcast(AgentId);
 }
 
 void UAirsideTraffic::SpawnView(int32 AgentId)

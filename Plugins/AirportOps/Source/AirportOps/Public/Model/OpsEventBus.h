@@ -9,6 +9,7 @@
 #include "Model/Flight.h"
 #include "Model/Ledger.h"
 #include "Model/OpsAlerts.h"
+#include "Model/OpsEvents.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
 #include "Model/ServiceJob.h"
@@ -102,11 +103,17 @@ struct AIRPORTOPS_API FSpeedChangedEvent
 	FString Describe() const;
 };
 
-/** A line for the toast stack (saved, loaded, ...). */
-struct AIRPORTOPS_API FNotificationEvent
+/**
+ * A save or a load came to Outcome, on Slot (#445 item 7). REPLACED FNotificationEvent{FString}, the catch-all that carried
+ * the runtime's own English line ("Save to 'X' failed") to the toast as plain Info. The case is typed (EOpsSaveOutcome,
+ * declared beside the face that carries it, UOpsEvents::OnSaveSlot) and the toast widget words it.
+ * ENFORCED BY: Check-Architecture rule 4 ('FNotificationEvent (retired)'), AirportMgr.UI.ToastsWordSavesAndPurchases
+ */
+struct AIRPORTOPS_API FSaveSlotEvent
 {
-	FString Text;
-	static const TCHAR* EventName() { return TEXT("Notification"); }
+	EOpsSaveOutcome Outcome = EOpsSaveOutcome::Saved;
+	FString Slot;
+	static const TCHAR* EventName() { return TEXT("SaveSlot"); }
 	FString Describe() const;
 };
 
@@ -478,7 +485,7 @@ struct AIRPORTOPS_API FAirlineAdmissionChangedEvent
  * against it, and the wiring test walks it - "lists that must agree are ONE list".
  * FInstancedStruct was rejected: an open set has no answer to "which events exist?".
  */
-using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChangedEvent, FNotificationEvent,
+using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChangedEvent, FSaveSlotEvent,
 	FOfferExpiredEvent, FOfferDeclinedEvent, FFlightAirborneEvent, FDayEndedEvent, FAirlineSatisfactionEvent,
 	FNetworkChangedEvent, FAlertRaisedEvent, FAlertClearedEvent, FAlertsResetEvent, FBuildRefusedEvent, FLandRefusedEvent,
 	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent, FOfferAcceptedEvent,

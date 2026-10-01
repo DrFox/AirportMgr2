@@ -380,12 +380,87 @@ bool FToastsFromOpsAlertsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("in the plan's words"), Stack->Centre()->Entries()[5].Text.ToString(), Planned);
 	}
 
-	// #266: THE REPAIR'S LINE through its own delegate - unbound, the modules would be removed and refunded in silence.
-	Events->NotifyWarning(TEXT("No room on its plot - 2 Sheds removed, 80,000 refunded"));
-	if (TestEqual(TEXT("a warning notification is a toast"), Stack->Centre()->Entries().Num(), 7))
+	// #266: THE REPAIR'S LINE through the purchase face (its own warning delegate until #445 item 7) - unbound, the modules would be
+	// removed and refunded in silence.
+	FOpsPurchase Refund;
+	Refund.Kind = EOpsPurchaseKind::ModulesRefunded;
+	Refund.Name = FText::FromString(TEXT("Sheds"));
+	Refund.Count = 2;
+	Refund.Amount = 80000.0;
+	Refund.Money = FText::FromString(TEXT("80,000"));
+	Events->NotifyPurchase(Refund);
+	if (TestEqual(TEXT("a refund is a toast"), Stack->Centre()->Entries().Num(), 7))
 	{
-		TestEqual(TEXT("as a Warning, where a plain notification is Info"), Stack->Centre()->Entries()[6].Severity, ENotificationSeverity::Warning);
-		TestTrue(TEXT("in the publisher's words"), Stack->Centre()->Entries()[6].Text.ToString().Contains(TEXT("2 Sheds removed")));
+		TestEqual(TEXT("as a Warning, where a purchase is Info"), Stack->Centre()->Entries()[6].Severity, ENotificationSeverity::Warning);
+		TestTrue(TEXT("in the widget's words, with the count and the noun it was given"), Stack->Centre()->Entries()[6].Text.ToString().Contains(TEXT("2 Sheds removed")));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FToastsWordSavesAndPurchasesTest,
+	"AirportMgr.UI.ToastsWordSavesAndPurchases",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FToastsWordSavesAndPurchasesTest::RunTest(const FString& Parameters)
+{
+	// #445 item 7: UOpsRuntime worded every save, load and purchase toast as an English FString on a catch-all event, so the widget -
+	// which says it is the one place that decides what the player is told - could not tell "Save to 'X' failed" from "Saved 'X'",
+	// and showed a failed save as Info. The faces carry the case and the facts now; the words and the severity are decided HERE.
+	// Each case by name, its sentence and its severity, so a case that went silent or lost its Warning is red by its name.
+	// Mutation-checked 2026-10-01: SaveFailed posted at Info, this went red ("SaveFailed at its severity").
+	FAirsideTestWorld TestWorld;
+	UToastStackWidget* Stack = MakeStack(TestWorld.World);
+	if (!TestNotNull(TEXT("a toast stack"), Stack)) { return false; }
+	UOpsEvents* Events = NewObject<UOpsEvents>();
+	Stack->BindTo(*Events);
+	auto Last = [Stack]() { return Stack->Centre()->Entries().Last(); };
+
+	struct FSaveCase { EOpsSaveOutcome Outcome; const TCHAR* Says; ENotificationSeverity Severity; const TCHAR* Why; };
+	const FSaveCase SaveCases[] = {
+		{ EOpsSaveOutcome::Saved, TEXT("Saved 'Slot1'"), ENotificationSeverity::Info, TEXT("it happened, no decision") },
+		// THE PIN: a failed save is an error the player must see - not the Info a good save is.
+		{ EOpsSaveOutcome::SaveFailed, TEXT("Save to 'Slot1' failed"), ENotificationSeverity::Warning, TEXT("the save did not happen") },
+		{ EOpsSaveOutcome::Loaded, TEXT("Loaded 'Slot1'"), ENotificationSeverity::Info, TEXT("it happened, no decision") },
+		{ EOpsSaveOutcome::NoSave, TEXT("No save 'Slot1'"), ENotificationSeverity::Warning, TEXT("the load found nothing - a refusal") },
+	};
+	for (const FSaveCase& Case : SaveCases)
+	{
+		const int32 Before = Stack->Centre()->Entries().Num();
+		Events->NotifySaveSlot(Case.Outcome, TEXT("Slot1"));
+		const FString Name = UEnum::GetValueAsString(Case.Outcome);
+		if (!TestEqual(*FString::Printf(TEXT("%s is one toast"), *Name), Stack->Centre()->Entries().Num(), Before + 1)) { continue; }
+		TestEqual(*FString::Printf(TEXT("%s says '%s'"), *Name, Case.Says), Last().Text.ToString(), FString(Case.Says));
+		TestEqual(*FString::Printf(TEXT("%s at its severity: %s"), *Name, Case.Why), Last().Severity, Case.Severity);
+	}
+
+	FOpsPurchase Purchase;
+	Purchase.Name = FText::FromString(TEXT("Fuel bowser"));
+	Purchase.Money = FText::FromString(TEXT("$45,000"));
+	struct FPurchaseCase { EOpsPurchaseKind Kind; double Amount; const TCHAR* Says; ENotificationSeverity Severity; };
+	const FPurchaseCase PurchaseCases[] = {
+		{ EOpsPurchaseKind::VehicleBought, 45000.0, TEXT("Bought Fuel bowser — $45,000"), ENotificationSeverity::Info },
+		{ EOpsPurchaseKind::VehicleSold, 45000.0, TEXT("Sold Fuel bowser — $45,000"), ENotificationSeverity::Info },
+		// A SALE WORTH NOTHING (#487) says no money: no em dash and no "$0".
+		{ EOpsPurchaseKind::VehicleSold, 0.0, TEXT("Sold Fuel bowser"), ENotificationSeverity::Info },
+		// A WITHDRAWN VEHICLE (#443) says where the credit came from, or that there was none.
+		{ EOpsPurchaseKind::VehicleWithdrawn, 45000.0, TEXT("Depot removed — Fuel bowser credited $45,000"), ENotificationSeverity::Info },
+		{ EOpsPurchaseKind::VehicleWithdrawn, 0.0, TEXT("Depot removed — Fuel bowser withdrawn"), ENotificationSeverity::Info },
+		{ EOpsPurchaseKind::ModuleBought, 45000.0, TEXT("Bought Fuel bowser — $45,000"), ENotificationSeverity::Info },
+		{ EOpsPurchaseKind::ModulesRefunded, 0.0, TEXT("No room on its plot — 1 Fuel bowser removed"), ENotificationSeverity::Warning },
+		// THE PAID REFUND (#499 review): the figure, and "refunded", when money came back.
+		{ EOpsPurchaseKind::ModulesRefunded, 45000.0, TEXT("No room on its plot — 1 Fuel bowser removed, $45,000 refunded"), ENotificationSeverity::Warning },
+	};
+	for (const FPurchaseCase& Case : PurchaseCases)
+	{
+		const int32 Before = Stack->Centre()->Entries().Num();
+		Purchase.Kind = Case.Kind;
+		Purchase.Amount = Case.Amount;
+		Events->NotifyPurchase(Purchase);
+		const FString Name = FString::Printf(TEXT("%s at %.0f"), *UEnum::GetValueAsString(Case.Kind), Case.Amount);
+		if (!TestEqual(*FString::Printf(TEXT("%s is one toast"), *Name), Stack->Centre()->Entries().Num(), Before + 1)) { continue; }
+		TestEqual(*FString::Printf(TEXT("%s says '%s'"), *Name, Case.Says), Last().Text.ToString(), FString(Case.Says));
+		TestEqual(*FString::Printf(TEXT("%s at its severity"), *Name), Last().Severity, Case.Severity);
 	}
 	return true;
 }

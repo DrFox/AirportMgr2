@@ -5,6 +5,7 @@
 #include "Content/AirportOpsSettings.h"
 #include "Content/AirsideSettings.h"
 #include "Model/ArrivalPlanner.h"
+#include "Model/ExhaustiveSwitch.h"
 #include "Model/GroundTraffic.h"
 #include "Model/OpsCatalog.h"
 #include "Model/OpsDefinition.h"
@@ -27,6 +28,29 @@
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
+
+namespace
+{
+	/**
+	 * The purchase toast a fleet change is, false for none (#445 item 7). EVERY CHANGE BY NAME, NO default: a fourth way
+	 * a vehicle can join or leave the fleet is a BUILD ERROR here (C4062), not a change the feed silently never says.
+	 * ENFORCED BY: C4062 as an error, AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+	 */
+	AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+	bool PurchaseKindOf(EFleetChange Change, EOpsPurchaseKind& OutKind)
+	{
+		switch (Change)
+		{
+		case EFleetChange::Bought:    OutKind = EOpsPurchaseKind::VehicleBought; return true;
+		case EFleetChange::Sold:      OutKind = EOpsPurchaseKind::VehicleSold; return true;
+		case EFleetChange::Withdrawn: OutKind = EOpsPurchaseKind::VehicleWithdrawn; return true;
+		// A STARTER VEHICLE changed no hands - see the FleetChanged subscriber in WireBus.
+		case EFleetChange::Seeded:    return false;
+		}
+		return false;
+	}
+	AIRSIDE_EXHAUSTIVE_SWITCH_END
+}
 
 UOpsRuntime::UOpsRuntime()
 {
@@ -575,8 +599,9 @@ void UOpsRuntime::WireBus()
 	// ENFORCED BY: AirportMgr.UI.EveryOpsEventDelegateHasAListener
 	Bus.Subscribe<FArrivalRefusedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FArrivalRefusedEvent& E) { Events->NotifyArrivalRefused(E.Why); });
-	Bus.Subscribe<FNotificationEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
-		[this](const FNotificationEvent& E) { Events->NotifyNotification(E.Text); });
+	// A SAVE OR A LOAD, BY CASE (#445 item 7): the face carries the outcome and the slot, and the toast words them.
+	Bus.Subscribe<FSaveSlotEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
+		[this](const FSaveSlotEvent& E) { Events->NotifySaveSlot(E.Outcome, E.Slot); });
 
 	// THE ALERTS PASS (spec 2026-09-29-ops-alerts §1) - AFTER the job board's and the arrival queue's (declared), so a Step, a dispatch
 	// and the alerts that follow from them land in the same round. Dirtied, in the Reaction tier, by the events below and by the job
@@ -635,53 +660,55 @@ void UOpsRuntime::WireBus()
 	Bus.Subscribe<FBalanceSignChangedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FBalanceSignChangedEvent& E) { Events->OnBalanceSignChanged.Broadcast(E.bOverdrawn); });
 
-	// THE PURCHASE TOASTS - through the notification face every other toast uses, not a delegate of their
-	// own (§6 deviation 4: nothing would bind one; the inspector re-reads the quote anyway).
+	// THE PURCHASE TOASTS - through one typed face, FOpsPurchase (§6 deviation 4 kept: nothing would bind a delegate per event,
+	// and the inspector re-reads the quote anyway). THE FACTS AND THE NOUNS GO, THE SENTENCES DO NOT (#445 item 7): each name
+	// is its owner's one function - FServiceFleet::NameOf, the offer's DisplayName/PluralName, UPricing::Format - and the
+	// toast widget words them. These handlers used to build "Bought <name> - <price>" here, beside a widget whose job is to
+	// decide the player's words.
+	// ENFORCED BY: Check-Architecture rule 4 ('one-string dynamic delegate (a sentence face)'), AirportMgr.UI.ToastsWordSavesAndPurchases
 	Bus.Subscribe<FFleetChangedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"), [this](const FFleetChangedEvent& E)
 	{
-		// A SEEDED VEHICLE IS NOT NEWS: the player did nothing and nothing was paid. A WITHDRAWN one is (#443): its depot
-		// went and the fleet's door credited it, and the feed should say where that money came from.
-		if (E.Change == EFleetChange::Seeded)
+		// A SEEDED VEHICLE IS NOT A PURCHASE: the player did nothing and nothing was paid, so there is nothing to tell them. A
+		// WITHDRAWN one is (#443): its depot went and the fleet's door credited it, and the feed should say where that money
+		// came from. NOT A FILTER ON WORDS, which would be the widget's: a seeding changed no hands, so it is not on the face.
+		FOpsPurchase Purchase;
+		if (!PurchaseKindOf(E.Change, Purchase.Kind))
 		{
 			return;
 		}
-		const FString Name = FServiceFleet::NameOf(*JobBoard, E.TypeCode).ToString();
-		const FString Money = Pricing->Format(E.Amount).ToString();
-		if (E.Change == EFleetChange::Withdrawn)
-		{
-			Events->NotifyNotification(E.Amount > 0.0
-				? FString::Printf(TEXT("Depot removed \u2014 %s credited %s"), *Name, *Money)
-				: FString::Printf(TEXT("Depot removed \u2014 %s withdrawn"), *Name));
-			return;
-		}
-		// A SALE WORTH NOTHING SAYS NO MONEY (#487: a seeded vehicle fetches no resale), the way a removal that credited nothing says
-		// "withdrawn" rather than "credited $0".
-		if (E.Change == EFleetChange::Sold && E.Amount <= 0.0)
-		{
-			Events->NotifyNotification(FString::Printf(TEXT("Sold %s"), *Name));
-			return;
-		}
-		Events->NotifyNotification(FString::Printf(TEXT("%s %s \u2014 %s"),
-			E.Change == EFleetChange::Bought ? TEXT("Bought") : TEXT("Sold"), *Name, *Money));
+		Purchase.Name = FServiceFleet::NameOf(*JobBoard, E.TypeCode);
+		// A SALE WORTH NOTHING SAYS NO MONEY (#487: a seeded vehicle fetches no resale), the way a removal that credited nothing
+		// says "withdrawn" rather than "credited $0" - the widget reads Amount for that, so it travels as posted.
+		Purchase.Amount = E.Amount;
+		Purchase.Money = Pricing->Format(E.Amount);
+		Events->NotifyPurchase(Purchase);
 	});
 	Bus.Subscribe<FFacilityUpgradedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"), [this](const FFacilityUpgradedEvent& E)
 	{
 		const FModuleOffer* Offer = FacilityPurchases->ModuleOffers.Find(E.Module);
-		const FString Name = Offer != nullptr ? Offer->DisplayName.ToString() : UEnum::GetValueAsString(E.Module);
-		Events->NotifyNotification(FString::Printf(TEXT("Bought %s \u2014 %s"), *Name, *Pricing->Format(E.Amount).ToString()));
+		FOpsPurchase Purchase;
+		Purchase.Kind = EOpsPurchaseKind::ModuleBought;
+		Purchase.Name = Offer != nullptr ? Offer->DisplayName : FText::FromString(UEnum::GetValueAsString(E.Module));
+		Purchase.Amount = E.Amount;
+		Purchase.Money = Pricing->Format(E.Amount);
+		Events->NotifyPurchase(Purchase);
 	});
 	// THE REPAIR'S TOAST, A WARNING (#266): the player did not ask for it, and the depot now holds less than it did. The log's
-	// Warning (RemoveUnseated's) carries the depot and the counts; this is what the player reads.
-	// ENFORCED BY: AirportOps.Present.Facility.RepairRemovesAndRefundsUnseated ("the toast"), AirportMgr.UI.ToastsSayAlertsAndRefusals
+	// Warning (RemoveUnseated's) carries the depot and the counts; the toast is what the player reads, and its severity is the
+	// widget's to give, by EOpsPurchaseKind::ModulesRefunded.
+	// ENFORCED BY: AirportOps.Present.Facility.RepairRemovesAndRefundsUnseated ("the toast"), AirportMgr.UI.ToastsWordSavesAndPurchases
 	Bus.Subscribe<FModulesRefundedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"), [this](const FModulesRefundedEvent& E)
 	{
 		const FModuleOffer* Offer = FacilityPurchases->ModuleOffers.Find(E.Module);
+		FOpsPurchase Purchase;
+		Purchase.Kind = EOpsPurchaseKind::ModulesRefunded;
 		// THE OFFER'S OWN WORDS, singular or plural as data (FModuleOffer::PluralName), not an appended "s".
-		const FString Name = Offer == nullptr ? UEnum::GetValueAsString(E.Module)
-			: (E.Count == 1 ? Offer->DisplayName : Offer->PluralName).ToString();
-		Events->NotifyWarning(E.Amount > 0.0
-			? FString::Printf(TEXT("No room on its plot \u2014 %d %s removed, %s refunded"), E.Count, *Name, *Pricing->Format(E.Amount).ToString())
-			: FString::Printf(TEXT("No room on its plot \u2014 %d %s removed"), E.Count, *Name));
+		Purchase.Name = Offer == nullptr ? FText::FromString(UEnum::GetValueAsString(E.Module))
+			: (E.Count == 1 ? Offer->DisplayName : Offer->PluralName);
+		Purchase.Count = E.Count;
+		Purchase.Amount = E.Amount;
+		Purchase.Money = Pricing->Format(E.Amount);
+		Events->NotifyPurchase(Purchase);
 	});
 
 	Bus.EndWiring();
@@ -843,38 +870,47 @@ TArray<UOpsRuntime::FAirsideBridge> UOpsRuntime::AirsideBridges()
 				[&Runtime](const FAgentTransition& Transition) { Runtime.Bus.Publish(FAgentPhaseEvent{ Transition }); });
 		},
 		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UAirsideTraffic* Traffic = Actor.GetTraffic()) { Traffic->OnAgentPhaseChanged.Remove(Handle); } } });
+	// THE FOUR PURE NOTIFICATIONS ARE BOUND ON THEIR OWNER, the traffic model (#445 item 6): UAirsideTraffic used to re-declare and
+	// re-broadcast each from a one-line handler that added nothing, so these bound a relay of a relay. Only AgentPhase stays on the
+	// presenter, whose relay adds the view (see UAirsideTraffic::OnAgentPhaseChanged). Asked for through the actor's GetGroundTraffic()
+	// at the moment of the bind, and again on the way back, rather than held: the presenter owns which model it has.
+	// ENFORCED BY: AirportOps.Present.Bus.ReattachDoesNotDouble (broadcasts each on the model), Check-Architecture rule 87
 	Out.Add({ TEXT("ArrivalRefused"),
 		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
 		{
-			return Actor.GetTraffic()->OnArrivalRefused.AddWeakLambda(&Runtime,
+			UGroundTraffic* Model = Actor.GetGroundTraffic();
+			return Model == nullptr ? FDelegateHandle() : Model->OnArrivalRefused.AddWeakLambda(&Runtime,
 				[&Runtime](EArrivalRefusal Why) { Runtime.Bus.Publish(FArrivalRefusedEvent{ Why }); });
 		},
-		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UAirsideTraffic* Traffic = Actor.GetTraffic()) { Traffic->OnArrivalRefused.Remove(Handle); } } });
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UGroundTraffic* Model = Actor.GetGroundTraffic()) { Model->OnArrivalRefused.Remove(Handle); } } });
 
 	// AIRSIDE'S DERIVED FREEDOM (ops batch 3 §5) - Airside never learns ops exists; it fires native delegates and these bridge them.
 	// ENFORCED BY: Check-Architecture rule 1b (cross-plugin) for "never learns"; AirportOps.Present.Bus.FreedIsBridged for the bridges
 	Out.Add({ TEXT("RunwayFreed"),
 		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
 		{
-			return Actor.GetTraffic()->OnRunwayFreed.AddWeakLambda(&Runtime,
+			UGroundTraffic* Model = Actor.GetGroundTraffic();
+			return Model == nullptr ? FDelegateHandle() : Model->OnRunwayFreed.AddWeakLambda(&Runtime,
 				[&Runtime](FRoadSegmentId Seed) { Runtime.Bus.Publish(FRunwayFreedEvent{ Seed }); });
 		},
-		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UAirsideTraffic* Traffic = Actor.GetTraffic()) { Traffic->OnRunwayFreed.Remove(Handle); } } });
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UGroundTraffic* Model = Actor.GetGroundTraffic()) { Model->OnRunwayFreed.Remove(Handle); } } });
 	Out.Add({ TEXT("StandsFreed"),
 		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
 		{
-			return Actor.GetTraffic()->OnStandsFreed.AddWeakLambda(&Runtime,
+			UGroundTraffic* Model = Actor.GetGroundTraffic();
+			return Model == nullptr ? FDelegateHandle() : Model->OnStandsFreed.AddWeakLambda(&Runtime,
 				[&Runtime](const TArray<FGuidelineNodeId>& PoseNodes) { Runtime.Bus.Publish(FStandsFreedEvent{ PoseNodes }); });
 		},
-		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UAirsideTraffic* Traffic = Actor.GetTraffic()) { Traffic->OnStandsFreed.Remove(Handle); } } });
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UGroundTraffic* Model = Actor.GetGroundTraffic()) { Model->OnStandsFreed.Remove(Handle); } } });
 	// ENFORCED BY: AirportOps.Present.Bus.PushGroundFreedIsBridged
 	Out.Add({ TEXT("PushGroundFreed"),
 		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
 		{
-			return Actor.GetTraffic()->OnPushGroundFreed.AddWeakLambda(&Runtime,
+			UGroundTraffic* Model = Actor.GetGroundTraffic();
+			return Model == nullptr ? FDelegateHandle() : Model->OnPushGroundFreed.AddWeakLambda(&Runtime,
 				[&Runtime](int32 AgentId) { Runtime.Bus.Publish(FPushGroundFreedEvent{ AgentId }); });
 		},
-		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UAirsideTraffic* Traffic = Actor.GetTraffic()) { Traffic->OnPushGroundFreed.Remove(Handle); } } });
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UGroundTraffic* Model = Actor.GetGroundTraffic()) { Model->OnPushGroundFreed.Remove(Handle); } } });
 
 	// "THE NETWORK CHANGED", BRIDGED LIKE THE ABOVE (#446) - it was a per-frame poll in Tick. See OnNetworkChanged, which adds behaviour (Geometry is no change).
 	Out.Add({ TEXT("NetworkChanged"),
@@ -952,6 +988,14 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	for (FAirsideBridge& Bridge : Bridges)
 	{
 		Bridge.Handle = Bridge.Bind(*this, *Target);
+		// A BRIDGE THAT BINDS NOTHING IS SAID, not silent (#499 review): an invalid handle means the actor lacks what the entry
+		// bridges (no facade, no traffic model), and every event of that delegate would then never reach the bus - a deaf board
+		// with nothing in the log to say why. A Warning, not a refusal: the rest of the airport still runs.
+		if (!Bridge.Handle.IsValid())
+		{
+			UE_LOG(LogAirportOps, Warning, TEXT("OpsRuntime: the '%s' bridge bound nothing on %s - its Airside events will not reach the ops bus"),
+				Bridge.Name, *Target->GetName());
+		}
 	}
 
 	// Content is resolved ONCE, here, and applied to the clock and the ledger.
@@ -1470,8 +1514,8 @@ bool UOpsRuntime::SaveToSlot(const FString& SlotName)
 	const TArray<IOpsPersistent*> Saved = Persistents();
 	OpsSave::Capture(Saved, *Target->Network, Snapshot);
 	const bool bOk = OpsSave::WriteSlot(SlotName, Snapshot);
-	Bus.Publish(FNotificationEvent{ bOk ? FString::Printf(TEXT("Saved '%s'"), *SlotName)
-	                                    : FString::Printf(TEXT("Save to '%s' failed"), *SlotName) });
+	// THE CASE, NOT A SENTENCE (#445 item 7): "Save to 'X' failed" used to go out as a plain line and show as Info.
+	Bus.Publish(FSaveSlotEvent{ bOk ? EOpsSaveOutcome::Saved : EOpsSaveOutcome::SaveFailed, SlotName });
 	return bOk;
 }
 
@@ -1595,7 +1639,7 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	FOpsSnapshot Snapshot;
 	if (!OpsSave::ReadSlot(SlotName, Snapshot))
 	{
-		Bus.Publish(FNotificationEvent{ FString::Printf(TEXT("No save '%s'"), *SlotName) });
+		Bus.Publish(FSaveSlotEvent{ EOpsSaveOutcome::NoSave, SlotName });
 		return false;
 	}
 	// Agents first: they were never saved, and one mid-taxi on a network about to be
@@ -1684,6 +1728,6 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	Bus.MarkAllDirty();
 
 	ApplySpeed(Clock->GetSpeed());
-	Bus.Publish(FNotificationEvent{ FString::Printf(TEXT("Loaded '%s'"), *SlotName) });
+	Bus.Publish(FSaveSlotEvent{ EOpsSaveOutcome::Loaded, SlotName });
 	return true;
 }

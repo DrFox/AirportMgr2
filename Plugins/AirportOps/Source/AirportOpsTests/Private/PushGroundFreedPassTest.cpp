@@ -219,7 +219,7 @@ bool FPushGroundFreedBridgedTest::RunTest(const FString&)
 	if (!TestTrue(TEXT("a field and an attached runtime"), Rig.Build(true, 5.0))) { return false; }
 	FOpsEventBus& Bus = Rig.Runtime->GetBus();
 
-	// THROUGH THE MODEL'S OWN DELEGATE, so UAirsideTraffic's relay is part of what is measured.
+	// THROUGH THE MODEL'S OWN DELEGATE: the broadcast is the delegate the bridge binds (#445 item 6).
 	const int32 Before = Bus.QueuedCount();
 	Rig.Model->OnPushGroundFreed.Broadcast(Rig.Aircraft);
 	TestEqual(TEXT("a freed push ground is published onto the bus"), Bus.QueuedCount(), Before + 1);

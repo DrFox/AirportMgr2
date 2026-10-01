@@ -4,6 +4,7 @@
 #include "AirportMgrPanelWidget.h"
 #include "Blueprint/UserWidget.h"
 #include "Model/ArrivalPlanner.h"
+#include "Model/OpsEvents.h"
 #include "NotificationCentre.h"
 #include "ToastStackWidget.generated.h"
 
@@ -164,11 +165,22 @@ private:
 	 *  BuildOnce (see CachedIcon*) rather than LoadSynchronous()'d off the style every call. */
 	UTexture2D* IconFor(ENotificationSeverity Severity) const;
 
-	/** Both are FEED: they happened, they are worth knowing, and they need no decision. */
-	UFUNCTION() void OnNotification(const FString& Text);
 	UFUNCTION() void OnArrivalRefused(EArrivalRefusal Why);
-	/** UOpsEvents::OnWarning: OnNotification's words at ENotificationSeverity::Warning - something the player may act on. */
-	UFUNCTION() void OnWarning(const FString& Text);
+
+	/**
+	 * A save or a load, WORDED HERE (#445 item 7) - it used to arrive as the runtime's own sentence on OnNotification, so a
+	 * failed save looked like a good one and showed as Info. Saved and Loaded are Info (it happened, no decision); SaveFailed
+	 * and NoSave are Warnings - the game did not do what the player asked.
+	 * ENFORCED BY: AirportMgr.UI.ToastsWordSavesAndPurchases
+	 */
+	UFUNCTION() void OnSaveSlot(EOpsSaveOutcome Outcome, const FString& SlotName);
+
+	/**
+	 * A purchase, WORDED HERE from its facts and its owners' nouns (#445 item 7) - the sentences UOpsRuntime used to build.
+	 * Info, except #266's refund: the game removed what the player owned, and they may want to redraw the plot.
+	 * ENFORCED BY: AirportMgr.UI.ToastsWordSavesAndPurchases
+	 */
+	UFUNCTION() void OnPurchase(const FOpsPurchase& Purchase);
 
 	/** Ops alerts (spec 2026-09-29-ops-alerts §3): a standing problem starting is a Warning; its clearing
 	 *  is silent except for Overdrawn, whose end ("back in credit") is news. */

@@ -631,7 +631,7 @@ bool FFacilityRepairWiredTest::RunTest(const FString&)
 	ULedger* Ledger = Runtime->GetLedger();
 	if (!TestEqual(TEXT("setup: the attach's catch-up finds nothing to repair on a depot that seats what it owns"), FacilityWiredRefunds(*Ledger), 0)) { return false; }
 	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
-	Runtime->GetEvents()->OnWarning.AddDynamic(Listener, &UOpsEventsTestListener::OnNote);
+	Runtime->GetEvents()->OnPurchase.AddDynamic(Listener, &UOpsEventsTestListener::OnPurchase);
 
 	// THE PLOT SHRINKS UNDER THE DEPOT: 20 m of frontage centred on the same gate, so the frontage recovered from the pose
 	// is still the road edge and only the room changes.
@@ -667,8 +667,14 @@ bool FFacilityRepairWiredTest::RunTest(const FString&)
 	const FString Expected = FString::Printf(TEXT("depot %d at"), Depot.Index);
 	TestTrue(FString::Printf(TEXT("the log names the depot and the modules (%s)"), *FString::Join(Spy.Lines, TEXT(" | "))),
 		Spy.Lines.ContainsByPredicate([&Expected](const FString& L) { return L.Contains(TEXT("Repair: ")) && L.Contains(Expected) && L.Contains(TEXT("owned 2 Shed")); }));
-	TestTrue(FString::Printf(TEXT("the player is toasted a Warning (%s)"), *FString::Join(Listener->Seen, TEXT(" | "))),
-		Listener->CountOf(TEXT("note:No room on its plot")) == 1);
+	// THE TOAST'S FACTS (#445 item 7: the words and the Warning are the widget's, by the kind - AirportMgr.UI.ToastsWordSavesAndPurchases).
+	TestTrue(FString::Printf(TEXT("the player is toasted the refund (%s)"), *FString::Join(Listener->Seen, TEXT(" | "))),
+		Listener->CountOf(TEXT("buy:ModulesRefunded")) == 1);
+	if (const FOpsPurchase* Refund = Listener->Purchases.FindByPredicate([](const FOpsPurchase& P) { return P.Kind == EOpsPurchaseKind::ModulesRefunded; }))
+	{
+		TestEqual(TEXT("counting the sheds removed"), Refund->Count, 2 - Seats);
+		TestEqual(TEXT("with the refund as posted"), Refund->Amount, (2 - Seats) * 40000.0, 1e-6);
+	}
 	TestEqual(TEXT("upkeep charges only the standing sheds"), Runtime->GetFacilityPurchases()->DailyUpkeep(*Actor->Network).Modules, Seats * 200.0, 1e-9);
 
 	Runtime->Tick(Step);

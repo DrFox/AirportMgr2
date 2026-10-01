@@ -282,6 +282,14 @@ bool FServiceTextBoardForwardsTest::RunTest(const FString& Parameters)
 		TestEqual(*FString::Printf(TEXT("RefusalText forwards refusal %d"), Why),
 			FString(UJobBoard::RefusalText(Refusal)), FString(ServiceText::RefusalText(Refusal)));
 	}
+
+	// THE DEADLINE'S TURNAROUND HALF (#494 review): UJobBoard::NextDeadline is the vehicles' timed steps AND FTurnarounds::NextDeadline,
+	// and #427 moved the second behind a forwarding call that nothing pinned - dropped, the board would book no wake-up for a
+	// turnaround's end, and an aircraft whose service never finished would sit at its stand until some other event came. The bowser
+	// here is Serving with no step booked (StepEndsAt 0, not after Now), so the turnaround staged at +300 s is the only deadline on
+	// the board: the answer is that, or the forwarding is gone. Mutation-checked 2026-10-01: the Turnarounds.NextDeadline call
+	// dropped from UJobBoard::NextDeadline, this went red (the board answered "none", Max double).
+	TestEqual(TEXT("NextDeadline includes the staged turnaround's end - the turnarounds' half forwards"), Board->NextDeadline(Now), Now + 300.0);
 	return true;
 }
 

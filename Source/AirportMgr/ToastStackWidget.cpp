@@ -14,6 +14,7 @@
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "NotificationCentre.h"
+#include "Model/ExhaustiveSwitch.h"
 #include "Model/OpsEvents.h"
 #include "Present/OpsRuntime.h"
 #include "Styling/SlateBrush.h"
@@ -83,8 +84,8 @@ void UToastStackWidget::EnsureSlots(const UUIStyle* Style)
 
 void UToastStackWidget::BindTo(UOpsEvents& Events)
 {
-	Events.OnNotification.AddUniqueDynamic(this, &UToastStackWidget::OnNotification);
-	Events.OnWarning.AddUniqueDynamic(this, &UToastStackWidget::OnWarning);
+	Events.OnSaveSlot.AddUniqueDynamic(this, &UToastStackWidget::OnSaveSlot);
+	Events.OnPurchase.AddUniqueDynamic(this, &UToastStackWidget::OnPurchase);
 	Events.OnArrivalRefused.AddUniqueDynamic(this, &UToastStackWidget::OnArrivalRefused);
 	Events.OnAlertRaised.AddUniqueDynamic(this, &UToastStackWidget::OnAlertRaised);
 	Events.OnAlertCleared.AddUniqueDynamic(this, &UToastStackWidget::OnAlertCleared);
@@ -151,23 +152,80 @@ void UToastStackWidget::OnLandRefused(EArrivalRefusal Why, const FString& Senten
 	OnArrivalRefused(Why);
 }
 
-void UToastStackWidget::OnNotification(const FString& Text)
+// EVERY CASE BY NAME, NO default, in both functions below: an outcome or a purchase kind added to its enum is a BUILD ERROR
+// here (C4062, raised by the macro), not a toast that silently says nothing.
+// ENFORCED BY: C4062 as an error, AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+void UToastStackWidget::OnSaveSlot(EOpsSaveOutcome Outcome, const FString& SlotName)
 {
-	if (Notifications != nullptr)
+	if (Notifications == nullptr)
 	{
-		Notifications->PostFeed(FText::FromString(Text));
+		return;
+	}
+	// THE WORDS UOpsRuntime USED, moved here with the decision (#445 item 7) - and the severity, which a sentence on a
+	// catch-all could not carry: a failed save and a missing one were Info, as plain as a good save.
+	const FText Name = FText::FromString(SlotName);
+	switch (Outcome)
+	{
+	case EOpsSaveOutcome::Saved:
+		Notifications->PostFeed(FText::Format(NSLOCTEXT("AirportMgr", "Saved", "Saved '{0}'"), Name), ENotificationSeverity::Info);
+		return;
+	case EOpsSaveOutcome::SaveFailed:
+		// A WARNING: the save the player asked for did not happen, and the airport is not on disk.
+		Notifications->PostFeed(FText::Format(NSLOCTEXT("AirportMgr", "SaveFailed", "Save to '{0}' failed"), Name), ENotificationSeverity::Warning);
+		return;
+	case EOpsSaveOutcome::Loaded:
+		Notifications->PostFeed(FText::Format(NSLOCTEXT("AirportMgr", "Loaded", "Loaded '{0}'"), Name), ENotificationSeverity::Info);
+		return;
+	case EOpsSaveOutcome::NoSave:
+		// A WARNING, as a refusal is (OnArrivalRefused's reason): the load the player asked for found nothing to load.
+		Notifications->PostFeed(FText::Format(NSLOCTEXT("AirportMgr", "NoSave", "No save '{0}'"), Name), ENotificationSeverity::Warning);
+		return;
 	}
 }
 
-void UToastStackWidget::OnWarning(const FString& Text)
+void UToastStackWidget::OnPurchase(const FOpsPurchase& Purchase)
 {
-	// OnNotification's line at the Warning severity: the game did something to the player's airport they did not ask for
-	// (#266's repair - modules with no room removed and refunded), and they may want to redraw the plot.
-	if (Notifications != nullptr)
+	if (Notifications == nullptr)
 	{
-		Notifications->PostFeed(FText::FromString(Text), ENotificationSeverity::Warning);
+		return;
+	}
+	// A FIGURE ONLY WHEN MONEY MOVED (#487): a sale or a removal worth nothing says so in words - "Sold X", "X withdrawn" -
+	// rather than "credited $0". The nouns are the owners' (see FOpsPurchase); the sentences were UOpsRuntime's until #445.
+	const bool bPaid = Purchase.Amount > 0.0;
+	switch (Purchase.Kind)
+	{
+	case EOpsPurchaseKind::VehicleBought:
+	case EOpsPurchaseKind::ModuleBought:
+		Notifications->PostFeed(FText::Format(NSLOCTEXT("AirportMgr", "Bought", "Bought {0} — {1}"), Purchase.Name, Purchase.Money),
+			ENotificationSeverity::Info);
+		return;
+	case EOpsPurchaseKind::VehicleSold:
+		Notifications->PostFeed(bPaid
+			? FText::Format(NSLOCTEXT("AirportMgr", "Sold", "Sold {0} — {1}"), Purchase.Name, Purchase.Money)
+			: FText::Format(NSLOCTEXT("AirportMgr", "SoldForNothing", "Sold {0}"), Purchase.Name), ENotificationSeverity::Info);
+		return;
+	case EOpsPurchaseKind::VehicleWithdrawn:
+		// A WITHDRAWN VEHICLE IS NEWS (#443): its depot went and the fleet's door credited it, and the feed says where that
+		// money came from.
+		Notifications->PostFeed(bPaid
+			? FText::Format(NSLOCTEXT("AirportMgr", "DepotRemovedCredited", "Depot removed — {0} credited {1}"), Purchase.Name, Purchase.Money)
+			: FText::Format(NSLOCTEXT("AirportMgr", "DepotRemovedWithdrawn", "Depot removed — {0} withdrawn"), Purchase.Name),
+			ENotificationSeverity::Info);
+		return;
+	case EOpsPurchaseKind::ModulesRefunded:
+		// THE REPAIR'S TOAST, A WARNING (#266): the player did not ask for it, the depot now holds less than it did, and they
+		// may want to redraw the plot. The log's Warning (RemoveUnseated's) carries the depot and the counts.
+		Notifications->PostFeed(bPaid
+			? FText::Format(NSLOCTEXT("AirportMgr", "ModulesRefunded", "No room on its plot — {0} {1} removed, {2} refunded"),
+				FText::AsNumber(Purchase.Count), Purchase.Name, Purchase.Money)
+			: FText::Format(NSLOCTEXT("AirportMgr", "ModulesRemoved", "No room on its plot — {0} {1} removed"),
+				FText::AsNumber(Purchase.Count), Purchase.Name),
+			ENotificationSeverity::Warning);
+		return;
 	}
 }
+AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 void UToastStackWidget::OnArrivalRefused(EArrivalRefusal Why)
 {

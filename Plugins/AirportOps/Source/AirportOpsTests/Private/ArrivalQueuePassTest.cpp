@@ -125,7 +125,7 @@ bool FArrivalQueueFreedBridgedTest::RunTest(const FString&)
 	if (!TestTrue(TEXT("an attached runtime"), Rig.Attach([](URoadNetwork&) {}))) { return false; }
 	FOpsEventBus& Bus = Rig.Runtime->GetBus();
 
-	// THROUGH THE MODEL'S OWN DELEGATES, so the relay on UAirsideTraffic is part of what is measured.
+	// THROUGH THE MODEL'S OWN DELEGATES: the broadcast is the delegate the bridge binds (#445 item 6).
 	const int32 Before = Bus.QueuedCount();
 	Rig.Model->OnRunwayFreed.Broadcast(FRoadSegmentId());
 	TestEqual(TEXT("a freed runway is published onto the bus"), Bus.QueuedCount(), Before + 1);

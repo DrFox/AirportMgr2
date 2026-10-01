@@ -23,9 +23,10 @@ enum class EDepartureRefusal : uint8;
  * who is mid-journey without being the graph itself (an agent is a thing part way through a
  * trip, not a fact about the airport) or the mesh (agents share no geometry with the pavement
  * they drive on) - but none of that needs a world, so M2 moved it down to Model/ where a test
- * can NewObject it. What is left here is the VIEW REGISTRY and the relay: the same shape the
- * ops plugin's own runtime object has above it - a Present-layer object that owns actors and
- * re-broadcasts a world-free model's events to the game module.
+ * can NewObject it. What is left here is the VIEW REGISTRY and the one relay that adds to it -
+ * the phase event, which spawns and destroys the cubes (see OnAgentPhaseChanged). The model's
+ * other events are not relayed: a listener binds UGroundTraffic's own delegates through
+ * GetModel() (#445 - see the note where the four relays were).
  *
  * A UCLASS(UObject) rather than a plain C++ class because Views holds UObject pointers the
  * garbage collector must trace - a plain class holding TObjectPtr fields with no UPROPERTY
@@ -69,36 +70,39 @@ public:
 	 * onto its own Blueprint-facing bus. Making this one dynamic too would be two Blueprint
 	 * surfaces for one fact.
 	 *
-	 * RELAYED from UGroundTraffic::OnAgentPhaseChanged. AirportOps binds HERE, not to the
-	 * model: the game module reaches the airport through the actor, and a subscriber that
-	 * had to walk down into Model/ would be reaching past the composition root.
+	 * RELAYED from UGroundTraffic::OnAgentPhaseChanged, and THE ONE RELAY LEFT, because it ADDS
+	 * BEHAVIOUR: OnModelPhaseChanged spawns the agent's cube before it re-broadcasts Gone -> X and
+	 * destroys it before X -> Gone, so a listener that asks GetAgentView in the handler finds the
+	 * view the event describes. A listener bound to the model directly gets no such order: UE 5.8
+	 * broadcasts a multicast delegate in REVERSE bind order and a removal reorders the list
+	 * (MulticastDelegateBase.h, "call bound functions in reverse order", RemoveAtSwap - read
+	 * 2026-10-01), so one bound after this object hears the birth before the view exists.
+	 * AirportOps binds here for the same delegate's sake, through its bridge table.
+	 * ENFORCED BY: Airside.Present.PhaseRelayShowsTheViewFirst (the order), Check-Architecture rule 87
+	 * (relay-adds-behaviour: the relay still calls SpawnView and DestroyView)
 	 *
-	 * THE MODEL'S OWN SIGNATURE, the whole FAgentTransition (#436): the relay passes the value on and adds nothing,
+	 * THE MODEL'S OWN SIGNATURE, the whole FAgentTransition (#436): the relay passes the value on unchanged,
 	 * so the Cause the model built reaches ops unchanged - a relay that re-packed it would be the second place a
 	 * transition is described.
 	 */
 	using FOnAgentPhaseChanged = UGroundTraffic::FOnAgentPhaseChanged;
 	FOnAgentPhaseChanged OnAgentPhaseChanged;
 
-	/** Fired when DispatchArrival refuses, with the planner's reason. Relayed from the model,
-	 *  which logs it too. */
-	DECLARE_MULTICAST_DELEGATE_OneParam(FOnArrivalRefused, EArrivalRefusal);
-	FOnArrivalRefused OnArrivalRefused;
+	// THE FOUR PURE RELAYS ARE GONE (#445 item 6): OnArrivalRefused, OnRunwayFreed, OnStandsFreed and OnPushGroundFreed were
+	// re-declared here and re-broadcast from one-line handlers that added nothing. Each Airside event cost a declaration, a
+	// handler and a bind on this layer besides the model's own - hand-paired, the five binds guarded by IsBoundToObject of the
+	// FIRST alone - and PushGroundFreed (2026-09-30) touched about twelve sites. Their reason for existing here ("the airport
+	// is reached through the actor, not down into Model/") no longer held on 2026-10-01: the ops layer read the model directly
+	// for every pass already. A listener binds UGroundTraffic's delegate through GetModel(), or the actor's GetGroundTraffic(),
+	// which forwards to it - the ops plugin's bridges do.
+	// ENFORCED BY: Check-Architecture rule 87 (relay-adds-behaviour: no delegate here but a relay that adds behaviour)
 
-	/** A runway's strip freed - relayed from UGroundTraffic::OnRunwayFreed, which see. AirportOps binds here
-	 *  for OnAgentPhaseChanged's reason: the airport is reached through the actor, not down into Model/. */
-	DECLARE_MULTICAST_DELEGATE_OneParam(FOnRunwayFreed, FRoadSegmentId /*Seed*/);
-	FOnRunwayFreed OnRunwayFreed;
-
-	/** Stand pose nodes freed - relayed from UGroundTraffic::OnStandsFreed, which see. */
-	DECLARE_MULTICAST_DELEGATE_OneParam(FOnStandsFreed, const TArray<FGuidelineNodeId>& /*PoseNodes*/);
-	FOnStandsFreed OnStandsFreed;
-
-	/** A parked aircraft's push no longer blocked - relayed from UGroundTraffic::OnPushGroundFreed, which see. */
-	DECLARE_MULTICAST_DELEGATE_OneParam(FOnPushGroundFreed, int32 /*AgentId*/);
-	FOnPushGroundFreed OnPushGroundFreed;
-
-	/** The agents themselves, for a caller that wants the model rather than the view. */
+	/**
+	 * The agents themselves, for a caller that wants the model rather than the view - and THE DOOR TO THE MODEL'S
+	 * NOTIFICATIONS (#445): OnArrivalRefused, OnRunwayFreed, OnStandsFreed, OnPushGroundFreed are bound here, on the model.
+	 * BIND AFTER CONSTRUCTION, for PostInitProperties' reason: that is where a duplicate's Model is put back on its own
+	 * subobject, so a binding taken through this before it would be a binding to the CDO's model.
+	 */
 	UGroundTraffic* GetModel() const { return Model; }
 
 	/** Id of the most recently dispatched agent, or 0 when nothing is under way. */
@@ -298,14 +302,11 @@ private:
 	/** See TouchdownsShownForTest. A session counter: not saved, not a UPROPERTY. */
 	int32 TouchdownsShown = 0;
 
+	/** The phase relay: the view first (spawn on Gone -> X, destroy on X -> Gone), then OnAgentPhaseChanged. */
 	void OnModelPhaseChanged(const FAgentTransition& Transition);
 
 	/** One touchdown moment's smoke, at the pose the moment carries - see UGroundTraffic::GetMomentsThisAdvance. */
 	void ShowTouchdown(const FAgentTransition& Moment);
-	void OnModelArrivalRefused(EArrivalRefusal Why);
-	void OnModelRunwayFreed(FRoadSegmentId Seed);
-	void OnModelStandsFreed(const TArray<FGuidelineNodeId>& PoseNodes);
-	void OnModelPushGroundFreed(int32 AgentId);
 
 	void SpawnView(int32 AgentId);
 	void DestroyView(int32 AgentId);

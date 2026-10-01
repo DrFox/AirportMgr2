@@ -953,6 +953,31 @@ $AllowedCallers = @(
         ProdReason  = 'bind through UOpsRuntime (it publishes into the ops bus; handlers run a drain later) - a production listener that acts inside the broadcast re-enters UGroundTraffic mid-Advance (#436, #193)'
     },
     @{
+        # THE CATCH-ALL TOAST IS RETIRED (#445 item 7). FNotificationEvent{FString} carried "Saved 'X'", "Save to 'X' failed" and
+        # "No save 'X'" as English lines from UOpsRuntime, so the toast widget - the one place that claims to decide what the
+        # player is told - could not tell a failed save from a good one, and showed both as Info. A save or a load is an
+        # FSaveSlotEvent now (an EOpsSaveOutcome and the slot), a purchase an FOpsPurchase, and the widget words both. Nothing
+        # brings the catch-all back, a test included: the bus's own tests publish FSaveSlotEvent instead.
+        Name        = 'FNotificationEvent (retired)'
+        Pattern     = '\bFNotificationEvent\b'
+        ProdAllowed = @()
+        ProdReason  = 'publish a typed event (FSaveSlotEvent, or a new one carrying the facts) and word it in UToastStackWidget (#445)'
+        TestReason  = 'the catch-all is gone - publish a typed event (#445)'
+    },
+    @{
+        # NO ONE-STRING FACE (#445 item 7): a dynamic delegate whose one argument is an FString is a sentence its publisher
+        # decided - UOpsEvents::OnNotification and OnWarning were, and every save, load and purchase toast they carried was
+        # worded in UOpsRuntime. A face carries facts (an enum, a USTRUCT, the nouns their owners name) and the toast widget
+        # composes the sentence. FOpsLandRefused (Airside's refusal sentence BESIDE its reason, #456 review) and FOpsBuildRefused
+        # (three nouns) are not one-string faces. FString OR FText, by reference OR by value (#499 review): an FText sentence is
+        # the same catch-all, localised.
+        Name        = 'one-string dynamic delegate (a sentence face)'
+        Pattern     = 'DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam\s*\(\s*\w+\s*,\s*(?:const\s+)?(?:FString|FText)\s*&?\s*,'
+        ProdAllowed = @()
+        TestExempt  = $true
+        ProdReason  = 'carry the facts (an enum, a USTRUCT) and let the toast widget word them (#445)'
+    },
+    @{
         # A ONE-SUBSTEP EDGE IS READ ON THE SUBSTEP (#446). FLandingRun::bTouchedDown is true for the one Advance that put
         # the wheels down; UAirsideTraffic read it once a FRAME, after up to 32 substeps, and lost the smoke of three
         # landings in four at x8. FRoadAgent::Advance reads it on the call that set it and reports EAgentEvent::TouchedDown,
@@ -4688,27 +4713,49 @@ $ranRules.Add('bus-reentry-guarded')
 # Every line counts, a WHY comment included (rule 49's reason: a budget must not be gameable by deleting one).
 # RoadNetwork.cpp's figure was raised 2200 -> 2287 by #495 (#490/#450 load migrations: the depot number backfill, EnsureStandFrontages and the stand-entrance
 # default in PlaceEntity, each with its WHY comment) - the one raise, named in the row, that this rule's (a) asks for.
-# THE FIGURES ARE 2026-10-01's, measured after #427's extraction (JobBoard.cpp 1549 -> 1048, with #491's lines rebased in). The default is 800: on that
+# THE FIGURES ARE 2026-10-01's, measured after #427's extraction (JobBoard.cpp 1558 at main 9bb30096 -> 1048 at d2bb63cd,
+# #491's lines included). The default is 800: on that
 # date the largest Model file under it was VehicleFit.cpp at 768, so no file was given room it had never had.
 # DOES NOT SEE: a responsibility added to a NEW file beside the old one (which is the extraction this wants, and review's to
 # judge), a header, or a Public\ file. Nor does it see a function moved to a sibling .cpp of the same class to dodge a
 # figure - JobBoardBid.cpp and JobBoardDrive.cpp are held by the default like any other file.
+# EACH ROW CARRIES ITS DATED REASON (#494 review): what the file held on the date it was measured, and why that was not yet
+# split - so a raise has a sentence to argue with, and a row whose reason has gone stale is visibly so.
 $modelLineDefault = 800
 $modelLineSlack = 50
 $modelLineBudget = [ordered]@{
-    'Plugins\Airside\Source\Airside\Private\Model\RoadNetwork.cpp'            = 2287   # raised from 2200 by #495: #490/#450 load migrations (depot backfill in EnsureStandNumbers, EnsureStandFrontages, the stand-entrance default in PlaceEntity)
-    # 2026-10-01 #444: lowered from 2121 - the retry pass and its two arms went to GroundTrafficWaiters.cpp (one responsibility).
+    # 2026-10-01: the graph's whole authoring and query surface (111 member definitions - nodes, segments, entities, runway
+    # facts, restore). One class's API, not a pile of responsibilities; no extraction named yet. RAISED 2200 -> 2287 the same
+    # day by #495: #490/#450 load migrations (depot backfill in EnsureStandNumbers, EnsureStandFrontages, the stand-entrance
+    # default in PlaceEntity).
+    'Plugins\Airside\Source\Airside\Private\Model\RoadNetwork.cpp'            = 2287
+    # 2026-10-01: the traffic Mediator - dispatch, Announce, goals, depart, holds, Advance and the freed diff. #429 and #436
+    # took route changes and transitions to one door each; the rebuild half already lives in GroundTrafficRebuild.cpp.
+    # LOWERED 2121 -> 1954 the same day by #444: the retry pass and its two arms went to GroundTrafficWaiters.cpp (one
+    # responsibility).
     'Plugins\Airside\Source\Airside\Private\Model\GroundTraffic.cpp'          = 1954
+    # 2026-10-01: the claim arbiter, one algorithm (Run and its windows, crossings and ranking - 13 functions, long ones);
+    # splitting it would scatter one invariant across files.
     'Plugins\Airside\Source\Airside\Private\Model\TrafficClaims.cpp'          = 1898
+    # 2026-10-01: a flight's lifecycle - offers, quotes, accept, the arrival queue, cancels, restore, fees (50 member
+    # definitions); one class's state machine, not yet split.
     'Plugins\AirportOps\Source\AirportOps\Private\Model\FlightBoard.cpp'      = 1746
-    # 2026-10-01 #444: raised from 1583. The wait's one door (WaitFor/EndWait, in place of three flag mutators and a bare write) and
-    # the exhaustive-switch reasons on DescribeMotion and Advance (a phase added is a build error there now). No natural cut: what
-    # is left of the size is Advance's per-phase arms and the engine/gear state, the struct's own; a sibling file would only dodge.
+    # 2026-10-01: one agent's follower - engine, gear, taxi, tow, pushback and reverse legs (32 member definitions); one
+    # struct's motion, not yet split. RAISED 1583 -> 1610 the same day by #444: the wait's one door (WaitFor/EndWait, in place
+    # of three flag mutators and a bare write) and the exhaustive-switch reasons on DescribeMotion and Advance (a phase added is
+    # a build error there now). No natural cut: what is left of the size is Advance's per-phase arms and the engine/gear
+    # state, the struct's own; a sibling file would only dodge.
     'Plugins\Airside\Source\Airside\Private\Model\RoadAgent.cpp'              = 1610
-    # 2026-10-01 #444: raised from 1582 - the retarget branch's guard for a held departure, with its reason and its test.
+    # 2026-10-01: re-resolution after a graph rebuild (splice, re-resolve, rescue) - already the extraction out of
+    # GroundTraffic.cpp; 7 functions, each long. RAISED 1582 -> 1589 the same day by #444: the retarget branch's guard for a
+    # held departure, with its reason and its test.
     'Plugins\Airside\Source\Airside\Private\Model\GroundTrafficRebuild.cpp'   = 1589
+    # 2026-10-01: the route search (A* over the guideline graph, plan building, run description) - one algorithm.
     'Plugins\Airside\Source\Airside\Private\Model\RouteSearch.cpp'            = 1191
+    # 2026-10-01: what #427 left of UJobBoard - the jobs, the vehicles' lifecycle and Step's one sequence; bidding and
+    # driving are already JobBoardBid.cpp and JobBoardDrive.cpp.
     'Plugins\AirportOps\Source\AirportOps\Private\Model\JobBoard.cpp'         = 1048
+    # 2026-10-01: the ArrivalPlanner namespace - runway, exit and stand choice for one arrival; one planner, not yet split.
     'Plugins\Airside\Source\Airside\Private\Model\ArrivalPlanner.cpp'         = 943
 }
 $modelLineFiles = @()
@@ -4760,33 +4807,53 @@ $ranRules.Add('model-line-budget')
 # turnaround) each called StandAtNode for itself, behind different gates - the flight board on To == Parked, the job board on
 # the Parked cause - so the two derivations of one fact agreed only while the traffic model kept reporting every Parked phase
 # with the Parked cause. FTurnarounds::BeganAt is the one derivation now. THE SHAPE removed is a second call, so:
-#  (a) `StandAtNode(` appears in production code only in Flight.h (the declaration), Flight.cpp (the definition) and
-#      Turnarounds.cpp (BeganAt) - comments and strings stripped, test files exempt (a test helper may ask a node);
+#  (a) `StandAtNode(` appears in production code only ON its declaration line in Flight.h, ON its definition line in
+#      Flight.cpp, and INSIDE FTurnarounds::BeganAt's body in Turnarounds.cpp - comments and strings stripped, test files
+#      exempt (a test helper may ask a node). BY LINE AND BY FUNCTION, not by file (#494 review): a file allow-list let a
+#      second call into Flight.cpp - FlightPhaseFromTransition asking the node for itself, the very derivation BeganAt
+#      replaced - or into any other function of Turnarounds.cpp, and the rule stayed green. "Which function" is
+#      Get-ArchDefinition, as (b) reads it; a declaration or definition line is one at column 0 that Get-ArchDefinition
+#      names StandAtNode;
 #  (b) both boards READ the one derivation: `FTurnarounds::BeganAt(` / `BeganAt(` is called inside UFlightBoard::OnAgentPhase
 #      (FlightBoard.cpp) and inside FTurnarounds::OnAircraftPhase (Turnarounds.cpp);
 #  (c) THE FRIEND TOUCHES WHAT IT WAS LET IN FOR. FTurnarounds is a friend of UJobBoard (as FServiceFleet is), and a friend
-#      sees every private member - so every `Board.X` / `Board->X` in Turnarounds.cpp names a member of $beganBoardReach:
+#      sees every private member - so every `R.X` / `R->X` in Turnarounds.cpp AND Turnarounds.h, where R is `Board` or any
+#      name either file declares as a `UJobBoard&` / `UJobBoard*` (a parameter renamed `Jobs`, an alias), names a member
+#      of $beganBoardReach (#494 review: the identifier Board alone let a renamed parameter, or an inline body in the
+#      header, reach anything):
 #      the counter it moves (RevisionCount), the two job doors (OpenJob, DropJobsOf), and the board's public reads and
 #      wiring. A write of the board's Jobs, Vehicles or NextJobId, a vehicle transition (Lifecycle) or a recall from here
 #      would put a second owner on the jobs - the shape #427 took apart.
-# WHAT NO REGEX SEES: a third board deriving the fact some other way (reading the live agent's goal, say). The behaviour
+# WHAT NO REGEX SEES: a third board deriving the fact some other way (reading the live agent's goal, say), and in (c) a
+# receiver reached through `auto&` or a member pointer rather than a declared UJobBoard reference. The behaviour
 # half is AirportOps.Model.Turnarounds.BothBoardsBeginAtTheOneStand, and the stale-goal half AirportOps.Model.Bus.SameFrameRedirectStaysTaxiIn.
-$beganAllowed = @('Public\Model\Flight.h', 'Private\Model\Flight.cpp', 'Private\Model\Turnarounds.cpp')
+# MUTATION-CHECKED 2026-10-01, each red alone: StandAtNode called inside FlightPhaseFromTransition (Flight.cpp) and inside a
+# second Turnarounds.cpp function; a `UJobBoard& Jobs` parameter writing Jobs.Vehicles in Turnarounds.cpp; an inline
+# Board.NextJobId read in Turnarounds.h.
+$beganDeclarers = @('Public\Model\Flight.h', 'Private\Model\Flight.cpp')
+$beganReader = 'Private\Model\Turnarounds.cpp'
 $beganFiles = 0
 foreach ($tree in $trees) {
     foreach ($file in Get-Sources $tree @('.cpp', '.h')) {
         if ($file.Name -like '*Test.cpp' -or $file.Name -like '*Test.h' -or $file.Name -like '*TestHelpers.h' -or $file.FullName -match '[\\/](Testing|AirsideTests|AirportOpsTests)[\\/]') { continue }
         $beganFiles++
-        $allowed = $false
-        foreach ($suffix in $beganAllowed) { if (Test-AllowedPathSuffix $file $suffix) { $allowed = $true; break } }
-        if ($allowed) { continue }
+        $isDeclarer = $false
+        foreach ($suffix in $beganDeclarers) { if (Test-AllowedPathSuffix $file $suffix) { $isDeclarer = $true; break } }
+        $isReader = Test-AllowedPathSuffix $file $beganReader
         $lines = Get-Content -LiteralPath $file.FullName
         $inBlock = $false
+        $current = ''
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
-            if ($code -match '\bStandAtNode\s*\(') {
-                $failures.Add("turnaround-began-once: $($file.FullName):$($i + 1) calls StandAtNode - ask FTurnarounds::BeganAt, the one derivation of 'a turnaround began' both boards read (#427): $($code.Trim())")
-            }
+            $def = Get-ArchDefinition $code
+            if ($null -ne $def) { $current = $def }
+            if ($code -notmatch '\bStandAtNode\s*\(') { continue }
+            # THE DECLARATION OR DEFINITION ITSELF: at column 0, and the name Get-ArchDefinition reads off it is StandAtNode.
+            if ($isDeclarer -and $def -eq 'StandAtNode' -and $code -match '^[A-Za-z_]') { continue }
+            # THE ONE READER: inside BeganAt's body, by the function the line sits in.
+            if ($isReader -and $current -eq 'FTurnarounds::BeganAt') { continue }
+            $where = if ($current -ne '') { " (in $current)" } else { '' }
+            $failures.Add("turnaround-began-once: $($file.FullName):$($i + 1) calls StandAtNode$where - ask FTurnarounds::BeganAt, the one derivation of 'a turnaround began' both boards read (#427): $($code.Trim())")
         }
     }
 }
@@ -4821,28 +4888,122 @@ foreach ($reader in @(
     }
 }
 $beganBoardReach = @('RevisionCount', 'OpenJob', 'DropJobsOf', 'FindJob', 'JobForAircraft', 'LitresOwedFor', 'PostServiceFee', 'Bus')
-$turnaroundsFile = Join-Path $ops 'Private\Model\Turnarounds.cpp'
-if (Test-Path $turnaroundsFile) {
-    $lines = Get-Content -LiteralPath $turnaroundsFile
+$turnaroundsFiles = @((Join-Path $ops 'Private\Model\Turnarounds.cpp'), (Join-Path $ops 'Public\Model\Turnarounds.h'))
+$turnaroundsCode = @{}
+foreach ($turnaroundsFile in $turnaroundsFiles) {
+    if (-not (Test-Path $turnaroundsFile)) {
+        $failures.Add("turnaround-began-once: $turnaroundsFile is named by rule 78(c) but does not exist - update the rule, do not let it check nothing")
+        continue
+    }
     $inBlock = $false
-    $reachSeen = 0
-    for ($i = 0; $i -lt $lines.Count; $i++) {
-        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
-        if ($code -match '\bLifecycle\s*\(') {
-            $failures.Add("turnaround-began-once: Turnarounds.cpp:$($i + 1) moves a vehicle (Lifecycle) - a turnaround hands its jobs back through UJobBoard::DropJobsOf, and the vehicles are the board's (#427): $($code.Trim())")
+    $turnaroundsCode[$turnaroundsFile] = @(Get-Content -LiteralPath $turnaroundsFile | ForEach-Object { Strip-ArchCode $_ ([ref]$inBlock) })
+}
+# THE RECEIVERS, BY TYPE: Board, and every name either file declares as a UJobBoard reference or pointer - so a parameter
+# renamed, or a local alias of the board, is read like Board is. One set for both files: the header's parameter names
+# and the .cpp's need not match.
+$beganReceivers = @('Board')
+foreach ($code in $turnaroundsCode.Values) {
+    foreach ($line in $code) {
+        foreach ($m in [regex]::Matches($line, '\bUJobBoard\s*[&*]\s*(\w+)')) {
+            if ($beganReceivers -notcontains $m.Groups[1].Value) { $beganReceivers += $m.Groups[1].Value }
         }
-        foreach ($m in [regex]::Matches($code, '\bBoard\s*(?:\.|->)\s*(\w+)')) {
+    }
+}
+$beganReceiverPattern = '\b(' + (($beganReceivers | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')\s*(?:\.|->)\s*(\w+)'
+$reachSeen = 0
+foreach ($turnaroundsFile in $turnaroundsCode.Keys) {
+    $code = $turnaroundsCode[$turnaroundsFile]
+    $short = Split-Path $turnaroundsFile -Leaf
+    for ($i = 0; $i -lt $code.Count; $i++) {
+        if ($code[$i] -match '\bLifecycle\s*\(') {
+            $failures.Add("turnaround-began-once: ${short}:$($i + 1) moves a vehicle (Lifecycle) - a turnaround hands its jobs back through UJobBoard::DropJobsOf, and the vehicles are the board's (#427): $($code[$i].Trim())")
+        }
+        foreach ($m in [regex]::Matches($code[$i], $beganReceiverPattern)) {
             $reachSeen++
-            if ($beganBoardReach -notcontains $m.Groups[1].Value) {
-                $failures.Add("turnaround-began-once: Turnarounds.cpp:$($i + 1) reaches Board.$($m.Groups[1].Value) - the turnaround owner is a friend of UJobBoard for RevisionCount and the OpenJob/DropJobsOf doors only; the jobs and vehicles are the board's to write (#427): $($code.Trim())")
+            if ($beganBoardReach -notcontains $m.Groups[2].Value) {
+                $failures.Add("turnaround-began-once: ${short}:$($i + 1) reaches $($m.Groups[1].Value).$($m.Groups[2].Value) - the turnaround owner is a friend of UJobBoard for RevisionCount and the OpenJob/DropJobsOf doors only; the jobs and vehicles are the board's to write (#427): $($code[$i].Trim())")
             }
         }
     }
-    if ($reachSeen -eq 0) {
-        $failures.Add("turnaround-began-once: rule 78(c) found no Board. reach in Turnarounds.cpp - the board is no longer passed as Board, so the rule checks nothing; update it")
-    }
+}
+if ($reachSeen -eq 0) {
+    $failures.Add("turnaround-began-once: rule 78(c) found no reach through a UJobBoard receiver ($($beganReceivers -join ', ')) in Turnarounds.cpp or .h - the board is no longer passed by reference, so the rule checks nothing; update it")
 }
 $ranRules.Add('turnaround-began-once')
+
+# --- 87. A PRESENT-LAYER RELAY OF THE TRAFFIC MODEL ADDS BEHAVIOUR, OR IS NOT THERE (#445 item 6) --------------------------
+# UAirsideTraffic re-declared five of UGroundTraffic's delegates and re-broadcast each from a one-line handler. Four added
+# nothing: each Airside event cost a declaration, a handler and a bind on this layer as well as the model's, hand-paired,
+# and the five binds were guarded by IsBoundToObject of the first alone. The model's delegates are public, and a listener
+# binds them through GetModel() (UOpsRuntime's bridges do). What stays is the PHASE relay, because it adds the view: the cube
+# is spawned before any listener hears Gone -> X and destroyed before one hears X -> Gone. THE SHAPE, both halves:
+#  (a) AirsideTraffic.h declares no delegate type (DECLARE_*DELEGATE*) and no `FOn... On...;` member but the kept relays' -
+#      the type qualified or not (`UGroundTraffic::FOnRunwayFreed OnRunwayFreed;` is the same relay, #499 review);
+#  (b) every `.Broadcast(` in AirsideTraffic.cpp sits inside a kept relay's function, and that function still calls each
+#      behaviour the relay is kept for - a relay whose behaviour moved out is a pure forwarder again. AirsideTraffic.h has
+#      NO `.Broadcast(` at all: no kept relay's body lives there, so one there is an inline relay (#499 review).
+# WHAT NO REGEX SEES: the same shape on another Present object, or a member typed TMulticastDelegate<...> directly. The
+# behaviour half - the view is there when the relay is heard - is Airside.Present.PhaseRelayShowsTheViewFirst; the bridges'
+# half is AirportOps.Present.Bus.ReattachDoesNotDouble.
+# RED ON 2026-10-01 against main d2bb63cd (the four pure relays: 4 delegate types, 4 members, 4 re-broadcasts), and
+# mutation-checked after, each red alone: SpawnView dropped from OnModelPhaseChanged; a `UGroundTraffic::FOnRunwayFreed
+# OnRunwayFreed;` member; an inline `OnAgentPhaseChanged.Broadcast(` body in the header.
+$relayKept = @{ 'OnAgentPhaseChanged' = @{ Function = 'UAirsideTraffic::OnModelPhaseChanged'; Behaviour = @('SpawnView', 'DestroyView') } }
+$relayHeader = Join-Path $Root 'Plugins\Airside\Source\Airside\Public\Present\AirsideTraffic.h'
+$relaySource = Join-Path $Root 'Plugins\Airside\Source\Airside\Private\Present\AirsideTraffic.cpp'
+if (-not (Test-Path $relayHeader) -or -not (Test-Path $relaySource)) {
+    $failures.Add("relay-adds-behaviour: AirsideTraffic.h/.cpp named by rule 87 do not exist - update the rule, do not let it check nothing")
+}
+else {
+    $inBlock = $false
+    $code = @(Get-Content -LiteralPath $relayHeader | ForEach-Object { Strip-ArchCode $_ ([ref]$inBlock) })
+    $membersSeen = 0
+    for ($i = 0; $i -lt $code.Count; $i++) {
+        if ($code[$i] -match '\bDECLARE_\w*DELEGATE\w*\s*\(') {
+            $failures.Add("relay-adds-behaviour: AirsideTraffic.h:$($i + 1) declares a delegate type - a model notification is UGroundTraffic's own delegate, bound through GetModel(); relay it here only to add behaviour, and add the relay to rule 87 (#445): $($code[$i].Trim())")
+        }
+        if ($code[$i] -match '^\s*((?:\w+::)*FOn\w+)\s+(On\w+)\s*;') {
+            $membersSeen++
+            if (-not $relayKept.ContainsKey($Matches[2])) {
+                $failures.Add("relay-adds-behaviour: AirsideTraffic.h:$($i + 1) declares the relay $($Matches[2]) - a pure forwarder of the model's delegate; bind UGroundTraffic's through GetModel() (#445): $($code[$i].Trim())")
+            }
+        }
+        if ($code[$i] -match '\.Broadcast\s*\(') {
+            $failures.Add("relay-adds-behaviour: AirsideTraffic.h:$($i + 1) broadcasts in the header - an inline relay; a kept relay's body is in AirsideTraffic.cpp, where rule 87 reads what it adds (#445): $($code[$i].Trim())")
+        }
+    }
+    if ($membersSeen -eq 0) {
+        $failures.Add("relay-adds-behaviour: rule 87 found no delegate member in AirsideTraffic.h - the phase relay moved or the member shape changed, so the rule checks nothing; update it")
+    }
+    $keptFunctions = @{}
+    foreach ($kept in $relayKept.Values) { $keptFunctions[$kept.Function] = @{} }
+    $inBlock = $false
+    $code = @(Get-Content -LiteralPath $relaySource | ForEach-Object { Strip-ArchCode $_ ([ref]$inBlock) })
+    $current = ''
+    for ($i = 0; $i -lt $code.Count; $i++) {
+        $def = Get-ArchDefinition $code[$i]
+        if ($null -ne $def) { $current = $def }
+        if ($keptFunctions.ContainsKey($current)) {
+            foreach ($m in [regex]::Matches($code[$i], '\b(\w+)\s*\(')) { $keptFunctions[$current][$m.Groups[1].Value] = $true }
+        }
+        if ($code[$i] -match '\.Broadcast\s*\(' -and -not $keptFunctions.ContainsKey($current)) {
+            $failures.Add("relay-adds-behaviour: AirsideTraffic.cpp:$($i + 1) re-broadcasts from $current - a relay that adds nothing; listeners bind the model's delegate through GetModel() (#445): $($code[$i].Trim())")
+        }
+    }
+    foreach ($kept in $relayKept.Values) {
+        $calls = $keptFunctions[$kept.Function]
+        if ($calls.Count -eq 0) {
+            $failures.Add("relay-adds-behaviour: $($kept.Function) not found in AirsideTraffic.cpp - it moved or went; update rule 87, do not let it check nothing")
+            continue
+        }
+        foreach ($behaviour in $kept.Behaviour) {
+            if (-not $calls.ContainsKey($behaviour)) {
+                $failures.Add("relay-adds-behaviour: $($kept.Function) no longer calls $behaviour - the behaviour the relay is kept for; without it the relay is a pure forwarder, so cut it and bind the model's delegate (#445)")
+            }
+        }
+    }
+}
+$ranRules.Add('relay-adds-behaviour')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
