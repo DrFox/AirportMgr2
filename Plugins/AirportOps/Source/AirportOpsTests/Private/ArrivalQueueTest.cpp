@@ -293,6 +293,9 @@ bool FQueueOverdueOnLoadTest::RunTest(const FString& Parameters)
 	Rig.HoldRunway();
 	Rig.Clock->Advance(1.0);   // 1 game s: the ETA is already behind us
 	TestEqual(TEXT("nothing has been dispatched, because nothing was armed"), Rig.Dispatched, 0);
+	// THE PREMISE, ASKED OF THE FLIGHT: Dispatched == 0 holds with the runway held whether or not anything was armed, so it cannot fail. An
+	// armed arrival fires on that Advance and joins the queue - Inbound - which is what a flight left Accepted proves did not happen.
+	TestEqual(TEXT("and the flight is still Accepted - an armed arrival would already be Inbound"), Flight->GetPhase(), EFlightPhase::Accepted);
 	Rig.Board->RearmSchedules(*Rig.Traffic, *Rig.Airport.Net, *Rig.Clock);
 	TestEqual(TEXT("it is holding"), Flight->GetPhase(), EFlightPhase::Inbound);
 	TestEqual(TEXT("and nothing was dispatched onto the busy runway"), Rig.Dispatched, 0);

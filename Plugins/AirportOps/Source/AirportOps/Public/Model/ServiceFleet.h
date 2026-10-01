@@ -164,8 +164,8 @@ private:
 	/** The fleet is emptied and forgotten - a load's OnBeforeRestore: no vehicles, no depot seen. Moves both counters. */
 	void Clear();
 
-	/** The archive has just replaced the vehicles (UJobBoard::Serialize, after it normalised each one): every restored
-	 *  vehicle's depot counts as seen, so a placeholder is not added beside them, and both counters move. */
+	/** The archive has just replaced the vehicles (UJobBoard::Serialize, after it normalised each one): both counters move. Which
+	 *  depots were seen is the saved SeededDepots', handed back whole by the archive - it is not re-derived from the vehicles. */
 	void Restored();
 
 	/**

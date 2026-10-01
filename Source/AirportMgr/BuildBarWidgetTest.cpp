@@ -16,6 +16,7 @@
 #include "RoadBuildController.h"
 #include "Testing/AirsideTestWorld.h"
 #include "UIStyle.h"
+#include "AirportMgrTestSlot.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -431,7 +432,7 @@ bool FBarBalanceFollowsALoadTest::RunTest(const FString& Parameters)
 	ULedger* Ledger = Runtime->GetLedger();
 	Ledger->Post(0.0, ELedgerCategory::LandingFee, 1200.0, FText::FromString(TEXT("saved fee")));
 	const FString Saved = Runtime->GetPricing()->Format(Ledger->Balance()).ToString();
-	const FString Slot = TEXT("AirportMgrTest_BarBalanceLoad");
+	const AirportMgrTest::FScopedSlot Slot(TEXT("AirportMgrTest_BarBalanceLoad"));
 	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
 
 	Ledger->Post(0.0, ELedgerCategory::LandingFee, 900.0, FText::FromString(TEXT("unsaved fee")));

@@ -2418,7 +2418,6 @@ namespace FuelServiceTest
 		bool bBothServed = false;
 		TArray<EServiceVehicleState> States;
 		TSet<int32> Agents;
-		int32 Trucks = 0;
 	};
 
 	FTwoJobRun RunTwoJobs(FAutomationTestBase& Test, double BowserCapacity, TOptional<EIcaoCode> Letter = TOptional<EIcaoCode>())
@@ -2458,7 +2457,6 @@ namespace FuelServiceTest
 			const FServiceJob* B = Fixture.Service->JobForAircraft(Second);
 			return A != nullptr && B != nullptr && A->State == EServiceJobState::Done && B->State == EServiceJobState::Done;
 		}, 900.0);
-		Run.Trucks = Fixture.Service->GetVehicles().Num();
 		FString Seen;
 		for (const EServiceVehicleState State : Run.States)
 		{
@@ -2469,7 +2467,10 @@ namespace FuelServiceTest
 		// body cannot hide under it. The two already found were a wheelbase (494 uu) and a whole reverse span (2529 uu). THE WHOLE ROUND
 		// TRIP IS IN THIS WINDOW - the serve, the REDIRECT home, the reverse out and the drive back to the refill - which is what
 		// AirportOps.Ops.TruckNeverTeleportsOnItsRoundTrip (deleted, #462 #34) claimed and, stopping at the end of the pump, never watched.
-		Test.TestTrue(*FString::Printf(TEXT("no body ever teleports (worst %.1f uu)"), Fixture.WorstJump), Fixture.WorstJump < 60.0);
+		Test.TestTrue(*FString::Printf(TEXT("no body ever teleports (worst %.1f uu, agent %d, t=%.1f s, (%.0f,%.0f) -> (%.0f,%.0f), phase %d -> %d)"),
+				Fixture.WorstJump, Fixture.WorstJumpAgent, Fixture.WorstJumpAt, Fixture.WorstJumpFrom.X, Fixture.WorstJumpFrom.Y,
+				Fixture.WorstJumpTo.X, Fixture.WorstJumpTo.Y, Fixture.WorstJumpPhaseBefore, Fixture.WorstJumpPhase),
+			Fixture.WorstJump < 60.0);
 		return Run;
 	}
 
@@ -2821,9 +2822,9 @@ bool FServiceRebidUnderwayNeverMovesTest::RunTest(const FString& Parameters)
 	// better another vehicle would do - a truck turned back halfway reads as broken.
 	//
 	// BOTH SIDES OF "COMMITTED" (#463): this staged only the Serving job - the pump running - and never an UNDERWAY one, the state the
-	// comment above is about, so it could not tell the two apart. The re-bid stage has two guards a committed job passes through
-	// (only Queued jobs are walked, and a job not on its holder's QUEUE has no position to be moved from), each enough alone: the test
-	// goes red when both are gone, which is the day a committed job is re-bid.
+	// comment above is about, so it could not tell the two apart. The re-bid stage has THREE guards a committed job passes through
+	// (only Queued jobs are collected, the walk skips one that is not Queued, and a job not on its holder's QUEUE has no position to be moved
+	// from), each enough alone: the test goes red when all three are gone, which is the day a committed job is re-bid.
 	for (const EServiceVehicleState AState : { EServiceVehicleState::Serving, EServiceVehicleState::ToJob })
 	{
 		const FString Which = AState == EServiceVehicleState::ToJob ? TEXT("underway") : TEXT("serving");
@@ -2898,9 +2899,10 @@ bool FServiceRebidOnRunwayFlipTest::RunTest(const FString& Parameters)
 
 // (AirportOps.Fuel.RestoredFleetIsNotReseeded is gone, #462 #11. A LOADED FLEET IS THE FLEET: the placeholder seeds a depot the first time the board
 // sees it, and seeding a restored one again would double the fleet on every load. The test passed with FServiceFleet::Restored's own loop deleted -
-// SeededDepots is a SAVED set, so the round trip hands it back whole - and with the set forgotten the loop re-marked every depot that had vehicles. The
-// guard is the saved set, pinned by AirportOps.Model.Fleet.SoldStarterFleetIsNotReseededAfterLoad (a sold-out depot has no vehicle to re-mark it) and
-// AirportOps.Present.Fleet.LoadDoesNotReseedADepotThatHasVehicles (through the runtime's own load); both go red if Restored forgets the seen depots.)
+// SeededDepots is a SAVED set, so the round trip hands it back whole - and with the set forgotten the loop re-marked every depot that had vehicles
+// (that loop is gone now, #462: nothing pinned it). The guard is the saved set, pinned by
+// AirportOps.Model.Fleet.SoldStarterFleetIsNotReseededAfterLoad (a sold-out depot has no vehicle to re-mark it) and
+// AirportOps.Present.Fleet.LoadDoesNotReseedADepotThatHasVehicles (through the runtime's own load); both go red if a restore forgets the seen depots.)
 
 // ---------------------------------------------------------------------------------------
 // THE VEHICLE HALF OF THE UNSTICK MENU (spec 2026-09-29-unstick-agent), on this file's fixture

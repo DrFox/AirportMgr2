@@ -4434,41 +4434,66 @@ if (-not (Test-Path $runwayRowsCpp)) {
 }
 $ranRules.Add('foldable-panels-gate')
 
-# --- 102. AN OPS TEST'S SAVE SLOT IS A SCOPED ONE (#462) -------------------------------------------------------------------------
+# --- 102. A TEST'S SAVE SLOT IS A SCOPED ONE, AND ONLY A TEST SLOT (#462) --------------------------------------------------------
 # A SaveToSlot in a test writes a real file under Saved/SaveGames. By 2026-10-01 22 of them had piled up there, written by tests that never deleted
 # them (ArrivalQueuePassTest, AirportTest, OpsRuntimeTest, OpsRuntimeBusTest and others) - state the NEXT run did not make, which is how a "load a
-# missing slot is refused" or a save-then-load test passes or fails on the previous run's file. OpsSaveTest::FScopedSlot (OpsSaveTestHelpers.h) deletes
-# the slot when it is made AND when it goes out of scope, so a killed run leaves nothing for the next to find. In AirportOpsTests\*.cpp, comments stripped:
-# (a) every line that names an "AirportOpsTest_..." slot constructs an FScopedSlot on that same line - the literal is the helper's argument, never a bare
-#     string handed to SaveToSlot/LoadFromSlot/WriteSlot; the one exception is a slot named NoSuch..., which is only ever READ (nothing writes it);
-# (b) the helper still deletes on both ends: OpsSaveTestHelpers.h's FScopedSlot constructor and destructor each call DeleteGameInSlot;
-# (c) the half that stops it checking nothing: at least 10 FScopedSlot constructions exist (25 on 2026-10-01 - a rename of the helper fails (a) first,
-#     an emptied folder fails here).
-# DOES NOT SEE: a slot named without the AirportOpsTest_ prefix or built from a variable at run time (a test that does that is on its own), and the game
-# module's AirportMgrTest_ slots (BarBalanceLoad, LoadRetires) - those are the game tests' to scope.
-$opsSlotHelper = Join-Path $opsTests 'Private\OpsSaveTestHelpers.h'
-if (-not (Test-Path $opsSlotHelper)) {
-    $failures.Add("ops-test-slots-scoped: $opsSlotHelper is named by rule 102 but does not exist - update the rule, do not let it check nothing")
-} else {
-    $helperText = (Get-Content -LiteralPath $opsSlotHelper) -join "`n"
+# missing slot is refused" or a save-then-load test passes or fails on the previous run's file. FScopedSlot (OpsSaveTest:: in AirportOpsTests'
+# OpsSaveTestHelpers.h, AirportMgrTest:: in the game module's AirportMgrTestSlot.h) deletes the slot when it is made AND when it goes out of scope,
+# so a killed run leaves nothing for the next to find. THE SAME DELETE IS WHY THE NAME MATTERS: an FScopedSlot(TEXT("QuickSave")) would delete the
+# player's real quicksave (ARoadBuildController::QuickSave) at the start of a test. In AirportOpsTests and Source\AirportMgr, .cpp AND .h, comments stripped:
+# (a) every line that names an "AirportOpsTest_..." or "AirportMgrTest_..." slot constructs an FScopedSlot on that same line - the literal is the
+#     helper's argument, never a bare string handed to SaveToSlot/LoadFromSlot/WriteSlot; the one exception is a slot named NoSuch..., which is only
+#     ever READ (nothing writes it);
+# (b) every FScopedSlot construction names its slot with a TEXT("...") literal that starts with AirportOpsTest_ or AirportMgrTest_ - never a real
+#     slot's name, and never a variable this rule cannot read;
+# (c) both helpers still delete on both ends: each FScopedSlot constructor and destructor calls UGameplayStatics::DeleteGameInSlot;
+# (d) the half that stops it checking nothing: at least 10 FScopedSlot constructions under AirportOpsTests (25 on 2026-10-01) and at least 2 under
+#     Source\AirportMgr (2) - a rename of the helper fails (a) first, an emptied folder fails here.
+# DOES NOT SEE: a slot named without those prefixes or built from a variable at run time, passed to SaveToSlot by a name the FScopedSlot does not carry
+# (a second literal on another line fails (a); a variable does not), and an FScopedSlot in a folder this rule does not list.
+$slotHelpers = @(
+    @{ Path = (Join-Path $opsTests 'Private\OpsSaveTestHelpers.h'); Type = 'OpsSaveTest::FScopedSlot' },
+    @{ Path = (Join-Path $Root 'Source\AirportMgr\AirportMgrTestSlot.h'); Type = 'AirportMgrTest::FScopedSlot' })
+foreach ($helper in $slotHelpers) {
+    if (-not (Test-Path $helper.Path)) {
+        $failures.Add("ops-test-slots-scoped: $($helper.Path) is named by rule 102 but does not exist - update the rule, do not let it check nothing")
+        continue
+    }
+    $helperText = (Get-Content -LiteralPath $helper.Path) -join "`n"
     if ($helperText -notmatch 'FScopedSlot\s*\([^)]*\)\s*:[^{]*\{\s*UGameplayStatics::DeleteGameInSlot' -or $helperText -notmatch '~FScopedSlot\s*\(\s*\)\s*\{\s*UGameplayStatics::DeleteGameInSlot') {
-        $failures.Add("ops-test-slots-scoped: OpsSaveTest::FScopedSlot no longer calls UGameplayStatics::DeleteGameInSlot from BOTH its constructor and its destructor - a killed run would leave its slot for the next one to find, and a finished one would leave it on disk")
+        $failures.Add("ops-test-slots-scoped: $($helper.Type) no longer calls UGameplayStatics::DeleteGameInSlot from BOTH its constructor and its destructor - a killed run would leave its slot for the next one to find, and a finished one would leave it on disk")
     }
 }
-$scopedSlots = 0
-foreach ($file in (Get-Sources $opsTests @('.cpp'))) {
-    $inBlock = $false
-    $lines = Get-Content -LiteralPath $file.FullName
-    for ($i = 0; $i -lt $lines.Count; $i++) {
-        $code = Strip-ArchComments $lines[$i] ([ref]$inBlock)
-        if ($code -match 'FScopedSlot') { $scopedSlots += ([regex]::Matches($code, 'FScopedSlot\s*[\w]*\s*[\(\{]')).Count }
-        if ($code -notmatch '"AirportOpsTest_\w+"') { continue }
-        if ($code -match 'FScopedSlot' -or $code -match 'NoSuch') { continue }
-        $failures.Add("ops-test-slots-scoped: $($file.Name):$($i + 1) names an AirportOpsTest_ slot without OpsSaveTest::FScopedSlot on the same line - a test's save slot is deleted when the test ends, however it ends (#462): $($code.Trim())")
+$scopedSlots = @{ 'AirportOpsTests' = 0; 'AirportMgr' = 0 }
+$slotScans = @(
+    @{ Dir = $opsTests; Name = 'AirportOpsTests' },
+    @{ Dir = (Join-Path $Root 'Source\AirportMgr'); Name = 'AirportMgr' })
+foreach ($scan in $slotScans) {
+    foreach ($file in (Get-Sources $scan.Dir @('.cpp', '.h'))) {
+        $inBlock = $false
+        $lines = Get-Content -LiteralPath $file.FullName
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchComments $lines[$i] ([ref]$inBlock)
+            # A CONSTRUCTION is the type, a variable name, then ( or { - the helper's own constructor and deleted copy have no variable name between.
+            foreach ($made in [regex]::Matches($code, '\bFScopedSlot\s+\w+\s*[\(\{]\s*(TEXT\("([^"]*)"\))?')) {
+                $scopedSlots[$scan.Name] += 1
+                if (-not $made.Groups[1].Success) {
+                    $failures.Add("ops-test-slots-scoped: $($file.Name):$($i + 1) constructs an FScopedSlot from something other than a TEXT(`"...`") literal - rule 102 cannot see which slot it deletes (#462): $($code.Trim())")
+                } elseif ($made.Groups[2].Value -notmatch '^(AirportOpsTest_|AirportMgrTest_)') {
+                    $failures.Add("ops-test-slots-scoped: $($file.Name):$($i + 1) constructs an FScopedSlot on `"$($made.Groups[2].Value)`" - it deletes that slot at construction and at scope end, so only an AirportOpsTest_ or AirportMgrTest_ name is allowed; a real slot (QuickSave) would be wiped by a test (#462)")
+                }
+            }
+            if ($code -notmatch '"(AirportOpsTest_|AirportMgrTest_)\w+"') { continue }
+            if ($code -match 'FScopedSlot' -or $code -match 'NoSuch') { continue }
+            $failures.Add("ops-test-slots-scoped: $($file.Name):$($i + 1) names a test save slot without FScopedSlot on the same line - a test's save slot is deleted when the test ends, however it ends (#462): $($code.Trim())")
+        }
     }
 }
-if ($scopedSlots -lt 10) {
-    $failures.Add("ops-test-slots-scoped: rule 102 found only $scopedSlots FScopedSlot construction(s) under AirportOpsTests (25 on 2026-10-01) - the helper was renamed or the tests moved; update the rule, do not let it check nothing")
+if ($scopedSlots['AirportOpsTests'] -lt 10) {
+    $failures.Add("ops-test-slots-scoped: rule 102 found only $($scopedSlots['AirportOpsTests']) FScopedSlot construction(s) under AirportOpsTests (25 on 2026-10-01) - the helper was renamed or the tests moved; update the rule, do not let it check nothing")
+}
+if ($scopedSlots['AirportMgr'] -lt 2) {
+    $failures.Add("ops-test-slots-scoped: rule 102 found only $($scopedSlots['AirportMgr']) FScopedSlot construction(s) under Source\AirportMgr (2 on 2026-10-01) - the helper was renamed or the tests moved; update the rule, do not let it check nothing")
 }
 $ranRules.Add('ops-test-slots-scoped')
 

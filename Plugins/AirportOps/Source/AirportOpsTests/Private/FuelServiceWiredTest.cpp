@@ -406,8 +406,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FFleetLoadDoesNotReseedTest::RunTest(const FString& Parameters)
 {
 	// A LOAD ANNOUNCES THE NETWORK IT ADOPTED (FNetworkChangedEvent, once) AND MARKS EVERY PASS DIRTY, so the "FleetSeed" pass
-	// runs after every load - and must find every depot seen. The restored vehicles' depots are (FServiceFleet::Restored), and
-	// so are the depots whose fleet was sold (SeededDepots is saved). There are no player saves yet (owner ruling), but a
+	// runs after every load - and must find every depot seen. They are: SeededDepots is saved, so the depots whose vehicles came
+	// back and the depots whose fleet was sold both come back seen. There are no player saves yet (owner ruling), but a
 	// test snapshot is one, and a pass that seeded again would double the fleet on every load.
 	FAirsideTestWorld TestWorld;
 	ARoadNetworkActor* Actor = TestWorld.Actor;

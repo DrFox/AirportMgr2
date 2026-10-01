@@ -33,12 +33,14 @@ namespace OpsSaveTest
 	 * "load a missing slot is refused" or a "save then load" test pass or fail on the previous run's file.
 	 *
 	 * DELETED AT CONSTRUCTION TOO, not only at the end: a crashed or killed run (the dedicated test editor is a hard-kill
-	 * target) never reaches a destructor, so the first thing the next run must see is no slot at all.
+	 * target) never reaches a destructor, so the first thing the next run must see is no slot at all. THE SAME DELETE IS WHY THE
+	 * NAME IS CHECKED: an FScopedSlot on "QuickSave" would wipe the player's real quicksave when a test began.
 	 *
 	 * CONVERTS TO FString so it drops in where the bare `const FString Slot` was: SaveToSlot, LoadFromSlot, ReadSlot and
 	 * WriteSlot all take const FString&.
 	 * ENFORCED BY: Check-Architecture rule 102 (ops-test-slots-scoped) - an "AirportOpsTest_..." slot literal that is not
-	 * the argument of an FScopedSlot (or a slot read that nothing wrote) fails the lint.
+	 * the argument of an FScopedSlot (or a slot read that nothing wrote) fails the lint, and so does an FScopedSlot whose
+	 * name does not start with AirportOpsTest_ or AirportMgrTest_.
 	 */
 	struct FScopedSlot
 	{

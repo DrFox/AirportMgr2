@@ -580,8 +580,8 @@ bool FOpsRuntimeRearmsRepeatersOnLoadTest::RunTest(const FString& Parameters)
 
 	// A SAVE FROM TWO DAYS LATER, written the way a real one is - SaveToSlot - with its clock's blob swapped for one two days on: the
 	// load restores GameSeconds into the runtime's own clock and the queue does not move, exactly the jump a real load makes. THROUGH
-	// LoadFromSlot (#463): this used to call RearmRepeatingSchedules() itself, so the one production call of it - in LoadFromSlot, after
-	// the restore - could be deleted and the test stay green.
+	// LoadFromSlot (#463): this used to call RearmRepeatingSchedules() itself, so the load's call of it (OpsRuntime.cpp, LoadFromSlot,
+	// after the restore) could be deleted and the test stay green. Attach calls it too: that one is armed above and is not this test's.
 	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_OffersRearm"));
 	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
 	FOpsSnapshot Snapshot;

@@ -96,13 +96,16 @@ bool FOfferGeneratorWidthTest::RunTest(const FString& Parameters)
 	URoadNetwork* Narrow = FieldWith(1800.0, Airliner);   // an 18 m strip, as M_Test has
 
 	EArrivalRefusal Why = EArrivalRefusal::None;
+	FString Sentence;
 	TestFalse(TEXT("an airliner is not offered a strip too narrow for its wingspan"),
-		UOfferGenerator::CouldEverAdmit(*Narrow, FVector2D::ZeroVector, Airliner, Why));
+		UOfferGenerator::CouldEverAdmit(*Narrow, FVector2D::ZeroVector, Airliner, Why, Sentence));
 	TestEqual(TEXT("and the reason is admission, not something vaguer"),
 		Why, EArrivalRefusal::NotAdmitted);
+	TestFalse(TEXT("and it comes with the plan's own sentence, figures and all (issue #396)"), Sentence.IsEmpty());
 
 	TestTrue(TEXT("a light aircraft that fits the same strip still is"),
-		UOfferGenerator::CouldEverAdmit(*Narrow, FVector2D::ZeroVector, Needing(0.0, 1200.0), Why));
+		UOfferGenerator::CouldEverAdmit(*Narrow, FVector2D::ZeroVector, Needing(0.0, 1200.0), Why, Sentence));
+	TestTrue(TEXT("with no sentence, because nothing was refused"), Sentence.IsEmpty());
 	return true;
 }
 
@@ -721,8 +724,9 @@ bool FOfferArrivalsOnlyTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("arrivals only: two hours at six an hour make no offer"),
 		RunMinutes(*Generator, *Field, Airlines, *ClockAt(9.0), 120).Num(), 0);
 	EArrivalRefusal Why = EArrivalRefusal::None;
+	FString Sentence;   // not read here: the reason is what this case is about
 	TestFalse(TEXT("because the type could never be admitted"),
-		UOfferGenerator::CouldEverAdmit(*Field, FVector2D::ZeroVector, Candidate(3000.0).Airframe, Why));
+		UOfferGenerator::CouldEverAdmit(*Field, FVector2D::ZeroVector, Candidate(3000.0).Airframe, Why, Sentence));
 	TestEqual(TEXT("for the runway's use, not something vaguer"), Why, EArrivalRefusal::NotAdmitted);
 
 	const uint32 Before = Field->GetGuidelineRevision();
