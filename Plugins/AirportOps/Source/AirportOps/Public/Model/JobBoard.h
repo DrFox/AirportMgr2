@@ -14,8 +14,10 @@
 #include "Model/ServiceFleet.h"
 #include "Model/ServiceJob.h"
 #include "Model/ServiceRolePolicy.h"
+#include "Model/ServiceText.h"
 #include "Model/ServiceVehicle.h"
 #include "Model/ServiceVehicleLifecycle.h"
+#include "Model/Turnarounds.h"
 #include "Model/Vehicle.h"
 #include "Solve/IcaoCode.h"
 #include "UObject/Object.h"
@@ -32,25 +34,6 @@ class FOpsEventBus;
 class UPricing;
 struct FRoadAgent;
 enum class EAgentPhase : uint8;
-
-/**
- * How far behind one depot is: the depot card's two texts and the counts behind them. See
- * UJobBoard::DescribeDepot.
- */
-struct FDepotBacklog
-{
-	/** "3 jobs · clears in 38 min · 1 late", "No jobs", or - a depot with no vehicle at all - "No vehicles — buy one". */
-	FString Summary;
-
-	/** One line per vehicle, then its jobs in the order it will do them. Empty with no vehicles. */
-	FString Detail;
-
-	int32 Jobs = 0;
-	int32 LateJobs = 0;
-
-	/** The latest promised finish among its jobs, USimClock game seconds; 0 with none. */
-	double ClearsAt = 0.0;
-};
 
 /**
  * Every parked aircraft's service jobs, every service vehicle, and the bidding that puts one on the
@@ -92,15 +75,27 @@ struct FDepotBacklog
  *  - the catalogue: FServiceFleet::ResolveCatalogue gives every row Role = Fuel and reads its figures from FFuelVehicleSpec;
  *  - the tank: FFuelRolePolicy::CapacityOf is called as a static (FServiceFleet::Add, the refill log, a job's TankLitres at
  *    the bid, the re-bid and the stand, and the shop's quote);
- *  - the jobs: OnAgentPhase creates a Fuel job for a parked aircraft and no other kind, the fee is Pricing->FuelFee
- *    (PostServiceFee), and the outcome enum (EFuelOutcome) and its rule (FuelOutcomeOf) are fuel's;
+ *  - the jobs: a parked aircraft's turnaround (FTurnarounds::OnAircraftPhase) opens a Fuel job and no other kind, the fee
+ *    is Pricing->FuelFee (PostServiceFee), and the outcome enum (EFuelOutcome) and its rule (FuelOutcomeOf) are fuel's;
  *  - the depot: a fuel depot is an entity whose PoseRole is Fuel and whose pumps are its EDepotModule::Pump modules
  *    (the starter seeding, CouldServe, HasWorkingPump, PumpsAt); PolicyFor pushes RefillLitresPerMinutePerPump into the
  *    one FFuelRolePolicy the constructor registers;
- *  - the words: RefusalText, DescribeAgent's fuel line, the "Fuel:" log lines.
+ *  - the words: ServiceText's RefusalText and DescribeAgent's fuel line, the "Fuel:" log lines.
  * PolicyFor is where a second role's policy would be looked up, and the registry has the constructor's Fuel entry
  * alone: a test-only way to register another had no caller and was removed, because a seam nothing plugs into is a
  * claim the code does not keep.
+ *
+ * THE ORCHESTRATOR, AND THE OWNERS IT CALLS (#427): this was the ops plugin's god class - about fourteen responsibilities
+ * in 3,331 lines, the #32 shape ARoadNetworkActor had - because every feature entered through it. Step stays the one
+ * sequence (see its comment), and the concepts it sequences have owners of their own, each reached through a forwarder
+ * so every old name still answers:
+ *  - the vehicle catalogue and the fleet's membership and money: FServiceFleet (#430, #443), through Fleet();
+ *  - turnarounds and the departure decision: FTurnarounds, held here as Turnarounds - its open and close, "did this
+ *    transition begin a turnaround" (FTurnarounds::BeganAt, which UFlightBoard reads too), DepartTheReady, EndTurnaround;
+ *  - how a vehicle moves: Airside's UGroundTraffic::SendAgentTo and its route-change seam (#429; JobBoardDrive.cpp);
+ *  - the text: the ServiceText namespace (ServiceText.h).
+ * What is left here is the jobs, the vehicles' lifecycle and the bidding (JobBoardBid.cpp). A new responsibility does not
+ * enter by growing this file: Check-Architecture rule 77 holds every Model/*.cpp to a line budget that may only fall.
  */
 UCLASS()
 class AIRPORTOPS_API UJobBoard : public UObject, public IOpsPersistent
@@ -268,9 +263,8 @@ public:
 	/** The letter VehicleFor reads Stand as - LetterOf(Outline), else C. See VehicleFor. */
 	static EIcaoCode LetterOfStand(const FEntityInstance& Stand);
 
-	/** What the player is told for Why - on the aircraft card and in the log. The wording IS the
-	 *  contract: tests assert it, because it is what sends the player to the right thing to fix. */
-	static const TCHAR* RefusalText(EServiceRefusal Why);
+	/** What the player is told for Why. FORWARDS to ServiceText::RefusalText (#427), where the wording and its reasons live. */
+	static const TCHAR* RefusalText(EServiceRefusal Why) { return ServiceText::RefusalText(Why); }
 
 	/**
 	 * The catalogue's row for TypeCode (#430): its chassis from Content, its figures from the scenario, joined once by
@@ -338,6 +332,10 @@ public:
 	 * reaching Parked is that vehicle ARRIVING, which moves the vehicle's own state; an aircraft
 	 * LEAVING Parked drops its turnaround and jobs and moves any vehicle out for them on; a vehicle's
 	 * agent going Gone is that vehicle LOSING its agent (LoseAgent), and a Stranded one releases its jobs.
+	 *
+	 * A DISPATCH TO TWO OWNERS SINCE #427, by whose agent it is: a vehicle's agent's change goes to OnVehiclePhase (the
+	 * vehicle lifecycle's three cases), every other agent's to FTurnarounds::OnAircraftPhase (the turnaround's three). It
+	 * was one body of five unrelated cases, each re-asking whose agent it had.
 	 *
 	 * MAPS THE TRANSITION'S CAUSE, not (From, To) plus the live agent (#436): it is heard a drain late, so what
 	 * decides is what was true when the change was made - DepartOrdered, not bDepartureArmed read now; GoalAtEvent,
@@ -450,16 +448,16 @@ public:
 
 	/**
 	 * The aircraft the last Step's DepartTheReady got away, cleared as each Step begins. The ops runtime reads it
-	 * after a run the safety net alone asked for, to name the departure no event covered.
+	 * after a run the safety net alone asked for, to name the departure no event covered. FORWARDS to the turnarounds
+	 * (FTurnarounds::DepartedLastPass), which own the departure pass since #427.
 	 */
-	const TArray<int32>& DepartedLastStep() const { return LastStepDeparted; }
+	const TArray<int32>& DepartedLastStep() const { return Turnarounds.DepartedLastPass(); }
 
 	/**
-	 * Is any turnaround due, not being served, and refused its departure by the last try? What keeps the ops
-	 * safety net armed for departures: such an aircraft is retried only by an event now (see Step), and the net
-	 * is for the one whose event never came. DERIVED from the board, asked after every Step.
+	 * Is any turnaround due, not being served, and refused its departure by the last try? FORWARDS to
+	 * FTurnarounds::HasRefusedDeparture (#427), where the rule and its reasons live. Asked after every Step.
 	 */
-	bool HasRefusedDeparture(double Now) const;
+	bool HasRefusedDeparture(double Now) const { return Turnarounds.HasRefusedDeparture(*this, Now); }
 
 	/**
 	 * Moves with every CHANGE to Jobs, Vehicles and Turnarounds, and not with a call that changed nothing (#443: it was
@@ -491,30 +489,21 @@ public:
 	uint32 RevisionCountForTest() const { return RevisionCount; }
 
 	/**
-	 * The one line the inspector's card shows for this agent, or empty when the board has nothing to
-	 * say about it: an aircraft's fuel line, or - for a service vehicle's agent - the vehicle's own
-	 * line (DescribeVehicle). ONE SEAM FOR BOTH, because the inspector already asks it for whatever
-	 * agent is selected.
-	 *
-	 * A STRING BUILT HERE rather than an enum the panel switches on: it is presentation of two
-	 * orthogonal model facts (the state, and for Unserviceable the reason), and nothing branches on
-	 * it - the same argument InspectFacts::StatusOf makes for its own line.
-	 *
-	 * NETWORK NAMES THE STANDS (#447): a vehicle's line says "to stand 4" by the number painted at the stand (OpsNames::StandLabel), which
-	 * only the network's entity holds. REQUIRED, NO DEFAULT: it was optional at first, and the depot card's fleet rows left it off and said "to stand 0"
-	 * beside the backlog's "to stand 4" (#447 review). A world-free test of the board passes nullptr, which names them by index.
+	 * The one line the inspector's card shows for this agent, or empty when the board has nothing to say about it.
+	 * FORWARDS to ServiceText::DescribeAgent (#427), where the wording and its reasons live. Network names the stands,
+	 * REQUIRED - see ServiceText.h.
 	 */
-	FString DescribeAgent(int32 AgentId, double Now, const URoadNetwork* Network) const;
+	FString DescribeAgent(int32 AgentId, double Now, const URoadNetwork* Network) const
+	{
+		bool bMovesWithClock = false;
+		return ServiceText::DescribeAgent(*this, AgentId, Now, bMovesWithClock, Network);
+	}
 
-	/**
-	 * DescribeAgent, and whether its answer MOVES WITH THE CLOCK: true only while the fuel line counts litres down
-	 * through a trip being pumped (its "LIVE WHILE PUMPING" rule). Anything else it says changes only with the
-	 * board, so a caller may keep it until Revision moves - the inspector does (ops batch 3 PR E).
-	 * ENFORCED BY: AirportOps.Fuel.LineSaysWhenItMovesWithTheClock (live only while serving);
-	 * AirportMgr.Inspector.Cache.FuelLineLiveWhilePumping (the card follows it while live)
-	 * Network: see the overload above.
-	 */
-	FString DescribeAgent(int32 AgentId, double Now, bool& bOutMovesWithClock, const URoadNetwork* Network) const;
+	/** DescribeAgent, and whether its answer MOVES WITH THE CLOCK - see ServiceText::DescribeAgent, which this forwards to. */
+	FString DescribeAgent(int32 AgentId, double Now, bool& bOutMovesWithClock, const URoadNetwork* Network) const
+	{
+		return ServiceText::DescribeAgent(*this, AgentId, Now, bOutMovesWithClock, Network);
+	}
 
 	/**
 	 * The player's Unstick for a VEHICLE (spec 2026-09-29-unstick-agent): every job it holds - the
@@ -532,23 +521,12 @@ public:
 	bool RecallVehicleOfAgent(int32 AgentId, bool bRetire, UGroundTraffic& Traffic, const URoadNetwork& Network,
 		const USimClock& Clock);
 
-	/**
-	 * How far behind Depot is (user, 2026-09-28: "see how far behind your depot is in jobs"): every job
-	 * on its vehicles - under way, being served, or queued - when the last of them is promised to
-	 * finish, and how many of those promises land after their aircraft's turnaround ends, which is the
-	 * backlog actually costing the airport. Read off each job's PromisedFinish, which the re-bid pass
-	 * refreshes on every trigger (RebidQueued), so the card needs no bookkeeping of its own. Minutes are
-	 * whole - but rounded from Now, so they move at half-minute offsets of it, not at the game minute. The
-	 * inspector therefore passes the START of the game minute as Now (ops batch 3 PR E), which makes its
-	 * card a function of the minute it keys on, and redraws it at most once a game minute.
-	 *
-	 * THE STATUS IS THE BOARD'S (#447): a depot with no vehicle says "No vehicles - buy one" in Summary, where the card laid that over
-	 * the summary in its own wording beside RefusalText's. Network names the stands as the card does (OpsNames::StandLabel); a test of the
-	 * board with no graph passes nullptr and gets the index. Required, no default - see DescribeAgent.
-	 * ENFORCED BY: AirportOps.Fuel.Describe.DepotBacklog (the no-vehicle and no-job cases),
-	 * AirportOps.Model.StandLabel.AlertBacklogAndCardSayTheSameNumber
-	 */
-	FDepotBacklog DescribeDepot(FEntityInstanceId Depot, double Now, const URoadNetwork* Network) const;
+	/** How far behind Depot is - the depot card's backlog. FORWARDS to ServiceText::DescribeDepot (#427), where the rule
+	 *  and its reasons live. */
+	FDepotBacklog DescribeDepot(FEntityInstanceId Depot, double Now, const URoadNetwork* Network) const
+	{
+		return ServiceText::DescribeDepot(*this, Depot, Now, Network);
+	}
 
 	/**
 	 * THE FLEET'S MEMBERSHIP DOOR (#443): every vehicle that joins or leaves goes through FServiceFleet::Add and
@@ -568,10 +546,11 @@ public:
 	/** Vehicles whose Home is Depot - counted off the vehicles, never stored on the depot. */
 	int32 VehiclesAt(FEntityInstanceId Depot) const;
 
-	/** "Bowser #7 · at depot 1 · 10,000 L" - the one line the depot card's backlog and its fleet rows share. The kind's
-	 *  NAME, through FServiceFleet::NameOf (#430): the card listed "FUEL #7" beside the "Bowser" it sold. Its stand is named by number through
-	 *  Network (OpsNames::StandLabel), which BOTH callers must pass - null (a graph-free test) names it by index. */
-	FString VehicleLine(const FServiceVehicle& Vehicle, const URoadNetwork* Network) const;
+	/** "Bowser #7 · at depot 1 · 10,000 L" - the depot card's vehicle line. FORWARDS to ServiceText::VehicleLine (#427). */
+	FString VehicleLine(const FServiceVehicle& Vehicle, const URoadNetwork* Network) const
+	{
+		return ServiceText::VehicleLine(*this, Vehicle, Network);
+	}
 
 	/** A turnaround with a deadline and one job, bypassing OnAgentPhase - for the backlog's lateness. */
 	void AddTurnaroundForTest(int32 AircraftId, double TurnaroundEndsAt, int32 JobId);
@@ -585,23 +564,24 @@ public:
 	 */
 	static bool IsStranded(const FServiceVehicle& Vehicle, const UGroundTraffic& Traffic);
 	const TArray<FServiceVehicle>& GetVehicles() const { return Vehicles; }
-	const TArray<FTurnaround>& GetTurnarounds() const { return Turnarounds; }
+	const TArray<FTurnaround>& GetTurnarounds() const { return Turnarounds.All(); }
 
 	/** The aircraft's job of Role, or null. */
 	const FServiceJob* JobForAircraft(int32 AircraftId, EServiceRole Role = EServiceRole::Fuel) const;
 
 	/**
-	 * How a departing aircraft left, from the FIGURES, not the job's state (batch 3 review I1): a job still
-	 * being served when the player pressed Depart is part-fuelled, though it never went Unserviceable.
-	 * Wanted <= 0 or delivered within FFuelRolePolicy::FuelledWithinLitres of it: Fuelled; nothing delivered:
-	 * Unfuelled; otherwise PartFuelled. THE POLICY'S FIGURE, the one FinishServe calls a job Done by (DoneWithin), so
-	 * the outcome and the fee use the same number - or a Done job 0.4 L short would read part-fuelled and be paid for
-	 * twice (#443: it was a constant here beside two literals in the policy and two in the bid).
+	 * The job with JobId, or null (0 is no job). PUBLIC since #427 for the two owners that read the jobs without writing
+	 * them - ServiceText's lines and FTurnarounds' "still being served" - and no wider than GetJobs, which already hands
+	 * out every job read-only. Its writable twin stays private.
 	 */
-	static EFuelOutcome FuelOutcomeOf(double Delivered, double Wanted);
+	const FServiceJob* FindJob(int32 JobId) const;
 
-	/** The aircraft's turnaround, or null. */
-	const FTurnaround* TurnaroundFor(int32 AircraftId) const;
+	/** How a departing aircraft left, from the FIGURES. FORWARDS to FTurnarounds::FuelOutcomeOf (#427), where the rule and
+	 *  its reasons live, beside the departure it scores. */
+	static EFuelOutcome FuelOutcomeOf(double Delivered, double Wanted) { return FTurnarounds::FuelOutcomeOf(Delivered, Wanted); }
+
+	/** The aircraft's turnaround, or null. FORWARDS to the turnarounds (#427). */
+	const FTurnaround* TurnaroundFor(int32 AircraftId) const { return Turnarounds.For(AircraftId); }
 
 	const FServiceVehicle* FindVehicle(int32 VehicleId) const;
 	const FServiceVehicle* VehicleForAgent(int32 AgentId) const;
@@ -686,14 +666,11 @@ private:
 	 *  and the vehicles, jobs and counters it moves are private here on purpose (Check-Architecture rule 43). */
 	friend class FServiceFleet;
 
-	/**
-	 * Send every aircraft whose turnaround has run out and whose jobs are finished.
-	 *
-	 * Its own function and not a step in the job loop, because it is a pass OVER the turnarounds
-	 * rather than a transition of one: departing an aircraft removes its turnaround and jobs, so this
-	 * cannot run inside a loop that walks them. See its body.
-	 */
-	void DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
+	/** FTurnarounds opens and closes turnarounds, which moves RevisionCount and writes the jobs through OpenJob and
+	 *  DropJobsOf: it is this board's turnaround owner (#427), and those are private here so that only the board's own
+	 *  owners can call them. See FTurnarounds' class comment for why a friend and not a free-standing service, and for
+	 *  the lint that holds what a friend could otherwise touch (Check-Architecture rule 78(c)). */
+	friend class FTurnarounds;
 
 	/**
 	 * The placeholder fleet brought in line with the depots (spec §3.4): a vehicle whose depot is gone is withdrawn (its
@@ -726,34 +703,28 @@ private:
 		const URoadNetwork& Network, const USimClock& Clock);
 
 	/**
-	 * The aircraft left its stand: its turnaround and jobs go, and vehicles out for them move on.
-	 *
-	 * bDeparted - it left for a departing phase (pushed back, taxied), not Gone or Stranded - makes this
-	 * where a TURNED-AROUND aircraft's turnaround ends (batch 3 review I1): it calls EndTurnaround, the one
-	 * publisher of FTurnaroundEndedEvent and poster of the part-fuelled fee, whoever sent it - DepartTheReady,
-	 * or the inspector's Depart calling UGroundTraffic::DepartAgent directly, which never passes through
-	 * DepartTheReady. EndTurnaround's other caller is OnAgentPhase, for a departure never turned around. A retire
-	 * (Unstick's despawn) is not a departure: PR B scores it as a cancelled flight.
-	 * ENFORCED BY: AirportOps.Fuel.ManualDepartEndsTurnaroundOnce, AirportOps.Fuel.RetiredAircraftEndsNoTurnaround
+	 * A vehicle's agent changed phase - the three cases of OnAgentPhase that are the vehicle lifecycle's (#427): its agent
+	 * stranding or moving again (the composition counters), going Gone (LoseAgent), stranded (its jobs released), and
+	 * parked (OnVehicleArrived). Vehicle is the one whose agent it is; OnAgentPhase asked.
 	 */
-	void DropAircraft(int32 AircraftId, bool bDeparted, UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
+	void OnVehiclePhase(FServiceVehicle& Vehicle, UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock,
+		const FAgentTransition& Transition);
 
 	/**
-	 * A turnaround's end, announced - THE ONE PUBLISHER of FTurnaroundEndedEvent (and poster of the part-fuelled fee).
-	 * Two callers, one per way an aircraft can leave: DropAircraft for one that had a turnaround, and OnAgentPhase for
-	 * one that departed WITHOUT ever being turned around (whole-stack review M4) - which can never both be true of one
-	 * departure, since OnAgentPhase takes the second branch only when TurnaroundFor finds nothing.
-	 * ENFORCED BY: AirportOps.Model.Bus.DepartFromFallbackReadsTaxiOut ("one TurnaroundEnded"), AirportOps.Fuel.ManualDepartEndsTurnaroundOnce
+	 * A new Open job of Role for AircraftId at Stand, owing Quantity - the turnaround's ask when its aircraft parks
+	 * (FTurnarounds::OnAircraftPhase). THE JOB LIST IS THIS BOARD'S: the turnaround names the job it is given and writes
+	 * none. Moves no revision: the turnaround's open has, in the same breath.
 	 */
-	void EndTurnaround(int32 AircraftId, FEntityInstanceId Stand, double Delivered, double Wanted, const USimClock& Clock);
+	FServiceJob& OpenJob(int32 AircraftId, EServiceRole Role, FEntityInstanceId Stand, double Quantity);
 
 	/**
-	 * The litres AgentId's flight is owed: LitresOwedFor (the offer's FuelLitres), else DefaultLitres. ONE READ for both
-	 * sites that ask - a turnaround's fuel job and a departure never turned around (whole-stack re-review m1) - so the
-	 * two cannot be owed different amounts.
-	 * ENFORCED BY: AirportOps.Model.Bus.DepartFromFallbackReadsTaxiOut ("owed what the flight was owed")
+	 * The jobs of an aircraft whose turnaround has just closed (FTurnarounds::Drop) go, and the vehicles out for them move
+	 * on - DropAircraft's second half (#427), in its order: each job logged and taken off its vehicle's queue, a vehicle
+	 * whose current job it was released, every job removed, then each released vehicle started on what is left.
+	 * JobIds is the closed turnaround's list, copied before it went; StandIndex is for the log line.
 	 */
-	double LitresWanted(int32 AgentId, const FAirframe& Airframe) const;
+	void DropJobsOf(int32 AircraftId, int32 StandIndex, const TArray<int32>& JobIds, UGroundTraffic& Traffic,
+		const URoadNetwork& Network, const USimClock& Clock);
 
 	/**
 	 * A trip's pumping is over: quantities move, the job is Done or re-opened with its remainder. The vehicle is
@@ -808,14 +779,6 @@ private:
 	 */
 	bool DriveVehicleTo(FServiceVehicle& Vehicle, FGuidelineNodeId Goal, bool bToFacility,
 		UGroundTraffic& Traffic, const URoadNetwork& Network);
-
-	/** The vehicle card's line - its kind's NAME (FServiceFleet::NameOf, #430), what it is doing, what it carries, what
-	 *  is queued. */
-	FString DescribeVehicle(const FServiceVehicle& Vehicle, const URoadNetwork* Network) const;
-
-	/** "to stand 3", "at depot 1" - the one phrase the vehicle card and the depot card share, so the
-	 *  two cannot describe the same vehicle two ways. The stand is named by its number through Network (OpsNames::StandLabel); null, for a graph-free test, names it by index. */
-	FString VehicleDoing(const FServiceVehicle& Vehicle, const URoadNetwork* Network) const;
 
 	/** A job the vehicle can no longer do goes back to the board, remainder and all. */
 	void Reopen(FServiceJob& Job);
@@ -915,10 +878,10 @@ private:
 	/** Put Job on Vehicle's queue (append only - user's ruling 6), with the promise it was won on. */
 	void Assign(FServiceVehicle& Vehicle, FServiceJob& Job, double PromisedFinish);
 
-	FServiceJob* FindJob(int32 JobId);
-	const FServiceJob* FindJob(int32 JobId) const;
+	/** The job with JobId, writable, or null - FindJob's private twin, named apart as FindVehicleMutable is, so a caller
+	 *  outside holding a non-const board reaches the public read rather than an access error. */
+	FServiceJob* FindJobMutable(int32 JobId);
 	FServiceVehicle* FindVehicleMutable(int32 VehicleId);
-	FTurnaround* FindTurnaround(int32 AircraftId);
 
 	/** The stand's anchor node for Role, or unset. By ROLE and then by ID, never by index - see
 	 *  URoadNetwork::GetAnchorIdsForRole. */
@@ -936,7 +899,13 @@ private:
 	 * the leak it exists to fix.
 	 */
 	UPROPERTY(Transient) TArray<FServiceJob> Jobs;
-	UPROPERTY(Transient) TArray<FTurnaround> Turnarounds;
+
+	/**
+	 * THE TURNAROUND OWNER (#427): the turnaround list, the departure pass and its last answer, which were three members
+	 * here (a UPROPERTY(Transient) array - Jobs' reason above - LastStepDeparted, and IsBeingServed's rule). Not a
+	 * UPROPERTY: nothing in it is saved or holds an object (see FTurnarounds::Items), and OnBeforeRestore clears it.
+	 */
+	FTurnarounds Turnarounds;
 
 	/**
 	 * SAVED, unlike the two above (stage 3): the fleet is what the player will BUY, and a load that
@@ -1009,15 +978,8 @@ private:
 	/** See StepCountForTest. A session counter, not saved. */
 	int32 StepCount = 0;
 
-	/** See DepartedLastStep. Transient: one Step's answer. */
-	TArray<int32> LastStepDeparted;
-
 	/** See Revision: the changes that move no vehicle. A session counter, not saved. */
 	uint32 RevisionCount = 0;
-
-	/** True while any of the turnaround's jobs is neither Done nor Unserviceable. One rule, read by
-	 *  DepartTheReady and by HasRefusedDeparture - so the two cannot disagree. */
-	bool IsBeingServed(const FTurnaround& Turnaround) const;
 
 	/**
 	 * The depot-to-stand route cache, dated by the graph's guideline revision (#301: the shape

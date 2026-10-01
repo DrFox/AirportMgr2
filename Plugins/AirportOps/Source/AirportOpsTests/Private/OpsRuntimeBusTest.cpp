@@ -12,6 +12,7 @@
 #include "Model/DeparturePlanner.h"
 #include "Model/Airport.h"
 #include "Model/JobBoard.h"
+#include "Model/Turnarounds.h"
 #include "Model/OfferGenerator.h"
 #include "Model/Ledger.h"
 #include "Model/RoadGuideline.h"
@@ -1734,6 +1735,49 @@ bool FOpsRuntimeDeadlockLookBandTest::RunTest(const FString&)
 	Runtime->Tick(3.0 / Clock->TimeScale());
 	TestTrue(TEXT("one game second past the edge: the look has fired there, not at the full period booked on the old band's rate"),
 		Runtime->GetAlerts()->RecomputeCountForTest() > Booked);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTurnaroundsBothBoardsBeginTest, "AirportOps.Model.Turnarounds.BothBoardsBeginAtTheOneStand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTurnaroundsBothBoardsBeginTest::RunTest(const FString&)
+{
+	// #427: "A TURNAROUND BEGAN" IS ONE DERIVATION, FTurnarounds::BeganAt, and both boards read it - the flight board enters
+	// Turnaround and records the stand, the job board opens the turnaround. They used to ask StandAtNode each for itself
+	// behind different gates (the flight board on To == Parked, the job board on the Parked cause). Pinned two ways: the
+	// derivation's own rule, on hand-made transitions; and both boards, on one bus, hearing one landing.
+	FFallbackParkRig Rig;
+	const FEntityInstanceId Stand = Rig.Field.Stands[0];
+	FAgentTransition Parked;
+	Parked.From = EAgentPhase::Taxiing;
+	Parked.To = EAgentPhase::Parked;
+	Parked.Cause = EAgentEvent::Parked;
+	Parked.GoalAtEvent = Rig.Field.Pose(Stand);
+	TestTrue(TEXT("a Parked on a stand's pose begins a turnaround at that stand"), FTurnarounds::BeganAt(*Rig.Field.Net, Parked) == Stand);
+	FAgentTransition Born = Parked;
+	Born.From = EAgentPhase::Gone;
+	Born.Cause = EAgentEvent::Dispatched;
+	TestFalse(TEXT("the Parked PHASE without the Parked cause begins none - the cause decides (#436)"),
+		FTurnarounds::BeganAt(*Rig.Field.Net, Born).IsSet());
+	FAgentTransition Nowhere = Parked;
+	Nowhere.GoalAtEvent = FGuidelineNodeId();
+	TestFalse(TEXT("a Parked on no stand's pose begins none"), FTurnarounds::BeganAt(*Rig.Field.Net, Nowhere).IsSet());
+
+	// ONE LANDING, BOTH BOARDS: the flight is in Turnaround exactly where the job board's turnaround is, on the same stand.
+	if (!TestTrue(TEXT("the flight lands"), Rig.Land())) { return false; }
+	if (!TestTrue(TEXT("and parks at a stand"), Rig.RunUntil(600.0, [&Rig]()
+		{
+			const FRoadAgent* A = Rig.Aircraft();
+			return A != nullptr && A->Phase == EAgentPhase::Parked;
+		})))
+	{
+		return false;
+	}
+	const FTurnaround* Turnaround = Rig.Jobs->TurnaroundFor(Rig.Agent);
+	if (!TestNotNull(TEXT("the job board opened its turnaround"), Turnaround)) { return false; }
+	TestEqual(TEXT("the flight board entered Turnaround on the same event"), Rig.Flight->GetPhase(), EFlightPhase::Turnaround);
+	TestTrue(TEXT("on a real stand"), Turnaround->Stand.IsSet());
+	TestTrue(TEXT("and both boards name the SAME stand - the one BeganAt answered"), Rig.Flight->Stand == Turnaround->Stand);
 	return true;
 }
 

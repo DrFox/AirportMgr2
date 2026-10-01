@@ -1103,7 +1103,7 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 		// AT Log AND NOT Warning: a taxiway the player has left busy refuses this for as long
 		// as they leave it, and it clears itself. It is asked again only when the push watch
 		// below says the answer changed (or the caller's own trigger fires), so this is a line
-		// per wake, not per tick; UJobBoard::DepartTheReady throttles its own to a change of reason.
+		// per wake, not per tick; FTurnarounds::DepartTheReady throttles its own to a change of reason.
 		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("Agent %d cannot push back yet: %.0f uu of ground is not free."),
 			AgentId, Push.PushRoute.Length);

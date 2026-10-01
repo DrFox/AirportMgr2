@@ -581,7 +581,10 @@ AIRPORTOPS_API EFlightPhase FlightPhaseFromTransition(const FAgentTransition& Tr
  * The stand whose pose is this node, or unset: a live IsStand() entity. The ONE "is it at (or bound for) a stand"
  * question both boards ask - UFlightBoard (does a Parked flight enter Turnaround) and UJobBoard (does a Parked
  * aircraft open a turnaround) - so the two cannot disagree about the fallback junction (review M8). Asked of a
- * transition's GoalAtEvent since #436: the node it parked on, not the one it may have been sent to since.
+ * transition's GoalAtEvent since #436: the node it parked on, not the one it may have been sent to since. ASKED THROUGH
+ * FTurnarounds::BeganAt since #427, which both boards call, so "a turnaround began" is one derivation and not two calls
+ * of this one with different gates around them.
+ * ENFORCED BY: Check-Architecture rule 78 (turnaround-began-once)
  */
 AIRPORTOPS_API FEntityInstanceId StandAtNode(const URoadNetwork& Network, FGuidelineNodeId Node);
 

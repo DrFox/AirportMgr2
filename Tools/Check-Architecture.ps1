@@ -4517,6 +4517,171 @@ else {
 }
 $ranRules.Add('bus-reentry-guarded')
 
+# --- 77. A MODEL FILE DOES NOT GROW BACK: A LINE BUDGET THAT MAY ONLY FALL (#427) ----------------------------------------
+# UJobBoard reached 3,331 lines on 2026-09-30 (JobBoard.h 816, JobBoard.cpp 1493, JobBoardBid.cpp 639, JobBoardDrive.cpp 383)
+# and about fourteen responsibilities - the #32 shape ARoadNetworkActor had at 2,313 - because every feature entered through
+# the one class and nothing said no. #427 and the PRs before it took the owners out (FServiceFleet, Airside's SendAgentTo,
+# FTurnarounds, ServiceText); this is what keeps the next feature from walking back in. THE SHAPE, by its symptom: every
+# Plugins\*\Source\*\Private\Model\*.cpp is held to $modelLineDefault lines, and a file already over that on the date below
+# is held to its own figure. A RATCHET, three ways:
+#  (a) a file over its figure fails. A new responsibility shrinks something, or its PR names the raise and edits the row
+#      with the reason - a raise with none is the rule switched off, which review refuses (rule 49's convention);
+#  (b) a listed file that has FALLEN more than $modelLineSlack lines below its figure fails too, until the figure is lowered
+#      to today's count: a ceiling nobody lowers lets a file grow back into the room an extraction made;
+#  (c) a listed file that is gone, or now fits the default, fails until its row goes, so the list cannot rot into a
+#      record of files that were once big.
+# Every line counts, a WHY comment included (rule 49's reason: a budget must not be gameable by deleting one).
+# THE FIGURES ARE 2026-10-01's, measured after #427's extraction (JobBoard.cpp 1549 -> 1048, with #491's lines rebased in). The default is 800: on that
+# date the largest Model file under it was VehicleFit.cpp at 768, so no file was given room it had never had.
+# DOES NOT SEE: a responsibility added to a NEW file beside the old one (which is the extraction this wants, and review's to
+# judge), a header, or a Public\ file. Nor does it see a function moved to a sibling .cpp of the same class to dodge a
+# figure - JobBoardBid.cpp and JobBoardDrive.cpp are held by the default like any other file.
+$modelLineDefault = 800
+$modelLineSlack = 50
+$modelLineBudget = [ordered]@{
+    'Plugins\Airside\Source\Airside\Private\Model\RoadNetwork.cpp'            = 2200
+    'Plugins\Airside\Source\Airside\Private\Model\GroundTraffic.cpp'          = 2121
+    'Plugins\Airside\Source\Airside\Private\Model\TrafficClaims.cpp'          = 1898
+    'Plugins\AirportOps\Source\AirportOps\Private\Model\FlightBoard.cpp'      = 1746
+    'Plugins\Airside\Source\Airside\Private\Model\RoadAgent.cpp'              = 1583
+    'Plugins\Airside\Source\Airside\Private\Model\GroundTrafficRebuild.cpp'   = 1582
+    'Plugins\Airside\Source\Airside\Private\Model\RouteSearch.cpp'            = 1191
+    'Plugins\AirportOps\Source\AirportOps\Private\Model\JobBoard.cpp'         = 1048
+    'Plugins\Airside\Source\Airside\Private\Model\ArrivalPlanner.cpp'         = 943
+}
+$modelLineFiles = @()
+foreach ($pluginDir in (Get-ChildItem -LiteralPath (Join-Path $Root 'Plugins') -Directory)) {
+    $sourceDir = Join-Path $pluginDir.FullName 'Source'
+    if (-not (Test-Path $sourceDir)) { continue }
+    foreach ($moduleDir in (Get-ChildItem -LiteralPath $sourceDir -Directory)) {
+        $modelDir = Join-Path $moduleDir.FullName 'Private\Model'
+        if (-not (Test-Path $modelDir)) { continue }
+        $modelLineFiles += @(Get-ChildItem -LiteralPath $modelDir -File -Filter '*.cpp')
+    }
+}
+if ($modelLineFiles.Count -lt 40) {
+    $failures.Add("model-line-budget: rule 77 found only $($modelLineFiles.Count) Plugins\*\Source\*\Private\Model\*.cpp file(s) - the trees moved, or the rule checks nothing (#427)")
+}
+$modelLineSeen = @{}
+foreach ($file in $modelLineFiles) {
+    $relative = $file.FullName.Substring($Root.TrimEnd('\', '/').Length + 1).Replace('/', '\')
+    $count = @(Get-Content -LiteralPath $file.FullName).Count
+    $key = $null
+    foreach ($candidate in $modelLineBudget.Keys) {
+        if ($candidate -ieq $relative) { $key = $candidate; break }
+    }
+    if ($null -eq $key) {
+        if ($count -gt $modelLineDefault) {
+            $failures.Add("model-line-budget: $relative is $count lines, over the $modelLineDefault every Model .cpp is held to - a new responsibility belongs in an owner of its own (FTurnarounds, ServiceText, FServiceFleet are the pattern), or the PR names why this file grows and adds a dated row to rule 77 (#427)")
+        }
+        continue
+    }
+    $modelLineSeen[$key] = $true
+    $figure = $modelLineBudget[$key]
+    if ($count -gt $figure) {
+        $failures.Add("model-line-budget: $relative is $count lines, over its figure of $figure - shrink something, or raise the row in rule 77 with the reason in the PR; the figures may only fall (#427)")
+    } elseif ($count -le $modelLineDefault) {
+        $failures.Add("model-line-budget: $relative is $count lines, inside the default of $modelLineDefault - remove its row from rule 77, the default holds it now (#427)")
+    } elseif ($count -lt $figure - $modelLineSlack) {
+        $failures.Add("model-line-budget: $relative is $count lines, more than $modelLineSlack under its figure of $figure - lower the row in rule 77 to $count, so the room it made cannot be grown back into (#427)")
+    }
+}
+foreach ($key in $modelLineBudget.Keys) {
+    if (-not $modelLineSeen.ContainsKey($key)) {
+        $failures.Add("model-line-budget: rule 77 holds $key to $($modelLineBudget[$key]) lines, but no such Model .cpp exists - remove or rename its row (#427)")
+    }
+}
+$ranRules.Add('model-line-budget')
+
+# --- 78. "A TURNAROUND BEGAN" IS ONE DERIVATION, READ BY BOTH BOARDS (#427) ------------------------------------------------
+# UFlightBoard (does a Parked flight enter Turnaround, and on which stand) and UJobBoard (does a Parked aircraft open a
+# turnaround) each called StandAtNode for itself, behind different gates - the flight board on To == Parked, the job board on
+# the Parked cause - so the two derivations of one fact agreed only while the traffic model kept reporting every Parked phase
+# with the Parked cause. FTurnarounds::BeganAt is the one derivation now. THE SHAPE removed is a second call, so:
+#  (a) `StandAtNode(` appears in production code only in Flight.h (the declaration), Flight.cpp (the definition) and
+#      Turnarounds.cpp (BeganAt) - comments and strings stripped, test files exempt (a test helper may ask a node);
+#  (b) both boards READ the one derivation: `FTurnarounds::BeganAt(` / `BeganAt(` is called inside UFlightBoard::OnAgentPhase
+#      (FlightBoard.cpp) and inside FTurnarounds::OnAircraftPhase (Turnarounds.cpp);
+#  (c) THE FRIEND TOUCHES WHAT IT WAS LET IN FOR. FTurnarounds is a friend of UJobBoard (as FServiceFleet is), and a friend
+#      sees every private member - so every `Board.X` / `Board->X` in Turnarounds.cpp names a member of $beganBoardReach:
+#      the counter it moves (RevisionCount), the two job doors (OpenJob, DropJobsOf), and the board's public reads and
+#      wiring. A write of the board's Jobs, Vehicles or NextJobId, a vehicle transition (Lifecycle) or a recall from here
+#      would put a second owner on the jobs - the shape #427 took apart.
+# WHAT NO REGEX SEES: a third board deriving the fact some other way (reading the live agent's goal, say). The behaviour
+# half is AirportOps.Model.Turnarounds.BothBoardsBeginAtTheOneStand, and the stale-goal half AirportOps.Model.Bus.SameFrameRedirectStaysTaxiIn.
+$beganAllowed = @('Public\Model\Flight.h', 'Private\Model\Flight.cpp', 'Private\Model\Turnarounds.cpp')
+$beganFiles = 0
+foreach ($tree in $trees) {
+    foreach ($file in Get-Sources $tree @('.cpp', '.h')) {
+        if ($file.Name -like '*Test.cpp' -or $file.Name -like '*Test.h' -or $file.Name -like '*TestHelpers.h' -or $file.FullName -match '[\\/](Testing|AirsideTests|AirportOpsTests)[\\/]') { continue }
+        $beganFiles++
+        $allowed = $false
+        foreach ($suffix in $beganAllowed) { if (Test-AllowedPathSuffix $file $suffix) { $allowed = $true; break } }
+        if ($allowed) { continue }
+        $lines = Get-Content -LiteralPath $file.FullName
+        $inBlock = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            if ($code -match '\bStandAtNode\s*\(') {
+                $failures.Add("turnaround-began-once: $($file.FullName):$($i + 1) calls StandAtNode - ask FTurnarounds::BeganAt, the one derivation of 'a turnaround began' both boards read (#427): $($code.Trim())")
+            }
+        }
+    }
+}
+if ($beganFiles -lt 50) {
+    $failures.Add("turnaround-began-once: rule 78 read only $beganFiles production file(s) - the trees moved, or the rule checks nothing (#427)")
+}
+foreach ($reader in @(
+        @{ File = (Join-Path $ops 'Private\Model\FlightBoard.cpp'); Function = 'UFlightBoard::OnAgentPhase' },
+        @{ File = (Join-Path $ops 'Private\Model\Turnarounds.cpp'); Function = 'FTurnarounds::OnAircraftPhase' })) {
+    if (-not (Test-Path $reader.File)) {
+        $failures.Add("turnaround-began-once: $($reader.File) is named by rule 78 but does not exist - update the rule, do not let it check nothing")
+        continue
+    }
+    $lines = Get-Content -LiteralPath $reader.File
+    $inBlock = $false
+    $current = ''
+    $seen = $false
+    $reads = $false
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        $def = Get-ArchDefinition $code
+        if ($null -ne $def) { $current = $def }
+        if ($current -eq $reader.Function) {
+            $seen = $true
+            if ($code -match '\bBeganAt\s*\(') { $reads = $true }
+        }
+    }
+    if (-not $seen) {
+        $failures.Add("turnaround-began-once: $($reader.Function) not found in $($reader.File) - it moved or went; update rule 78, do not let it check nothing")
+    } elseif (-not $reads) {
+        $failures.Add("turnaround-began-once: $($reader.Function) no longer reads FTurnarounds::BeganAt - the two boards would derive 'a turnaround began' each for itself again (#427)")
+    }
+}
+$beganBoardReach = @('RevisionCount', 'OpenJob', 'DropJobsOf', 'FindJob', 'JobForAircraft', 'LitresOwedFor', 'PostServiceFee', 'Bus')
+$turnaroundsFile = Join-Path $ops 'Private\Model\Turnarounds.cpp'
+if (Test-Path $turnaroundsFile) {
+    $lines = Get-Content -LiteralPath $turnaroundsFile
+    $inBlock = $false
+    $reachSeen = 0
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        if ($code -match '\bLifecycle\s*\(') {
+            $failures.Add("turnaround-began-once: Turnarounds.cpp:$($i + 1) moves a vehicle (Lifecycle) - a turnaround hands its jobs back through UJobBoard::DropJobsOf, and the vehicles are the board's (#427): $($code.Trim())")
+        }
+        foreach ($m in [regex]::Matches($code, '\bBoard\s*(?:\.|->)\s*(\w+)')) {
+            $reachSeen++
+            if ($beganBoardReach -notcontains $m.Groups[1].Value) {
+                $failures.Add("turnaround-began-once: Turnarounds.cpp:$($i + 1) reaches Board.$($m.Groups[1].Value) - the turnaround owner is a friend of UJobBoard for RevisionCount and the OpenJob/DropJobsOf doors only; the jobs and vehicles are the board's to write (#427): $($code.Trim())")
+            }
+        }
+    }
+    if ($reachSeen -eq 0) {
+        $failures.Add("turnaround-began-once: rule 78(c) found no Board. reach in Turnarounds.cpp - the board is no longer passed as Board, so the rule checks nothing; update it")
+    }
+}
+$ranRules.Add('turnaround-began-once')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

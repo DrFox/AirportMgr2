@@ -13,6 +13,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
+#include "Model/Turnarounds.h"
 #include "Algo/StableSort.h"
 
 namespace FlightBoardText
@@ -1183,12 +1184,15 @@ void UFlightBoard::OnAgentPhase(const URoadNetwork& Network, const USimClock& Cl
 	const EFlightPhase WasPhase = Flight->GetPhase();
 
 	// WHERE IT PARKED, AS THE EVENT SAYS (#436): the transition's GoalAtEvent is the node it parked on when it parked,
-	// through the same StandAtNode UJobBoard::OnAgentPhase asks (review M8). The fallback junction a stand-less
+	// read through FTurnarounds::BeganAt - THE ONE DERIVATION of "a turnaround began" that the job board opens its
+	// turnaround on (#427; review M8 made the two boards share StandAtNode, and #427 the whole question, where this asked
+	// on To == Parked and the job board on the Parked cause). The fallback junction a stand-less
 	// arrival waits on (UGroundTraffic::ReResolvePlan) is no stand's pose. This used to read the LIVE agent - Phase,
 	// GoalNode, bDepartureArmed - because the bus delivers the event a step late and the (From, To) pair could not
 	// say which taxi a Parked -> Taxiing was; its Cause says so now, and the two special cases that corrected the pair
 	// (#405's fallback park, review M4's depart from it) are cases of FlightPhaseFromTransition, WHY comments and all.
-	const FEntityInstanceId ParkedStand = To == EAgentPhase::Parked ? StandAtNode(Network, Transition.GoalAtEvent) : FEntityInstanceId();
+	// ENFORCED BY: Check-Architecture rule 78 (turnaround-began-once), AirportOps.Model.Turnarounds.BothBoardsBeginAtTheOneStand
+	const FEntityInstanceId ParkedStand = FTurnarounds::BeganAt(Network, Transition);
 
 	const EFlightPhase Next = FlightPhaseFromTransition(Transition, WasPhase, ParkedStand.IsSet());
 	if (Transition.Cause == EAgentEvent::Parked && !FlightPhase::HasReachedStand(WasPhase) && !ParkedStand.IsSet())
@@ -1224,7 +1228,7 @@ void UFlightBoard::OnAgentPhase(const URoadNetwork& Network, const USimClock& Cl
 	if (To == EAgentPhase::Parked)
 	{
 		// WHICH stand it actually got, which need not be the one held - see UFlight::Stand.
-		// The node it parked on is the authority, exactly as UJobBoard reads it - the EVENT's, not the
+		// The node it parked on is the authority, read through the one derivation UJobBoard reads (BeganAt) - the EVENT's, not the
 		// live agent's: the bus delivers this a step late, and an aircraft redirected since has a GoalNode
 		// that is its next stand, not this one. It used to be asked whether it was STILL parked to rule
 		// that out; GoalAtEvent cannot be anything but the node it parked on (#436).
