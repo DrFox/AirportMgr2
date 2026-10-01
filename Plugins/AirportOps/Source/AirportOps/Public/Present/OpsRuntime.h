@@ -405,15 +405,17 @@ private:
 	/**
 	 * THE DEADLOCK LOOK (#446): the one condition the alerts pass cannot learn from an event - a ring of agents each stalled past
 	 * FTrafficRules::StallSeconds, which matures with no phase change and no network edit. It was caught by the alerts pass being dirtied
-	 * every offer minute whatever was on the ground, which at x32 is about every frame. It is a clock entry of its own now, booked only for a
-	 * STALLED agent (one somebody has refused), for the game time its stall still needs to cross the threshold - not because agents exist: a
-	 * parked aircraft books nothing. StallSeconds is in MOTION seconds, which run at the speed multiplier alone, so the game seconds in them
-	 * are the day's compression: 21 game s per motion s by day and 75 by night on the default scenario (2026-09-30), so the three-second
-	 * threshold is ~63 game s by day and ~225 at night. Capped at the band edge and re-booked there (USimClock::GameSecondsToBandEdge) so
-	 * it is not up to 3.6x late across dawn. Re-booked by every alerts run - which a phase change, an edit, a load and an attach all cause.
-	 * The ONSET of a stall is not announced by anything, so it is not seen until some other event causes a recompute - see ArmDeadlockLook.
-	 * ENFORCED BY: AirportOps.Present.Alerts.DeadlockLookIsAClockEntryNotAnOfferMinuteTick,
-	 * AirportOps.Present.Alerts.DeadlockLookIgnoresAgentsThatAreNotStalled, AirportOps.Present.Alerts.DeadlockLookIsReBookedAtTheBandEdge
+	 * every offer minute whatever was on the ground, which at x32 is about every frame. It is a clock entry of its own now, with ONE BOOKING RULE
+	 * (ArmDeadlockLook): while ANY AGENT IS ON A ROUTE (FRoadAgent::IsOnRoute) a look is kept at the stall-threshold cadence - a first stall,
+	 * which nothing announces, can only begin on a route, so it is caught within about two thresholds - and a STALLED agent books the moment its
+	 * stall would cross the threshold when that is sooner. Armed by the agent-phase event (it dirties the alerts pass, whose run ends in the arm) when
+	 * an agent enters a route phase, cancelled by the run the last one's leaving causes: a field of parked or stranded aircraft, or none, books
+	 * nothing. StallSeconds is in MOTION seconds, which run at the speed multiplier alone, so the game seconds in them are the day's compression:
+	 * 21 game s per motion s by day and 75 by night on the default scenario (2026-09-30), so the three-second threshold is ~63 game s by day and ~225
+	 * at night. Capped at the band edge and re-booked there (USimClock::GameSecondsToBandEdge) so it is not up to 3.6x late across dawn.
+	 * ENFORCED BY: AirportOps.Present.Alerts.NoseToNoseJamIsAlertedWithNoOtherEvent, AirportOps.Present.Alerts.DeadlockLookKeepsWatchWhileAnAgentMoves,
+	 * AirportOps.Present.Alerts.DeadlockLookIgnoresAFieldWithNothingMoving, AirportOps.Present.Alerts.DeadlockLookIsAClockEntryNotAnOfferMinuteTick,
+	 * AirportOps.Present.Alerts.DeadlockLookIsReBookedAtTheBandEdge
 	 */
 	int32 DeadlockLookHandle = INDEX_NONE;
 	void ArmDeadlockLook();

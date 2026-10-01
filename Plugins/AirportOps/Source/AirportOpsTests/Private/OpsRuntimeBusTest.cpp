@@ -1408,7 +1408,7 @@ bool FOpsRuntimeDeadlockLookTest::RunTest(const FString&)
 	// #446: a deadlock matures when agents have been stalled past FTrafficRules::StallSeconds - no phase change, no edit. A STALLED agent (one refused
 	// by somebody) books the alerts pass a look at the moment its stall would cross that threshold, from a clock entry the pass itself books. The
 	// offer minute that used to do this is gone (QuietMinutesRunNoAlertsPass), and an aircraft that waits on nobody books nothing
-	// (DeadlockLookIgnoresAgentsThatAreNotStalled). ONE agent stalling gives exactly one look after StallSeconds.
+	// (DeadlockLookIgnoresAFieldWithNothingMoving). ONE agent stalling gives exactly one look after StallSeconds.
 	FAirsideTestWorld TestWorld;
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
@@ -1539,36 +1539,154 @@ bool FOpsRuntimePausedEditAlertTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeDeadlockLookIgnoresIdleTest, "AirportOps.Present.Alerts.DeadlockLookIgnoresAgentsThatAreNotStalled",
+namespace
+{
+	/** A line of two guideline nodes in the actor's network, far from the road the tests place first, and the aircraft dispatched along it (Count of them).
+	 *  Prefixed: unity build. Returns false when a dispatch is refused. */
+	bool RuntimeDeadlockLookLine(FAirsideTestWorld& TestWorld, int32 Count, TArray<int32>& OutAircraft, FGuidelineNodeId& OutA, FGuidelineNodeId& OutB)
+	{
+		ARoadNetworkActor* Actor = TestWorld.Actor;
+		if (Actor == nullptr) { return false; }
+		Actor->PlaceNode(FVector2D(0.0, 60000.0));
+		if (Actor->Network.Get() == nullptr) { return false; }
+		URoadNetwork& Net = *Actor->Network;
+		RuntimeE2ELayLine(Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0), OutA, OutB);
+		const FRoutePlan Plan = TestGraph::Probe(Net, OutA, OutB, ETraversalClass::Aircraft);
+		if (!Plan.IsValid()) { return false; }
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			if (!Actor->DispatchAgent(Plan, UAirsideSettings::ResolveDefaultAirframe())) { return false; }
+			OutAircraft.Add(Actor->GetTraffic()->GetNewestAgentId());
+		}
+		return true;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeDeadlockLookMovingTest, "AirportOps.Present.Alerts.DeadlockLookKeepsWatchWhileAnAgentMoves",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeDeadlockLookMovingTest::RunTest(const FString&)
+{
+	// #445 REVIEW, round 3: nothing announces the ONSET of a stall, so waiting for an agent to be seen stalled left a jam with no later event unalerted
+	// (the minute catch-all caught it). A first stall can only begin on a route, so while ANY agent is on one (Taxiing, Manoeuvring, Reversing) a look is
+	// kept booked at the StallSeconds cadence, re-booked by every run of the alerts pass - which every phase change causes.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	TArray<int32> Aircraft;
+	FGuidelineNodeId A, B;
+	if (!TestTrue(TEXT("one aircraft dispatched along a line"), RuntimeDeadlockLookLine(TestWorld, 1, Aircraft, A, B))) { return false; }
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(TestWorld.Actor);
+	for (int32 Frame = 0; Frame < 3; ++Frame) { Runtime->Tick(0.0); }
+	UGroundTraffic* Model = TestWorld.Actor->GetTraffic()->GetModel();
+	if (!TestTrue(TEXT("PRECONDITION: it is on a route and waits on nobody"),
+		Model->GetAgents()[0].IsOnRoute() && Model->GetAgents()[0].GetWaitingOn() == 0)) { return false; }
+
+	USimClock* Clock = Runtime->GetClock();
+	const double Period = Clock->GameSecondsOfMovement(Model->Rules.StallSeconds);
+	const int32 Before = Runtime->GetAlerts()->RecomputeCountForTest();
+	// ONE STEP PER PERIOD, not one big step: a look is a clock entry that marks the pass, and a single Tick drains once however much time it spans.
+	for (int32 Step = 0; Step < 5; ++Step) { Runtime->Tick(1.1 * Period / Clock->TimeScale()); }
+	TestEqual(TEXT("five stall periods with an aircraft on a route: the alerts pass looked once a period"),
+		Runtime->GetAlerts()->RecomputeCountForTest() - Before, 5);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeDeadlockLookFirstStallTest, "AirportOps.Present.Alerts.NoseToNoseJamIsAlertedWithNoOtherEvent",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeDeadlockLookFirstStallTest::RunTest(const FString&)
+{
+	// #445 REVIEW, round 3 - the regression the earlier "booked only for a stalled agent" rule opened: two aircraft nose to nose, and NOTHING after
+	// the dispatches to wake the alerts pass. The ring forms while no recompute is looking, so no stalled agent has ever been SEEN to book a look for;
+	// the old offer-minute catch-all found it within a game minute. The ring is staged AFTER the last recompute, with no event after it, and the alert
+	// must come within 2 x StallSeconds of game movement time.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	TArray<int32> Aircraft;
+	FGuidelineNodeId A, B;
+	if (!TestTrue(TEXT("two aircraft dispatched along one line"), RuntimeDeadlockLookLine(TestWorld, 2, Aircraft, A, B))) { return false; }
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(TestWorld.Actor);
+	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
+	Runtime->GetEvents()->OnAlertRaised.AddDynamic(Listener, &UOpsEventsTestListener::OnAlertRaised);
+	for (int32 Frame = 0; Frame < 3; ++Frame) { Runtime->Tick(0.0); }   // the last recompute: both aircraft are moving, neither is stalled
+	UGroundTraffic* Model = TestWorld.Actor->GetTraffic()->GetModel();
+	const FString Deadlock = TEXT("alert+:") + UEnum::GetValueAsString(EAlertKind::Deadlock);
+	if (!TestEqual(TEXT("PRECONDITION: no jam yet"), Listener->CountOf(Deadlock), 0)) { return false; }
+
+	// THE JAM, with no event: each waits on the other, past the threshold - what a claim pass and that long a wait leave. NO recompute follows.
+	FGroundTrafficTestAccess Access(*Model);
+	const double Stalled = Model->Rules.StallSeconds + 1.0;
+	Access.ScriptWait(Aircraft[0], FTrafficResource::OfNode(A), Aircraft[1], Stalled);
+	Access.ScriptWait(Aircraft[1], FTrafficResource::OfNode(B), Aircraft[0], Stalled);
+	TArray<TArray<int32>> Rings;
+	Model->CurrentDeadlocks(Rings);
+	if (!TestEqual(TEXT("PRECONDITION: the traffic itself reports the ring"), Rings.Num(), 1)) { return false; }
+	TestEqual(TEXT("PRECONDITION: and nothing has told the alerts pass"), Listener->CountOf(Deadlock), 0);
+
+	USimClock* Clock = Runtime->GetClock();
+	Runtime->Tick(2.0 * Clock->GameSecondsOfMovement(Model->Rules.StallSeconds) / Clock->TimeScale());
+	TestEqual(TEXT("within 2 x StallSeconds of game movement time the Deadlock alert is raised, with no other event"), Listener->CountOf(Deadlock), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeDeadlockLookIgnoresIdleTest, "AirportOps.Present.Alerts.DeadlockLookIgnoresAFieldWithNothingMoving",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FOpsRuntimeDeadlockLookIgnoresIdleTest::RunTest(const FString&)
 {
-	// #445 REVIEW: the look was booked because agents EXIST, so a parked aircraft kept the alerts pass firing at the old catch-all's rate. It is booked
-	// for a STALLED agent alone (one refused by somebody), at the moment its stall would cross the threshold. An aircraft on the ground that waits on
-	// nobody books nothing.
+	// #445 REVIEW: the look was booked because agents EXIST, so a parked aircraft kept the alerts pass firing at the old catch-all's rate. It is booked for
+	// an agent on a route, or a stalled one (the moving rule: DeadlockLookKeepsWatchWhileAnAgentMoves) - a field of PARKED aircraft costs nothing. The
+	// aircraft taxis to its stand, parks, and then a whole game hour passes with the alerts pass run not once.
 	FAirsideTestWorld TestWorld;
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
-	Actor->PlaceNode(FVector2D(0.0, 60000.0));
+	Actor->PlaceNode(FVector2D(0.0, 40000.0));
 	if (!TestNotNull(TEXT("a network"), Actor->Network.Get())) { return false; }
 	URoadNetwork& Net = *Actor->Network;
-	FGuidelineNodeId A, B;
-	RuntimeE2ELayLine(Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0), A, B);
+	const FGuidelineNodeId TaxiSouth = Net.AddGuidelineNode(FVector2D(-10000.0, -10000.0));
+	const FGuidelineNodeId TaxiNorth = Net.AddGuidelineNode(FVector2D(-10000.0, 10000.0));
+	{
+		FGuidelineEdge Edge;
+		Edge.A = TaxiSouth;
+		Edge.B = TaxiNorth;
+		Edge.Control = FVector2D(-10000.0, 0.0);
+		Edge.AllowedTraffic = FTrafficMask::Only(ETraversalClass::Aircraft);
+		Edge.Direction = EGuidelineDir::Bidirectional;
+		Edge.Width = 600.0;
+		Edge.bDerived = true;
+		Net.AddGuidelineEdge(MoveTemp(Edge));
+	}
+	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Stand = Net.PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 0.0), 0.0, 3600.0,
+		StandDef->PoseRole, StandDef->Trucks);
+	TestGraph::Link(Net);
 	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 	Runtime->Attach(Actor);
-	const FRoutePlan Plan = TestGraph::Probe(Net, A, B, ETraversalClass::Aircraft);
-	if (!TestTrue(TEXT("a route"), Plan.IsValid())) { return false; }
-	if (!TestTrue(TEXT("an aircraft is dispatched"), Actor->DispatchAgent(Plan, UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
-	for (int32 Frame = 0; Frame < 3; ++Frame) { Runtime->Tick(0.0); }
-	UGroundTraffic* Model = Actor->GetTraffic()->GetModel();
-	if (!TestEqual(TEXT("PRECONDITION: one aircraft on the ground"), Model->GetAgentCount(), 1)) { return false; }
-	TestEqual(TEXT("PRECONDITION: and it waits on nobody"), Model->GetAgents()[0].GetWaitingOn(), 0);
+	const FRoutePlan Plan = TestGraph::Probe(Net, TaxiSouth, Net.GetEntity(Stand)->PoseNode, ETraversalClass::Aircraft);
+	if (!TestTrue(TEXT("the aircraft routes to the stand"), Plan.IsValid())) { return false; }
+	FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	Airframe.TurnaroundSeconds = 1.0e9;   // it stays parked: nothing departs it inside this test
+	if (!TestTrue(TEXT("and dispatches"), Actor->DispatchAgent(Plan, Airframe))) { return false; }
+	const int32 Aircraft = Actor->GetTraffic()->GetNewestAgentId();
 
-	const int32 OnGround = Runtime->GetAlerts()->RecomputeCountForTest();
-	const double Period = Runtime->GetClock()->GameSecondsOfMovement(Model->Rules.StallSeconds);
-	Runtime->Tick(Period * 5.0 / Runtime->GetClock()->TimeScale());
-	TestEqual(TEXT("five stall periods with an aircraft on the ground and nothing stalled: the alerts pass looked not once"),
-		Runtime->GetAlerts()->RecomputeCountForTest(), OnGround);
+	constexpr float Step = 1.0f / 30.0f;
+	UGroundTraffic* Model = Actor->GetTraffic()->GetModel();
+	const FRoadAgent* Agent = Model->FindAgent(Aircraft);
+	for (int32 Tick = 0; Tick < 30 * 240 && Agent != nullptr && Agent->Phase != EAgentPhase::Parked; ++Tick)
+	{
+		Actor->Tick(Step);
+		Runtime->Tick(Step);
+		Agent = Model->FindAgent(Aircraft);
+	}
+	if (!TestTrue(TEXT("PRECONDITION: the aircraft is parked on its stand"), Agent != nullptr && Agent->Phase == EAgentPhase::Parked)) { return false; }
+	for (int32 Frame = 0; Frame < 10; ++Frame) { Runtime->Tick(0.0); }   // what parking sets in motion settles
+
+	USimClock* Clock = Runtime->GetClock();
+	const int32 Settled = Runtime->GetAlerts()->RecomputeCountForTest();
+	// A WHOLE GAME HOUR, in steps a little over a stall period each: a look is a clock entry that marks the pass, and one Tick drains once however
+	// much time it spans, so a single hour-long step could not tell a booked look from none (the mutation "any agent books" showed a count of one).
+	const double StepGameSeconds = 1.1 * Clock->GameSecondsOfMovement(Model->Rules.StallSeconds);
+	for (double Elapsed = 0.0; Elapsed < 3600.0; Elapsed += StepGameSeconds) { Runtime->Tick(StepGameSeconds / Clock->TimeScale()); }
+	TestEqual(TEXT("a field of parked aircraft, a whole game hour: the alerts pass looked not once"), Runtime->GetAlerts()->RecomputeCountForTest(), Settled);
 	return true;
 }
 

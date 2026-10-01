@@ -716,24 +716,35 @@ void UOpsRuntime::ArmDeadlockLook()
 	{
 		return;
 	}
-	// BOOKED FOR A STALLED AGENT ALONE (#445 review), at the moment its stall would cross the threshold. An agent is stalled when somebody has
-	// refused it (GetWaitingOn) - an aircraft parked on its stand, or taxiing freely, waits on nobody and books nothing, where "an agent exists" kept
-	// the pass firing at the old catch-all's rate for as long as any aircraft sat at a stand. The threshold is the traffic's own (CurrentDeadlocks
-	// reads a stall strictly past it); one already past it is still watched, a ring is made by the agents NOT yet stalled joining it, so it is
-	// looked at again a threshold on. The soonest of them books it.
-	// WHAT THIS DOES NOT SEE, and says: the ONSET of a stall. Nothing announces an agent becoming blocked, so a first stall is learnt of by the
-	// next recompute something else causes (any phase change, an edit, a payment, the job board's pass). A jam with no such event after it is
-	// not looked for until one comes; the old offer-minute catch-all found it within a game minute.
-	// ENFORCED BY: AirportOps.Present.Alerts.DeadlockLookIgnoresAgentsThatAreNotStalled,
+	// THE BOOKING RULE (#445 review, round 3). Nothing announces the ONSET of a stall - an agent becoming blocked is no event - so a look booked only
+	// for an agent already SEEN stalled would leave a jam that forms with no later event unalerted for good (two aircraft nose to nose and nothing else
+	// happening; the old offer-minute catch-all found it within a game minute). But a first stall can only begin on a ROUTE, so:
+	//  - WHILE ANY AGENT IS ON ONE (FRoadAgent::IsOnRoute: Taxiing, Manoeuvring, Reversing) a look is kept booked at the stall-threshold cadence, so
+	//    an onset is caught within about two thresholds of game movement time. This is armed by the phase event itself: an agent entering a route
+	//    phase publishes FAgentPhaseEvent, which dirties the alerts pass (WireBus), whose run ends here - and it is cancelled the same way, by the run
+	//    the last route agent's leaving causes. A field of PARKED or stranded aircraft, or none, books NOTHING (it did, while "an agent exists" was the
+	//    rule: a parked aircraft kept the pass firing at the old catch-all's rate).
+	//  - A STALLED AGENT (one whose stall clock is running: FRoadAgent::IsStoppedAndWaiting, #429's one definition of the clock's feed) books the
+	//    moment its stall would cross the threshold, when that is sooner than the cadence. The threshold is the traffic's own (CurrentDeadlocks reads a stall strictly past it); one already past it is looked at again a threshold
+	//    on, since a ring is made by the agents not yet stalled joining it.
+	// THE COST, said: about one alerts recompute per threshold (3 motion s: ~63 game s by day) for as long as anything moves - the old catch-all's rate
+	// less the time nothing moves.
+	// ENFORCED BY: AirportOps.Present.Alerts.NoseToNoseJamIsAlertedWithNoOtherEvent (the first stall, no other event),
+	// AirportOps.Present.Alerts.DeadlockLookKeepsWatchWhileAnAgentMoves, AirportOps.Present.Alerts.DeadlockLookIgnoresAFieldWithNothingMoving,
 	// AirportOps.Present.Alerts.DeadlockLookIsAClockEntryNotAnOfferMinuteTick
 	const double Threshold = FMath::Max(Model->Rules.StallSeconds, 0.1);
 	double SoonestMotionSeconds = TNumericLimits<double>::Max();
 	for (const FRoadAgent& Agent : Model->GetAgents())
 	{
-		if (Agent.GetWaitingOn() == 0)
+		if (Agent.IsOnRoute())
+		{
+			SoonestMotionSeconds = FMath::Min(SoonestMotionSeconds, Threshold);
+		}
+		if (!Agent.IsStoppedAndWaiting())
 		{
 			continue;
 		}
+		// THE CLOCK READ AS A VALUE, to say how long is left - not compared to a bound (rule 4's 'stall clock compared' is for that).
 		const double Stalled = Agent.GetStalledSeconds();
 		SoonestMotionSeconds = FMath::Min(SoonestMotionSeconds, Stalled < Threshold ? Threshold - Stalled : Threshold);
 	}
