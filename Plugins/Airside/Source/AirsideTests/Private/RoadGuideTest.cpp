@@ -89,8 +89,9 @@ bool FRoadAnchorExtendsTheSegmentBehindItTest::RunTest(const FString& Parameters
 	//
 	// A PROFILE IS REQUIRED, NOT HONOURED-IF-PRESENT: this used to skip the two assertions when none
 	// resolved ("a content set with no taxiway would leave the widths legitimately zero"), and a taxiway
-	// always resolves something (Airside.Present.ProfileResolutionIsOneRule), so the skip could only hide
-	// a broken resolution - the assertions ran zero times and the test stayed green.
+	// always resolves something, so the skip could only hide a broken resolution - the assertions ran zero
+	// times and the test stayed green.
+	// ENFORCED BY: Airside.Present.ProfileResolutionIsOneRule (a taxiway always resolves a profile).
 	const URoadProfile* Armed = Gesture.TestWorld.Actor->ResolveProfileFor(
 		ERoadKind::Taxiway, Gesture.Road()->GetWidthIndex());
 	if (TestNotNull(TEXT("the taxiway the gesture would lay resolves a profile"), Armed))
@@ -269,14 +270,17 @@ bool FRoadAnchorCarriesItsHalfWidthTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("a road drags a centreline"),
 		static_cast<int32>(Anchor.Point), static_cast<int32>(EDragPoint::Centreline));
 
-	// HONOURED, NOT ASSUMED: the profile has to resolve for the widths to mean anything, and a
-	// content set with no taxiway would leave them legitimately zero.
+	// REQUIRED, NOT HONOURED-IF-PRESENT: the profile has to resolve for the widths to mean anything. This
+	// used to AddInfo and return true when none did ("a content set with no taxiway would leave them
+	// legitimately zero"), but a taxiway always resolves something, so the skip could only hide a broken
+	// resolution and leave every assertion below running zero times under a green test - the same trap as
+	// the Armed check above.
+	// ENFORCED BY: Airside.Present.ProfileResolutionIsOneRule (a taxiway always resolves a profile).
 	const URoadProfile* Profile = Target->ResolveProfileFor(ERoadKind::Taxiway,
 		Gesture.Road()->GetWidthIndex());
-	if (Profile == nullptr)
+	if (!TestNotNull(TEXT("the taxiway the anchor drags resolves a profile"), Profile))
 	{
-		AddInfo(TEXT("No taxiway profile resolves; half-widths not checked"));
-		return true;
+		return false;
 	}
 
 	// THE TWO ARE ASKED SEPARATELY because URoadProfile's are separate: a cross-section may be
