@@ -5,6 +5,7 @@
 #include "Model/Airport.h"
 #include "Model/AirsideCapability.h"
 #include "Model/Flight.h"
+#include "Model/OpsEventBus.h"
 #include "Model/Pricing.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
@@ -154,6 +155,7 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 		{
 			// NO BANKING - see TickMinute's header.
 			State.Accumulated = 0.0;
+			const bool bWasComing = State.bCouldCome;
 			if (State.bCouldCome)
 			{
 				// SAYS WHY, and names the aeroplane - ON THE TRANSITION, not every minute. An
@@ -169,6 +171,18 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 					FirstRefused != nullptr ? FirstRefused->Airframe.Requirements.LandingFieldLength : 0.0);
 				State.bCouldCome = false;
 			}
+			// ANNOUNCED WHEN THE VERDICT MOVES - it could come and cannot, or still cannot for another reason (#446, #445). The alerts
+			// pass looks again on this and on nothing else about airlines: it used to look every offer minute, ~40 times a real
+			// second at x32. The transition's own log line above stays the record; this is the wake-up.
+			// ENFORCED BY: AirportOps.Model.Offers.AdmissionChangeIsAnnounced
+			if (Cache.AnnouncedReason != FirstRefusalText || bWasComing)
+			{
+				Cache.AnnouncedReason = FirstRefusalText;
+				if (Bus != nullptr)
+				{
+					Bus->Publish(FAirlineAdmissionChangedEvent{ Airline.GetFName(), false, FirstRefusalText });
+				}
+			}
 			continue;
 		}
 		if (!State.bCouldCome)
@@ -176,6 +190,11 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 			UE_LOG(LogAirportOps, Log, TEXT("Offers: %s can use this airport again (%d type(s))"),
 				*Airline.DisplayName.ToString(), Admissible.Num());
 			State.bCouldCome = true;
+			Cache.AnnouncedReason.Reset();
+			if (Bus != nullptr)
+			{
+				Bus->Publish(FAirlineAdmissionChangedEvent{ Airline.GetFName(), true, FString() });
+			}
 		}
 
 		State.Accumulated += Rate * (TickSeconds / 3600.0);

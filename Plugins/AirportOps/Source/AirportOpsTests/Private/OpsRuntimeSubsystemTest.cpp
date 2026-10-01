@@ -124,6 +124,60 @@ bool FOpsRuntimeSubsystemReattachTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+namespace
+{
+	/**
+	 * Every line the ops categories write at Warning or worse, and every "discarded" line at any level, while registered. UNBUFFERED
+	 * (CanBeUsedOnMultipleThreads) - the log thread would deliver it after the spy is gone (FLogLineSpy's #216 reason).
+	 */
+	struct FOpsQuietSpy : public FOutputDevice
+	{
+		TArray<FString> Lines;
+		FOpsQuietSpy() { GLog->AddOutputDevice(this); }
+		virtual ~FOpsQuietSpy() override { GLog->RemoveOutputDevice(this); }
+		virtual bool CanBeUsedOnMultipleThreads() const override { return true; }
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category) override
+		{
+			const bool bOpsCategory = Category == FName(TEXT("LogAirportOps")) || Category == FName(TEXT("LogOpsBus"));
+			if (bOpsCategory && ((Verbosity & ELogVerbosity::VerbosityMask) <= ELogVerbosity::Warning || FCString::Strstr(V, TEXT("discarded")) != nullptr))
+			{
+				Lines.Add(V);
+			}
+		}
+	};
+}
+
+/**
+ * A GAME INSTANCE THAT SHUTS DOWN WITH ITS AIRPORT STILL ATTACHED (#445): Deinitialize drops the registry's handle - the one that detaches
+ * on the airport's Left announcement - so a runtime that simply went would leave the facade's raw IBuildPurse* pointing at its ledger and the
+ * actor's delegates bound to it. Deinitialize detaches, through the same Detach the announcement uses.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeSubsystemDeinitializeTest,
+	"AirportOps.Present.OpsRuntimeSubsystemDetachesOnDeinitialize",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeSubsystemDeinitializeTest::RunTest(const FString& Parameters)
+{
+	FOpsSubsystemTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	UOpsRuntimeSubsystem* Sub = TestWorld.GameInstance->GetSubsystem<UOpsRuntimeSubsystem>();
+	if (!TestNotNull(TEXT("the subsystem"), Sub) || !TestNotNull(TEXT("with a runtime"), Sub->GetRuntime())) { return false; }
+	ARoadNetworkActor* Airport = TestWorld.World->SpawnActor<ARoadNetworkActor>();
+	if (!TestNotNull(TEXT("an airport"), Airport)) { return false; }
+	UOpsRuntime* Runtime = Sub->GetRuntime();
+	if (!TestEqual(TEXT("setup: attached to it"), Runtime->GetTarget(), Airport)) { return false; }
+	TestTrue(TEXT("setup: its ledger publishes onto the runtime's bus"), Runtime->GetLedger()->Bus == &Runtime->GetBus());
+
+	Sub->Deinitialize();
+	TestNull(TEXT("deinitialised with the airport still there, the runtime is detached from it"), Runtime->GetTarget());
+	for (const UOpsRuntime::FOpsBusPublisher& Each : Runtime->Publishers())
+	{
+		TestNull(*FString::Printf(TEXT("and the %s no longer points at the bus"), Each.Name), *Each.Slot);
+	}
+	return true;
+}
+
 /**
  * THE REGISTRY'S LIST IS EVERY WORLD'S (#446) - one static delegate, because this game-instance subsystem outlives
  * worlds - so the subsystem filters: an airport registered in a world this game instance does not own (the editor
@@ -229,6 +283,35 @@ bool FOpsRuntimeSubsystemReregisterTest::RunTest(const FString& Parameters)
 	URoadNetworkRegistry::OnAirportChanged().Broadcast(*TestWorld.World, *Airport, EAirportRegistration::Arrived);
 	TestEqual(TEXT("a re-announced arrival of the target is no re-attach: the game time holds"), Runtime->GetClock()->Now(), Now, 1e-9);
 	TestEqual(TEXT("and so does the balance"), Runtime->GetLedger()->Balance(), Balance, 1e-9);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeSubsystemQuietDetachTest,
+	"AirportOps.Present.OpsRuntimeSubsystemDetachesTwiceQuietly",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeSubsystemQuietDetachTest::RunTest(const FString& Parameters)
+{
+	// THE SECOND DETACH IS A NO-OP, AND SAYS NOTHING (#445 review): the airport's Left announcement detaches; Deinitialize detaches again, and Detach
+	// is documented as safe with nothing attached. It logged "Bus: discarded 0 queued event(s)" for the nothing it did. Detach twice - after the Left
+	// announcement and then from Deinitialize - writes no Warning, no Error and no discard line.
+	FOpsSubsystemTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	UOpsRuntimeSubsystem* Sub = TestWorld.GameInstance->GetSubsystem<UOpsRuntimeSubsystem>();
+	if (!TestNotNull(TEXT("the subsystem"), Sub) || !TestNotNull(TEXT("with a runtime"), Sub->GetRuntime())) { return false; }
+	ARoadNetworkActor* Airport = TestWorld.World->SpawnActor<ARoadNetworkActor>();
+	if (!TestNotNull(TEXT("an airport"), Airport)) { return false; }
+	UOpsRuntime* Runtime = Sub->GetRuntime();
+	if (!TestEqual(TEXT("setup: attached to it"), Runtime->GetTarget(), Airport)) { return false; }
+	Airport->Destroy();   // the registry's Left: the first Detach
+	if (!TestNull(TEXT("setup: detached by the airport leaving"), Runtime->GetTarget())) { return false; }
+
+	FOpsQuietSpy Spy;
+	Runtime->Detach();       // a second Detach, called directly
+	Sub->Deinitialize();     // and a third, from the subsystem's own teardown
+	TestEqual(TEXT("detaching what is already detached writes no Warning, no Error and no discard line"), Spy.Lines.Num(), 0);
+	for (const FString& Line : Spy.Lines) { AddError(Line); }
 	return true;
 }
 

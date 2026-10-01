@@ -124,14 +124,24 @@ double USimClock::TimeScale() const
 	return Multiplier(Speed) * GameSecondsPerRealSecond(TimeOfDay());
 }
 
+double USimClock::GameSecondsToBandEdge() const
+{
+	// THE BAND EDGES ARE DAWN AND DUSK, wrapping midnight - Advance's own piecewise step, which used to compute this inline: ONE calculation of
+	// where the rate changes, so a caller booking a look across a band (#445) and the clock that crosses it cannot disagree.
+	const double Dawn = DawnHour * 3600.0;
+	const double Dusk = DuskHour * 3600.0;
+	const double Tod = TimeOfDay();
+	if (Tod < Dawn)      { return Dawn - Tod; }
+	if (Tod < Dusk)      { return Dusk - Tod; }
+	return SecondsPerDay - Tod + Dawn;
+}
+
 void USimClock::Advance(double RealDeltaSeconds)
 {
 	// PIECEWISE ACROSS DAWN AND DUSK. A single multiply by TimeScale() would run a step that
 	// began at 19:59 at the daylight rate all the way through the night - and a long frame, or
 	// a test's one big step, is exactly when that is wrong by the most.
 	double Remaining = FMath::Max(RealDeltaSeconds, 0.0);
-	const double Dawn = DawnHour * 3600.0;
-	const double Dusk = DuskHour * 3600.0;
 	while (Remaining > 0.0)
 	{
 		const double Rate = TimeScale();
@@ -139,12 +149,8 @@ void USimClock::Advance(double RealDeltaSeconds)
 		{
 			break;
 		}
-		const double Tod = TimeOfDay();
 		// Game seconds to the next band edge, wrapping midnight.
-		double Edge;
-		if (Tod < Dawn)      { Edge = Dawn - Tod; }
-		else if (Tod < Dusk) { Edge = Dusk - Tod; }
-		else                 { Edge = SecondsPerDay - Tod + Dawn; }
+		const double Edge = GameSecondsToBandEdge();
 		const double RealToEdge = Edge / Rate;
 		if (Remaining <= RealToEdge)
 		{

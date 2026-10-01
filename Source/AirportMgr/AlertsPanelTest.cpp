@@ -1,6 +1,8 @@
 #include "CoreMinimal.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Components/TextBlock.h"
+#include "Blueprint/WidgetTree.h"
 #include "Model/OpsAlerts.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
@@ -147,6 +149,33 @@ namespace
 		Alert.Focus.Point = Point;
 		return Alert;
 	}
+
+	/**
+	 * A WINDOW'S WHOLE WORLD (#445): the model it reads and the events it listens to. The window keeps no list of its own - it reads
+	 * UOpsAlerts::GetAlerts() - so a test stages what the model holds and broadcasts what the runtime would publish, in that order: the model is
+	 * changed first, then the world is told. Prefixed-by-type: the module is a unity build.
+	 */
+	struct FAlertsPanelRig
+	{
+		UOpsAlerts* Model = NewObject<UOpsAlerts>();
+		UOpsEvents* Events = NewObject<UOpsEvents>();
+		void Bind(UAlertsPanelWidget& Panel) { Panel.BindTo(*Events, *Model); }
+		void Raise(const FOpsAlert& Alert)
+		{
+			Model->StageForTest(Alert);
+			Events->OnAlertRaised.Broadcast(Alert);
+		}
+		void Clear(const FOpsAlertKey& Key)
+		{
+			Model->UnstageForTest(Key);
+			Events->OnAlertCleared.Broadcast(Key);
+		}
+		void Reset()
+		{
+			for (const FOpsAlert& Each : TArray<FOpsAlert>(Model->GetAlerts())) { Model->UnstageForTest(Each.Key); }
+			Events->OnAlertsReset.Broadcast();
+		}
+	};
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAlertsWindowFollowsTest, "AirportMgr.UI.Alerts.WindowFollowsRaiseAndClear",
@@ -156,17 +185,17 @@ bool FAlertsWindowFollowsTest::RunTest(const FString&)
 	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
 	UAlertsPanelWidget* Panel = CreateWidget<UAlertsPanelWidget>(TestWorld.World, UAlertsPanelWidget::StaticClass());
 	if (!TestNotNull(TEXT("an alerts window"), Panel)) { return false; }
-	UOpsEvents* Events = NewObject<UOpsEvents>();
-	Panel->BindTo(*Events);
+	FAlertsPanelRig Rig;
+	Rig.Bind(*Panel);
 
 	const FOpsAlert A = AlertsPanelTestAlert(EAlertKind::FlightStranded, 1);
-	Events->OnAlertRaised.Broadcast(A);
-	Events->OnAlertRaised.Broadcast(AlertsPanelTestAlert(EAlertKind::JobUnserviceable, 2));
-	Events->OnAlertRaised.Broadcast(A);   // a re-raise after a load - the same key
+	Rig.Raise(A);
+	Rig.Raise(AlertsPanelTestAlert(EAlertKind::JobUnserviceable, 2));
+	Rig.Raise(A);   // a re-raise after a load - the same key
 	TestEqual(TEXT("one row per standing problem - a re-raise updates, it does not stack"), Panel->AlertCount(), 2);
-	Events->OnAlertCleared.Broadcast(A.Key);
+	Rig.Clear(A.Key);
 	TestEqual(TEXT("a cleared problem leaves the list"), Panel->AlertCount(), 1);
-	Events->OnAlertsReset.Broadcast();
+	Rig.Reset();
 	TestEqual(TEXT("a load or re-attach empties it - the re-raises that follow refill it"), Panel->AlertCount(), 0);
 	return true;
 }
@@ -180,8 +209,8 @@ bool FAlertsBadgeTest::RunTest(const FString&)
 	if (!TestNotNull(TEXT("controller spawned"), C) || !TestNotNull(TEXT("with a HUD layer"), C->GetHud())) { return false; }
 	UAlertsPanelWidget* Panel = CreateWidget<UAlertsPanelWidget>(TestWorld.World, UAlertsPanelWidget::StaticClass());
 	C->GetHud()->AlertsPanel = Panel;
-	UOpsEvents* Events = NewObject<UOpsEvents>();
-	Panel->BindTo(*Events);
+	FAlertsPanelRig Rig;
+	Rig.Bind(*Panel);
 
 	const FBuildAction* Action = BuildActions().FindByPredicate([](const FBuildAction& A) { return A.Id == FName(TEXT("game.alerts")); });
 	if (!TestNotNull(TEXT("the bar has an Alerts button"), Action) || !TestTrue(TEXT("with a live label"), static_cast<bool>(Action->DynamicLabel)))
@@ -190,8 +219,8 @@ bool FAlertsBadgeTest::RunTest(const FString&)
 	}
 	FBuildActionContext Ctx(*C);
 	TestFalse(TEXT("unlit with nothing wrong"), Action->IsActive(Ctx));
-	Events->OnAlertRaised.Broadcast(AlertsPanelTestAlert(EAlertKind::FlightStranded, 1));
-	Events->OnAlertRaised.Broadcast(AlertsPanelTestAlert(EAlertKind::Overdrawn, 0));
+	Rig.Raise(AlertsPanelTestAlert(EAlertKind::FlightStranded, 1));
+	Rig.Raise(AlertsPanelTestAlert(EAlertKind::Overdrawn, 0));
 	TestTrue(TEXT("the label counts the standing problems"), Action->DynamicLabel(Ctx).ToString().Contains(TEXT("2")));
 	TestTrue(TEXT("and the button is lit while any exist"), Action->IsActive(Ctx));
 	return true;
@@ -205,9 +234,9 @@ bool FAlertsRowGoTest::RunTest(const FString&)
 	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
 	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
 	UAlertsPanelWidget* Panel = CreateWidget<UAlertsPanelWidget>(TestWorld.World, UAlertsPanelWidget::StaticClass());
-	UOpsEvents* Events = NewObject<UOpsEvents>();
-	Panel->BindTo(*Events);
-	Events->OnAlertRaised.Broadcast(AlertsPanelTestAlert(EAlertKind::HeldStandLost, 7, EAlertFocusKind::Point, FVector2D(-2500.0, 800.0)));
+	FAlertsPanelRig Rig;
+	Rig.Bind(*Panel);
+	Rig.Raise(AlertsPanelTestAlert(EAlertKind::HeldStandLost, 7, EAlertFocusKind::Point, FVector2D(-2500.0, 800.0)));
 	TestTrue(TEXT("Go on a row with a place goes there"), Panel->Go(0, *C));
 	TestEqual(TEXT("the camera's focus is the alert's"), C->GetViewFocus(), FVector2D(-2500.0, 800.0));
 	TestFalse(TEXT("a row that is not there does nothing"), Panel->Go(5, *C));
@@ -247,12 +276,12 @@ bool FAlertsCancelFlightTest::RunTest(const FString&)
 
 	UAlertsPanelWidget* Panel = CreateWidget<UAlertsPanelWidget>(TestWorld.World, UAlertsPanelWidget::StaticClass());
 	if (!TestNotNull(TEXT("an alerts window"), Panel)) { return false; }
-	UOpsEvents* Events = NewObject<UOpsEvents>();
-	Panel->BindTo(*Events);
+	FAlertsPanelRig Rig;
+	Rig.Bind(*Panel);
 	const FOpsAlert Cannot = AlertsPanelTestAlert(EAlertKind::FlightCannotLand, Flight->Id);
 	const FOpsAlert Lost = AlertsPanelTestAlert(EAlertKind::HeldStandLost, Flight->Id);
-	Events->OnAlertRaised.Broadcast(Cannot);
-	Events->OnAlertRaised.Broadcast(Lost);
+	Rig.Raise(Cannot);
+	Rig.Raise(Lost);
 
 	TestFalse(TEXT("a held-stand alert for the same flight offers no cancel"), Panel->CancelFlightOf(Lost.Key, *Runtime));
 	TestEqual(TEXT("and cancelled nothing"), Flight->GetPhase(), EFlightPhase::Accepted);
@@ -263,7 +292,7 @@ bool FAlertsCancelFlightTest::RunTest(const FString&)
 	TestFalse(TEXT("and its stand released"), Model->IsStandHeld(StandNode, 0));
 	TestFalse(TEXT("a second click on the same row finds nothing still to cancel"), Panel->CancelFlightOf(Cannot.Key, *Runtime));
 
-	Events->OnAlertCleared.Broadcast(Cannot.Key);
+	Rig.Clear(Cannot.Key);
 	TestFalse(TEXT("and once the alert has cleared the row is gone"), Panel->CancelFlightOf(Cannot.Key, *Runtime));
 	return true;
 }
@@ -302,12 +331,12 @@ bool FAlertsCancelClickTest::RunTest(const FString&)
 
 	UAlertsPanelWidget* Panel = CreateWidget<UAlertsPanelWidget>(TestWorld.World, UAlertsPanelWidget::StaticClass());
 	if (!TestNotNull(TEXT("an alerts window"), Panel)) { return false; }
-	UOpsEvents* Events = NewObject<UOpsEvents>();
-	Panel->BindTo(*Events);
+	FAlertsPanelRig Rig;
+	Rig.Bind(*Panel);
 	const FOpsAlert Cannot = AlertsPanelTestAlert(EAlertKind::FlightCannotLand, Flight->Id, EAlertFocusKind::Point, Field.Threshold);
 	const FOpsAlert Lost = AlertsPanelTestAlert(EAlertKind::HeldStandLost, Flight->Id, EAlertFocusKind::Point, Field.Threshold);
-	Events->OnAlertRaised.Broadcast(Cannot);
-	Events->OnAlertRaised.Broadcast(Lost);
+	Rig.Raise(Cannot);
+	Rig.Raise(Lost);
 	Panel->PaintRowsForTest();
 
 	TestTrue(TEXT("the flight-cannot-land row's Cancel flight is bound to its own entry"), Panel->IsCancelBoundForTest(Cannot.Key));
@@ -371,6 +400,71 @@ bool FAlertsIsAWindowTest::RunTest(const FString&)
 	Hud->AlertsPanel = CreateWidget<UAlertsPanelWidget>(TestWorld.World, UAlertsPanelWidget::StaticClass());
 	Hud->WireWindows();
 	TestNotNull(TEXT("the alerts panel is a window the host can show"), Hud->WindowHost->WindowForTest(TEXT("alerts")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAlertsRowTextTest, "AirportMgr.UI.Alerts.RowTextFollowsTheModel",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAlertsRowTextTest::RunTest(const FString&)
+{
+	// #445's SECOND PIN: raise with reason A, change the reason, recompute - the row text equals the model's. The window kept its own copy of the list
+	// and UOpsAlerts refreshed a standing alert's words without publishing, so the row kept "reason A" for as long as the problem stood. The model
+	// announces the change now (FAlertChangedEvent -> UOpsEvents::OnAlertChanged) and the window repaints from the MODEL.
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	UAlertsPanelWidget* Panel = CreateWidget<UAlertsPanelWidget>(TestWorld.World, UAlertsPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("an alerts window"), Panel)) { return false; }
+	FAlertsPanelRig Rig;
+	Rig.Bind(*Panel);
+	auto Painted = [Panel](const FString& Words)
+	{
+		TArray<UWidget*> All;
+		Panel->WidgetTree->GetAllWidgets(All);
+		for (UWidget* Each : All)
+		{
+			const UTextBlock* Text = Cast<UTextBlock>(Each);
+			if (Text != nullptr && Text->GetText().ToString() == Words) { return true; }
+		}
+		return false;
+	};
+
+	FOpsAlert A = AlertsPanelTestAlert(EAlertKind::AirlineCannotCome, 0);
+	A.Key.Name = TEXT("CumbriaAir");
+	A.Text = FText::FromString(TEXT("Cumbria Air cannot use this airport: runway too short"));
+	Rig.Raise(A);
+	Panel->PaintRowsForTest();
+	if (!TestTrue(TEXT("PRECONDITION: the row says reason A"), Painted(A.Text.ToString()))) { return false; }
+	TestFalse(TEXT("and the window is clean - nothing left to repaint"), Panel->NeedsRepaintForTest());
+
+	// THE REASON CHANGES: the player lengthened the runway, and what stops the airline is now a stand. The model holds the new words; the
+	// event is all the window is TOLD.
+	FOpsAlert B = A;
+	B.Text = FText::FromString(TEXT("Cumbria Air cannot use this airport: no stand big enough"));
+	Rig.Model->StageForTest(B);
+	TestEqual(TEXT("the window's count and list ARE the model's - no copy to go stale"), Panel->GetAlerts()[0].Text.ToString(), B.Text.ToString());
+	Rig.Events->OnAlertChanged.Broadcast(A.Key);
+	TestTrue(TEXT("the event invalidates the rows"), Panel->NeedsRepaintForTest());
+	Panel->PaintRowsForTest();   // what the next tick while shown does
+	TestTrue(TEXT("the row now says reason B - the model's words"), Painted(B.Text.ToString()));
+	TestFalse(TEXT("and not reason A"), Painted(A.Text.ToString()));
+	TestEqual(TEXT("one row, not two"), Panel->AlertCount(), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAlertsBadgeReadsTheModelTest, "AirportMgr.UI.Alerts.BadgeReadsTheModel",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAlertsBadgeReadsTheModelTest::RunTest(const FString&)
+{
+	// THE BAR'S BADGE, #445: it read the window's mirror, which only the events fed. It reads the model now, through the window - so an alert the
+	// model holds is counted the moment it is held, with no event between, and the badge can never disagree with what the runtime says.
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	UAlertsPanelWidget* Panel = CreateWidget<UAlertsPanelWidget>(TestWorld.World, UAlertsPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("an alerts window"), Panel)) { return false; }
+	FAlertsPanelRig Rig;
+	TestEqual(TEXT("unbound: nothing to count"), Panel->AlertCount(), 0);
+	Rig.Bind(*Panel);
+	Rig.Model->StageForTest(AlertsPanelTestAlert(EAlertKind::Overdrawn, 0));
+	Rig.Model->StageForTest(AlertsPanelTestAlert(EAlertKind::FlightStranded, 4));
+	TestEqual(TEXT("the model holds two: the badge says two, though no event has been heard"), Panel->AlertCount(), 2);
 	return true;
 }
 

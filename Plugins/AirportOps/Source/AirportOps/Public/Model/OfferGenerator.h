@@ -11,6 +11,7 @@
 
 class UPricing;
 
+class FOpsEventBus;
 class UAirlineDefinition;
 class UAirport;
 class UFlight;
@@ -222,6 +223,13 @@ public:
 	 */
 	UPROPERTY(Transient) TObjectPtr<const UAirport> Airport = nullptr;
 
+	/**
+	 * Where an airline's change of verdict is announced (FAirlineAdmissionChangedEvent, #446/#445). Owned by UOpsRuntime, like
+	 * UAirlineRoster::Bus - set and cleared with the runtime's other publishers (UOpsRuntime::Publishers), null in a bare NewObject.
+	 * ENFORCED BY: AirportOps.Model.Offers.AdmissionChangeIsAnnounced, AirportOps.Present.Bus.DetachUnhooksEveryPublisher
+	 */
+	FOpsEventBus* Bus = nullptr;
+
 	/** Every airline back to "could come", unjudged - a reopen (UOpsRuntime::WireBus). The next TickMinute judges
 	 *  afresh against the admission cache, and logs the transition if an airline still cannot come. */
 	void ForgetAirlineVerdicts();
@@ -289,6 +297,11 @@ private:
 		/** FirstRefusal as the plan described it, figures and all - see CouldEverAdmit. */
 		FString FirstRefusalSentence;
 		int32 FirstRefused = INDEX_NONE;
+		/**
+		 * The reason last ANNOUNCED for this airline (FAirlineAdmissionChangedEvent), empty while it could come. Not reset with the cache: it
+		 * is what a rebuilt cache is compared with, so a change of reason is one event and a repeat of it is none.
+		 */
+		FString AnnouncedReason;
 	};
 	TMap<FName, FAdmissionCache> AdmissionCache;
 	int32 AdmissionChecks = 0;

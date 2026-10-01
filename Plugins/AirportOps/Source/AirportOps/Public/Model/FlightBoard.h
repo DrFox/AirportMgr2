@@ -105,6 +105,13 @@ struct FQueueTick
 	/** The airport admits no arrivals (AdmitsArrivals): nothing was cleared, and nothing can be until it opens -
 	 *  so the pass keeps no safety net ticking for the flights still Waiting (whole-stack review I1). */
 	bool bClosed = false;
+	/**
+	 * A flight was already cleared in this queue frame (BeginQueueFrame), so nothing was decided: the pass asks again next frame
+	 * (#445 - the one-clearance-a-frame rule is the queue's own, and this is how it says "not yet" without the runtime counting
+	 * frames). Waiting and the rest of this result are NOT filled - a deferred tick looked at nothing - so the pass leaves its
+	 * safety-net wish as it was.
+	 */
+	bool bDeferred = false;
 };
 
 /**
@@ -438,17 +445,19 @@ public:
 	/**
 	 * WHY A HOLDING FLIGHT CAN NEVER LAND, or None (#442): the refusal its cached clearance (ClearanceFor - the plan minus
 	 * the runway, which TickQueue asks) holds, when that refusal is one the player must build or change something to clear
-	 * (ArrivalPlanner::IsPermanentRefusal). What the FlightCannotLand alert is derived from. None for a flight that is not
-	 * Inbound, that the queue has not judged yet (a busy runway is asked first, so the clearance of a flight waiting behind
-	 * one is computed when the runway frees), whose refusal will clear on its own, or whose cached judgement is OLDER THAN
-	 * THE GUIDELINE GRAPH.
+	 * (ArrivalPlanner::IsPermanentRefusal). What the FlightCannotLand alert is derived from. An ACCEPTED flight is judged too
+	 * (#445; JudgeUnarrived, the queue pass's own - the plan with no occupancy, the question the offer generator asks), so the alert
+	 * does not wait for its ETA. None for a flight that is neither Accepted nor Inbound, that the queue has not judged yet, whose refusal will
+	 * clear on its own, or whose cached judgement is OLDER THAN THE GUIDELINE GRAPH.
 	 *
 	 * READS THE CACHE AND NEVER FILLS IT: an alert pass that planned would be a route search per holding flight per
-	 * recompute. And it trusts the cache only while it is dated by Network's guideline revision: a holding flight behind a
-	 * busy runway is not re-judged (ClearanceFor is asked after the runway), so after the player fixes the airport its old
-	 * "no exit" would keep the alert up until the runway freed. A stale judgement is None here, not a guess either way.
+	 * recompute. And it trusts the cache only while it is dated by Network's guideline revision: a judgement older than the graph says nothing
+	 * - not a guess either way - so after the player fixes the airport its old "no exit" cannot keep the alert up. The queue pass keeps the cache
+	 * CURRENT (JudgeUnarrived re-dates every unarrived flight on a graph change, runway busy or clock paused or not), so "older than the graph"
+	 * is the window between an edit and the pass that runs for it - inside one drain, the pass running before the alerts'.
 	 * ENFORCED BY: AirportOps.Model.Alerts.UnlandableHoldingFlightRaisesAnAlert,
-	 * AirportOps.Model.Alerts.FixedAirportClearsTheAlertBehindABusyRunway
+	 * AirportOps.Model.Alerts.FixedAirportClearsTheAlertBehindABusyRunway,
+	 * AirportOps.Model.Alerts.HoldingFlightAlertSurvivesAnUnrelatedEditBehindABusyRunway
 	 */
 	EArrivalRefusal UnlandableWhy(const UFlight& Flight, const URoadNetwork& Network) const;
 
@@ -643,6 +652,23 @@ public:
 	 */
 	FQueueTick TickQueue(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
+	/**
+	 * A NEW FRAME FOR ONE CLEARANCE A FRAME (#445): the aircraft just cleared claims the runway on its first motion tick, so a
+	 * second clearance in the frame of the first would be decided before that claim exists - on two runways, onto a strip the first
+	 * is about to hold. The rule is the QUEUE'S, so its state is here: TickQueue clears at most one flight between two calls of this,
+	 * and says bDeferred when asked for another. UOpsRuntime::Tick calls it once per frame before the drain - the drain runs the
+	 * arrival pass more than once when a clearance's own Arriving event wakes it again, which is exactly the case - and it counted
+	 * the frames itself (DrainFrame, QueueClearedFrame) until this moved. THE RULE APPLIES ONLY ONCE A FRAME HAS BEGUN: a caller
+	 * that never calls this (a world-free test driving TickQueue by hand) sets its own pace and is not limited - a board that cleared one
+	 * flight and then refused for ever would be a trap for whoever called it without knowing.
+	 * ENFORCED BY: AirportOps.Present.ArrivalQueue.SecondRunwayNextFrame, AirportOps.Model.FlightBoard.OneClearanceAFrameIsTheQueuesRule
+	 */
+	void BeginQueueFrame()
+	{
+		bQueueFramed = true;
+		bClearedThisQueueFrame = false;
+	}
+
 	/** How many times TickQueue has run. For the runtime-wiring test. */
 	int32 TickQueueCallsForTest() const { return TickQueueCalls; }
 
@@ -726,6 +752,20 @@ private:
 	};
 	TMap<int32, FClearance> Clearances;
 	int32 TickQueueCalls = 0;
+
+	/** Set by a clearance, cleared by BeginQueueFrame - see there. bQueueFramed: a frame has ever begun. Session state, never saved. */
+	bool bClearedThisQueueFrame = false;
+	bool bQueueFramed = false;
+
+	/**
+	 * Judges every flight still to arrive - accepted or holding - against the current guideline graph (#445), once per graph revision: the plan
+	 * with no occupancy (what the field could EVER take, as UOfferGenerator::CouldEverAdmit asks) into Clearances, so UnlandableWhy has an answer
+	 * for a flight that has not joined the queue AND one for a holding flight whatever the runway or the clock is doing - ClearanceFor is asked only
+	 * with the runway free and the clock running, which left a verdict older than the graph after any edit made while paused or behind a busy
+	 * runway (the FlightCannotLand alert cleared, and was raised again with a fresh toast). Run by TickQueue, first, which the pass runs when the
+	 * network changes. A TRANSIENT verdict (GraphBeingEdited) is not kept: see ClearanceFor.
+	 */
+	void JudgeUnarrived(const URoadNetwork& Network);
 
 	/** See Clearances. Logs on a change of reason; never bumps the revision. */
 	EArrivalRefusal ClearanceFor(const UGroundTraffic& Traffic, const URoadNetwork& Network, const UFlight& Flight);

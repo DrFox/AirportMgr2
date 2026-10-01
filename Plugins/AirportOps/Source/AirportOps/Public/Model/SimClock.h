@@ -108,6 +108,15 @@ public:
 	 */
 	double GameSecondsOfMovement(double MovementSeconds) const;
 
+	/**
+	 * Game seconds until the day's rate next CHANGES - the next dawn or dusk, wrapping midnight. A figure made with GameSecondsOfMovement
+	 * is the rate NOW (see there), so a caller that books something for a span must not book past this: it re-books at the edge, at the new
+	 * rate. Advance steps by it. (#445: the deadlock look, which at dawn booked on the night rate of 75 game s per motion s would have
+	 * fired up to 3.6x late against the day rate of 21.)
+	 * ENFORCED BY: AirportOps.Model.SimClock.BandEdgeIsWhereTheRateChanges
+	 */
+	double GameSecondsToBandEdge() const;
+
 	double Now() const { return GameSeconds; }
 	int32 Day() const;
 	double TimeOfDay() const;

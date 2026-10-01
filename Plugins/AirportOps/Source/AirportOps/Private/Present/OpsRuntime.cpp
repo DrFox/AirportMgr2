@@ -31,6 +31,9 @@
 UOpsRuntime::UOpsRuntime()
 {
 	Clock = CreateDefaultSubobject<USimClock>(TEXT("Clock"));
+	// THE NET'S TWO COLLABORATORS ARE THIS OBJECT'S OWN FOR ITS LIFE - the bus a member, the clock a subobject - so it is bound here,
+	// once, and not at each attach (#445); a detach cancels its entry, which is all it ever needs undoing.
+	SafetyNet.Bind(Bus, *Clock, SafetyNetSeconds);
 	Events = CreateDefaultSubobject<UOpsEvents>(TEXT("Events"));
 	Catalog = CreateDefaultSubobject<UOpsCatalog>(TEXT("Catalog"));
 	JobBoard = CreateDefaultSubobject<UJobBoard>(TEXT("JobBoard"));
@@ -96,7 +99,9 @@ UOpsRuntime::UOpsRuntime()
 	FacilityPurchases->Ledger = Ledger;
 	FacilityPurchases->Pricing = Pricing;
 	FacilityPurchases->Clock = Clock;
-	FacilityPurchases->Bus = &Bus;
+	// ITS BUS IS NOT SET HERE (#445): it was, and never cleared - the seventh publisher, in none of Attach, Detach or the Detach test.
+	// Every publisher is pointed at the bus by Attach's loop over Publishers(), and taken back by Detach's.
+	// ENFORCED BY: Check-Architecture rule 71 (every-bus-publisher-is-listed), AirportOps.Present.Bus.DetachUnhooksEveryPublisher
 }
 
 void UOpsRuntime::SeedAirlines()
@@ -148,7 +153,7 @@ FUnstickVerdict UOpsRuntime::Unstick(int32 AgentId, EUnstickAction Action)
 	// A PLAYER COMMAND THAT MAY HAVE CHANGED THE JOB BOARD (jobs released, a vehicle recalled): its
 	// pass runs on events (stage 3), and every rescue path today also raises a phase event - but a
 	// command is not an event, so it says so itself rather than leaning on that.
-	DirtyJobBoard();
+	Bus.MarkDirty(TEXT("JobBoard"));
 	return Verdict;
 }
 
@@ -162,12 +167,12 @@ bool UOpsRuntime::CancelFlight(int32 FlightId)
 	}
 	// THE RULE IS THE BOARD'S. What this adds is the wake-up: a cancel is a command, not an event, and what it frees - a stand a
 	// holding flight was waiting for, a queue place, the alert that offered it - is read by passes that run on events. The
-	// FFlightCancelled it publishes dirties the alerts pass (WireBus); the queue is told here, through the door every other
-	// dirtier uses.
+	// FFlightCancelled it publishes dirties the alerts pass (WireBus); the queue is told here, as every other
+	// dirtier tells it.
 	const bool bCancelled = FlightBoard->CancelByPlayer(*Model, *Clock, FlightId);
 	if (bCancelled)
 	{
-		DirtyArrivalQueue();
+		Bus.MarkDirty(TEXT("ArrivalQueue"));
 	}
 	return bCancelled;
 }
@@ -274,9 +279,11 @@ TArray<FAirlineOffers> UOpsRuntime::AirlineOffersFromCatalog() const
 void UOpsRuntime::OfferTick()
 {
 	++OfferTicks;
-	// AN AIRLINE'S "CAN IT COME?" is re-judged inside TickMinute below, which announces nothing - so the
-	// alerts pass looks again every offer minute (spec 2026-09-29-ops-alerts §1).
-	Bus.MarkDirty(TEXT("Alerts"));
+	// NO ALERTS MARK HERE ANY MORE (#446): an airline's "can it come?" is re-judged inside TickMinute below, which used to announce
+	// nothing, so the alerts pass looked again every offer minute - about every frame at x32 - whether or not anything had moved. It
+	// announces now (FAirlineAdmissionChangedEvent, which WireBus routes to the pass) and the deadlock condition has a clock entry
+	// of its own (ArmDeadlockLook).
+	// ENFORCED BY: AirportOps.Present.Alerts.QuietMinutesRunNoAlertsPass
 	if (Target == nullptr || Target->Network == nullptr)
 	{
 		return;
@@ -347,7 +354,7 @@ void UOpsRuntime::WireBus()
 	// A LOAD DOES NOT RE-SEED: SeededDepots is saved and restored, so the pass the load wakes finds every depot seen.
 	// ENFORCED BY: AirportOps.Present.Fleet.PlacedDepotIsSeededByTheAnnouncement, AirportOps.Present.Fleet.LoadDoesNotReseedADepotThatHasVehicles,
 	// AirportOps.Present.Fleet.AttachSeedsTheStarterFleetOnTheFirstDrain; Check-Architecture rule 60 (starter-fleet-seeded-on-announcement)
-	Bus.RegisterPass(TEXT("FleetSeed"), [this]()
+	Bus.RegisterPass(TEXT("FleetSeed"), [this](const FPassRun&)
 	{
 		if (Target != nullptr && Target->Network != nullptr)
 		{
@@ -364,7 +371,7 @@ void UOpsRuntime::WireBus()
 	// seat can move. Not by a purchase: the shop refuses one past the ceiling, so it can never leave an excess.
 	// ENFORCED BY: AirportOps.Present.Facility.RepairRemovesAndRefundsUnseated, AirportOps.Present.Facility.RepairRunsAfterALoad;
 	// the purchase half by AirportOps.Model.Facility.UnseatedModulesGrantNeitherBaysNorPumps (a buy past the ceiling: NoSlotReserved)
-	Bus.RegisterPass(TEXT("ModuleRepair"), [this]()
+	Bus.RegisterPass(TEXT("ModuleRepair"), [this](const FPassRun&)
 	{
 		if (Target != nullptr && Target->Network != nullptr)
 		{
@@ -383,7 +390,7 @@ void UOpsRuntime::WireBus()
 		}
 		// ANY PHASE CHANGE may be the board's business - an aircraft parked, a vehicle arrived or lost
 		// its agent - and deciding which here would be a second copy of OnAgentPhase's own rules.
-		DirtyJobBoard();
+		Bus.MarkDirty(TEXT("JobBoard"));
 	});
 	// THE PLAYER DREW SOMETHING: a refused job may be servable now, and so may a refused departure - a runway, a route or
 	// the push arm it had none of. Every refusal but PushbackBlocked waits on this. (A new depot's starter fleet is NOT this
@@ -391,42 +398,40 @@ void UOpsRuntime::WireBus()
 	// the bids below meet the vehicles - Check-Architecture rule 60.)
 	// ENFORCED BY: AirportOps.Present.PushGroundFreed.NoPushbackRouteIsQuiet ("drawing the arm")
 	Bus.Subscribe<FNetworkChangedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
-		[this](const FNetworkChangedEvent&) { DirtyJobBoard(); });
+		[this](const FNetworkChangedEvent&) { Bus.MarkDirty(TEXT("JobBoard")); });
 	// A VEHICLE BOUGHT OR SOLD, A MODULE BOUGHT: the board's candidates changed, and a job waiting on an
 	// empty depot meets the new vehicle on this drain's pass - nothing polls (facility-upgrades spec §3).
-	// Through DirtyJobBoard like every other JobBoard dirtier (rule 36), so the pass keeps one door.
 	// ENFORCED BY: AirportOps.Present.Facility.PurchaseWakesTheBoard
 	Bus.Subscribe<FFleetChangedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
-		[this](const FFleetChangedEvent&) { DirtyJobBoard(); });
+		[this](const FFleetChangedEvent&) { Bus.MarkDirty(TEXT("JobBoard")); });
 	Bus.Subscribe<FFacilityUpgradedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
-		[this](const FFacilityUpgradedEvent&) { DirtyJobBoard(); });
+		[this](const FFacilityUpgradedEvent&) { Bus.MarkDirty(TEXT("JobBoard")); });
 	// A MODULE REMOVED BY THE REPAIR (#266): the capability did not change - an unseated module granted nothing - but the
 	// board's pass is where a changed depot is looked at, and a repair is rare enough that asking costs nothing.
 	Bus.Subscribe<FModulesRefundedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
-		[this](const FModulesRefundedEvent&) { DirtyJobBoard(); });
+		[this](const FModulesRefundedEvent&) { Bus.MarkDirty(TEXT("JobBoard")); });
 	// A PUSH NO LONGER BLOCKED (Airside's push watch, bridged in Attach): the refused departure it names can go now.
 	// What bDepartureWaiting used to find by re-running the whole Step every frame (ops push-ground-freed).
 	// ENFORCED BY: AirportOps.Present.PushGroundFreed.DepartsTheFrameAfter
 	Bus.Subscribe<FPushGroundFreedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
-		[this](const FPushGroundFreedEvent&) { DirtyJobBoard(); });
+		[this](const FPushGroundFreedEvent&) { Bus.MarkDirty(TEXT("JobBoard")); });
 
 	// THE JOB BOARD'S WHOLE SEQUENCE, as one pass (stage 3 - see UJobBoard::Step for why it stays one
 	// sequence). It runs when something above marked it, when its deadline comes due, while it says a vehicle or
-	// job is unresolved - once each frame - and on the safety net while a due turnaround's departure is refused.
-	// ENFORCED BY: AirportOps.Present.Bus.QuietBoardDoesNoWork, AirportOps.Present.PushGroundFreed.NoPushbackRouteIsQuiet
-	Bus.RegisterPass(TEXT("JobBoard"), [this]()
+	// job is unresolved - once each frame - and on the safety net while a due turnaround's departure is refused. AFTER the two passes
+	// that put vehicles under it: the fleet a new depot starts with and the modules the repair leaves standing - it bids with both.
+	// ENFORCED BY: AirportOps.Present.Bus.QuietBoardDoesNoWork, AirportOps.Present.PushGroundFreed.NoPushbackRouteIsQuiet,
+	// AirportOps.Present.Bus.WiringOrderIsDeclared
+	Bus.RegisterPass(TEXT("JobBoard"), [this](const FPassRun& Run)
 	{
 		UGroundTraffic* Model = LiveModel();
 		if (Model == nullptr)
 		{
 			return;
 		}
-		// A RUN ONLY THE NET ASKED FOR - RunArrivalQueue's rule, for the other half of the net.
-		const bool bSafetyOnly = bJobBoardSafetyDue && !bJobBoardCovered;
-		bJobBoardSafetyDue = false;
-		bJobBoardCovered = false;
 		const bool bUnresolved = JobBoard->Step(*Model, *Target->Network, *Clock);
-		if (bSafetyOnly)
+		// A RUN ONLY THE NET ASKED FOR - RunArrivalQueue's rule, for the other pass the net watches.
+		if (Run.IsSafetyOnly())
 		{
 			for (const int32 AircraftId : JobBoard->DepartedLastStep())
 			{
@@ -440,13 +445,13 @@ void UOpsRuntime::WireBus()
 		Bus.MarkDirty(TEXT("Alerts"));
 		if (bUnresolved)
 		{
-			// COVERED: the retry is the tail of a run something asked for - RunArrivalQueue's bRetry reason.
-			bJobBoardCovered = true;
+			// A RETRY (EPassCause::Retry, MarkDirtyNextDrain's default): the tail of a run something asked for, so a run of it that
+			// finds work is not the net's find.
 			Bus.MarkDirtyNextDrain(TEXT("JobBoard"));
 		}
 		// ENFORCED BY: AirportOps.Present.PushGroundFreed.NetArmedAndCancelled
-		WantDepartureSafetyNet(JobBoard->HasRefusedDeparture(Clock->Now()));
-	});
+		SafetyNet.Want(TEXT("JobBoard"), JobBoard->HasRefusedDeparture(Clock->Now()));
+	}, { TEXT("FleetSeed"), TEXT("ModuleRepair") });
 	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("FlightBoard"), [this](const FAgentPhaseEvent& E)
 	{
 		// ASKED FOR THE LIVE AIRPORT, not handed the model: the flight board maps the event's Cause and reads no agent
@@ -458,34 +463,34 @@ void UOpsRuntime::WireBus()
 	});
 
 	// THE ARRIVAL QUEUE, as a pass (ops batch 3 §5) - see RunArrivalQueue. After the job board's pass and before the
-	// alerts', so a dispatch and the alerts that read it land in the same round. Every dirtier below is an event that
-	// can let a holding flight land; each goes through DirtyArrivalQueue, which is how a safety run knows it was not
-	// asked for. AFTER THE CLOCK in Tick, still: a flight that came due this frame publishes FlightInbound from the
+	// alerts' (the alerts pass declares After this one), so a dispatch and the alerts that read it land in the same round. Every
+	// dirtier below is an event that can let a holding flight land; each marks the pass with the default cause, which is how a safety
+	// run knows it was not asked for. AFTER THE CLOCK in Tick, still: a flight that came due this frame publishes FlightInbound from the
 	// clock's callback, so it is holding and can be cleared this frame if its runway is free.
 	// ENFORCED BY: AirportOps.Present.ArrivalQueue.EachEventDirtiesIt
-	Bus.RegisterPass(TEXT("ArrivalQueue"), [this]() { RunArrivalQueue(); });
+	Bus.RegisterPass(TEXT("ArrivalQueue"), [this](const FPassRun& Run) { RunArrivalQueue(Run); }, { TEXT("JobBoard") });
 	// A RUNWAY OR A STAND FREED: what a holding flight waits for (Airside's diff, bridged in Attach).
-	Bus.Subscribe<FRunwayFreedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FRunwayFreedEvent&) { DirtyArrivalQueue(); });
-	Bus.Subscribe<FStandsFreedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FStandsFreedEvent&) { DirtyArrivalQueue(); });
+	Bus.Subscribe<FRunwayFreedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FRunwayFreedEvent&) { Bus.MarkDirty(TEXT("ArrivalQueue")); });
+	Bus.Subscribe<FStandsFreedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FStandsFreedEvent&) { Bus.MarkDirty(TEXT("ArrivalQueue")); });
 	// AN ACCEPT: a zero-lead accept (key 7's AcceptImmediate) is due at once, and the queue re-reserves.
-	Bus.Subscribe<FOfferAcceptedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FOfferAcceptedEvent&) { DirtyArrivalQueue(); });
+	Bus.Subscribe<FOfferAcceptedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FOfferAcceptedEvent&) { Bus.MarkDirty(TEXT("ArrivalQueue")); });
 	// A FLIGHT JOINS THE QUEUE - its ETA came (UFlightBoard::Enqueue).
-	Bus.Subscribe<FFlightInboundEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FFlightInboundEvent&) { DirtyArrivalQueue(); });
+	Bus.Subscribe<FFlightInboundEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FFlightInboundEvent&) { Bus.MarkDirty(TEXT("ArrivalQueue")); });
 	// THE PLAYER BUILT OR DELETED something: a new stand, exit or runway may be the one a flight was refused for.
-	Bus.Subscribe<FNetworkChangedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FNetworkChangedEvent&) { DirtyArrivalQueue(); });
+	Bus.Subscribe<FNetworkChangedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FNetworkChangedEvent&) { Bus.MarkDirty(TEXT("ArrivalQueue")); });
 	// A REOPEN admits the queue again (a closure cancels it through the flight board's handler above).
-	Bus.Subscribe<FAirportStatusChangedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FAirportStatusChangedEvent&) { DirtyArrivalQueue(); });
+	Bus.Subscribe<FAirportStatusChangedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FAirportStatusChangedEvent&) { Bus.MarkDirty(TEXT("ArrivalQueue")); });
 	// A RESUME: TickQueue clears nobody while paused, and a pass run then has consumed its dirt - so the speed change
 	// that un-pauses is itself a dirtier. Not in the spec's list; its omission would hold the queue until the net.
 	// ENFORCED BY: AirportOps.Present.ArrivalQueue.EachEventDirtiesIt ("a resume")
-	Bus.Subscribe<FSpeedChangedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FSpeedChangedEvent&) { DirtyArrivalQueue(); });
+	Bus.Subscribe<FSpeedChangedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FSpeedChangedEvent&) { Bus.MarkDirty(TEXT("ArrivalQueue")); });
 	// THE NEW AGENT'S ARRIVING, the other half of ONE CLEARANCE A FRAME: after a dispatch the pass does not re-dirty
-	// itself; this does, and RunArrivalQueue defers it to the next frame - so a second runway gets its flight then.
+	// itself; this does, and the queue defers it to the next frame (FQueueTick::bDeferred) - so a second runway gets its flight then.
 	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FAgentPhaseEvent& E)
 	{
 		if (E.To == EAgentPhase::Arriving)
 		{
-			DirtyArrivalQueue();
+			Bus.MarkDirty(TEXT("ArrivalQueue"));
 		}
 	});
 
@@ -564,26 +569,25 @@ void UOpsRuntime::WireBus()
 	});
 
 	// PRESENTATION: UOpsEvents, the BP/UMG face of the bus. Its Notify* functions keep their
-	// UE_LOG lines, so the log is unchanged.
-	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
-		[this](const FAgentPhaseEvent& E) { Events->NotifyAgentPhaseChanged(E.AgentId, E.From, E.To); });
+	// UE_LOG lines, so the log is unchanged. NO FACE FOR THE PHASE OR THE SPEED (#445): both delegates had no listener - nothing bound
+	// them outside a test - and the wiring test counted this very line as their consumer; the boards and the queue consume both in the
+	// Sim tier, and every event has one. A delegate is added here WITH its listener.
+	// ENFORCED BY: AirportMgr.UI.EveryOpsEventDelegateHasAListener
 	Bus.Subscribe<FArrivalRefusedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FArrivalRefusedEvent& E) { Events->NotifyArrivalRefused(E.Why); });
-	Bus.Subscribe<FSpeedChangedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
-		[this](const FSpeedChangedEvent& E) { Events->NotifySpeedChanged(E.Speed); });
 	Bus.Subscribe<FNotificationEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FNotificationEvent& E) { Events->NotifyNotification(E.Text); });
 
-	// THE ALERTS PASS (spec 2026-09-29-ops-alerts §1) - registered AFTER the job board's, so a Step and the
-	// alerts that follow from it land in the same round. Dirtied, in the Reaction tier, by the events below,
-	// by the job board pass, and by the OFFER MINUTE (OfferTick). The offer minute is also the catch-all: a
-	// condition that starts or ends with no event of its own - a deadlock's stall time passing the
-	// threshold, an airline's admission re-judged, a balance crossing zero before stage 3's MoneyPosted -
-	// is seen within one game minute, ~1 real second at x1 (2026-09-29). A separate stall backstop on a
-	// 10 game s timer was cut in review: at the day compression it fired about seven times a real second
-	// whenever any agent queued, recomputing every alert.
-	// ENFORCED BY: AirportOps.Present.Alerts.PassRaisesThroughTheRuntime
-	Bus.RegisterPass(TEXT("Alerts"), [this]() { RecomputeAlerts(); });
+	// THE ALERTS PASS (spec 2026-09-29-ops-alerts §1) - AFTER the job board's and the arrival queue's (declared), so a Step, a dispatch
+	// and the alerts that follow from them land in the same round. Dirtied, in the Reaction tier, by the events below and by the job
+	// board pass. THERE IS NO CATCH-ALL ANY MORE (#446): the offer minute used to dirty it every game minute - about every frame at
+	// x32 - for the two conditions that start with no event of their own. An airline's admission re-judged now announces itself
+	// (FAirlineAdmissionChangedEvent, below) and a deadlock's stall time passing its threshold is a clock entry (ArmDeadlockLook); a
+	// balance crossing zero is FMoneyPostedEvent. A separate stall backstop on a 10 game s timer was cut in review: at the day
+	// compression it fired about seven times a real second whenever any agent queued, recomputing every alert.
+	// ENFORCED BY: AirportOps.Present.Alerts.PassRaisesThroughTheRuntime, AirportOps.Present.Alerts.QuietMinutesRunNoAlertsPass,
+	// AirportOps.Present.Bus.WiringOrderIsDeclared
+	Bus.RegisterPass(TEXT("Alerts"), [this](const FPassRun&) { RecomputeAlerts(); }, { TEXT("JobBoard"), TEXT("ArrivalQueue") });
 	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FAgentPhaseEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 	Bus.Subscribe<FNetworkChangedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FNetworkChangedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 	Bus.Subscribe<FOfferExpiredEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FOfferExpiredEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
@@ -610,12 +614,18 @@ void UOpsRuntime::WireBus()
 	// network change of its own.
 	// ENFORCED BY: AirportOps.Present.Airport.StatusChangeDirtiesAlerts
 	Bus.Subscribe<FAirportStatusChangedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FAirportStatusChangedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
+	// AN AIRLINE'S VERDICT MOVED (#446): the one condition the offer-minute catch-all was for. Published by the generator's own judgement.
+	// ENFORCED BY: AirportOps.Model.Offers.AdmissionChangeIsAnnounced, AirportOps.Present.Alerts.QuietMinutesRunNoAlertsPass
+	Bus.Subscribe<FAirlineAdmissionChangedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FAirlineAdmissionChangedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 
 	// PRESENTATION: the new UOpsEvents faces.
 	Bus.Subscribe<FAlertRaisedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FAlertRaisedEvent& E) { Events->OnAlertRaised.Broadcast(E.Alert); });
 	Bus.Subscribe<FAlertClearedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FAlertClearedEvent& E) { Events->OnAlertCleared.Broadcast(E.Key); });
+	// A STANDING ALERT'S WORDS MOVED (#445): the window re-reads the model - the event names only the key.
+	Bus.Subscribe<FAlertChangedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
+		[this](const FAlertChangedEvent& E) { Events->OnAlertChanged.Broadcast(E.Key); });
 	Bus.Subscribe<FAlertsResetEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FAlertsResetEvent&) { Events->OnAlertsReset.Broadcast(); });
 	Bus.Subscribe<FBuildRefusedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
@@ -690,6 +700,70 @@ void UOpsRuntime::RecomputeAlerts()
 	Sources.Airport = Airport;
 	Sources.Airlines = AirlineOffers;
 	Alerts->Recompute(Sources, Clock->Now());
+	// THE NEXT LOOK AT A STALL, booked from what is on the ground NOW - after every run, whatever woke it.
+	ArmDeadlockLook();
+}
+
+void UOpsRuntime::ArmDeadlockLook()
+{
+	if (DeadlockLookHandle != INDEX_NONE)
+	{
+		Clock->Cancel(DeadlockLookHandle);
+		DeadlockLookHandle = INDEX_NONE;
+	}
+	const UGroundTraffic* Model = LiveModel();
+	if (Model == nullptr)
+	{
+		return;
+	}
+	// THE BOOKING RULE (#445 review, round 3). Nothing announces the ONSET of a stall - an agent becoming blocked is no event - so a look booked only
+	// for an agent already SEEN stalled would leave a jam that forms with no later event unalerted for good (two aircraft nose to nose and nothing else
+	// happening; the old offer-minute catch-all found it within a game minute). But a first stall can only begin on a ROUTE, so:
+	//  - WHILE ANY AGENT IS ON ONE (FRoadAgent::IsOnRoute: Taxiing, Manoeuvring, Reversing) a look is kept booked at the stall-threshold cadence, so
+	//    an onset is caught within about two thresholds of game movement time. This is armed by the phase event itself: an agent entering a route
+	//    phase publishes FAgentPhaseEvent, which dirties the alerts pass (WireBus), whose run ends here - and it is cancelled the same way, by the run
+	//    the last route agent's leaving causes. A field of PARKED or stranded aircraft, or none, books NOTHING (it did, while "an agent exists" was the
+	//    rule: a parked aircraft kept the pass firing at the old catch-all's rate).
+	//  - A STALLED AGENT (one whose stall clock is running: FRoadAgent::IsStoppedAndWaiting, #429's one definition of the clock's feed) books the
+	//    moment its stall would cross the threshold, when that is sooner than the cadence. The threshold is the traffic's own (CurrentDeadlocks reads a stall strictly past it); one already past it is looked at again a threshold
+	//    on, since a ring is made by the agents not yet stalled joining it.
+	// THE COST, said: about one alerts recompute per threshold (3 motion s: ~63 game s by day) for as long as anything moves - the old catch-all's rate
+	// less the time nothing moves.
+	// ENFORCED BY: AirportOps.Present.Alerts.NoseToNoseJamIsAlertedWithNoOtherEvent (the first stall, no other event),
+	// AirportOps.Present.Alerts.DeadlockLookKeepsWatchWhileAnAgentMoves, AirportOps.Present.Alerts.DeadlockLookIgnoresAFieldWithNothingMoving,
+	// AirportOps.Present.Alerts.DeadlockLookIsAClockEntryNotAnOfferMinuteTick
+	const double Threshold = FMath::Max(Model->Rules.StallSeconds, 0.1);
+	double SoonestMotionSeconds = TNumericLimits<double>::Max();
+	for (const FRoadAgent& Agent : Model->GetAgents())
+	{
+		if (Agent.IsOnRoute())
+		{
+			SoonestMotionSeconds = FMath::Min(SoonestMotionSeconds, Threshold);
+		}
+		if (!Agent.IsStoppedAndWaiting())
+		{
+			continue;
+		}
+		// THE CLOCK READ AS A VALUE, to say how long is left - not compared to a bound (rule 4's 'stall clock compared' is for that).
+		const double Stalled = Agent.GetStalledSeconds();
+		SoonestMotionSeconds = FMath::Min(SoonestMotionSeconds, Stalled < Threshold ? Threshold - Stalled : Threshold);
+	}
+	if (SoonestMotionSeconds == TNumericLimits<double>::Max())
+	{
+		return;
+	}
+	// IN GAME SECONDS - USimClock::GameSecondsOfMovement (#447), the clock's one conversion between the two time bases: motion runs at the speed
+	// multiplier and the game clock at the multiplier times the day's compression, so the ratio is the compression alone - whatever the speed, and a
+	// paused clock simply never reaches it. 0.1 OF A MOTION SECOND PAST, so the stall is strictly over the threshold when the look reads it.
+	// THE RATE IS THE BAND'S NOW, so the look is capped at the band's edge (USimClock::GameSecondsToBandEdge) and re-booked there at the new
+	// rate: booked on the night rate of 75 game s per motion s across dawn, it would fire up to 3.6x late against the day's 21 (the default
+	// scenario, 2026-09-30). Floored at half a game second, so a stall a hair short of the threshold cannot book a tight loop.
+	const double Period = FMath::Max(FMath::Min(Clock->GameSecondsOfMovement(SoonestMotionSeconds + 0.1), Clock->GameSecondsToBandEdge()), 0.5);
+	DeadlockLookHandle = Clock->At(Clock->Now() + Period, [this]()
+	{
+		DeadlockLookHandle = INDEX_NONE;
+		Bus.MarkDirty(TEXT("Alerts"));
+	});
 }
 
 void UOpsRuntime::OnBuildRefused(const FBuildQuote& Quote, EBuildRefusal Why)
@@ -700,138 +774,122 @@ void UOpsRuntime::OnBuildRefused(const FBuildQuote& Quote, EBuildRefusal Why)
 		Pricing->Format(Ledger->Balance()).ToString() });
 }
 
-void UOpsRuntime::DirtyArrivalQueue()
-{
-	bQueueCovered = true;
-	Bus.MarkDirty(TEXT("ArrivalQueue"));
-}
-
-void UOpsRuntime::RunArrivalQueue()
+void UOpsRuntime::RunArrivalQueue(const FPassRun& Run)
 {
 	UGroundTraffic* Model = LiveModel();
 	if (Model == nullptr)
 	{
 		return;
 	}
-	// ONE CLEARANCE A FRAME, ACROSS ROUNDS: the Arriving event of the flight just cleared is dispatched in this same
-	// drain's next round and dirties the pass again; a second clearance now would be decided in the frame the first
-	// was, which TickQueue's own rule exists to prevent. Deferred, not dropped - and bQueueCovered is left set, so
-	// the deferred run is still one an event asked for.
-	if (QueueClearedFrame == DrainFrame)
+	const FQueueTick Result = FlightBoard->TickQueue(*Model, *Target->Network, *Clock);
+	if (Result.bDeferred)
 	{
-		Bus.MarkDirtyNextDrain(TEXT("ArrivalQueue"));
+		// ONE CLEARANCE A FRAME, ACROSS ROUNDS (the queue's own rule - UFlightBoard::BeginQueueFrame): the Arriving event of the flight
+		// just cleared is dispatched in this same drain's next round and dirties the pass again; a second clearance now would be
+		// decided in the frame the first was. Deferred, not dropped - and with the SAME CAUSE this run had: a run the net alone asked for
+		// that is deferred is still the net's when it finally runs, and an event's is still an event's.
+		Bus.MarkDirtyNextDrain(TEXT("ArrivalQueue"), Run.Cause);
 		return;
 	}
-	const bool bSafetyOnly = bQueueSafetyDue && !bQueueCovered;
-	bQueueSafetyDue = false;
-	bQueueCovered = false;
-
-	const FQueueTick Result = FlightBoard->TickQueue(*Model, *Target->Network, *Clock);
-	if (Result.Cleared != nullptr)
+	// THE ALERTS READ WHAT THIS RUN DECIDED (#445 review): FlightCannotLand is derived from the clearances the queue keeps (UFlightBoard::
+	// JudgeUnarrived, asked first in TickQueue), and the offer-minute catch-all that used to look again is gone - so a queue run that decided
+	// something marks the pass that reads it, itself, rather than relying on whatever else happened to. The alerts pass is declared After this
+	// one, so it runs in the same round. Not on a deferral: a deferred tick decided nothing.
+	// ENFORCED BY: AirportOps.Present.Alerts.UnlandableAlertSurvivesAPausedEdit
+	Bus.MarkDirty(TEXT("Alerts"));
+	if (Result.Cleared != nullptr && Run.IsSafetyOnly())
 	{
-		QueueClearedFrame = DrainFrame;
-		if (bSafetyOnly)
-		{
-			// THE DEFECT, NAMED: nothing published said this flight could land, yet it could. Whatever freed its
-			// runway or stand needs an event (or a DirtyArrivalQueue) of its own.
-			UE_LOG(LogOpsBus, Warning, TEXT("safety pass dispatched flight %d (%s) - no event covered it"),
-				Result.Cleared->Id, *Result.Cleared->Callsign);
-		}
+		// THE DEFECT, NAMED: nothing published said this flight could land, yet it could. Whatever freed its
+		// runway or stand needs an event of its own.
+		UE_LOG(LogOpsBus, Warning, TEXT("safety pass dispatched flight %d (%s) - no event covered it"),
+			Result.Cleared->Id, *Result.Cleared->Callsign);
 	}
 	if (Result.bRetry)
 	{
-		// A DISPATCH REFUSED in a same-frame race (UFlightBoard::DispatchNow): retried next frame, never dropped -
-		// and COVERED (review M1): the retry is the tail of a run something asked for, not the net's own find.
+		// A DISPATCH REFUSED in a same-frame race (UFlightBoard::DispatchNow): retried next frame, never dropped - and a RETRY
+		// (EPassCause::Retry, the default of MarkDirtyNextDrain), review M1: the tail of a run something asked for, not the net's own find.
 		// ENFORCED BY: AirportOps.Present.ArrivalQueue.RetryStaysCovered
-		bQueueCovered = true;
 		Bus.MarkDirtyNextDrain(TEXT("ArrivalQueue"));
 	}
 	// NO NET WHILE CLOSED (whole-stack review I1): a closed airport clears nobody, so a net would tick every 30 s to
 	// find the same answer. Reopening is an AirportStatusChanged, which dirties this pass (WireBus), and the run that
 	// follows re-arms it if anyone is still holding.
 	// ENFORCED BY: AirportOps.Present.ArrivalQueue.ClosedAirportDispatchesNothing ("no safety net ticks")
-	WantQueueSafetyNet(!Result.bClosed && Result.Waiting > (Result.Cleared != nullptr ? 1 : 0));
+	SafetyNet.Want(TEXT("ArrivalQueue"), !Result.bClosed && Result.Waiting > (Result.Cleared != nullptr ? 1 : 0));
 }
 
-void UOpsRuntime::ArmSafetyNet()
+TArray<FName> UOpsRuntime::AirsideBridgeNamesForTest()
 {
-	const bool bWanted = bQueueNetWanted || bDepartureNetWanted;
-	if (bWanted && SafetyNetHandle == INDEX_NONE)
-	{
-		SafetyNetHandle = Clock->Every(SafetyNetSeconds, [this]()
+	TArray<FName> Out;
+	for (const FAirsideBridge& Bridge : AirsideBridges()) { Out.Add(Bridge.Name); }
+	return Out;
+}
+
+TArray<UOpsRuntime::FAirsideBridge> UOpsRuntime::AirsideBridges()
+{
+	// EVERY ENTRY PUBLISHES, NEVER HANDLES (the reason the first one, OnAgentPhase, gave): each of these runs inside UGroundTraffic's Advance - or
+	// a release, or a facade's commit - where nothing may act (#193's re-entrancy contract exists because a listener that did could retire any
+	// agent mid-loop). The handling is a drain away, in the tier order WireBus makes. The bind lambdas are weak on the runtime: a delegate that
+	// outlived it must not call into it. Traffic is asked NULL-SAFELY on the way back: a detach may find the actor without it.
+	TArray<FAirsideBridge> Out;
+
+	// THE WHOLE TRANSITION, Cause and GoalAtEvent with it (#436) - so a handler a drain later decides on what was true when the change was made,
+	// and the delay this publish introduces costs nothing. (The rule this used to keep by hand - THE SERVICE FIRST, THEN THE BUS - is the tier
+	// order in WireBus now: Sim, then Reaction, then Presentation.)
+	Out.Add({ TEXT("AgentPhase"),
+		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
 		{
-			// EACH HALF RUNS ITS OWN PASS, and only while it is wanted - the other half's waiting is no reason to run it.
-			if (bQueueNetWanted)
-			{
-				bQueueSafetyDue = true;
-				Bus.MarkDirty(TEXT("ArrivalQueue"));
-			}
-			if (bDepartureNetWanted)
-			{
-				bJobBoardSafetyDue = true;
-				Bus.MarkDirty(TEXT("JobBoard"));
-			}
-		});
-	}
-	else if (!bWanted && SafetyNetHandle != INDEX_NONE)
-	{
-		Clock->Cancel(SafetyNetHandle);
-		SafetyNetHandle = INDEX_NONE;
-	}
-}
+			return Actor.GetTraffic()->OnAgentPhaseChanged.AddWeakLambda(&Runtime,
+				[&Runtime](const FAgentTransition& Transition) { Runtime.Bus.Publish(FAgentPhaseEvent{ Transition }); });
+		},
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UAirsideTraffic* Traffic = Actor.GetTraffic()) { Traffic->OnAgentPhaseChanged.Remove(Handle); } } });
+	Out.Add({ TEXT("ArrivalRefused"),
+		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
+		{
+			return Actor.GetTraffic()->OnArrivalRefused.AddWeakLambda(&Runtime,
+				[&Runtime](EArrivalRefusal Why) { Runtime.Bus.Publish(FArrivalRefusedEvent{ Why }); });
+		},
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UAirsideTraffic* Traffic = Actor.GetTraffic()) { Traffic->OnArrivalRefused.Remove(Handle); } } });
 
-void UOpsRuntime::WantQueueSafetyNet(bool bWaiting)
-{
-	bQueueNetWanted = bWaiting;
-	if (!bWaiting)
-	{
-		// BOTH FLAGS GO WITH THE NET (review M1): a safety-due or a covered left over from a disarmed net - a load,
-		// a detach, an emptied queue - would misattribute the next run, one way or the other.
-		bQueueSafetyDue = false;
-		bQueueCovered = false;
-	}
-	ArmSafetyNet();
-}
+	// AIRSIDE'S DERIVED FREEDOM (ops batch 3 §5) - Airside never learns ops exists; it fires native delegates and these bridge them.
+	// ENFORCED BY: Check-Architecture rule 1b (cross-plugin) for "never learns"; AirportOps.Present.Bus.FreedIsBridged for the bridges
+	Out.Add({ TEXT("RunwayFreed"),
+		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
+		{
+			return Actor.GetTraffic()->OnRunwayFreed.AddWeakLambda(&Runtime,
+				[&Runtime](FRoadSegmentId Seed) { Runtime.Bus.Publish(FRunwayFreedEvent{ Seed }); });
+		},
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UAirsideTraffic* Traffic = Actor.GetTraffic()) { Traffic->OnRunwayFreed.Remove(Handle); } } });
+	Out.Add({ TEXT("StandsFreed"),
+		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
+		{
+			return Actor.GetTraffic()->OnStandsFreed.AddWeakLambda(&Runtime,
+				[&Runtime](const TArray<FGuidelineNodeId>& PoseNodes) { Runtime.Bus.Publish(FStandsFreedEvent{ PoseNodes }); });
+		},
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UAirsideTraffic* Traffic = Actor.GetTraffic()) { Traffic->OnStandsFreed.Remove(Handle); } } });
+	// ENFORCED BY: AirportOps.Present.Bus.PushGroundFreedIsBridged
+	Out.Add({ TEXT("PushGroundFreed"),
+		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
+		{
+			return Actor.GetTraffic()->OnPushGroundFreed.AddWeakLambda(&Runtime,
+				[&Runtime](int32 AgentId) { Runtime.Bus.Publish(FPushGroundFreedEvent{ AgentId }); });
+		},
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UAirsideTraffic* Traffic = Actor.GetTraffic()) { Traffic->OnPushGroundFreed.Remove(Handle); } } });
 
-void UOpsRuntime::WantDepartureSafetyNet(bool bWaiting)
-{
-	bDepartureNetWanted = bWaiting;
-	if (!bWaiting)
-	{
-		// THE SAME RULE, for the job board's pair.
-		bJobBoardSafetyDue = false;
-		bJobBoardCovered = false;
-	}
-	ArmSafetyNet();
-}
+	// "THE NETWORK CHANGED", BRIDGED LIKE THE ABOVE (#446) - it was a per-frame poll in Tick. See OnNetworkChanged, which adds behaviour (Geometry is no change).
+	Out.Add({ TEXT("NetworkChanged"),
+		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor) { return Actor.OnNetworkChanged.AddUObject(&Runtime, &UOpsRuntime::OnNetworkChanged); },
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { Actor.OnNetworkChanged.Remove(Handle); } });
 
-void UOpsRuntime::CancelSafetyNet()
-{
-	WantQueueSafetyNet(false);
-	WantDepartureSafetyNet(false);
-}
-
-void UOpsRuntime::DirtyJobBoard()
-{
-	bJobBoardCovered = true;
-	Bus.MarkDirty(TEXT("JobBoard"));
-}
-
-void UOpsRuntime::OnRunwayFreed(FRoadSegmentId Seed)
-{
-	// PUBLISHED, NOT HANDLED - OnAgentPhase's reason: this runs inside UGroundTraffic's Advance.
-	Bus.Publish(FRunwayFreedEvent{ Seed });
-}
-
-void UOpsRuntime::OnStandsFreed(const TArray<FGuidelineNodeId>& PoseNodes)
-{
-	Bus.Publish(FStandsFreedEvent{ PoseNodes });
-}
-
-void UOpsRuntime::OnPushGroundFreed(int32 AgentId)
-{
-	// PUBLISHED, NOT HANDLED - OnRunwayFreed's reason: this runs inside UGroundTraffic's Advance (or a release).
-	Bus.Publish(FPushGroundFreedEvent{ AgentId });
+	// THE FACADE'S SILENT REFUSAL, bridged: "cannot afford" at commit (spec 2026-09-29-ops-alerts §2). An actor with no facade bridges nothing.
+	Out.Add({ TEXT("BuildRefused"),
+		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
+		{
+			URoadEditFacade* Facade = Actor.GetEditFacade();
+			return Facade != nullptr ? Facade->OnRefused.AddUObject(&Runtime, &UOpsRuntime::OnBuildRefused) : FDelegateHandle();
+		},
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (URoadEditFacade* Facade = Actor.GetEditFacade()) { Facade->OnRefused.Remove(Handle); } } });
+	return Out;
 }
 
 void UOpsRuntime::ArmJobBoardDeadline()
@@ -847,7 +905,7 @@ void UOpsRuntime::ArmJobBoardDeadline()
 		JobBoardDeadlineHandle = Clock->At(Next, [this]()
 		{
 			JobBoardDeadlineHandle = INDEX_NONE;
-			DirtyJobBoard();
+			Bus.MarkDirty(TEXT("JobBoard"));
 		});
 	}
 }
@@ -888,18 +946,13 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// WIRED BEFORE the Airside delegates are bound, so nothing can be published into a bus with
 	// no handlers for it.
 	WireBus();
-	UAirsideTraffic* Traffic = Target->GetTraffic();
-	PhaseHandle = Traffic->OnAgentPhaseChanged.AddUObject(this, &UOpsRuntime::OnAgentPhase);
-	RefusalHandle = Traffic->OnArrivalRefused.AddUObject(this, &UOpsRuntime::OnArrivalRefused);
-	// AIRSIDE'S DERIVED FREEDOM (ops batch 3 §5) - Airside never learns ops exists; it fires native delegates and
-	// this bridges them, like the two above.
-	// ENFORCED BY: Check-Architecture rule 1b (cross-plugin) for "never learns"; AirportOps.Present.Bus.FreedIsBridged for the bridge
-	RunwayFreedHandle = Traffic->OnRunwayFreed.AddUObject(this, &UOpsRuntime::OnRunwayFreed);
-	StandsFreedHandle = Traffic->OnStandsFreed.AddUObject(this, &UOpsRuntime::OnStandsFreed);
-	// ENFORCED BY: AirportOps.Present.Bus.PushGroundFreedIsBridged
-	PushGroundFreedHandle = Traffic->OnPushGroundFreed.AddUObject(this, &UOpsRuntime::OnPushGroundFreed);
-	// "THE NETWORK CHANGED", BRIDGED LIKE THE THREE ABOVE (#446) - it was a per-frame poll in Tick. See OnNetworkChanged.
-	NetworkChangedHandle = Target->OnNetworkChanged.AddUObject(this, &UOpsRuntime::OnNetworkChanged);
+	// EVERY AIRSIDE DELEGATE, BRIDGED IN ONE LOOP over the table (#445) - see FAirsideBridge. The build-refused bridge binds here too, where it
+	// used to bind after the purse: nothing is refused while an attach runs.
+	Bridges = AirsideBridges();
+	for (FAirsideBridge& Bridge : Bridges)
+	{
+		Bridge.Handle = Bridge.Bind(*this, *Target);
+	}
 
 	// Content is resolved ONCE, here, and applied to the clock and the ledger.
 	if (Catalog->Num() == 0)
@@ -1004,25 +1057,25 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		UE_LOG(LogAirportOps, Log, TEXT("Fuel vehicles by stand letter: %s"), *PerLetter.TrimEnd());
 	}
 
-	// THE BUS, per attach, like the scenario figures above - Detach takes it back. The money these
-	// objects post is wired once, in the constructor (#425), and a load no longer overwrites it.
-	FlightBoard->Bus = &Bus;
-	Alerts->Bus = &Bus;
-	Ledger->Bus = &Bus;
+	// THE BUS, per attach, like the scenario figures above - Detach takes it back. ONE LOOP over Publishers() (#445): it was a line
+	// per publisher here, a line per publisher in Detach and a list in the test, and the seventh was in none of them. The money these
+	// objects post is wired once, in the constructor (#425), and a load no longer overwrites it. AFTER the ledger's Open and the roster's
+	// reset above, as each was set after them before: an opening balance posts nothing onto the bus.
+	for (const FOpsBusPublisher& Publisher : Publishers())
+	{
+		*Publisher.Slot = &Bus;
+	}
 	// A NEW AIRPORT, A NEW SET: the old actor's alerts name its flights and agents.
 	Alerts->Reset();
-	Airlines->Bus = &Bus;
 	// A NEW GAME OPENS, beside the ledger's Open and the roster's reset above; a load overwrites the intent from its
 	// "Airport" blob. RE-DERIVED SILENTLY - an attach is not a change the player made, and a runway-less new game
 	// has nothing to cancel. The first NetworkChanged then finds the status already right.
 	// ENFORCED BY: AirportOps.Present.Airport.RunwayComesAndGoes ("the attach re-derives", "publishes no status change")
-	Airport->Bus = &Bus;
 	Airport->ResetForNewGame();
 	if (Target->Network != nullptr)
 	{
 		Airport->Reseat(*Target->Network);
 	}
-	JobBoard->Bus = &Bus;
 
 	// THE LEDGER IS THE PURSE the build tools spend from. Handed to the facade here and
 	// nowhere else, so design-time building - which has no runtime and therefore no purse -
@@ -1030,8 +1083,7 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	if (URoadEditFacade* Facade = Target->GetEditFacade())
 	{
 		Facade->SetPurse(Ledger);
-		// THE FACADE'S SILENT REFUSAL, bridged: "cannot afford" at commit (spec 2026-09-29-ops-alerts §2).
-		RefusedHandle = Facade->OnRefused.AddUObject(this, &UOpsRuntime::OnBuildRefused);
+		// (THE FACADE'S SILENT REFUSAL is bridged with the rest, above: the "BuildRefused" entry of AirsideBridges.)
 	}
 
 	// THE ONE PRODUCTION DISPATCHER. Weak, because the board outlives a level change and a
@@ -1136,23 +1188,21 @@ void UOpsRuntime::Detach()
 		if (URoadEditFacade* Facade = Target->GetEditFacade())
 		{
 			Facade->SetPurse(nullptr);
-			Facade->OnRefused.Remove(RefusedHandle);
 		}
 	}
 
-	if (Target != nullptr && Target->GetTraffic() != nullptr)
-	{
-		Target->GetTraffic()->OnAgentPhaseChanged.Remove(PhaseHandle);
-		Target->GetTraffic()->OnArrivalRefused.Remove(RefusalHandle);
-		Target->GetTraffic()->OnRunwayFreed.Remove(RunwayFreedHandle);
-		Target->GetTraffic()->OnStandsFreed.Remove(StandsFreedHandle);
-		Target->GetTraffic()->OnPushGroundFreed.Remove(PushGroundFreedHandle);
-	}
+	// THE BRIDGES BACK OFF THE ACTOR, one loop (#445) - each entry's own Unbind, null-safe against an actor that has lost what it bound to.
 	if (Target != nullptr)
 	{
-		Target->OnNetworkChanged.Remove(NetworkChangedHandle);
+		for (FAirsideBridge& Bridge : Bridges)
+		{
+			if (Bridge.Handle.IsValid())
+			{
+				Bridge.Unbind(*Target, Bridge.Handle);
+			}
+		}
 	}
-	NetworkChangedHandle.Reset();
+	Bridges.Reset();
 	if (UpkeepHandle != INDEX_NONE)
 	{
 		Clock->Cancel(UpkeepHandle);
@@ -1169,17 +1219,20 @@ void UOpsRuntime::Detach()
 		Clock->Cancel(JobBoardDeadlineHandle);
 		JobBoardDeadlineHandle = INDEX_NONE;
 	}
-	CancelSafetyNet();
-	// NO SeenNetwork RESET any more (#446): the poll it primed for a catch-up event is gone - see NetworkChangedHandle.
+	SafetyNet.CancelAll();
+	if (DeadlockLookHandle != INDEX_NONE)
+	{
+		Clock->Cancel(DeadlockLookHandle);
+		DeadlockLookHandle = INDEX_NONE;
+	}
+	// NO SeenNetwork RESET any more (#446): the poll it primed for a catch-up event is gone - see the "NetworkChanged" bridge.
 	// THE BUS POINTERS GO WITH THE ATTACH: the bus is this runtime's, and a subobject left pointing at it
-	// after a detach is a publish into whatever comes next (stage 3 review). Every one Attach set.
+	// after a detach is a publish into whatever comes next (stage 3 review). Every one Attach set - the same list, one loop.
 	// ENFORCED BY: AirportOps.Present.Bus.DetachUnhooksEveryPublisher
-	FlightBoard->Bus = nullptr;
-	Alerts->Bus = nullptr;
-	Ledger->Bus = nullptr;
-	JobBoard->Bus = nullptr;
-	Airlines->Bus = nullptr;
-	Airport->Bus = nullptr;
+	for (const FOpsBusPublisher& Publisher : Publishers())
+	{
+		*Publisher.Slot = nullptr;
+	}
 	// THE QUEUE IS THE OLD ACTOR'S. A new level's traffic numbers its agents from 1 again, so a
 	// stale Parked for agent k would land on the new level's agent k. Dropped, and the price is
 	// that a re-Attach to the SAME actor loses at most one step of its events.
@@ -1235,8 +1288,8 @@ void UOpsRuntime::Tick(double RealDeltaSeconds)
 
 	// ONE DRAIN, after the clock: the queue holds Airside's events from the motion tick in publish
 	// order, then anything the clock just fired - so a flight that came due this frame is handled
-	// this frame (spec 2026-09-29 §1). Counted, for the arrival queue's ONE CLEARANCE A FRAME.
-	++DrainFrame;
+	// this frame (spec 2026-09-29 §1). A NEW QUEUE FRAME first, for the queue's own ONE CLEARANCE A FRAME (#445).
+	FlightBoard->BeginQueueFrame();
 	Bus.Drain();
 
 	if (Target != nullptr)
@@ -1308,24 +1361,6 @@ void UOpsRuntime::TogglePause()
 	ApplySpeed(Clock->GetSpeed());
 }
 
-void UOpsRuntime::OnAgentPhase(const FAgentTransition& Transition)
-{
-	// PUBLISHED, NOT HANDLED. This runs inside UGroundTraffic's broadcast, and nothing may act
-	// there (#193's re-entrancy contract exists because a listener that did could retire any agent
-	// mid-loop). The rule this function used to keep by hand - THE SERVICE FIRST, THEN THE BUS, so a
-	// Blueprint listener that asked the fuel service what an aircraft was doing never saw the state
-	// from BEFORE the event that woke it - is now the tier order in WireBus: Sim, then Presentation.
-	//
-	// THE WHOLE TRANSITION, Cause and GoalAtEvent with it (#436) - so a handler a drain later decides on what was true
-	// when the change was made, and the delay this publish introduces costs nothing.
-	Bus.Publish(FAgentPhaseEvent{ Transition });
-}
-
-void UOpsRuntime::OnArrivalRefused(EArrivalRefusal Why)
-{
-	Bus.Publish(FArrivalRefusedEvent{ Why });
-}
-
 void UOpsRuntime::PostDailyUpkeep()
 {
 	if (Target == nullptr || Target->Network == nullptr || Ledger == nullptr)
@@ -1363,6 +1398,23 @@ void UOpsRuntime::PostDailyUpkeep()
 
 	UE_LOG(LogAirportOps, Log, TEXT("Upkeep day %d: %.0f (+%.0f facilities, +%.0f fleet); balance %.0f"),
 		Clock->Day(), Base, Facilities.Modules, Facilities.Fleet, Ledger->Balance());
+}
+
+TArray<UOpsRuntime::FOpsBusPublisher> UOpsRuntime::Publishers()
+{
+	// THE ONE LIST (#445), like Persistents(): every object with a raw `FOpsEventBus* Bus`. A class that declares the field and is not
+	// here is one that publishes into nothing - or, once attached to a bus that has since gone, into a dead one.
+	// ENFORCED BY: Check-Architecture rule 71 (every-bus-publisher-is-listed), AirportOps.Present.Bus.DetachUnhooksEveryPublisher
+	TArray<FOpsBusPublisher> Out;
+	Out.Add({ TEXT("FlightBoard"), &FlightBoard->Bus });
+	Out.Add({ TEXT("Alerts"), &Alerts->Bus });
+	Out.Add({ TEXT("Ledger"), &Ledger->Bus });
+	Out.Add({ TEXT("JobBoard"), &JobBoard->Bus });
+	Out.Add({ TEXT("Airlines"), &Airlines->Bus });
+	Out.Add({ TEXT("Airport"), &Airport->Bus });
+	Out.Add({ TEXT("FacilityPurchases"), &FacilityPurchases->Bus });
+	Out.Add({ TEXT("OfferGenerator"), &OfferGenerator->Bus });
+	return Out;
 }
 
 TArray<IOpsPersistent*> UOpsRuntime::Persistents() const
@@ -1512,6 +1564,18 @@ FArrivalQuote UOpsRuntime::QuoteLanding(const FAirframe& Airframe, const FVector
 
 bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 {
+	// NOT FROM INSIDE A DRAIN (#445), SaveToSlot's guard for the other direction: a Presentation handler bound to a UOpsEvents delegate
+	// (a Blueprint "load on this notification") would reach the Discard below while Drain still holds its moved-out batch, and the REST
+	// of that batch - events naming the agents and flights of the airport being replaced - would be dispatched against the restored
+	// boards. A save can carry on without a drain (it only misses what is queued); a load cannot, so it is REFUSED, said, and the
+	// caller may ask again once the drain is over. The guard is for the first caller that does this.
+	// ENFORCED BY: AirportOps.Present.Bus.LoadFromAHandlerIsRefused
+	if (Bus.IsDraining())
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Load '%s' refused: called from inside an ops event handler, where discarding the queue would hand the rest of this batch to the restored boards"),
+			*SlotName);
+		return false;
+	}
 	// Target->Network is read HERE, not cached: URoadEditFacade::ClearNetwork replaces the
 	// actor's network OBJECT rather than draining it, so a pointer held across a clear is
 	// stale. The actor's field is the one authority on which network is current.
@@ -1602,9 +1666,15 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	FlightBoard->RestoreAfterLoad(Model, *Target->Network, *Clock, Airport->AdmitsArrivals());
 	// THE REPEATERS TOO, from the loaded Now - see RearmRepeatingSchedules (review I1).
 	RearmRepeatingSchedules();
-	// AND THE SAFETY NET, both halves, for the same reason: its entry was booked against the pre-load clock. Cancelled;
-	// the MarkAllDirty below runs both passes, which re-arm it if the loaded queue holds anyone or a departure waits.
-	CancelSafetyNet();
+	// AND THE SAFETY NET, for every pass that wanted it, for the same reason: its entry was booked against the pre-load clock.
+	// Cancelled; the MarkAllDirty below runs the passes, which re-arm it if the loaded queue holds anyone or a departure waits.
+	// THE DEADLOCK LOOK LIKEWISE: booked on the old clock, and the alerts run the MarkAllDirty causes books it afresh.
+	SafetyNet.CancelAll();
+	if (DeadlockLookHandle != INDEX_NONE)
+	{
+		Clock->Cancel(DeadlockLookHandle);
+		DeadlockLookHandle = INDEX_NONE;
+	}
 
 	// EVERY PASS ONCE after a load - the one catch-up, since nothing that happened before the load
 	// is an event any more (spec 2026-09-29 §4). No passes exist until stage 3; the rule is here first.

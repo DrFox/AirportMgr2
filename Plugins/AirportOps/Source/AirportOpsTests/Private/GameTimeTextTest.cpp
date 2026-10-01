@@ -71,4 +71,31 @@ bool FSimClockMovementTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FSimClockBandEdgeTest, "AirportOps.Model.SimClock.BandEdgeIsWhereTheRateChanges",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FSimClockBandEdgeTest::RunTest(const FString&)
+{
+	// #445: the next dawn or dusk, in game seconds - and it is where the rate REALLY changes, measured by advancing the clock across it rather
+	// than by restating the formula: one second of real time either side of the edge is worth the day's rate and then the night's.
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	Clock->RealSecondsDaylight = 2400.0;
+	Clock->RealSecondsNight = 480.0;
+	Clock->DawnHour = 6.0;
+	Clock->DuskHour = 20.0;
+	Clock->StartAtHour(19.0);
+	TestEqual(TEXT("an hour before dusk"), Clock->GameSecondsToBandEdge(), 3600.0);
+	Clock->StartAtHour(21.0);
+	TestEqual(TEXT("21:00: dawn is nine hours on, across midnight"), Clock->GameSecondsToBandEdge(), 9.0 * 3600.0);
+	Clock->StartAtHour(3.0);
+	TestEqual(TEXT("03:00: dawn is three hours on"), Clock->GameSecondsToBandEdge(), 3.0 * 3600.0);
+
+	Clock->StartAtHour(19.0);
+	const double Edge = Clock->GameSecondsToBandEdge();
+	const double DayRate = Clock->GameSecondsOfMovement(1.0);
+	Clock->Advance(Edge / DayRate + 1.0);
+	TestTrue(TEXT("one real second past the edge, the clock is in the night band"), Clock->GameSecondsOfMovement(1.0) > DayRate * 3.0);
+	TestTrue(TEXT("and the next edge is dawn, hours away - not the one just crossed"), Clock->GameSecondsToBandEdge() > 3600.0);
+	return true;
+}
+
 #endif

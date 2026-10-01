@@ -496,6 +496,17 @@ EArrivalRefusal UFlightBoard::ClearanceFor(const UGroundTraffic& Traffic, const 
 	// could strand a quiet airport's queue until some unrelated claim happened to bump it.
 	const EArrivalRefusal Why = ArrivalPlanner::Plan(Network, Flight.RunwayPreference, Flight.Airframe,
 		&Traffic.GetOccupancy(), ERunwayBusy::Queue, Flight.HolderId()).Why;
+	// A DRAG IS NOT THE FLIGHT'S NEWS (#445): GraphBeingEdited is the planner's "not on a graph mid-edit", answered before anything
+	// else is read, and it clears when the player lets go. It is returned - nothing is cleared to land on a stale graph - but NOT
+	// KEPT: stored over a standing permanent verdict, it made UnlandableWhy read None for the length of the drag, the FlightCannotLand
+	// alert clear, and the drop re-raise it with a fresh toast. The standing verdict stays dated by the graph revision it was made
+	// at, which a drag does not move until its drop. Nothing is lost by not caching it: the planner answers it at its step 0, before any route
+	// search (ArrivalPlanner.cpp, 2026-09-30), so asking again costs one revision compare.
+	// ENFORCED BY: AirportOps.Present.Alerts.AlertSurvivesANodeDrag
+	if (Why == EArrivalRefusal::GraphBeingEdited)
+	{
+		return Why;
+	}
 	if (Why != EArrivalRefusal::None && (!Clearance.bValid || Why != Clearance.Why))
 	{
 		// ONCE PER REASON, not per frame - the reason is the evidence, the repetition is noise.
@@ -511,9 +522,9 @@ EArrivalRefusal UFlightBoard::ClearanceFor(const UGroundTraffic& Traffic, const 
 
 EArrivalRefusal UFlightBoard::UnlandableWhy(const UFlight& Flight, const URoadNetwork& Network) const
 {
-	// HOLDING ONLY: the clearance is computed for the queue (TickQueue), and an Accepted flight has not joined it - it is
-	// not refused anything yet, and a plan run for it here would be a route search per flight per alert recompute.
-	if (Flight.GetPhase() != EFlightPhase::Inbound)
+	// HOLDING OR ACCEPTED: the clearance is computed for the queue (TickQueue), and a judgement of either is JudgeUnarrived's (#445) - also
+	// the queue pass's, never this alert pass's: a plan run here would be a route search per flight per alert recompute.
+	if (!Flight.IsUnarrived())
 	{
 		return EArrivalRefusal::None;
 	}
@@ -531,10 +542,76 @@ EArrivalRefusal UFlightBoard::UnlandableWhy(const UFlight& Flight, const URoadNe
 	return Clearance->Why;
 }
 
+void UFlightBoard::JudgeUnarrived(const URoadNetwork& Network)
+{
+	const uint32 GuidelineNow = Network.GetGuidelineRevision();
+	for (const TObjectPtr<UFlight>& Each : Flights)
+	{
+		// EVERY FLIGHT STILL TO ARRIVE - accepted or holding (#445 review). A holding flight used to be judged only by ClearanceFor, which TickQueue asks
+		// only once the runway is found free and the clock is running: behind a busy runway, or while paused, a graph change left its verdict older than
+		// the graph and the FlightCannotLand alert read None - cleared - until the queue happened to ask again (and with nothing on the ground, nothing
+		// woke the alerts pass after that). Re-dated here on every graph change, before either exit.
+		if (Each == nullptr || !Each->IsUnarrived())
+		{
+			continue;
+		}
+		FClearance& Clearance = Clearances.FindOrAdd(Each->Id);
+		if (Clearance.bValid && Clearance.GuidelineAt == GuidelineNow)
+		{
+			continue;
+		}
+		// WHAT THE FIELD COULD EVER TAKE, not what is free this second: no occupancy, so a busy runway or a held stand is not an
+		// answer here, and IsPermanentRefusal of what is left is UOfferGenerator::CouldEverAdmit's own test. A flight that was accepted
+		// because its plan passed is refused now only by an edit since.
+		const EArrivalRefusal Why = ArrivalPlanner::Plan(Network, Each->RunwayPreference, Each->Airframe).Why;
+		if (Why == EArrivalRefusal::GraphBeingEdited)
+		{
+			// MID-DRAG: no judgement (ClearanceFor's reason), and the next network change is the drop's.
+			continue;
+		}
+		if (Why != EArrivalRefusal::None && ArrivalPlanner::IsPermanentRefusal(Why) && (!Clearance.bValid || Why != Clearance.Why))
+		{
+			// SAID ONCE PER REASON, in the words each phase has always used: ClearanceFor's line for a holding flight (which it no longer
+			// writes when this got there first), and the accepted flight's own.
+			if (Each->GetPhase() == EFlightPhase::Accepted)
+			{
+				UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) accepted: it can no longer land - %s"),
+					Each->Id, *Each->Callsign, *ArrivalPlanner::DescribeRefusal(Why, Each->Airframe.Wingspan));
+			}
+			else
+			{
+				UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) holding: cannot land yet - %s"),
+					Each->Id, *Each->Callsign, *ArrivalPlanner::DescribeRefusal(Why, Each->Airframe.Wingspan));
+			}
+		}
+		Clearance.Why = Why;
+		Clearance.GuidelineAt = GuidelineNow;
+		// NO OCCUPANCY WAS ASKED, so no occupancy revision dates it: ClearanceFor's own test then plans afresh with one when the flight
+		// is next asked (the runway free, the clock running), and does not trust this verdict for the runway's busy-ness it never asked.
+		Clearance.OccupancyAt = TNumericLimits<uint32>::Max();
+		Clearance.bValid = true;
+	}
+}
+
 FQueueTick UFlightBoard::TickQueue(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock)
 {
-	++TickQueueCalls;
 	FQueueTick Result;
+	// ONE CLEARANCE A FRAME (#445): the rule is the queue's, and this is where it is kept - see BeginQueueFrame. Before anything is read
+	// AND BEFORE THE COUNT: a deferred tick decides nothing, so it is no run - TickQueueCallsForTest counts what the runtime's
+	// per-frame poll used to, and the deferral was never counted then either.
+	if (bQueueFramed && bClearedThisQueueFrame)
+	{
+		Result.bDeferred = true;
+		return Result;
+	}
+	++TickQueueCalls;
+	// EVERY FLIGHT STILL TO ARRIVE, JUDGED AGAINST TODAY'S GRAPH (#445), before the closed and paused exits below: it reads no clock and no runway,
+	// and the FlightCannotLand alert that follows this pass in the round reads what it leaves - so a graph change made while paused, or with the
+	// runway busy, cannot leave a verdict older than the graph for the alert to read as "fixed". A closed airport cancels its accepted
+	// flights by its own event, so a verdict made for one is not read for long.
+	// ENFORCED BY: AirportOps.Present.Alerts.UnlandableAlertSurvivesAPausedEdit,
+	// AirportOps.Model.Alerts.HoldingFlightAlertSurvivesAnUnrelatedEditBehindABusyRunway, AirportOps.Present.Airport.CloseCancelsThroughTheBus
+	JudgeUnarrived(Network);
 	// COUNTED BEFORE THE PAUSE TEST: a paused queue is still a queue, and the pass arms its safety net from this.
 	const TArray<UFlight*> Waiting = Queue();
 	Result.Waiting = Waiting.Num();
@@ -592,7 +669,7 @@ FQueueTick UFlightBoard::TickQueue(UGroundTraffic& Traffic, const URoadNetwork& 
 	}
 	// ONE CLEARANCE A FRAME: the aircraft just cleared claims the runway on its first tick, and
 	// a second clearance this frame would be decided before that claim exists. The pass may run
-	// twice in one drain, so UOpsRuntime::RunArrivalQueue keeps the rule across its rounds.
+	// twice in one drain, so the rule is kept across its rounds - bClearedThisQueueFrame, checked at the top.
 	// ENFORCED BY: AirportOps.Present.ArrivalQueue.SecondRunwayNextFrame
 	const double Held = Clock.Now() - Next->HoldingSince;
 	if (DispatchNow(Traffic, Network, *Next, Clock.Now()))
@@ -601,6 +678,7 @@ FQueueTick UFlightBoard::TickQueue(UGroundTraffic& Traffic, const URoadNetwork& 
 		UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) cleared to land after %.0f s holding"),
 			Next->Id, *Next->Callsign, FMath::Max(Held, 0.0));
 		Result.Cleared = Next;
+		bClearedThisQueueFrame = true;
 	}
 	else
 	{

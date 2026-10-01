@@ -239,6 +239,25 @@ bool FArrivalQueueDirtiersTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalQueueMarksAlertsTest, "AirportOps.Present.ArrivalQueue.QueueRunMarksTheAlertsPass",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalQueueMarksAlertsTest::RunTest(const FString&)
+{
+	// #445 REVIEW, the belt: FlightCannotLand is derived from what the queue keeps, and the offer-minute catch-all that used to look again is gone, so a
+	// queue run marks the alerts pass itself. A freed runway is an event the ALERTS do not subscribe to - so the pass running after it is the queue's
+	// doing alone.
+	FRig Rig;
+	if (!TestTrue(TEXT("an attached runtime"), Rig.Attach([&Rig](URoadNetwork& Net) { FTestAirport::Build(Rig.Airframe, FTestAirportOptions(), &Net); }))) { return false; }
+	for (int32 Tick = 0; Tick < 5; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
+	const int32 Alerts = Rig.Runtime->GetAlerts()->RecomputeCountForTest();
+	const int32 Queue = Rig.QueueRuns();
+	Rig.Runtime->GetBus().Publish(FRunwayFreedEvent{});
+	Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
+	if (!TestEqual(TEXT("PRECONDITION: the freed runway ran the queue pass"), Rig.QueueRuns(), Queue + 1)) { return false; }
+	TestEqual(TEXT("and the queue pass marked the alerts pass, which ran once after it in the same drain"), Rig.Runtime->GetAlerts()->RecomputeCountForTest(), Alerts + 1);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalQueueCrossingTest, "AirportOps.Present.ArrivalQueue.CrossingClearDispatchesNextFrame",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FArrivalQueueCrossingTest::RunTest(const FString&)

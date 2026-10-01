@@ -8,6 +8,7 @@
 #include "Model/Flight.h"
 #include "Model/LandingRun.h"
 #include "Model/OfferGenerator.h"
+#include "Model/OpsEventBus.h"
 #include "Model/OpsSave.h"
 #include "Model/Pricing.h"
 #include "Model/RoadNetwork.h"
@@ -523,6 +524,50 @@ bool FOfferNothingFitsTest::RunTest(const FString& Parameters)
 	const TArray<FAirlineOffers> Airlines = { Offering(MakeAirline(60.0), { TooBig }) };
 	TestEqual(TEXT("nothing is offered rather than something unlandable"),
 		RunMinutes(*Generator, *Tiny, Airlines, *ClockAt(9.0), 30).Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferAdmissionAnnouncedTest, "AirportOps.Model.Offers.AdmissionChangeIsAnnounced",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferAdmissionAnnouncedTest::RunTest(const FString& Parameters)
+{
+	// #446/#445: an airline's "can it come?" was re-judged inside TickMinute and announced nothing, so the alerts pass looked again every offer
+	// minute - about every frame at x32 - whether or not anything had moved. The generator announces the CHANGE: could and cannot, cannot and
+	// can, and nothing in between.
+	URoadNetwork* Narrow = FieldWith(1800.0, Needing(0.0, 3000.0));
+	URoadNetwork* Wide = FieldWith(4500.0, Needing(0.0, 3000.0));
+	UOfferGenerator* Generator = SeededGenerator();
+	FOpsEventBus Bus;
+	Generator->Bus = &Bus;
+	TArray<FAirlineAdmissionChangedEvent> Seen;
+	Bus.BeginWiring();
+	Bus.Subscribe<FAirlineAdmissionChangedEvent>(EOpsTier::Presentation, TEXT("test"),
+		[&Seen](const FAirlineAdmissionChangedEvent& E) { Seen.Add(E); });
+	Bus.EndWiring();
+	UAirlineDefinition* Airline = MakeAirline(6.0);
+	const TArray<FAirlineOffers> Airlines = { Offering(Airline, { Candidate(3000.0, TEXT("A")) }) };
+	USimClock* Clock = ClockAt(9.0);
+
+	RunMinutes(*Generator, *Narrow, Airlines, *Clock, 3);
+	Bus.Drain();
+	if (!TestEqual(TEXT("an airline that cannot use the airport: announced ONCE over three minutes"), Seen.Num(), 1)) { return false; }
+	TestTrue(TEXT("naming the airline, saying it cannot come, and why"),
+		Seen[0].AirlineId == Airline->GetFName() && !Seen[0].bCouldCome && !Seen[0].Reason.IsEmpty());
+
+	RunMinutes(*Generator, *Narrow, Airlines, *Clock, 3);
+	Bus.Drain();
+	TestEqual(TEXT("three more minutes of the same verdict announce nothing - the alerts pass is not woken for a repeat"), Seen.Num(), 1);
+
+	RunMinutes(*Generator, *Wide, Airlines, *Clock, 1);
+	Bus.Drain();
+	if (TestEqual(TEXT("a field it can use: announced"), Seen.Num(), 2))
+	{
+		TestTrue(TEXT("as can-come, with no reason"), Seen[1].bCouldCome && Seen[1].Reason.IsEmpty());
+	}
+	RunMinutes(*Generator, *Narrow, Airlines, *Clock, 1);
+	Bus.Drain();
+	TestEqual(TEXT("and back to one it cannot: announced again"), Seen.Num(), 3);
+	Generator->Bus = nullptr;
 	return true;
 }
 

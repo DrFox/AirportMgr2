@@ -86,6 +86,12 @@ FString FAlertClearedEvent::Describe() const
 		Key.Name.IsNone() ? TEXT("") : *(TEXT(" ") + Key.Name.ToString()));
 }
 
+FString FAlertChangedEvent::Describe() const
+{
+	return FString::Printf(TEXT("%s %d%s"), *UEnum::GetValueAsString(Key.Kind), Key.Id,
+		Key.Name.IsNone() ? TEXT("") : *(TEXT(" ") + Key.Name.ToString()));
+}
+
 FString FAlertsResetEvent::Describe() const
 {
 	return TEXT("every alert forgotten");
@@ -180,6 +186,12 @@ FString FFlightInboundEvent::Describe() const
 	return FString::Printf(TEXT("flight %d, airline %s"), FlightId, *AirlineId.ToString());
 }
 
+FString FAirlineAdmissionChangedEvent::Describe() const
+{
+	return bCouldCome ? FString::Printf(TEXT("airline %s can use the airport"), *AirlineId.ToString())
+		: FString::Printf(TEXT("airline %s cannot use the airport: %s"), *AirlineId.ToString(), *Reason);
+}
+
 FString FOpsEventBus::Describe(const FOpsEvent& Event)
 {
 	return Visit([](const auto& Each) { return Each.Describe(); }, Event);
@@ -201,7 +213,67 @@ void FOpsEventBus::LogSubscription(FName Who, EOpsTier Tier, const TCHAR* Event)
 }
 
 void FOpsEventBus::BeginWiring() { check(!bDraining); bWiring = true; }
-void FOpsEventBus::EndWiring() { bWiring = false; }
+
+void FOpsEventBus::EndWiring()
+{
+	bWiring = false;
+	OrderPasses();
+}
+
+void FOpsEventBus::OrderPasses()
+{
+	// A STABLE TOPOLOGICAL SORT by After (#445): each step takes the first pass, in registration order, whose dependencies are
+	// all placed - so a pass with none declared keeps the place its registration gave it, and the declared orders are the only
+	// ones that move anything. Kahn's walk over a handful of passes (5 on 2026-09-30), run once per wiring.
+	TArray<FPass> Ordered;
+	Ordered.Reserve(Passes.Num());
+	TArray<FPass> Waiting = MoveTemp(Passes);
+	Passes.Reset();
+	while (Waiting.Num() > 0)
+	{
+		int32 Next = INDEX_NONE;
+		for (int32 Index = 0; Index < Waiting.Num() && Next == INDEX_NONE; ++Index)
+		{
+			const bool bReady = !Waiting[Index].After.ContainsByPredicate([&Ordered](FName Dependency)
+			{
+				return !Ordered.ContainsByPredicate([Dependency](const FPass& Placed) { return Placed.Name == Dependency; });
+			});
+			Next = bReady ? Index : INDEX_NONE;
+		}
+		if (Next == INDEX_NONE)
+		{
+			// NOTHING IS READY: a dependency nobody registered, or a cycle. Said, with the passes it strands - a pass that never
+			// runs is the silent failure this ordering exists to remove - and the rest kept in registration order so the
+			// airport still runs while it is read.
+			for (const FPass& Stranded : Waiting)
+			{
+				UE_LOG(LogOpsBus, Error, TEXT("Bus: pass %s cannot be ordered: it runs After a pass that is not registered, or the order is a cycle"),
+					*Stranded.Name.ToString());
+			}
+			Ordered.Append(MoveTemp(Waiting));
+			break;
+		}
+		Ordered.Add(MoveTemp(Waiting[Next]));
+		Waiting.RemoveAt(Next);
+	}
+	Passes = MoveTemp(Ordered);
+	FString Order;
+	for (const FPass& Each : Passes) { Order += (Order.IsEmpty() ? TEXT("") : TEXT(", ")) + Each.Name.ToString(); }
+	UE_LOG(LogOpsBus, Log, TEXT("Bus: passes run in this order: %s"), *Order);
+}
+
+TArray<FName> FOpsEventBus::PassOrder() const
+{
+	TArray<FName> Out;
+	for (const FPass& Each : Passes) { Out.Add(Each.Name); }
+	return Out;
+}
+
+TArray<FName> FOpsEventBus::PassesAfter(FName Pass) const
+{
+	const FPass* Found = Passes.FindByPredicate([Pass](const FPass& Each) { return Each.Name == Pass; });
+	return Found != nullptr ? Found->After : TArray<FName>();
+}
 
 void FOpsEventBus::ResetWiring()
 {
@@ -216,20 +288,29 @@ void FOpsEventBus::ResetWiring()
 	Passes.Reset();
 }
 
-void FOpsEventBus::RegisterPass(FName Name, TFunction<void()> Run)
+void FOpsEventBus::RegisterPass(FName Name, TFunction<void(const FPassRun&)> Run, std::initializer_list<FName> After)
 {
 	check(bWiring && !bDraining);
-	Passes.Add({ Name, MoveTemp(Run), false });
-	UE_LOG(LogOpsBus, Log, TEXT("Bus: pass %s registered"), *Name.ToString());
+	FPass Pass;
+	Pass.Name = Name;
+	Pass.Run = MoveTemp(Run);
+	Pass.After = TArray<FName>(After.begin(), static_cast<int32>(After.size()));
+	Passes.Add(MoveTemp(Pass));
+	FString Dependencies;
+	for (const FName Each : After) { Dependencies += (Dependencies.IsEmpty() ? TEXT("") : TEXT(", ")) + Each.ToString(); }
+	UE_LOG(LogOpsBus, Log, TEXT("Bus: pass %s registered%s%s"), *Name.ToString(),
+		Dependencies.IsEmpty() ? TEXT("") : TEXT(", after "), *Dependencies);
 }
 
-void FOpsEventBus::MarkDirty(FName Pass)
+void FOpsEventBus::MarkDirty(FName Pass, EPassCause Cause)
 {
 	for (FPass& Each : Passes)
 	{
 		if (Each.Name == Pass)
 		{
 			Each.bDirty = true;
+			// THE STRONGEST CAUSE WINS (EPassCause's ordinal): a net mark does not demote an event's.
+			Each.Cause = FMath::Max(Each.Cause, Cause);
 			return;
 		}
 	}
@@ -237,12 +318,13 @@ void FOpsEventBus::MarkDirty(FName Pass)
 	UE_LOG(LogOpsBus, Warning, TEXT("Bus: MarkDirty(%s) names no registered pass"), *Pass.ToString());
 }
 
-void FOpsEventBus::MarkDirtyNextDrain(FName Pass)
+void FOpsEventBus::MarkDirtyNextDrain(FName Pass, EPassCause Cause)
 {
 	for (FPass& Each : Passes)
 	{
 		if (Each.Name == Pass)
 		{
+			Each.NextCause = Each.bDirtyNextDrain ? FMath::Max(Each.NextCause, Cause) : Cause;
 			Each.bDirtyNextDrain = true;
 			return;
 		}
@@ -252,7 +334,13 @@ void FOpsEventBus::MarkDirtyNextDrain(FName Pass)
 
 void FOpsEventBus::MarkAllDirty()
 {
-	for (FPass& Each : Passes) { Each.bDirty = true; }
+	// AN EVENT'S CAUSE: a catch-up (an attach, a load) is asked for by the game, not by the net - a run of it that finds work
+	// has found what nothing announced, which is the catch-up's whole point.
+	for (FPass& Each : Passes)
+	{
+		Each.bDirty = true;
+		Each.Cause = EPassCause::Event;
+	}
 }
 
 bool FOpsEventBus::AnyDirty() const
@@ -267,7 +355,11 @@ int32 FOpsEventBus::Drain()
 	// LAST FRAME'S "TRY AGAIN NEXT FRAME" becomes this frame's dirty - see MarkDirtyNextDrain.
 	for (FPass& Pass : Passes)
 	{
-		Pass.bDirty |= Pass.bDirtyNextDrain;
+		if (Pass.bDirtyNextDrain)
+		{
+			Pass.bDirty = true;
+			Pass.Cause = FMath::Max(Pass.Cause, Pass.NextCause);
+		}
 		Pass.bDirtyNextDrain = false;
 	}
 	int32 Dispatched = 0;
@@ -288,15 +380,21 @@ int32 FOpsEventBus::Drain()
 					Handler.Run(Event);
 				}
 			}
+			++DispatchedCounts[Event.GetIndex()];
 			++Dispatched;
 		}
-		// Passes run after every tier of the round: they mutate the sim and may publish.
+		// Passes run after every tier of the round: they mutate the sim and may publish. IN THE ORDER EndWiring made of
+		// After - see RegisterPass.
 		for (FPass& Pass : Passes)
 		{
 			if (Pass.bDirty)
 			{
+				// CLEANED BEFORE IT RUNS, and told what marked it: a pass that re-marks itself is the NEXT round's, and its own
+				// re-mark starts a fresh cause.
+				const FPassRun Run{ Pass.Cause };
 				Pass.bDirty = false;
-				Pass.Run();
+				Pass.Cause = EPassCause::SafetyNet;
+				Pass.Run(Run);
 			}
 		}
 	}
@@ -321,7 +419,17 @@ int32 FOpsEventBus::Discard()
 		UE_LOG(LogOpsBus, Log, TEXT("Bus: x %s {%s} (discarded)"), NameOf(Event), *Describe(Event));
 	}
 	Queue.Reset();
-	UE_LOG(LogOpsBus, Log, TEXT("Bus: discarded %d queued event(s)"), Dropped);
+	// QUIET WHEN IT DROPPED NOTHING (#445 review): Detach discards, and a second Detach - after the airport's Left announcement, from the subsystem's
+	// Deinitialize - is documented as a no-op; it wrote "discarded 0 queued event(s)" for the nothing it did, a line that reads like a load that lost
+	// something. Verbose then, so the count is still there for whoever turns the category up.
+	if (Dropped > 0)
+	{
+		UE_LOG(LogOpsBus, Log, TEXT("Bus: discarded %d queued event(s)"), Dropped);
+	}
+	else
+	{
+		UE_LOG(LogOpsBus, Verbose, TEXT("Bus: discarded 0 queued event(s)"));
+	}
 	return Dropped;
 }
 

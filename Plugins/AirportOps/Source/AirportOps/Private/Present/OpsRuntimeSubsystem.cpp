@@ -34,6 +34,15 @@ void UOpsRuntimeSubsystem::Deinitialize()
 	// outliving this subsystem (a game instance shutting down mid-level) must not call back into it.
 	URoadNetworkRegistry::OnAirportChanged().Remove(AirportHandle);
 	AirportHandle.Reset();
+	// THE ONE DETACH, here too (#445): the registry's Left announcement is what detaches while a PIE stops, and that handle is gone two
+	// lines up - so a game instance that shuts down with its airport still attached would let Runtime go with the facade still holding
+	// a raw IBuildPurse* to its ledger (RoadEditFacade::Purse) and the actor's delegates still bound to it. Detach is idempotent
+	// ("safe with nothing attached"), so the path that ran first - Left's - makes this one a no-op; it is the same call, not a second way.
+	// ENFORCED BY: AirportOps.Present.OpsRuntimeSubsystemDetachesOnDeinitialize, AirportOps.Present.OpsRuntimeSubsystemDetachesTwiceQuietly (the second is a no-op that says nothing)
+	if (Runtime != nullptr)
+	{
+		Runtime->Detach();
+	}
 	Runtime = nullptr;
 	Super::Deinitialize();
 }

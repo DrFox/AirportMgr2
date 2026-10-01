@@ -5,6 +5,7 @@
 #include "Model/FacilityPurchases.h"
 #include "Model/OfferGenerator.h"
 #include "Model/OpsEventBus.h"
+#include "Model/OpsSafetyNet.h"
 #include "Model/SimClock.h"
 #include "UObject/Object.h"
 #include "OpsRuntime.generated.h"
@@ -51,6 +52,12 @@ enum class EChangeKind : uint8;
  * pointer, three lines in Attach/Tick/OnAgentPhase, and no logic at all. The flight board, the
  * ledger and the pricing arrived the same way and cost the same: a pointer each and a line in
  * Attach. The job board is next, and gets no more. Logic lands in them, never here.
+ *
+ * PASS SCHEDULING IS NOT HERE (#445). It was - about nine fields (covered/due/wanted pairs, a funnel per pass, a frame counter for
+ * one-clearance-a-frame) that every pass needing to know WHY it ran reinvented, and that review corrected three times - which
+ * made the paragraph above false. The cause of a run is the bus's (EPassCause, FPassRun), the net is FOpsSafetyNet's, and
+ * one-clearance-a-frame is the flight board's (UFlightBoard::BeginQueueFrame). What is left here is the wiring: which event marks
+ * which pass, and what a pass body asks of the boards.
  */
 UCLASS()
 class AIRPORTOPS_API UOpsRuntime : public UObject
@@ -170,6 +177,28 @@ public:
 	 */
 	void Detach();
 
+	/** One object that holds a raw pointer to Bus: its name (for a failing test), and the slot that holds it. */
+	struct FOpsBusPublisher
+	{
+		const TCHAR* Name = TEXT("");
+		FOpsEventBus** Slot = nullptr;
+	};
+
+	/**
+	 * EVERY OBJECT THAT PUBLISHES ONTO THIS RUNTIME'S BUS, ONE LIST (#445), like Persistents(): Attach points each slot at the bus and
+	 * Detach takes each back in one loop apiece, and the Detach test walks it. It was kept by hand in three places - Attach, Detach and
+	 * the test - which already disagreed (UFacilityPurchases was set in the constructor, never cleared, and in no test), so the
+	 * facade's raw IBuildPurse* outlived the ledger it pointed at. A publisher is held by its Bus field, so a class that declares one
+	 * and is not listed is the defect the lint rule below finds.
+	 * PUBLIC so the test can walk it; the slots are this runtime's to write and nothing else's.
+	 * ENFORCED BY: AirportOps.Present.Bus.DetachUnhooksEveryPublisher, Check-Architecture rule 71 (every-bus-publisher-is-listed),
+	 * rule 4's row 'UOpsRuntime publisher slot written' (the slots are written in OpsRuntime.cpp alone)
+	 */
+	TArray<FOpsBusPublisher> Publishers();
+
+	/** The names of the Airside bridges Attach binds, in table order (see FAirsideBridge) - for the test that broadcasts every delegate. */
+	static TArray<FName> AirsideBridgeNamesForTest();
+
 	/** Advances the clock and pushes the speed multiplier into the actor. Real seconds in. */
 	void Tick(double RealDeltaSeconds);
 
@@ -249,11 +278,11 @@ public:
 	 *  no times (ops batch 3 PR E). Counted here, the one production caller, not on the actor. */
 	int32 TimeScaleSetsForTest() const { return TimeScaleSets; }
 
-	/** Whether the safety net (SafetyNetHandle) is booked on the clock - for either half. */
-	bool IsSafetyNetArmedForTest() const { return SafetyNetHandle != INDEX_NONE; }
+	/** Whether the safety net (SafetyNet) is booked on the clock - for any pass that wants it. */
+	bool IsSafetyNetArmedForTest() const { return SafetyNet.IsArmed(); }
 
 	/**
-	 * Game seconds between the safety net's runs - see ArmSafetyNet. 30 (ops event bus spec §2): long
+	 * Game seconds between the safety net's runs - see FOpsSafetyNet. 30 (ops event bus spec §2): long
 	 * enough that a stranded flight is a visible defect rather than a smooth fallback, short enough that one never
 	 * holds for minutes in play. At x1 on the default scenario (2400 real s of daylight for 14 h, 480 of night for 10 h)
 	 * 30 game s is about 1.4 real s by day and 0.4 by night (2026-09-30).
@@ -315,8 +344,7 @@ private:
 	UPROPERTY() TObjectPtr<UOpsAlerts> Alerts;
 	UPROPERTY() TObjectPtr<UAirport> Airport;
 
-	/** The facade's OnRefused, bridged onto the bus as FBuildRefusedEvent - see OnBuildRefused. */
-	FDelegateHandle RefusedHandle;
+	/** The facade's OnRefused, bridged onto the bus as FBuildRefusedEvent - see OnBuildRefused. Bound by the "BuildRefused" bridge. */
 	void OnBuildRefused(const FBuildQuote& Quote, EBuildRefusal Why);
 
 	/** Live sources for UOpsAlerts::Recompute, read fresh - the network object can be replaced. */
@@ -353,78 +381,70 @@ private:
 	int32 JobBoardDeadlineHandle = INDEX_NONE;
 	void ArmJobBoardDeadline();
 
-	/** Marks the JobBoard pass dirty FOR AN EVENT, a deadline or a command - every dirtier comes through here, so the
-	 *  pass can tell a run something asked for (bJobBoardCovered) from a run only the safety net asked for. The
-	 *  arrival queue's DirtyArrivalQueue, for the other pass.
-	 *  ENFORCED BY: Check-Architecture rule 36 (pass-dirtied-through-funnel) */
-	void DirtyJobBoard();
-
 	/**
 	 * THE ARRIVAL QUEUE'S PASS (ops batch 3 §5), in place of the per-frame UFlightBoard::TickQueue call: run when an
 	 * event that can let a holding flight land dirties it - a runway or stand freed, an accept, a flight joining the
 	 * queue, the network or the airport's status changing, the speed (a paused pass consumed its dirt) - and at a load.
 	 *
-	 * ONE CLEARANCE A FRAME, across the drain's rounds too: a flight cleared this frame defers any second run to the
-	 * next frame (MarkDirtyNextDrain), and the new agent's Arriving phase event is what dirties it - so a second runway
-	 * gets its flight one frame later, with the first one's claim already in the table.
+	 * ONE CLEARANCE A FRAME is the queue's rule now (UFlightBoard::BeginQueueFrame, called by Tick): a flight cleared this frame
+	 * makes TickQueue say bDeferred to any second run, and this pass asks again next frame - the new agent's Arriving phase event is
+	 * what wakes it - so a second runway gets its flight one frame later, with the first one's claim already in the table.
 	 * ENFORCED BY: AirportOps.Present.ArrivalQueue.SecondRunwayNextFrame, AirportOps.Present.ArrivalQueue.EachEventDirtiesIt
 	 */
-	void RunArrivalQueue();
-
-	/** Marks the pass dirty FOR AN EVENT - every dirtier in WireBus comes through here, so the pass can tell a run an
-	 *  event asked for (bQueueCovered) from a run only the safety net asked for.
-	 *  ENFORCED BY: Check-Architecture rule 36 (pass-dirtied-through-funnel) */
-	void DirtyArrivalQueue();
+	void RunArrivalQueue(const FPassRun& Run);
 
 	/**
-	 * THE SAFETY NET (ops event bus spec §2), for two passes: while flights hold (the arrival queue's half) or a due
-	 * turnaround's departure is refused (the job board's half, ops push-ground-freed 2026-09-30), Clock.Every(
-	 * SafetyNetSeconds) runs each wanting pass anyway. If THAT run - one no event asked for - clears a flight or gets an
-	 * aircraft away, an event that should have covered it is missing, and it says so as a Warning, which a test fails
-	 * on. A missing event becomes a named defect, not a stuck airport. Each half is wanted or not by its own pass after
-	 * every run (FQueueTick::Waiting, UJobBoard::HasRefusedDeparture); a paused clock fires nothing. Removed once quiet
-	 * in play.
-	 *
-	 * ONE CLOCK ENTRY, NOT ONE PER PASS: the halves share the period and the places that must cancel them (a load, a
-	 * detach), and a second handle is a second thing to forget at each.
-	 * ENFORCED BY: AirportOps.Present.ArrivalQueue.SafetyNetCatchesAMissedEvent, AirportOps.Present.PushGroundFreed.SafetyNetDepartsAMissedOne
+	 * THE SAFETY NET (ops event bus spec §2) - see FOpsSafetyNet. One object for every pass that wants it: the arrival queue while
+	 * flights hold, the job board while a due turnaround's departure is refused. Bound to the bus and the clock in the constructor
+	 * (both are this runtime's for its life); each pass says whether it wants the net after every run; a load and a detach cancel it.
+	 * ENFORCED BY: AirportOps.Present.ArrivalQueue.SafetyNetCatchesAMissedEvent, AirportOps.Present.PushGroundFreed.SafetyNetDepartsAMissedOne,
+	 * AirportOps.Model.Bus.ThirdNetWatchedPassNeedsNoRuntimeField
 	 */
-	void ArmSafetyNet();
-	/** The arrival queue's half. Unwanted, its flags go with it (review M1): a stale one would misattribute a run. */
-	void WantQueueSafetyNet(bool bWaiting);
-	/** The job board's half, the same rule. */
-	void WantDepartureSafetyNet(bool bWaiting);
-	/** Both halves off - a load (its clock is another) or a detach (no airport to guard). */
-	void CancelSafetyNet();
-	int32 SafetyNetHandle = INDEX_NONE;
-	bool bQueueNetWanted = false;
-	bool bDepartureNetWanted = false;
-	/** Set by the net's clock entry; read and cleared by the next run of the pass. */
-	bool bQueueSafetyDue = false;
-	/** Set by DirtyArrivalQueue; read and cleared by the next run of the pass. */
-	bool bQueueCovered = false;
-	/** The job board's pair of the two above: set by the net's entry, and by DirtyJobBoard. */
-	bool bJobBoardSafetyDue = false;
-	bool bJobBoardCovered = false;
+	FOpsSafetyNet SafetyNet;
 
-	/** Counts UOpsRuntime::Tick's drains - "this frame" for ONE CLEARANCE A FRAME. QueueClearedFrame is the frame the
-	 *  pass last cleared a flight in. Session counters, never saved. */
-	uint64 DrainFrame = 0;
-	uint64 QueueClearedFrame = TNumericLimits<uint64>::Max();
+	/**
+	 * THE DEADLOCK LOOK (#446): the one condition the alerts pass cannot learn from an event - a ring of agents each stalled past
+	 * FTrafficRules::StallSeconds, which matures with no phase change and no network edit. It was caught by the alerts pass being dirtied
+	 * every offer minute whatever was on the ground, which at x32 is about every frame. It is a clock entry of its own now, with ONE BOOKING RULE
+	 * (ArmDeadlockLook): while ANY AGENT IS ON A ROUTE (FRoadAgent::IsOnRoute) a look is kept at the stall-threshold cadence - a first stall,
+	 * which nothing announces, can only begin on a route, so it is caught within about two thresholds - and a STALLED agent books the moment its
+	 * stall would cross the threshold when that is sooner. Armed by the agent-phase event (it dirties the alerts pass, whose run ends in the arm) when
+	 * an agent enters a route phase, cancelled by the run the last one's leaving causes: a field of parked or stranded aircraft, or none, books
+	 * nothing. StallSeconds is in MOTION seconds, which run at the speed multiplier alone, so the game seconds in them are the day's compression:
+	 * 21 game s per motion s by day and 75 by night on the default scenario (2026-09-30), so the three-second threshold is ~63 game s by day and ~225
+	 * at night. Capped at the band edge and re-booked there (USimClock::GameSecondsToBandEdge) so it is not up to 3.6x late across dawn.
+	 * ENFORCED BY: AirportOps.Present.Alerts.NoseToNoseJamIsAlertedWithNoOtherEvent, AirportOps.Present.Alerts.DeadlockLookKeepsWatchWhileAnAgentMoves,
+	 * AirportOps.Present.Alerts.DeadlockLookIgnoresAFieldWithNothingMoving, AirportOps.Present.Alerts.DeadlockLookIsAClockEntryNotAnOfferMinuteTick,
+	 * AirportOps.Present.Alerts.DeadlockLookIsReBookedAtTheBandEdge
+	 */
+	int32 DeadlockLookHandle = INDEX_NONE;
+	void ArmDeadlockLook();
 
-	/** Airside's derived OnRunwayFreed / OnStandsFreed, bridged onto the bus - bound in Attach, removed in Detach. */
-	FDelegateHandle RunwayFreedHandle;
-	FDelegateHandle StandsFreedHandle;
-	void OnRunwayFreed(FRoadSegmentId Seed);
-	void OnStandsFreed(const TArray<FGuidelineNodeId>& PoseNodes);
-
-	/** Airside's derived OnPushGroundFreed, bridged the same way - bound in Attach, removed in Detach. */
-	FDelegateHandle PushGroundFreedHandle;
-	void OnPushGroundFreed(int32 AgentId);
+	/**
+	 * THE AIRSIDE BRIDGES, ONE TABLE (#445): every Airside delegate this runtime turns into a bus event, with how it is bound to the attached
+	 * actor and how it is taken back. Each used to cost a handle field, a forwarder declared here and defined in the .cpp, a bind line in Attach
+	 * and a remove line in Detach - four sites apiece, hand-paired, and only the phase bridge was tested for a second Attach doubling it. Attach
+	 * binds the table and Detach unbinds it, one loop each; the handle lives in the entry. A bridge is one entry in AirsideBridges().
+	 * WHAT THE TEST COVERS IS THE TABLE, BY NAME: AirportOps.Present.Bus.ReattachDoesNotDouble lists the delegates it broadcasts and compares
+	 * that list, by name, with AirsideBridgeNamesForTest() - so a bridge added to the table with no broadcast in the test, or left in the test
+	 * after it was cut, is red naming it - then broadcasts each once after two attaches and counts one event apiece.
+	 * ENFORCED BY: AirportOps.Present.Bus.ReattachDoesNotDouble, AirportOps.Present.Bus.FreedIsBridged, AirportOps.Present.Bus.PushGroundFreedIsBridged
+	 */
+	struct FAirsideBridge
+	{
+		const TCHAR* Name = TEXT("");
+		/** Binds to the attached actor and returns the handle; an invalid handle means the actor lacks what it bridges (no facade). */
+		TFunction<FDelegateHandle(UOpsRuntime&, ARoadNetworkActor&)> Bind;
+		/** Takes the handle Bind returned back off the actor - which may have lost what it bound to since. */
+		TFunction<void(ARoadNetworkActor&, FDelegateHandle)> Unbind;
+		FDelegateHandle Handle;
+	};
+	static TArray<FAirsideBridge> AirsideBridges();
+	TArray<FAirsideBridge> Bridges;
 
 	/**
 	 * Airside's ARoadNetworkActor::OnNetworkChanged, bridged onto the bus as FNetworkChangedEvent (#446) -
-	 * bound in Attach, removed in Detach, like the three above. It REPLACED A PER-FRAME POLL: Tick compared
+	 * the "NetworkChanged" bridge. It REPLACED A PER-FRAME POLL: Tick compared
 	 * the network pointer and GuidelineRevision against a remembered pair (SeenNetwork, SeenGuidelineRevision)
 	 * every frame, so a change was published up to a frame late - which is why SaveToSlot had to refresh the
 	 * airport's status itself - and a Detach reset the pair so the first Tick after an Attach published a
@@ -432,7 +452,6 @@ private:
 	 * are the catch-up. ENFORCED BY: AirportOps.Present.Bus.NetworkChangedPublishedOnceWithNoTick;
 	 * Check-Architecture rule 51 (network-change-announced)
 	 */
-	FDelegateHandle NetworkChangedHandle;
 	void OnNetworkChanged(EChangeKind Kind, const URoadNetwork& Network);
 
 	/** The repeating offer callback, so Detach can cancel it. INDEX_NONE when unattached. */
@@ -469,9 +488,6 @@ private:
 	/** One game minute of the generator, on the clock. Bound in Attach. */
 	void OfferTick();
 
-	FDelegateHandle PhaseHandle;
-	FDelegateHandle RefusalHandle;
-
 	/**
 	 * Every design figure the scenario sets, onto its receiver - the clock's day, the vehicle catalogue and starter fleet
 	 * (ResolveVehicleCatalogue), the refill rate, the module offers, the inbox cap, the airline tuning. THE ONE DOOR (#449), run at Attach and after every load: each
@@ -481,6 +497,4 @@ private:
 	 */
 	void ApplyScenarioFigures(const class UScenario& Scenario);
 	void ApplySpeed(ESimSpeed Speed);
-	void OnAgentPhase(const FAgentTransition& Transition);
-	void OnArrivalRefused(EArrivalRefusal Why);
 };

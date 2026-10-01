@@ -67,9 +67,19 @@ callback, or a handler.
 **Airside bridge.** Airside must not learn ops exists. It keeps native delegates
 (`OnAgentPhaseChanged`, `OnArrivalRefused`, new `OnRunwayFreed`), and `UOpsRuntime` publishes each onto
 the bus - the only place the two meet. The motion ticker (`ARoadNetworkActor::Tick`) and the ops ticker
-have no fixed order; an Airside event is handled at the next ops drain, at most one frame later. That
-is deliberate: no ops handler runs inside Airside's loop. The tier order replaces
-`OnAgentPhase`'s hand-written "SERVICE FIRST, THEN THE BUS".
+are ordered by the ENGINE, not by us (corrected #445; this paragraph said "no fixed order"): the actor sets
+no tick group, so it ticks in `TG_PrePhysics` inside the world's tick, and `UOpsRuntimeSubsystem` is a
+world-less `FTickableGameObject`, which `UGameEngine::Tick` runs AFTER every world has ticked
+(`GameEngine.cpp`, "End per-world ticking" then `FTickableGameObject::TickObjects(nullptr, ...)`; UE 5.8,
+checked 2026-09-30). So within a frame the motion tick comes first and the ops tick drains what it
+published: an Airside event is handled at the drain of the SAME frame - "at most one frame later" is the
+bound for one raised between the two, and a clock callback's. That is deliberate: no ops handler runs
+inside Airside's loop. The tier order replaces `OnAgentPhase`'s hand-written "SERVICE FIRST, THEN THE
+BUS"; the ORDER OF PASSES is declared (`RegisterPass(Name, Run, After{...})`, #445) and the order of
+subscribers within a tier is registration order - both are pinned by
+`AirportOps.Present.Bus.WiringOrderIsDeclared`. A pass that marks a LATER pass dirty from its `Run` gets
+that pass run in the same round; one that marks an EARLIER pass waits a round (and spends one of the
+eight), so a dependency is declared on the pass that reads.
 
 **Timing shift, accepted (stage 1 review, finding 8).** An event raised inside `UOpsRuntime::Tick`
 (a departure, a dispatch) is handled on the NEXT ops step, so the times handlers stamp from

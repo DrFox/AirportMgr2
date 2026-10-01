@@ -8,12 +8,11 @@
 #include "UObject/Object.h"
 #include "OpsEvents.generated.h"
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOpsAgentPhaseChanged, int32, AgentId, EAgentPhase, From, EAgentPhase, To);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsArrivalRefused, EArrivalRefusal, Why);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsSpeedChanged, ESimSpeed, Speed);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsNotification, const FString&, Text);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsAlertRaised, const FOpsAlert&, Alert);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsAlertCleared, const FOpsAlertKey&, Key);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsAlertChanged, const FOpsAlertKey&, Key);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOpsAlertsReset);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOpsBuildRefused, const FString&, What, const FString&, Price, const FString&, Balance);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOpsLandRefused, EArrivalRefusal, Why, const FString&, Sentence);
@@ -30,6 +29,11 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsBalanceSignChanged, bool, bOverd
  * Every Notify also writes a UE_LOG line: the log is this project's primary diagnostic
  * (CLAUDE.md "Diagnosing"), and an event nobody was bound to is otherwise invisible.
  *
+ * EVERY DELEGATE HERE HAS A LISTENER, and a test says so by reflection (#445: OnAgentPhaseChanged and OnSpeedChanged had none
+ * - nothing bound them outside a test, and the wiring test counted a log line as a consumer - so they were cut; the shape
+ * of closed #169). The bus events with no face here are still consumed: by the boards, in the Sim tier.
+ * ENFORCED BY: AirportMgr.UI.EveryOpsEventDelegateHasAListener (every delegate here), AirportOps.Present.Bus.EveryEventHasASubscriber (every event)
+ *
  * Only events with a PUBLISHER in this milestone exist here. Flight, job, ledger and
  * contract events arrive with the systems that raise them; declaring them now would be a
  * list nothing consumes, which is the bug CLAUDE.md names three times.
@@ -45,9 +49,7 @@ class AIRPORTOPS_API UOpsEvents : public UObject
 	GENERATED_BODY()
 
 public:
-	UPROPERTY(BlueprintAssignable) FOpsAgentPhaseChanged OnAgentPhaseChanged;
 	UPROPERTY(BlueprintAssignable) FOpsArrivalRefused    OnArrivalRefused;
-	UPROPERTY(BlueprintAssignable) FOpsSpeedChanged      OnSpeedChanged;
 	UPROPERTY(BlueprintAssignable) FOpsNotification      OnNotification;
 
 	/**
@@ -60,6 +62,8 @@ public:
 	/** A standing problem started / stopped (spec 2026-09-29-ops-alerts). The toast and the alert window. */
 	UPROPERTY(BlueprintAssignable) FOpsAlertRaised       OnAlertRaised;
 	UPROPERTY(BlueprintAssignable) FOpsAlertCleared      OnAlertCleared;
+	/** A standing alert's words changed while it stayed true (#445): the window re-reads the model - it names only the key. */
+	UPROPERTY(BlueprintAssignable) FOpsAlertChanged      OnAlertChanged;
 	/** Every alert forgotten (a load, an attach) - a UI list empties; re-raises follow. */
 	UPROPERTY(BlueprintAssignable) FOpsAlertsReset       OnAlertsReset;
 	/** A build refused at commit, and key 7 refused - silent before this (spec §2). */
@@ -76,9 +80,7 @@ public:
 	 */
 	UPROPERTY(BlueprintAssignable) FOpsBalanceSignChanged OnBalanceSignChanged;
 
-	void NotifyAgentPhaseChanged(int32 AgentId, EAgentPhase From, EAgentPhase To);
 	void NotifyArrivalRefused(EArrivalRefusal Why);
-	void NotifySpeedChanged(ESimSpeed Speed);
 	void NotifyNotification(const FString& Text);
 	void NotifyWarning(const FString& Text);
 };

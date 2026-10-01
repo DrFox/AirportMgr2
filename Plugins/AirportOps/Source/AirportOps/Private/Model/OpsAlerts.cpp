@@ -51,6 +51,21 @@ void UOpsAlerts::Reset()
 	}
 }
 
+void UOpsAlerts::StageForTest(const FOpsAlert& Alert)
+{
+	if (FOpsAlert* Existing = Alerts.FindByPredicate([&Alert](const FOpsAlert& A) { return A.Key == Alert.Key; }))
+	{
+		*Existing = Alert;
+		return;
+	}
+	Alerts.Add(Alert);
+}
+
+void UOpsAlerts::UnstageForTest(const FOpsAlertKey& Key)
+{
+	Alerts.RemoveAll([&Key](const FOpsAlert& A) { return A.Key == Key; });
+}
+
 void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 {
 	++RecomputeCount;
@@ -95,14 +110,24 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 			// ENFORCED BY: AirportOps.Model.Alerts.UnlandableHoldingFlightRaisesAnAlert
 			// NEEDS THE NETWORK: a judgement is only as fresh as the guideline graph it was made against (UnlandableWhy), and with no
 			// network the alert cannot tell a current refusal from a stale one, so it raises none.
+			// AN ACCEPTED FLIGHT TOO (#445): one accepted when the airport could take it, whose airport was then changed so it never
+			// can - the exit deleted, the runway set to departures only - used to be alerted only once its ETA had brought it into
+			// the queue, minutes of game time after the player did it. The same judgement, the same IsPermanentRefusal: the queue
+			// pass judges an accepted flight when the network changes (UFlightBoard::JudgeUnarrived), so this reads a cache either way.
+			// ENFORCED BY: AirportOps.Model.Alerts.AcceptedFlightThatCanNeverLandIsAlertedBeforeItsEta
 			const EArrivalRefusal Unlandable = Sources.Network != nullptr ? Sources.Flights->UnlandableWhy(*Flight, *Sources.Network)
 				: EArrivalRefusal::None;
 			if (Unlandable != EArrivalRefusal::None)
 			{
+				const FText Sentence = FText::FromString(ArrivalPlanner::DescribeRefusal(Unlandable, Flight->Airframe.Wingspan));
+				// "HOLDING" ONLY WHEN IT IS: an accepted flight has not come yet. The key is the flight's either way, so the row
+				// keeps its place (and its toast history) when the ETA comes - the words change, which FAlertChangedEvent announces.
 				FOpsAlert& Alert = Found.Add_GetRef(OpsAlertOf(EAlertKind::FlightCannotLand, Flight->Id, NAME_None,
-					FText::Format(NSLOCTEXT("OpsAlerts", "FlightCannotLand", "Flight {0} is holding and cannot land. {1} Fix the airport, or cancel the flight."),
-						FText::FromString(Flight->Callsign),
-						FText::FromString(ArrivalPlanner::DescribeRefusal(Unlandable, Flight->Airframe.Wingspan)))));
+					Flight->GetPhase() == EFlightPhase::Inbound
+						? FText::Format(NSLOCTEXT("OpsAlerts", "FlightCannotLand", "Flight {0} is holding and cannot land. {1} Fix the airport, or cancel the flight."),
+							FText::FromString(Flight->Callsign), Sentence)
+						: FText::Format(NSLOCTEXT("OpsAlerts", "AcceptedFlightCannotLand", "Flight {0} is accepted and will not be able to land. {1} Fix the airport, or cancel the flight."),
+							FText::FromString(Flight->Callsign), Sentence)));
 				// NO AEROPLANE TO GO TO: it is off the map. The point the planner orders runways from is the nearest thing to a place.
 				Alert.Focus.Kind = EAlertFocusKind::Point;
 				Alert.Focus.Point = Flight->RunwayPreference;
@@ -132,7 +157,10 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 		}
 		for (const FServiceJob& Job : Sources.Jobs->GetJobs())
 		{
-			if (Job.State != EServiceJobState::Unserviceable)
+			// REFUSED, OR ASKING AGAIN AFTER A REFUSAL (FServiceJob::IsStillRefused): the re-offer is Open for the frame before the
+			// next bid, and reading "Unserviceable" alone cleared the alert and raised it again - a fresh toast per road drawn.
+			// ENFORCED BY: AirportOps.Model.Alerts.RefusedJobReofferedDoesNotFlicker
+			if (!Job.IsStillRefused())
 			{
 				continue;
 			}
@@ -251,6 +279,20 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 		if (Was != nullptr)
 		{
 			Now_.RaisedAt = Was->RaisedAt;
+			// BUT SAID WHEN THE WORDS MOVED (#445): this refreshed the text and published nothing, so a window that kept its own
+			// copy of the list kept the old reason for as long as the problem stood - and told the player to build the wrong thing.
+			// The event invalidates and names the key; the model is the truth. NOT A RAISE: no toast, RaisedAt kept. Focus moves
+			// with an aircraft every frame and is read when a row's Go is clicked, so it is no change.
+			Now_.bReRaised = Was->bReRaised;
+			// EXACT, not FText::EqualTo (a collation compare at its default level): a changed word is a change whatever a locale folds together.
+			if (!Was->Text.ToString().Equals(Now_.Text.ToString(), ESearchCase::CaseSensitive))
+			{
+				UE_LOG(LogAirportOps, Verbose, TEXT("Alert changed: %s"), *Now_.Text.ToString());
+				if (Bus != nullptr)
+				{
+					Bus->Publish(FAlertChangedEvent{ Now_.Key });
+				}
+			}
 			continue;
 		}
 		Now_.RaisedAt = Now;

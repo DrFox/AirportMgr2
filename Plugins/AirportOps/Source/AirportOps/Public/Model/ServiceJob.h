@@ -44,7 +44,8 @@ enum class EServiceJobState : uint8
 	 *
 	 * TERMINAL FOR THIS GRAPH: a re-offer needs the airport itself to have CHANGED, which is what
 	 * URoadNetwork::GetGuidelineRevision reports. Without that test a job refused once would be
-	 * retried every tick for ever, logging as it went.
+	 * retried every tick for ever, logging as it went. The re-offer puts it back to Open WITH ITS REASON KEPT
+	 * (FServiceJob::IsStillRefused), so the alert about it does not clear for the frame the bid is pending.
 	 */
 	Unserviceable
 };
@@ -199,7 +200,26 @@ struct AIRPORTOPS_API FServiceJob
 	UPROPERTY() double TripStartedAt = 0.0;
 	UPROPERTY() double TripEndsAt = 0.0;
 
+	/**
+	 * WHAT IS MISSING while Unserviceable - and, since #445, while the job is Open AGAIN after a refusal (the re-offer below): the
+	 * refusal it is waiting to be answered afresh. Cleared only when the next bid lands (UJobBoard::Assign) or refuses again and
+	 * writes its own. See IsStillRefused for why it is kept.
+	 */
 	UPROPERTY() EServiceRefusal Why = EServiceRefusal::None;
+
+	/**
+	 * REFUSED, OR ASKING AGAIN AFTER A REFUSAL (#445): Unserviceable, or Open with the reason it was refused for still standing. The
+	 * re-offer (UJobBoard::ReopenRefusedJob) puts a refused job Open so the next bid can try it, and the bids run BEFORE the re-offer
+	 * in a Step - so for one frame the job was Open while nothing had changed about why it was refused, and the alerts pass, which read
+	 * "Unserviceable" alone, cleared the alert and raised it again on the next frame with a fresh toast: once per road the player
+	 * drew while trying to connect a depot. The OWNER says it is still refused (ruling, 2026-09-30) rather than the alerts pass
+	 * debouncing two recomputes: a debounce would hide a real clear for a frame too, and would be a second account of the job's state.
+	 * ENFORCED BY: AirportOps.Model.Alerts.RefusedJobReofferedDoesNotFlicker
+	 */
+	bool IsStillRefused() const
+	{
+		return State == EServiceJobState::Unserviceable || (State == EServiceJobState::Open && Why != EServiceRefusal::None);
+	}
 
 	/**
 	 * The guideline revision THIS job's refusal was decided against.

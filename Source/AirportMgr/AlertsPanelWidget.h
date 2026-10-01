@@ -7,6 +7,7 @@
 
 class ARoadBuildController;
 class UAlertsPanelWidget;
+class UOpsAlerts;
 class UOpsEvents;
 class UOpsRuntime;
 class UUiButton;
@@ -37,9 +38,13 @@ public:
 /**
  * The standing alerts, as a window: one row per problem, each with "Go". Spec 2026-09-29-ops-alerts §3.
  *
- * THE LIST IS KEPT HERE, the one mirror of UOpsAlerts's set on the UI side - fed by UOpsEvents' raise,
- * clear and reset, never by asking the model each frame. The bar's Alerts button reads its count from
- * here (ARoadBuildController::AlertCount), so the badge and the window cannot disagree.
+ * THE MODEL IS THE LIST (#445): the rows, the count and Go read UOpsAlerts::GetAlerts() - this window keeps no copy. It kept
+ * one, "fed by raise, clear and reset, never by asking the model", and UOpsAlerts refreshed a standing alert's text without
+ * publishing, so "runway too short" stayed on a row after the player lengthened the runway and the real reason became a stand - the
+ * window told the player to build the wrong thing. Events INVALIDATE now (raise, clear, reset and CHANGED each mark the rows
+ * dirty, and the next tick while shown paints them afresh from the model), and the bar's Alerts badge reads its count through
+ * here (UBuildHudLayer::AlertCount), so the badge and the window are one answer - the model's.
+ * ENFORCED BY: AirportMgr.UI.Alerts.RowTextFollowsTheModel, AirportMgr.UI.Alerts.WindowFollowsRaiseAndClear
  *
  * TOP LEFT, not AboveBarLeft as the spec first said: that corner is the inspector's, and "Go" opens the
  * inspector - the two would sit on top of each other exactly when both are wanted.
@@ -52,11 +57,16 @@ class AIRPORTMGR_API UAlertsPanelWidget : public UAirportMgrPanelWidget
 public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UVerticalBox> RowColumn;
 
-	/** Mirror UOpsEvents' alerts. BuildOnce calls it with the runtime's; a test with its own. */
-	void BindTo(UOpsEvents& Events);
+	/**
+	 * Read Model's alerts, and repaint when Events says they moved. BuildOnce calls it with the runtime's; a test with its own pair.
+	 * Model is held WEAKLY: it is the runtime's, which outlives this window in play and not in a test that lets it go.
+	 */
+	void BindTo(UOpsEvents& Events, const UOpsAlerts& Model);
 
-	int32 AlertCount() const { return Alerts.Num(); }
-	const TArray<FOpsAlert>& GetAlerts() const { return Alerts; }
+	/** The model's count - what the bar's badge shows. Zero while unbound. */
+	int32 AlertCount() const { return GetAlerts().Num(); }
+	/** The model's own list, never a copy. Empty while unbound. */
+	const TArray<FOpsAlert>& GetAlerts() const;
 
 	/**
 	 * Row Index's "Go": the camera to its subject and the subject selected (ARoadBuildController::
@@ -90,6 +100,9 @@ public:
 	/** Paint the rows now, instead of on the next tick while shown - for a test that clicks one. */
 	void PaintRowsForTest() { PaintRows(); }
 
+	/** Whether an alert event has invalidated the rows since they were last painted - what the next tick while shown acts on. */
+	bool NeedsRepaintForTest() const { return bRowsDirty; }
+
 	/** Row Key's Cancel flight button is bound to its own entry's HandleCancelClick - the hop ClickCancelForTest skips when it
 	 *  calls the method. Checked by name on the delegate, so an unbound button fails it. False for a row with no such button. */
 	bool IsCancelBoundForTest(const FOpsAlertKey& Key) const;
@@ -107,11 +120,13 @@ protected:
 	virtual void TickPanel(float DeltaTime) override;
 
 private:
+	/** Each of the four alert events only INVALIDATES: the rows are repainted from the model on the next tick while shown. */
 	UFUNCTION() void OnAlertRaised(const FOpsAlert& Alert);
 	UFUNCTION() void OnAlertCleared(const FOpsAlertKey& Key);
+	UFUNCTION() void OnAlertChanged(const FOpsAlertKey& Key);
 	UFUNCTION() void OnAlertsReset();
 
-	UPROPERTY(Transient) TArray<FOpsAlert> Alerts;
+	TWeakObjectPtr<const UOpsAlerts> Model;
 	UPROPERTY(Transient) TArray<TObjectPtr<UAlertRowEntry>> Entries;
 	/** The style's warning icon, resolved once in BuildOnce - the toast stack's reason (issue #186). */
 	UPROPERTY(Transient) TObjectPtr<class UTexture2D> WarningIcon;
