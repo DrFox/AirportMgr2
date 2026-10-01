@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Content/DepotModuleLook.h"
 #include "Content/FenceKit.h"
+#include "Content/GroundCoverKit.h"
 #include "Engine/DeveloperSettings.h"
 #include "Model/RoadEntity.h"
 #include "Model/Vehicle.h"
@@ -437,6 +438,13 @@ public:
 
 	/** The chainlink fence's meshes and material - the content defaults, each null if unset. */
 	static FFenceKit ResolveFenceKit();
+
+	/**
+	 * The ground-cover grass: its tuft meshes (any that fail to load are skipped), its density
+	 * layers converted from metres to uu, and its cell size. Not usable (IsUsable false) when the
+	 * content set names no tufts - the grass actor then idles.
+	 */
+	static FGroundCoverKit ResolveGroundCover();
 
 	/**
 	 * Every depot module's meshes, indexed by EDepotModule and walked to its sentinel like

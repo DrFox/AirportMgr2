@@ -708,6 +708,29 @@ UStaticMesh* UAirsideSettings::ResolveVehicleMesh()
 	return Content != nullptr ? Content->VehicleMesh.LoadSynchronous() : nullptr;
 }
 
+FGroundCoverKit UAirsideSettings::ResolveGroundCover()
+{
+	FGroundCoverKit Kit;
+	const UAirsideContent* Content = GetContent();
+	if (Content == nullptr)
+	{
+		return Kit;
+	}
+	for (const TSoftObjectPtr<UStaticMesh>& Soft : Content->GroundCoverTufts)
+	{
+		if (UStaticMesh* Mesh = Soft.LoadSynchronous())
+		{
+			Kit.Tufts.Add(Mesh);
+		}
+	}
+	for (const FGroundCoverLayerSetting& Layer : Content->GroundCoverLayers)
+	{
+		Kit.Layers.Add(GroundCover::FLayerSpec{ Layer.TuftsPerSquareMetre, Layer.ShowWithinMetres * 100.0 });
+	}
+	Kit.CellSizeUu = Content->GroundCoverCellMetres * 100.0;
+	return Kit;
+}
+
 FFenceKit UAirsideSettings::ResolveFenceKit()
 {
 	FFenceKit Kit;
