@@ -464,12 +464,19 @@ bool FOpsAlertsResetTest::RunTest(const FString&)
 	if (!TestTrue(TEXT("a field"), F.Build())) { return false; }
 	F.Ledger->Post(0.0, ELedgerCategory::Upkeep, -5000.0, FText::FromString(TEXT("test")));
 	F.Recompute();
+	if (!TestEqual(TEXT("setup: the overdrawn alert was raised once"), F.RaisedOf(EAlertKind::Overdrawn), 1)) { return false; }
+	TestFalse(TEXT("and the first raise is a raise, not a re-raise"), F.Raised.Last().bReRaised);
 	F.Alerts->Reset();
+	// DRAINED BEFORE ClearedOf IS READ (#463): Reset publishes onto the bus and the Cleared subscriber hears only on a Drain, so reading
+	// it straight after Reset passed with Reset announcing a clear for every alert it emptied. Drained, a Cleared that Reset sent is in F.Cleared.
+	F.Bus.Drain();
 	TestEqual(TEXT("Reset empties the set without announcing anything (a load's UI mirror is cleared by its caller)"),
 		F.ClearedOf(EAlertKind::Overdrawn), 0);
 	F.Recompute();
 	TestEqual(TEXT("and the next recompute raises again everything still true - nothing is saved, nothing is lost"),
 		F.RaisedOf(EAlertKind::Overdrawn), 2);
+	TestTrue(TEXT("marked as a re-raise - the alert list shows it and the toast does not, or a load re-announces every standing problem as news"),
+		F.Raised.Last().bReRaised);
 	return true;
 }
 

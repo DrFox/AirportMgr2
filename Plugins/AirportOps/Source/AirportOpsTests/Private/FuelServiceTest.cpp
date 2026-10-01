@@ -1214,6 +1214,14 @@ bool FFuelQueuesOnABusyDepotTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and carries no refusal, because nothing about the airport is wrong"),
 		static_cast<int32>(Waiting->Why), static_cast<int32>(EServiceRefusal::None));
 
+	// THE OTHER HALF OF #190 (FuelQueuedJobServedWithoutRebids, merged into this test - #462 M13: the same fixture, the same served
+	// predicate and the same 450 s bound): a job placed on a busy vehicle is served when that vehicle comes to it, with no retry along
+	// the way. WAS AirportOps.Ops.FuelBusyWaitReoffersOnce, which counted ONE ChooseDepot on the free-up; with the job already queued
+	// there is nothing to re-offer, and the only asking left is the re-bid's, which runs on triggers alone. PLACED above, so the count
+	// starts from a clean slate here.
+	Fixture.Service->ResetBidCallCountForTest();
+	const uint32 FleetBefore = Fixture.Service->GetFleetRevisionForTest();
+
 	// AND THE QUEUE ACTUALLY DRAINS, with NO edit to the airport. This is the half a
 	// state-only assertion would miss: Needed is worth nothing if the demand is never
 	// re-offered once the truck is home. The figure covers the first truck's drive out, its
@@ -1232,6 +1240,14 @@ bool FFuelQueuesOnABusyDepotTest::RunTest(const FString& Parameters)
 			const FServiceJob* Demand = SecondDemand();
 			return Demand != nullptr && Fixture.Service->AgentForJob(*Demand) != 0;
 		}, 450.0));
+
+	// THE DEFECT THIS WOULD CATCH: a job re-bid on every idle tick along the way, which over a 450 s bound is thousands of bids. SINCE THE
+	// RE-BID STAGE a queued job IS asked again - on a trigger (a vehicle's step ends, the fleet or the airport changes), once per vehicle
+	// that could take it. Two vehicles here, so at most two bids per trigger.
+	const int32 Triggers = static_cast<int32>(Fixture.Service->GetFleetRevisionForTest() - FleetBefore);
+	AddInfo(FString::Printf(TEXT("%d bid(s) over %d trigger(s)"), Fixture.Service->GetBidCallCountForTest(), Triggers));
+	TestTrue(TEXT("bids only on triggers, never per idle tick"),
+		Fixture.Service->GetBidCallCountForTest() <= 2 * Triggers);
 
 	// The card never said anything false along the way.
 	if (const FServiceJob* Served = SecondDemand())
@@ -1341,61 +1357,8 @@ bool FFuelBidCachesRouteFindsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FFuelQueuedJobServedWithoutRebidsTest, "AirportOps.Ops.FuelQueuedJobServedWithoutRebids",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FFuelQueuedJobServedWithoutRebidsTest::RunTest(const FString& Parameters)
-{
-	// THE OTHER HALF OF #190: a job placed on a busy vehicle is served when that vehicle comes to it,
-	// with no retry along the way. WAS AirportOps.Ops.FuelBusyWaitReoffersOnce, which counted ONE
-	// ChooseDepot on the free-up; with the job already queued there is nothing to re-offer, and the
-	// only asking left is the re-bid's, which runs on triggers alone.
-	FFuelFixture Fixture;
-	Fixture.bSecondStand = true;
-	Fixture.Build(/*bWithRoad=*/true);
-
-	const int32 First = Fixture.ParkAircraft();
-	if (!TestTrue(TEXT("an aircraft parked at the first stand"), First != 0)) { return false; }
-
-	if (!TestTrue(TEXT("the depot dispatches a truck"),
-		Fixture.AdvanceUntil([&Fixture]
-		{
-			const FServiceJob* Demand = Fixture.Service->GetJobs().Num() > 0
-				? &Fixture.Service->GetJobs()[0] : nullptr;
-			return Demand != nullptr && Fixture.Service->AgentForJob(*Demand) != 0;
-		}, 30.0)))
-	{
-		return false;
-	}
-
-	const int32 Second = Fixture.ParkAircraftAt(Fixture.StandPose2);
-	if (!TestTrue(TEXT("a second aircraft parked at the second stand"), Second != 0)) { return false; }
-
-	// PLACED, then start counting from a clean slate.
-	Fixture.Advance(1.0 / 30.0);
-	if (!TestNotNull(TEXT("setup: the second job exists"), Fixture.Service->JobForAircraft(Second))) { return false; }
-	Fixture.Service->ResetBidCallCountForTest();
-	const uint32 FleetBefore = Fixture.Service->GetFleetRevisionForTest();
-
-	// SAME BOUND AS FFuelQueuesOnABusyDepot: a whole round trip - drive out, pump, drive home.
-	const bool bServed = Fixture.AdvanceUntil([&Fixture, Second]
-	{
-		const FServiceJob* Demand = Fixture.Service->JobForAircraft(Second);
-		return Demand != nullptr && Fixture.Service->AgentForJob(*Demand) != 0;
-	}, 450.0);
-	if (!TestTrue(TEXT("a vehicle comes for the queued job"), bServed)) { return false; }
-
-	// THE DEFECT THIS WOULD CATCH: a job re-bid on every idle tick along the way, which over a 450 s
-	// bound is thousands of bids. SINCE THE RE-BID STAGE a queued job IS asked again - on a trigger
-	// (a vehicle's step ends, the fleet or the airport changes), once per vehicle that could take it.
-	// Two vehicles here, so at most two bids per trigger.
-	const int32 Triggers = static_cast<int32>(Fixture.Service->GetFleetRevisionForTest() - FleetBefore);
-	AddInfo(FString::Printf(TEXT("%d bid(s) over %d trigger(s)"), Fixture.Service->GetBidCallCountForTest(), Triggers));
-	TestTrue(TEXT("bids only on triggers, never per idle tick"),
-		Fixture.Service->GetBidCallCountForTest() <= 2 * Triggers);
-	return true;
-}
+// (AirportOps.Ops.FuelQueuedJobServedWithoutRebids is merged into AirportOps.Ops.FuelQueuesOnABusyDepot above, #462 M13: the same fixture,
+// the same served predicate and the same 450 s bound - its bids-only-on-triggers count is that test's last assertion.)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFuelTurnaroundDepartsTest,
@@ -1479,6 +1442,12 @@ bool FFuelUnserviceableStillDepartsTest::RunTest(const FString& Parameters)
 	// being written there - the same airport AirportOps.Model.FuelServiceRefusals uses.
 	Fixture.Build(/*bWithRoad=*/true, /*bWithDepot=*/false);
 	FTurnaroundRecorder Recorder(*Fixture.Service);
+	// THE MONEY, so the forfeit below is measured on a real ledger (moved here from FuelServiceEarnsItsFee, #463, whose version compared
+	// two values captured one line apart and so could not fail).
+	ULedger* Ledger = NewObject<ULedger>();
+	Ledger->Open(0.0);
+	Fixture.Service->Ledger = Ledger;
+	Fixture.Service->Pricing = NewObject<UPricing>();
 
 	const int32 Aircraft = Fixture.ParkAircraft();
 	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
@@ -1510,64 +1479,21 @@ bool FFuelUnserviceableStillDepartsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("unfuelled"), static_cast<int32>(Recorder.Ended[0].Outcome), static_cast<int32>(EFuelOutcome::Unfuelled));
 	TestEqual(TEXT("nothing delivered"), Recorder.Ended[0].Delivered, 0.0, 1e-6);
 	TestEqual(TEXT("of the fixture's 300 L"), Recorder.Ended[0].Wanted, Fixture.FixtureLitres, 1e-6);
+
+	// THE FORFEIT IS AN ENTRY THAT DOES NOT HAPPEN, never a negative one (spec D7). An Unserviceable demand never reaches
+	// PostServiceFee, and its turnaround's own end pays only for what was DELIVERED (nothing here): so the ledger of an airport that
+	// could serve nothing is exactly as it opened - no fee for the 300 L it was owed, and no fine for not serving them. A forfeit is not
+	// a fine, and there is nothing in this build a flight can be late against.
+	TestEqual(TEXT("an aircraft nothing could serve earns nothing"), Ledger->Balance(), 0.0, 1e-9);
+	TestEqual(TEXT("and writes no row"), Ledger->Entries().Num(), 0);
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FTruckNeverTeleportsOnItsRoundTripTest, "AirportOps.Ops.TruckNeverTeleportsOnItsRoundTrip",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FTruckNeverTeleportsOnItsRoundTripTest::RunTest(const FString& Parameters)
-{
-	// THE WHOLE ROUND TRIP, WATCHED FRAME BY FRAME. Dispatch, the drive out, the dwell, the
-	// REDIRECT home and the drive back - every handover between motion phases the game has,
-	// in the order and by the caller the game uses.
-	//
-	// AIRSIDE'S OWN REVERSE TEST DOES NOT COVER THIS, and that gap is why the defect reached
-	// PIE twice. It starts a FRESH agent on the way out, so it exercises arming and the
-	// hand-back but never the REDIRECT: in the game the same agent is parked at the service
-	// point when the service hands it a route home, and the log shows the reverse being armed
-	// from inside that redirect's own posing step. A synthetic start cannot see it.
-	//
-	// A FIXTURE-WIDE WATCH rather than an assertion of this test's own, so every other test in
-	// this file pays for it too and the next phase added is covered without being remembered.
-	FFuelFixture Fixture;
-	Fixture.Build(/*bWithRoad=*/true);
-	Fixture.JoinRoad();
-	const int32 Aircraft = Fixture.ParkAircraft();
-	if (!TestTrue(TEXT("an aircraft parked and asked for fuel"), Aircraft != 0))
-	{
-		return false;
-	}
-
-	// UNTIL THE TRUCK IS HOME AND RETIRED, which is the last handover of the trip.
-	const bool bDone = Fixture.AdvanceUntil([&Fixture]
-		{
-			const TArray<FServiceJob>& Demands = Fixture.Service->GetJobs();
-			return Demands.Num() > 0 && Demands[0].State == EServiceJobState::Done;
-		}, 600.0);
-
-	AddInfo(FString::Printf(
-		TEXT("round trip %s; furthest any body moved in one 1/30 s step was %.1f uu, by agent "
-		     "%d at t=%.1f s, from (%.0f,%.0f) to (%.0f,%.0f), phase %d -> %d"),
-		bDone ? TEXT("completed") : TEXT("DID NOT COMPLETE"),
-		Fixture.WorstJump, Fixture.WorstJumpAgent, Fixture.WorstJumpAt,
-		Fixture.WorstJumpFrom.X, Fixture.WorstJumpFrom.Y,
-		Fixture.WorstJumpTo.X, Fixture.WorstJumpTo.Y,
-		Fixture.WorstJumpPhaseBefore, Fixture.WorstJumpPhase));
-
-	TestTrue(TEXT("the round trip completed, so the watch below saw all of it"), bDone);
-
-	// 60 uu IN A THIRTIETH is 1800 uu/s, nearly twice the taxi cap, so ordinary motion cannot
-	// reach it and a handover that re-poses the body cannot hide under it. The two already
-	// found were a wheelbase (494 uu) and a whole reverse span (2529 uu).
-	TestTrue(
-		*FString::Printf(TEXT("no body ever teleports (worst %.1f uu, agent %d, t=%.1f s)"),
-			Fixture.WorstJump, Fixture.WorstJumpAgent, Fixture.WorstJumpAt),
-		Fixture.WorstJump < 60.0);
-
-	return true;
-}
+// (AirportOps.Ops.TruckNeverTeleportsOnItsRoundTrip is gone, #462 #34: it said "until the truck is home" but stopped at State == Done, which is
+// set at the END OF THE PUMP - so the redirect home, the reverse out and the drive home it was written for were never watched. The same
+// fixture-wide watch (FFuelFixture::WorstJump, 60 uu in a thirtieth) is asserted over a strictly larger window by the two-job runs:
+// AirportOps.Fuel.ShortTankGoesViaTheDepot and ChainsStandToStandWithoutTheDepot, whose runs span the serve, the redirect, the drive home
+// and the refill.)
 
 #endif
 
@@ -1889,7 +1815,7 @@ namespace FuelServiceTest
 		Test.TestTrue(*FString::Printf(TEXT("Code %s: by arriving home"), Code), bHomeLine);
 		Test.TestEqual(*FString::Printf(TEXT("Code %s: its depot has every truck back"), Code),
 			Fixture.Service->TrucksOutForTest(Fixture.Depot), 0);
-		// 60 uu IN A THIRTIETH - see TruckNeverTeleportsOnItsRoundTrip for the figure.
+		// 60 uu IN A THIRTIETH - see RunTwoJobs' teleport assertion for the figure.
 		Test.TestTrue(*FString::Printf(TEXT("Code %s: no body ever teleports (worst %.1f uu, agent %d, t=%.1f s, (%.0f,%.0f) -> (%.0f,%.0f))"),
 				Code, Fixture.WorstJump, Fixture.WorstJumpAgent, Fixture.WorstJumpAt,
 				Fixture.WorstJumpFrom.X, Fixture.WorstJumpFrom.Y, Fixture.WorstJumpTo.X, Fixture.WorstJumpTo.Y),
@@ -2492,7 +2418,6 @@ namespace FuelServiceTest
 		bool bBothServed = false;
 		TArray<EServiceVehicleState> States;
 		TSet<int32> Agents;
-		int32 Trucks = 0;
 	};
 
 	FTwoJobRun RunTwoJobs(FAutomationTestBase& Test, double BowserCapacity, TOptional<EIcaoCode> Letter = TOptional<EIcaoCode>())
@@ -2532,14 +2457,20 @@ namespace FuelServiceTest
 			const FServiceJob* B = Fixture.Service->JobForAircraft(Second);
 			return A != nullptr && B != nullptr && A->State == EServiceJobState::Done && B->State == EServiceJobState::Done;
 		}, 900.0);
-		Run.Trucks = Fixture.Service->GetVehicles().Num();
 		FString Seen;
 		for (const EServiceVehicleState State : Run.States)
 		{
 			Seen += UEnum::GetValueAsString(State) + TEXT(" ");
 		}
 		Test.AddInfo(FString::Printf(TEXT("vehicle states: %s; agents used: %d; worst jump %.1f uu"), *Seen, Run.Agents.Num(), Fixture.WorstJump));
-		Test.TestTrue(*FString::Printf(TEXT("no body ever teleports (worst %.1f uu)"), Fixture.WorstJump), Fixture.WorstJump < 60.0);
+		// 60 uu IN A THIRTIETH is 1800 uu/s, nearly twice the taxi cap, so ordinary motion cannot reach it and a handover that re-poses the
+		// body cannot hide under it. The two already found were a wheelbase (494 uu) and a whole reverse span (2529 uu). THE WHOLE ROUND
+		// TRIP IS IN THIS WINDOW - the serve, the REDIRECT home, the reverse out and the drive back to the refill - which is what
+		// AirportOps.Ops.TruckNeverTeleportsOnItsRoundTrip (deleted, #462 #34) claimed and, stopping at the end of the pump, never watched.
+		Test.TestTrue(*FString::Printf(TEXT("no body ever teleports (worst %.1f uu, agent %d, t=%.1f s, (%.0f,%.0f) -> (%.0f,%.0f), phase %d -> %d)"),
+				Fixture.WorstJump, Fixture.WorstJumpAgent, Fixture.WorstJumpAt, Fixture.WorstJumpFrom.X, Fixture.WorstJumpFrom.Y,
+				Fixture.WorstJumpTo.X, Fixture.WorstJumpTo.Y, Fixture.WorstJumpPhaseBefore, Fixture.WorstJumpPhase),
+			Fixture.WorstJump < 60.0);
 		return Run;
 	}
 
@@ -2784,10 +2715,15 @@ namespace FuelServiceTest
 		int32 QueuedJob = 0;
 		int32 ServingJob = 0;
 
-		bool Build(double ServeLeft)
+		/**
+		 * AState is the committed job's side of the pair: Serving (the default - the pump is running, and ServeLeft is how long it has
+		 * left) or ToJob (the vehicle has SET OFF toward the first stand, so its job is Underway - the state "a job its vehicle has set
+		 * off toward" names, which no rig staged until #463).
+		 */
+		bool Build(double ServeLeft, EServiceVehicleState AState = EServiceVehicleState::Serving)
 		{
 			Fixture.bSecondStand = true;
-			// THE HAND-PLACED VEHICLE BELOW is "Serving" with no agent - a state no transition reaches, staged only to be busy
+			// THE HAND-PLACED VEHICLE BELOW is "Serving" (or ToJob) with no agent - a state no transition reaches, staged only to be busy
 			// for a chosen time - so the fixture's per-Step invariant check (issue #428) does not apply to this rig.
 			Fixture.bCheckVehicleInvariants = false;
 			Fixture.Build(/*bWithRoad=*/true);
@@ -2795,16 +2731,20 @@ namespace FuelServiceTest
 			Bowser = Board.VehiclesFor(EIcaoCode::C).TypeCode;
 			Board.DriveSecondsOverride = [](FGuidelineNodeId From, FGuidelineNodeId To, FName) { return From == To ? 0.0 : 180.0; };
 
-			const int32 AId = Board.AddVehicleForTest(Bowser, Fixture.Depot, EServiceVehicleState::Serving, 9000.0).Id;
+			const int32 AId = Board.AddVehicleForTest(Bowser, Fixture.Depot, AState, 9000.0).Id;
 			VehicleA = AId;
 
 			const double StartedAt = Fixture.Clock->Now();
 			const double EndsAt = StartedAt + ServeLeft;
 			{
 				// SCOPED: the next AddJobForTest may reallocate the job array under this reference.
-				FServiceJob& Serving = Board.AddJobForTest(101, EServiceJobState::Serving, EServiceRefusal::None, 0);
+				FServiceJob& Serving = Board.AddJobForTest(101,
+					AState == EServiceVehicleState::ToJob ? EServiceJobState::Underway : EServiceJobState::Serving, EServiceRefusal::None, 0);
 				Serving.Stand = Fixture.Stand;
-				Serving.QuantityOwed = 300.0;
+				// AN UNDERWAY JOB IS PRICED BY WHAT IT WILL PUMP, not by a TripEndsAt (the vehicle has not reached the stand, and a
+				// ToJob bid reads the remaining drive - none, with no agent - plus the serve): a full tank's worth, or A would be free
+				// almost at once and B would be no better for the queued job, whatever the margin.
+				Serving.QuantityOwed = AState == EServiceVehicleState::ToJob ? 9000.0 : 300.0;
 				Serving.TripQuantity = 300.0;
 				Serving.TripStartedAt = StartedAt;
 				Serving.TripEndsAt = EndsAt;
@@ -2880,16 +2820,28 @@ bool FServiceRebidUnderwayNeverMovesTest::RunTest(const FString& Parameters)
 {
 	// COMMITTED MEANS COMMITTED: a job its vehicle has set off toward is never re-bid, however much
 	// better another vehicle would do - a truck turned back halfway reads as broken.
-	FuelServiceTest::FRebidRig Rig;
-	if (!TestTrue(TEXT("rig built"), Rig.Build(6000.0))) { return false; }
-	// THE SERVING JOB is the committed one; the rig's queued job is its control and should move.
-	Rig.AddB();
-	Rig.Fixture.Advance(1.0 / 30.0);
-	const FServiceJob* Committed = Rig.Fixture.Service->GetJobs().FindByPredicate(
-		[&Rig](const FServiceJob& J) { return J.Id == Rig.ServingJob; });
-	if (!TestNotNull(TEXT("the serving job survives"), Committed)) { return false; }
-	TestEqual(TEXT("the job A is serving stays with A"), Committed->VehicleId, Rig.VehicleA);
-	TestNotEqual(TEXT("while the queued one - the control - did move"), Rig.Job()->VehicleId, Rig.VehicleA);
+	//
+	// BOTH SIDES OF "COMMITTED" (#463): this staged only the Serving job - the pump running - and never an UNDERWAY one, the state the
+	// comment above is about, so it could not tell the two apart. The re-bid stage has THREE guards a committed job passes through
+	// (only Queued jobs are collected, the walk skips one that is not Queued, and a job not on its holder's QUEUE has no position to be moved
+	// from), each enough alone: the test goes red when all three are gone, which is the day a committed job is re-bid.
+	for (const EServiceVehicleState AState : { EServiceVehicleState::Serving, EServiceVehicleState::ToJob })
+	{
+		const FString Which = AState == EServiceVehicleState::ToJob ? TEXT("underway") : TEXT("serving");
+		FuelServiceTest::FRebidRig Rig;
+		if (!TestTrue(*(Which + TEXT(": rig built")), Rig.Build(6000.0, AState))) { return false; }
+		// THE COMMITTED JOB is the serving or underway one; the rig's queued job is its control and should move.
+		Rig.AddB();
+		Rig.Fixture.Advance(1.0 / 30.0);
+		const FServiceJob* Committed = Rig.Fixture.Service->GetJobs().FindByPredicate(
+			[&Rig](const FServiceJob& J) { return J.Id == Rig.ServingJob; });
+		if (!TestNotNull(*(Which + TEXT(": the committed job survives")), Committed)) { return false; }
+		TestEqual(*(Which + TEXT(": the job A has set off toward or is serving stays with A")), Committed->VehicleId, Rig.VehicleA);
+		TestEqual(*(Which + TEXT(": and is still the state it was staged in")),
+			static_cast<int32>(Committed->State),
+			static_cast<int32>(AState == EServiceVehicleState::ToJob ? EServiceJobState::Underway : EServiceJobState::Serving));
+		TestNotEqual(*(Which + TEXT(": while the queued one - the control - did move")), Rig.Job()->VehicleId, Rig.VehicleA);
+	}
 	return true;
 }
 
@@ -2945,30 +2897,12 @@ bool FServiceRebidOnRunwayFlipTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FFuelRestoredFleetIsNotReseededTest, "AirportOps.Fuel.RestoredFleetIsNotReseeded",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FFuelRestoredFleetIsNotReseededTest::RunTest(const FString& Parameters)
-{
-	// A LOADED FLEET IS THE FLEET. The placeholder seeds a depot the first time the board sees it; a
-	// depot whose vehicles came back from a save has been seen, and seeding it again would double the
-	// fleet on every load - the placeholder minting vehicles the player (one day) paid for twice.
-	FFuelFixture Fixture;
-	Fixture.Build(/*bWithRoad=*/true);
-	Fixture.Advance(1.0 / 30.0);
-	const int32 Seeded = Fixture.Service->GetVehicles().Num();
-	if (!TestTrue(TEXT("setup: the depot has its placeholder fleet"), Seeded > 0)) { return false; }
-
-	FOpsSnapshot Snapshot;
-	OpsSave::CaptureBlob(*Fixture.Service, Snapshot);
-	OpsSave::RestoreBlob(Snapshot, *Fixture.Service);
-	TestEqual(TEXT("the load brings the fleet back"), Fixture.Service->GetVehicles().Num(), Seeded);
-
-	Fixture.Advance(1.0 / 30.0);
-	TestEqual(TEXT("and the next tick does not seed the depot again"), Fixture.Service->GetVehicles().Num(), Seeded);
-	return true;
-}
+// (AirportOps.Fuel.RestoredFleetIsNotReseeded is gone, #462 #11. A LOADED FLEET IS THE FLEET: the placeholder seeds a depot the first time the board
+// sees it, and seeding a restored one again would double the fleet on every load. The test passed with FServiceFleet::Restored's own loop deleted -
+// SeededDepots is a SAVED set, so the round trip hands it back whole - and with the set forgotten the loop re-marked every depot that had vehicles
+// (that loop is gone now, #462: nothing pinned it). The guard is the saved set, pinned by
+// AirportOps.Model.Fleet.SoldStarterFleetIsNotReseededAfterLoad (a sold-out depot has no vehicle to re-mark it) and
+// AirportOps.Present.Fleet.LoadDoesNotReseedADepotThatHasVehicles (through the runtime's own load); both go red if a restore forgets the seen depots.)
 
 // ---------------------------------------------------------------------------------------
 // THE VEHICLE HALF OF THE UNSTICK MENU (spec 2026-09-29-unstick-agent), on this file's fixture
@@ -3253,30 +3187,8 @@ bool FFuelUnknownKindAmongKnownTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FFuelEmptyDepotSaysNoVehiclesTest, "AirportOps.Fuel.EmptyDepotSaysNoVehicles",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FFuelEmptyDepotSaysNoVehiclesTest::RunTest(const FString& Parameters)
-{
-	// A DEPOT WITH NO VEHICLES (R3): not seeded, and the card names the fix. Before NoVehicles the chain
-	// fell through to NoRoute - "no road from depot" about a depot sitting on a road with nothing in it.
-	FFuelFixture Fixture;
-	Fixture.bEmptyDepot = true;
-	Fixture.Build(/*bWithRoad=*/true);
-	Fixture.Advance(1.0 / 30.0);
-	TestEqual(TEXT("a depot placed with no starter trucks is not seeded"), Fixture.Service->GetVehicles().Num(), 0);
-
-	if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
-	Fixture.Advance(0.2);
-	if (!TestEqual(TEXT("one demand"), Fixture.Service->GetJobs().Num(), 1)) { return false; }
-	TestEqual(TEXT("refused for the missing vehicle"),
-		static_cast<int32>(Fixture.Service->GetJobs()[0].Why), static_cast<int32>(EServiceRefusal::NoVehicles));
-	TestEqual(TEXT("and the card says what to do"),
-		Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0, nullptr),
-		FString(TEXT("Fuel 300 L \u00B7 depot has no vehicles - buy one")));
-	return true;
-}
+// (AirportOps.Fuel.EmptyDepotSaysNoVehicles moved down beside the QuietBoard tests, #462 M14: it is merged with QuietBoard.NoVehiclesRefusal and
+// needs their QuietUnresolvedSteps helper, which is declared after this point.)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFuelRefusedDepartureTest, "AirportOps.Fuel.RefusedDepartureEndsNoTurnaround",
@@ -3528,23 +3440,36 @@ bool FFuelQuietServeEndSettlesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// THE EMPTY-DEPOT TEST LIVES HERE, beside the three QuietBoard parts, because it uses QuietUnresolvedSteps, which is declared above this
+// point and not at the test's old place in the file. It is AirportOps.Fuel.EmptyDepotSaysNoVehicles merged with
+// AirportOps.Fuel.QuietBoard.NoVehiclesRefusal (#462 M14): the same fixture and the same Why == NoVehicles assertion, and the quiet-steps
+// count is the only thing the second one added.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FFuelQuietNoVehiclesTest, "AirportOps.Fuel.QuietBoard.NoVehiclesRefusal",
+	FFuelEmptyDepotSaysNoVehiclesTest, "AirportOps.Fuel.EmptyDepotSaysNoVehicles",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FFuelQuietNoVehiclesTest::RunTest(const FString& Parameters)
+bool FFuelEmptyDepotSaysNoVehiclesTest::RunTest(const FString& Parameters)
 {
-	// #417's NoVehicles REFUSAL, beside the three parts above: a demand at a depot with nothing in it is refused
+	// A DEPOT WITH NO VEHICLES (R3): not seeded, and the card names the fix. Before NoVehicles the chain
+	// fell through to NoRoute - "no road from depot" about a depot sitting on a road with nothing in it.
+	//
+	// #417's NoVehicles REFUSAL, beside the three QuietBoard parts above: a demand at a depot with nothing in it is refused
 	// terminally (Unserviceable) and waits for the purchase that re-opens it (FServiceFleet::Add, woken by the bus's
 	// FleetChanged) - it must not keep the JobBoard pass re-dirtying itself every frame until the player buys.
 	FFuelFixture Fixture;
 	Fixture.bEmptyDepot = true;
 	Fixture.Build(/*bWithRoad=*/true);
+	Fixture.Advance(1.0 / 30.0);
+	TestEqual(TEXT("a depot placed with no starter trucks is not seeded"), Fixture.Service->GetVehicles().Num(), 0);
+
 	if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
 	Fixture.Advance(0.2);
 	if (!TestEqual(TEXT("one demand"), Fixture.Service->GetJobs().Num(), 1)) { return false; }
 	if (!TestEqual(TEXT("refused for the missing vehicle"),
 		static_cast<int32>(Fixture.Service->GetJobs()[0].Why), static_cast<int32>(EServiceRefusal::NoVehicles))) { return false; }
+	TestEqual(TEXT("and the card says what to do"),
+		Fixture.Service->DescribeAgent(Fixture.Service->GetJobs()[0].AircraftId, 0.0, nullptr),
+		FString(TEXT("Fuel 300 L · depot has no vehicles - buy one")));
 	const int32 Unresolved = FuelServiceTest::QuietUnresolvedSteps(Fixture, 300);
 	TestTrue(FString::Printf(TEXT("a depot with no vehicles leaves the board quiet (%d of 300 Steps unresolved)"), Unresolved), Unresolved <= 1);
 	return true;

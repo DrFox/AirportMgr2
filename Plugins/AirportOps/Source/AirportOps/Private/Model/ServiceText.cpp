@@ -183,11 +183,11 @@ namespace ServiceText
 		// THE CARD'S FUEL LINE (2026-09-28): the load, what is left, where the job has got to. Numbers
 		// through FText::AsNumber so they group ("2,900") as the rest of the UI's do.
 		auto Litres = [](double L) { return FText::AsNumber(FMath::RoundToInt(L)).ToString(); };
+		// NO ZERO-LITRE BRANCH: a job is only ever opened for Litres > 0 (FTurnarounds' Litres <= 0 return comes before OpenJob), and
+		// delivering moves litres from Owed to Delivered, so Total stays positive; the "none needed" an aircraft that wanted nothing
+		// reads is the Job == nullptr line above. A Total <= 0 branch here was unreachable (#462, T8).
+		// ENFORCED BY: AirportOps.Fuel.NoLitresNoTruck (a zero-litre aircraft has a turnaround and no job, and the card says so)
 		const double Total = Job->QuantityOwed + Job->QuantityDelivered;
-		if (Total <= 0.0)
-		{
-			return TEXT("Fuel") + Dot + TEXT("none needed");
-		}
 		const FString Head = FString::Printf(TEXT("Fuel %s L"), *Litres(Total));
 
 		if (Job->State == EServiceJobState::Unserviceable)

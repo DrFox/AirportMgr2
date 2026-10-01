@@ -7,6 +7,7 @@
 #include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Tool/BuildSession.h"
+#include "AirportMgrTestSlot.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -108,7 +109,7 @@ bool FLoadRetiresToolAndCachesTest::RunTest(const FString& Parameters)
 	Target->PlaceRunway(FVector2D(0.0, -50000.0), FVector2D(6000.0, -50000.0), TestProfiles::Runway());
 	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 	Runtime->Attach(Target);
-	const FString Slot = TEXT("AirportMgrTest_LoadRetires");
+	const AirportMgrTest::FScopedSlot Slot(TEXT("AirportMgrTest_LoadRetires"));
 	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
 
 	// THE SESSION IT IS LOADED OVER: no runway, and the taxiway tool chaining from a node its first click placed.

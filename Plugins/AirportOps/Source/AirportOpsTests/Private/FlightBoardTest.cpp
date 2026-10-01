@@ -256,30 +256,10 @@ bool FFlightBoardFollowsTheAgentTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FFlightBoardExpiresOffersTest,
-	"AirportOps.Model.FlightBoard.ExpiresAnIgnoredOffer",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FFlightBoardExpiresOffersTest::RunTest(const FString& Parameters)
-{
-	URoadNetwork* Net = BoardNetworkWithStands({3600.0});
-	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
-	USimClock* Clock = NewObject<USimClock>();
-	UFlightBoard* Board = MakeBoard();
-
-	UFlight* Offer = BoardFlightNeeding(3400.0);
-	Offer->OfferSecondsLeft = 50.0;
-	Board->AddOffer(*Clock, Offer);
-	TestEqual(TEXT("it is in the inbox to begin with"), Board->PendingOfferCount(), 1);
-
-	// REAL seconds now (spec 2026-09-28) - TickOffers, not Clock.Advance, drains the window.
-	Board->TickOffers(*Traffic, *Net, *Clock, 51.0);
-
-	TestEqual(TEXT("an ignored offer lapses"), Offer->GetPhase(), EFlightPhase::Expired);
-	TestEqual(TEXT("and leaves the inbox"), Board->PendingOfferCount(), 0);
-	return true;
-}
+// (AirportOps.Model.FlightBoard.ExpiresAnIgnoredOffer is gone, #462 #16: misnamed - its fixture has no runway, so the lapse was
+// NeverAcceptable, not Ignored - and its two assertions (Expired, and out of the inbox) are AirportOps.Model.Offers.Countdown.LapseIgnored's
+// and LapseNeverAcceptable's. REAL seconds drain the window - TickOffers, not Clock.Advance (spec 2026-09-28) - which
+// Countdown.DrainsInRealSeconds pins.)
 
 /**
  * PR #137 REVIEW, kept through the move to a real-time countdown: a declined offer that is

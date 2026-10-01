@@ -95,33 +95,54 @@ bool FLedgerRollUpTest::RunTest(const FString& Parameters)
 }
 
 /**
+ * THE DAY'S UPKEEP, ON THE ONE OVERLOAD (#462 M18 merged LedgerPostDailyUpkeep into this: the scalar (Base, Now) overload it
+ * called had no production caller and is gone). Three promises of the same beat:
+ * a positive line is one described charge; a zero line writes nothing; and a day with nothing standing still rolls up.
+ *
  * THE ROLL-UP DECISION (issue #191): PostDailyUpkeep's skip-if-zero used to guard RollUp too,
  * because both lived behind one early return in UOpsRuntime - so a day with nothing standing
- * (Base <= 0) silently deferred folding old entries as well as skipping the charge. Folding
+ * (a zero base) silently deferred folding old entries as well as skipping the charge. Folding
  * is housekeeping unrelated to whether today happened to cost anything, so this pins that a
- * zero-Base day still rolls up. Ledger->Post itself is checked separately in the assertions
+ * zero-base day still rolls up. Ledger->Post itself is checked separately in the assertions
  * on the charge below.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FLedgerPostDailyUpkeepTest,
-	"AirportOps.Model.LedgerPostDailyUpkeep",
+	FLedgerUpkeepLinesTest,
+	"AirportOps.Model.LedgerUpkeepLines",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FLedgerPostDailyUpkeepTest::RunTest(const FString& Parameters)
+bool FLedgerUpkeepLinesTest::RunTest(const FString& Parameters)
 {
 	const double Day = 86400.0;
 
-	// Base > 0: an upkeep entry is posted, and it is a charge (negative).
+	// A positive line: an upkeep entry is posted, and it is a charge (negative).
 	{
 		ULedger* Ledger = NewObject<ULedger>();
 		Ledger->Open(1000.0);
-		Ledger->PostDailyUpkeep(50.0, 1.0 * Day);
+		const FUpkeepLine Line{ 50.0, FText::FromString(TEXT("Upkeep")) };
+		Ledger->PostDailyUpkeep(MakeArrayView(&Line, 1), 1.0 * Day);
 		TestEqual(TEXT("a positive base posts one upkeep entry"), Ledger->Entries().Num(), 1);
 		TestEqual(TEXT("charged, not credited"), Ledger->Entries()[0].Amount, -50.0, 1e-9);
 		TestEqual(TEXT("filed as Upkeep"), Ledger->Entries()[0].Category, ELedgerCategory::Upkeep);
 	}
 
-	// Base <= 0: no entry - "an airport with nothing standing on it costs nothing to own" -
+	// ONE ENTRY PER DESCRIBED LINE (facility-upgrades spec §3): the finance screen shows where the money
+	// went, so "Fleet upkeep" is its own row, not folded into "Upkeep". A zero line writes nothing.
+	{
+		ULedger* Ledger = NewObject<ULedger>();
+		Ledger->Open(10000.0);
+		const FUpkeepLine Lines[] = {
+			{ 50.0, FText::FromString(TEXT("Upkeep")) },
+			{ 0.0, FText::FromString(TEXT("Facility upkeep")) },
+			{ 650.0, FText::FromString(TEXT("Fleet upkeep")) } };
+		Ledger->PostDailyUpkeep(Lines, 86400.0);
+		TestEqual(TEXT("two entries - the zero line wrote nothing"), Ledger->Entries().Num(), 2);
+		TestEqual(TEXT("both are Upkeep"), static_cast<int32>(Ledger->Entries().Last().Category), static_cast<int32>(ELedgerCategory::Upkeep));
+		TestEqual(TEXT("each described"), Ledger->Entries().Last().What.ToString(), FString(TEXT("Fleet upkeep")));
+		TestEqual(TEXT("and charged"), Ledger->Balance(), 10000.0 - 700.0, 1e-6);
+	}
+
+	// A zero line, and nothing else: no entry - "an airport with nothing standing on it costs nothing to own" -
 	// but RollUp still runs and still folds anything old enough to fold. THE BUG THIS PINS:
 	// before issue #191, the runtime's skip-if-zero guard returned before EITHER RollUp ran.
 	{
@@ -132,7 +153,8 @@ bool FLedgerPostDailyUpkeepTest::RunTest(const FString& Parameters)
 		Ledger->Post(2.0 * Day, ELedgerCategory::Upkeep, -10.0, FText::FromString(TEXT("old")));
 
 		const double Before = Ledger->Balance();
-		Ledger->PostDailyUpkeep(0.0, 40.0 * Day);
+		const FUpkeepLine Nothing{ 0.0, FText::FromString(TEXT("Upkeep")) };
+		Ledger->PostDailyUpkeep(MakeArrayView(&Nothing, 1), 40.0 * Day);
 
 		TestEqual(TEXT("a zero base posts no charge"), Ledger->Entries().Num(), 1);
 		TestEqual(TEXT("but the two old entries still folded into a brought-forward one - "
@@ -140,29 +162,6 @@ bool FLedgerPostDailyUpkeepTest::RunTest(const FString& Parameters)
 			Ledger->Entries()[0].Category, ELedgerCategory::BroughtForward);
 		TestEqual(TEXT("folding never moves the balance"), Ledger->Balance(), Before, 1e-9);
 	}
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FLedgerUpkeepLinesTest,
-	"AirportOps.Model.LedgerUpkeepLines",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FLedgerUpkeepLinesTest::RunTest(const FString& Parameters)
-{
-	// ONE ENTRY PER DESCRIBED LINE (facility-upgrades spec §3): the finance screen shows where the money
-	// went, so "Fleet upkeep" is its own row, not folded into "Upkeep". A zero line writes nothing.
-	ULedger* Ledger = NewObject<ULedger>();
-	Ledger->Open(10000.0);
-	const FUpkeepLine Lines[] = {
-		{ 50.0, FText::FromString(TEXT("Upkeep")) },
-		{ 0.0, FText::FromString(TEXT("Facility upkeep")) },
-		{ 650.0, FText::FromString(TEXT("Fleet upkeep")) } };
-	Ledger->PostDailyUpkeep(Lines, 86400.0);
-	TestEqual(TEXT("two entries - the zero line wrote nothing"), Ledger->Entries().Num(), 2);
-	TestEqual(TEXT("both are Upkeep"), static_cast<int32>(Ledger->Entries().Last().Category), static_cast<int32>(ELedgerCategory::Upkeep));
-	TestEqual(TEXT("each described"), Ledger->Entries().Last().What.ToString(), FString(TEXT("Fleet upkeep")));
-	TestEqual(TEXT("and charged"), Ledger->Balance(), 10000.0 - 700.0, 1e-6);
 	return true;
 }
 

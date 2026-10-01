@@ -261,7 +261,8 @@ bool FOpsRuntimeSubsystemReregisterTest::RunTest(const FString& Parameters)
 
 	// A GAME IN PROGRESS: time has passed and money has moved, so a restart would show on both.
 	Sub->Tick(5.0f);
-	Runtime->GetLedger()->PostDailyUpkeep(1234.0, Runtime->GetClock()->Now());
+	const FUpkeepLine Upkeep{ 1234.0, FText::FromString(TEXT("Upkeep")) };
+	Runtime->GetLedger()->PostDailyUpkeep(MakeArrayView(&Upkeep, 1), Runtime->GetClock()->Now());
 	const double Now = Runtime->GetClock()->Now();
 	const double Balance = Runtime->GetLedger()->Balance();
 

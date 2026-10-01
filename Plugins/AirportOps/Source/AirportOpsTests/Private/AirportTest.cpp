@@ -27,6 +27,7 @@
 #include "Profiles/RoadProfile.h"
 #include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
+#include "OpsSaveTestHelpers.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -444,7 +445,7 @@ namespace
 		int32 PlantedId = INDEX_NONE;
 		double DueAt = 0.0;
 		double SatisfactionAtSave = 0.0;
-		FString Slot = TEXT("AirportOpsTest_AirportLoad");
+		const OpsSaveTest::FScopedSlot Slot{ TEXT("AirportOpsTest_AirportLoad") };
 
 		bool Save()
 		{
@@ -503,8 +504,6 @@ namespace
 			}
 			return Runtime->GetClock()->Now() > DueAt;
 		}
-
-		~FAirportClosedLoadRig() { UGameplayStatics::DeleteGameInSlot(Slot, 0); }
 	};
 }
 
@@ -798,7 +797,8 @@ bool FAirportSaveRefreshesTest::RunTest(const FString&)
 	UFlight* Coming = AirportTestOffer(*Runtime, TEXT("AirportTestSaveAirline"));
 	if (!TestTrue(TEXT("an accepted flight"), Runtime->GetFlightBoard()->Accept(*TestWorld.Actor->GetTraffic()->GetModel(), *Net, *Runtime->GetClock(), *Coming))) { return false; }
 	AirportTestDeleteRunways(*TestWorld.Actor);
-	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(TEXT("AirportOpsTest_SaveRefresh")))) { return false; }
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_SaveRefresh"));
+	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
 	TestEqual(TEXT("no tick between: the save itself saw the runway go"), Runtime->GetAirport()->Status(), EAirportStatus::NoRunway);
 	TestEqual(TEXT("and its drain cancelled the flight before the snapshot"), Coming->GetPhase(), EFlightPhase::Cancelled);
 	return true;

@@ -150,7 +150,8 @@ bool FSimClockSpeedLadderTest::RunTest(const FString& Parameters)
  * are the same one - see ResumeSpeed's own comment on this class for the save bug that made
  * the move worth doing, not just tidier. UOpsRuntime keeps methods of the same name, but they
  * are now a two-line forward to this class plus the push into the actor and the event bus,
- * which is Present/'s job and needs a world (AirportOps.Present.Runtime covers that half).
+ * which is Present/'s job and needs a world (AirportOps.Present.Runtime covers the bus half,
+ * AirportOps.Present.SimTimeScale.SetOnlyWhenItChanges the actor's).
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FSimClockStepAndPauseTest,

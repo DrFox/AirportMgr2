@@ -41,7 +41,14 @@ bool FFlightBoardIsComposedByTheRuntimeTest::RunTest(const FString& Parameters)
 	// never attached must already have them.
 	// NO LEDGER ON THE BOARD since #506's review: billing is handed the runtime's own in WireBus - AirportOps.Present.Bus.BillingIsWired
 	// charges a landing through it.
-	TestTrue(TEXT("the board prices at the runtime's prices"), Board->Pricing.Get() == Runtime->GetPricing() && Runtime->GetLedger() != nullptr);
+	//
+	// THE RUNTIME'S OWN TWO SUBOBJECTS, ASKED FIRST (moved here from AirportOps.Runtime.LedgerIsComposedByTheRuntime, #462 M8, which held
+	// the same unattached runtime): the runtime grew a ledger and a pricing resolver, and a constructor that silently failed to make one
+	// would leave every fee posting to nothing at all, with no error anywhere - the money would simply never move. They are asked BEFORE
+	// the equalities below, which pass with both sides null (a null Pricing on the board equals a null GetPricing()).
+	if (!TestNotNull(TEXT("the runtime composes a ledger, as it does every other subobject"), Runtime->GetLedger())) { return false; }
+	if (!TestNotNull(TEXT("and a pricing resolver"), Runtime->GetPricing())) { return false; }
+	TestTrue(TEXT("the board prices at the runtime's prices"), Board->Pricing.Get() == Runtime->GetPricing());
 	TestTrue(TEXT("and asks the runtime's job board about fuel"), Board->Fuel.Get() == Runtime->GetJobBoard());
 	TestTrue(TEXT("the generator prices offers at the runtime's prices"),
 		Runtime->GetOfferGenerator() != nullptr && Runtime->GetOfferGenerator()->Pricing.Get() == Runtime->GetPricing());

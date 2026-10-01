@@ -69,11 +69,8 @@ bool FFuelDescribeStatesTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("done, in how many trips"), Service->DescribeAgent(1, 0.0, nullptr),
 			FString(TEXT("Fuel 2,900 L · done in 3 trips")));
 	}
-	{
-		UJobBoard* Service = NewObject<UJobBoard>();
-		Demand(*Service, EServiceJobState::Done, 0.0, 0.0, 0);
-		TestEqual(TEXT("a type with no tank"), Service->DescribeAgent(1, 0.0, nullptr), FString(TEXT("Fuel · none needed")));
-	}
+	// NO "a type with no tank" CASE (#462, T8): a zero-litre aircraft has a turnaround and NO job, so a job whose litres total zero never
+	// exists to be described; AirportOps.Fuel.NoLitresNoTruck pins the line the aircraft really reads.
 	{
 		UJobBoard* Service = NewObject<UJobBoard>();
 		FServiceJob& D = Demand(*Service, EServiceJobState::Unserviceable, 2900.0, 0.0, 0);

@@ -31,6 +31,7 @@
 #include "Model/RouteSearch.h"
 #include "Model/SimClock.h"
 #include "OpsEventsTestListener.h"
+#include "OpsSaveTestHelpers.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/OpsRuntime.h"
 #include "Present/RoadEditFacade.h"
@@ -136,31 +137,18 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 		Runtime->StepSpeed(+1);
 		Runtime->Tick(0.0);   // the bus delivers on the next ops step - see the spawn above
 		TestEqual(TEXT("stepping speed announces it, once"), Runtime->GetBus().DispatchedCountOfForTest<FSpeedChangedEvent>(), SpeedsBefore + 1);
-		TestEqual(TEXT("and the clock holds the new rung"), Runtime->GetClock()->GetSpeed(), ESimSpeed::X2);
-		TestEqual(TEXT("and pushes the multiplier into the actor"), Actor->GetSimTimeScale(), 2.0, 1e-12);
 
-		Runtime->TogglePause();
-		TestEqual(TEXT("pause zeroes the actor's scale"), Actor->GetSimTimeScale(), 0.0, 1e-12);
-		Runtime->TogglePause();
-		TestEqual(TEXT("unpause restores the previous speed"), Actor->GetSimTimeScale(), 2.0, 1e-12);
+		// THE SPEED LADDER IS NOT WALKED HERE (#462 M30). The clock's rung and its clamps at both ends are
+		// AirportOps.Model.SimClock.StepAndPause's (world-free, and it asks the LADDER rather than a literal, so adding a rung does not turn
+		// it into a failing test that says nothing about the behaviour it guards - this one used to read 8.0 and duly failed the day x16
+		// and x32 were added); that the actor runs at the clock's multiplier after a step, a pause, a resume, a load and an attach is
+		// AirportOps.Present.SimTimeScale.SetOnlyWhenItChanges's. What this test keeps is the bus half, above: one FSpeedChangedEvent a step.
 
-		// Asked of the LADDER rather than a literal, so adding a rung does not turn this
-		// into a failing test that says nothing about the behaviour it guards. It used to
-		// read 8.0 and duly failed the day x16 and x32 were added, which is a maintenance
-		// cost with no diagnostic value.
-		const TArrayView<const ESimSpeed> Ladder = USimClock::SpeedLadder();
-		const double Fastest = USimClock::Multiplier(Ladder.Last());
-		const double Slowest = USimClock::Multiplier(Ladder[0]);
-
-		Runtime->StepSpeed(+Ladder.Num() + 2);
-		TestEqual(TEXT("stepping past the top clamps at the fastest rung"),
-			Actor->GetSimTimeScale(), Fastest, 1e-12);
-		Runtime->StepSpeed(-Ladder.Num() - 4);
-		TestEqual(TEXT("stepping past the bottom clamps at the slowest rung, never paused"),
-			Actor->GetSimTimeScale(), Slowest, 1e-12);
-
+		// THE CLOCK BEFORE THE TICK (#463): Now() > 0.0 already held after Attach - the clock opens in the morning, not at zero - so it
+		// passed with the runtime's Tick advancing nothing.
+		const double NowBeforeTick = Runtime->GetClock()->Now();
 		Runtime->Tick(1.0);
-		TestTrue(TEXT("ticking the runtime advances the clock"), Runtime->GetClock()->Now() > 0.0);
+		TestTrue(TEXT("ticking the runtime advances the clock"), Runtime->GetClock()->Now() > NowBeforeTick);
 
 		// Save, clear, load: the network comes back and the mesh is rebuilt, measured by
 		// triangle count - the same probe MeshFreshnessTest uses. The facade defers its
@@ -169,7 +157,7 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 		Actor->RebuildMesh();
 		const int32 TrisBefore = Actor->GetPresenter()->SurfaceTriangleCountForTest();
 		TestTrue(TEXT("the road produced a surface to measure"), TrisBefore > 0);
-		const FString Slot = TEXT("AirportOpsTest_Runtime");
+		const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_Runtime"));
 		if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
 
 		Actor->ClearNetwork();
@@ -450,7 +438,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FOpsRuntimeDrawnStandSurvivesLoadTest::RunTest(const FString& Parameters)
 {
 	using namespace OpsRuntimeStandLoadTest;
-	const FString Slot = TEXT("AirportOpsTest_DrawnStand");
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_DrawnStand"));
 
 	UEntityDefinition* SavedDefinition = nullptr;
 	{
@@ -555,7 +543,7 @@ bool FOpsRuntimeLegacyStandGetsOutlineOnLoadTest::RunTest(const FString& Paramet
 		return false;
 	}
 
-	const FString Slot = TEXT("AirportOpsTest_LegacyStand");
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_LegacyStand"));
 	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 	Runtime->Attach(Actor);
 	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
@@ -584,22 +572,34 @@ bool FOpsRuntimeRearmsRepeatersOnLoadTest::RunTest(const FString& Parameters)
 {
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
+	// A NETWORK, which a save needs and a fresh actor lacks until its first edit.
+	TestWorld.Actor->PlaceNode(FVector2D(0.0, 90000.0));
 	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 	Runtime->Attach(TestWorld.Actor);
 	if (!TestTrue(TEXT("the minute tick is armed"), Runtime->HasOfferScheduledForTest())) { return false; }
 
-	// A SAVE FROM TWO DAYS LATER, restored into the runtime's own clock the way OpsSave does:
-	// GameSeconds jumps, the queue does not.
+	// A SAVE FROM TWO DAYS LATER, written the way a real one is - SaveToSlot - with its clock's blob swapped for one two days on: the
+	// load restores GameSeconds into the runtime's own clock and the queue does not move, exactly the jump a real load makes. THROUGH
+	// LoadFromSlot (#463): this used to call RearmRepeatingSchedules() itself, so the load's call of it (OpsRuntime.cpp, LoadFromSlot,
+	// after the restore) could be deleted and the test stay green. Attach calls it too: that one is armed above and is not this test's.
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_OffersRearm"));
+	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
+	FOpsSnapshot Snapshot;
+	if (!TestTrue(TEXT("and reads back"), OpsSave::ReadSlot(Slot, Snapshot))) { return false; }
 	USimClock* Later = NewObject<USimClock>();
 	Later->SetUniformDay(1.0);
 	Later->StartAtHour(9.0);
 	Later->Advance(2.0);
 	TArray<uint8> Bytes;
 	OpsSave::SerializeObject(*Later, Bytes);
-	OpsSave::DeserializeObject(*Runtime->GetClock(), Bytes);
-	Runtime->GetClock()->SetUniformDay(USimClock::SecondsPerDay);   // 1 game s per real s from here
+	if (!TestTrue(TEXT("the snapshot carries the clock's blob"), Snapshot.Blobs.Contains(TEXT("Clock")))) { return false; }
+	Snapshot.Blobs.Add(TEXT("Clock"), FOpsBlob{ Bytes });
+	if (!TestTrue(TEXT("rewritten with the later clock"), OpsSave::WriteSlot(Slot, Snapshot))) { return false; }
 
-	Runtime->RearmRepeatingSchedules();
+	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
+	if (!TestTrue(TEXT("and the clock jumped two days: the queue did not follow it unless the load re-armed"),
+		Runtime->GetClock()->Now() > 1.5 * USimClock::SecondsPerDay)) { return false; }
+	Runtime->GetClock()->SetUniformDay(USimClock::SecondsPerDay);   // 1 game s per real s from here
 	const int32 Before = Runtime->OfferTicksForTest();
 	Runtime->Tick(1.0);
 	TestEqual(TEXT("one game second after the load fires no backlog of minute ticks"),
@@ -821,7 +821,7 @@ bool FOpsRuntimeMidFlightLoadTest::RunTest(const FString& Parameters)
 	const int32 RecentBefore = Runtime->GetAirlines()->Find(Airline)->Recent.Num();
 	Runtime->GetClock()->Advance(1.0);
 	const double SavedAt = Runtime->GetClock()->Now();
-	const FString Slot = TEXT("AirportOpsTest_MidFlightLoad");
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_MidFlightLoad"));
 	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
 	// MOVED ON before the load: a board dated by the pre-load clock would read this time, not SavedAt.
 	Runtime->GetClock()->Advance(5.0);
@@ -922,7 +922,7 @@ bool FOpsRuntimeMidFlightClosedTest::RunTest(const FString& Parameters)
 		const int32 RecentBefore = Runtime->GetAirlines()->Find(Airline)->Recent.Num();
 		const double SatisfactionBefore = Runtime->GetAirlines()->Find(Airline)->Satisfaction;
 
-		const FString Slot = TEXT("AirportOpsTest_MidFlightClosed");
+		const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_MidFlightClosed"));
 		if (!TestTrue(*(Case + TEXT(": save writes")), Runtime->SaveToSlot(Slot))) { return false; }
 		if (!TestTrue(*(Case + TEXT(": load reads")), Runtime->LoadFromSlot(Slot))) { return false; }
 		for (int32 Tick = 0; Tick < 3; ++Tick) { Runtime->Tick(0.0); }
@@ -968,7 +968,7 @@ bool FOpsRuntimeLoadRestoresFlightsByValueTest::RunTest(const FString& Parameter
 	Board->AddOffer(*Runtime->GetClock(), Offer);
 	const int32 Id = Offer->Id;
 
-	const FString Slot = TEXT("AirportOpsTest_FlightsByValue");
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_FlightsByValue"));
 	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
 	Board->Decline(*Runtime->GetClock(), *Offer);
 	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
@@ -1025,7 +1025,7 @@ bool FOpsRuntimeDesignFiguresAreTheScenariosTest::RunTest(const FString& Paramet
 	TestTrue(TEXT("CONTROL: the catalogue has a bowser row"), Runtime->GetJobBoard()->GetCatalogue().Contains(Bowser));
 	TestEqual(TEXT("CONTROL: and prices it at the scenario's figure"), Runtime->GetJobBoard()->Fleet().PriceOf(Bowser), BowserPrice, 1e-9);
 
-	const FString Slot = TEXT("AirportOpsTest_DesignFigures");
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_DesignFigures"));
 	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
 
 	// THE RETUNE, between the save and the load - a designer's edit to the asset.

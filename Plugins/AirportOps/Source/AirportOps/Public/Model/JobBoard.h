@@ -413,8 +413,8 @@ public:
 	 * depot also arrives by a load or a replaced network - none of which a hook in PlaceEntity would see - while
 	 * a seed from inside the edit would mint vehicles for a depot that then does not exist. The event is published only for
 	 * a committed rebuild, of whichever door the depot came through, and Airside stays free of the fleet.
-	 * A LOAD DOES NOT RE-SEED: the restored vehicles' depots are already seen (FServiceFleet::Restored, and SeededDepots is
-	 * saved), so the pass the load wakes adds nothing to a depot that has its vehicles.
+	 * A LOAD DOES NOT RE-SEED: SeededDepots is saved, so every depot seen before the save is seen after it (a sold-out one
+	 * included), and the pass the load wakes adds nothing to a depot that has its vehicles.
 	 * Returns how many vehicles it added.
 	 * ENFORCED BY: Check-Architecture rule 60 (starter-fleet-seeded-on-announcement),
 	 * AirportOps.Present.Fleet.PlacedDepotIsSeededByTheAnnouncement, AirportOps.Present.Fleet.LoadDoesNotReseedADepotThatHasVehicles,

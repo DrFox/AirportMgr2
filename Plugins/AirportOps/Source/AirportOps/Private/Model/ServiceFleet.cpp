@@ -287,15 +287,12 @@ void FServiceFleet::Clear()
 
 void FServiceFleet::Restored()
 {
-	for (const FServiceVehicle& Vehicle : Board.Vehicles)
-	{
-		// ITS DEPOT HAS BEEN SEEN: the placeholder must not add a second fleet beside a restored one.
-		// ENFORCED BY: AirportOps.Fuel.RestoredFleetIsNotReseeded
-		if (Vehicle.Home.IsSet())
-		{
-			Board.SeededDepots.Add(Vehicle.Home);
-		}
-	}
+	// NO LOOP MARKING A RESTORED VEHICLE'S DEPOT SEEN (#462 #11, 2026-10-01): SeededDepots is SAVED, so a load hands every seen depot back
+	// whole - a sold-out one included - and the placeholder cannot add a second fleet beside a restored one. The loop that re-derived the set
+	// from the vehicles was a shim for a snapshot written before the set was saved (2026-09-29): nothing pinned it (deleting it turned no
+	// test red), there are no player saves (owner ruling 2026-09-23), and dead migration code is removed (2026-09-30).
+	// ENFORCED BY: AirportOps.Model.Fleet.SoldStarterFleetIsNotReseededAfterLoad, AirportOps.Present.Fleet.LoadDoesNotReseedADepotThatHasVehicles
+	// (both go red if a restore forgets the seen depots)
 	++Board.FleetCompositionRevision;
 	++Board.FleetRevision;
 }

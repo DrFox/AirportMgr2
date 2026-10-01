@@ -15,13 +15,6 @@
 // travelled with it.
 
 bool UOfferGenerator::CouldEverAdmit(const URoadNetwork& Network, const FVector2D& Focus,
-	const FAirframe& Airframe, EArrivalRefusal& OutWhy)
-{
-	FString Unused;
-	return CouldEverAdmit(Network, Focus, Airframe, OutWhy, Unused);
-}
-
-bool UOfferGenerator::CouldEverAdmit(const URoadNetwork& Network, const FVector2D& Focus,
 	const FAirframe& Airframe, EArrivalRefusal& OutWhy, FString& OutSentence)
 {
 	// No occupancy: the question is what this FIELD can take, not what is free this second.

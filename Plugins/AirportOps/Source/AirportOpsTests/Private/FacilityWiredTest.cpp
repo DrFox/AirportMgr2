@@ -17,6 +17,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
 #include "OpsEventsTestListener.h"
+#include "OpsSaveTestHelpers.h"
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Present/AirsideBuildingsActor.h"
@@ -712,7 +713,7 @@ bool FFacilityRepairAfterLoadTest::RunTest(const FString&)
 	Runtime->Attach(Actor);
 	const int32 Seats = Runtime->GetFacilityPurchases()->ReservedSlotsOf(Depot, *Actor->Network->GetEntity(Depot), EDepotModule::Shed);
 	if (!TestTrue(FString::Printf(TEXT("setup: the plot seats fewer than the twenty-one sheds (%d)"), Seats), Seats > 0 && Seats < 21)) { return false; }
-	const FString Slot = TEXT("AirportOpsTest_RepairAfterLoad");
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_RepairAfterLoad"));
 	Runtime->GetFacilityPurchases()->ApplyModuleRemoval = nullptr;
 	if (!TestTrue(TEXT("setup: saved while over-owned"), Runtime->SaveToSlot(Slot))) { return false; }
 	if (!TestEqual(TEXT("setup: with no removal hook the save's own drain removed nothing"), FacilityWiredOwned(*Actor, Depot, EDepotModule::Shed), 21)) { return false; }

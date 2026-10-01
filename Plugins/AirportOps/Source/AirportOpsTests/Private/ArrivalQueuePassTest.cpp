@@ -21,6 +21,7 @@
 #include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
 #include "OpsEventsTestListener.h"
+#include "OpsSaveTestHelpers.h"
 #include "OpsTransitionTestHelpers.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -234,11 +235,10 @@ bool FArrivalQueueDirtiersTest::RunTest(const FString&)
 	TestEqual(TEXT("a new arrival's Arriving"), RunsFor([&Bus]() { Bus.Publish(FAgentPhaseEvent{ OpsTestTransition(4242, EAgentPhase::Gone, EAgentPhase::Arriving, EAgentEvent::Dispatched) }); }), 1);
 	TestEqual(TEXT("any other phase change: no run"), RunsFor([&Bus]() { Bus.Publish(FAgentPhaseEvent{ OpsTestTransition(4242, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked) }); }), 0);
 
-	// A LOAD: nothing before it is an event any more, so MarkAllDirty runs it.
-	const FString Slot = TEXT("AirportOpsTest_QueuePassLoad");
-	if (!TestTrue(TEXT("saved"), Rig.Runtime->SaveToSlot(Slot))) { return false; }
-	Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
-	TestEqual(TEXT("a load"), RunsFor([&Rig, &Slot]() { Rig.Runtime->LoadFromSlot(Slot); }) >= 1, true);
+	// A LOAD IS NOT A ROW HERE (#463): LoadFromSlot announces the network it adopted (FNetworkChangedEvent, the row above), which
+	// dirties the pass by itself - so a load row passed with the load's own MarkAllDirty deleted. The catch-up is pinned where it
+	// can be seen: AirportOps.Present.ArrivalQueue.AttachAndLoadMarkItDirty reads the dirty bit straight after the load, before any
+	// event has been heard.
 	return true;
 }
 
@@ -604,7 +604,7 @@ bool FArrivalQueueCatchUpTest::RunTest(const FString&)
 	TestTrue(TEXT("an attach marks the queue pass dirty"), Rig.Runtime->GetBus().IsDirtyForTest(TEXT("ArrivalQueue")));
 	for (int32 Tick = 0; Tick < 5; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
 	TestFalse(TEXT("settled"), Rig.Runtime->GetBus().IsDirtyForTest(TEXT("ArrivalQueue")));
-	const FString Slot = TEXT("AirportOpsTest_QueueCatchUp");
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_QueueCatchUp"));
 	if (!TestTrue(TEXT("saved"), Rig.Runtime->SaveToSlot(Slot))) { return false; }
 	Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
 	if (!TestTrue(TEXT("loaded"), Rig.Runtime->LoadFromSlot(Slot))) { return false; }
@@ -625,7 +625,7 @@ bool FArrivalQueueNetCancelTest::RunTest(const FString&)
 	if (!TestNotNull(TEXT("accepted"), Rig.Accept(Field.Threshold))) { return false; }
 	for (int32 Tick = 0; Tick < 5; ++Tick) { Rig.Runtime->Tick(ArrivalQueuePassTest::Frame); }
 	if (!TestTrue(TEXT("armed while it holds"), Rig.Runtime->IsSafetyNetArmedForTest())) { return false; }
-	const FString Slot = TEXT("AirportOpsTest_QueueNetCancel");
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_QueueNetCancel"));
 	if (!TestTrue(TEXT("saved"), Rig.Runtime->SaveToSlot(Slot))) { return false; }
 	if (!TestTrue(TEXT("loaded"), Rig.Runtime->LoadFromSlot(Slot))) { return false; }
 	TestFalse(TEXT("a load cancels the net"), Rig.Runtime->IsSafetyNetArmedForTest());

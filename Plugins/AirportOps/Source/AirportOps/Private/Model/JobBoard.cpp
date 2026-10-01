@@ -52,8 +52,8 @@ void UJobBoard::Serialize(FArchive& Ar)
 		// are things a load clears. The lifecycle moves FleetRevision (once per vehicle).
 		Lifecycle(Vehicle).ResetForRestore();
 	}
-	// THE ARCHIVE REPLACED THE VEHICLES - even with none: each restored vehicle's depot has been seen (the placeholder must
-	// not add a second fleet beside a restored one), and the composition has changed, which the fleet's door records.
+	// THE ARCHIVE REPLACED THE VEHICLES - even with none: the composition has changed, which the fleet's door records. (The depots
+	// seen are the saved SeededDepots', back whole from the archive, so the placeholder adds no second fleet beside a restored one.)
 	Fleet().Restored();
 	if (Vehicles.Num() > 0)
 	{

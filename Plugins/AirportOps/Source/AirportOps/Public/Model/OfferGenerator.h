@@ -154,14 +154,12 @@ public:
 	 *
 	 * Static because it reads its arguments and nothing else, and because the tests want to
 	 * ask it without owning a generator.
-	 */
-	static bool CouldEverAdmit(const URoadNetwork& Network, const FVector2D& Focus,
-		const FAirframe& Airframe, EArrivalRefusal& OutWhy);
-
-	/**
-	 * The same, and the refusal as the plan's own sentence - WITH its figures, which the reason
-	 * alone cannot give: "not admitted to that runway" did not say whether length, width or
-	 * surface failed (issue #396). For the log line that says an airline cannot come.
+	 *
+	 * THE REFUSAL AS THE PLAN'S OWN SENTENCE TOO - WITH its figures, which the reason alone
+	 * cannot give: "not admitted to that runway" did not say whether length, width or surface
+	 * failed (issue #396). For the log line that says an airline cannot come. A 4-argument
+	 * overload that dropped the sentence forwarded here and had no production caller (#462);
+	 * a caller that wants only the reason passes a FString it ignores.
 	 */
 	static bool CouldEverAdmit(const URoadNetwork& Network, const FVector2D& Focus,
 		const FAirframe& Airframe, EArrivalRefusal& OutWhy, FString& OutSentence);

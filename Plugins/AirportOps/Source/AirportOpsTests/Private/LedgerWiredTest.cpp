@@ -9,23 +9,8 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FLedgerIsComposedByTheRuntimeTest,
-	"AirportOps.Runtime.LedgerIsComposedByTheRuntime",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FLedgerIsComposedByTheRuntimeTest::RunTest(const FString& Parameters)
-{
-	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
-
-	// THE SEAM TEST the refactor contract asks for: the runtime grew two subobjects, and a
-	// constructor that silently failed to make one would leave every fee posting to nothing at
-	// all, with no error anywhere - the money would simply never move.
-	TestNotNull(TEXT("the runtime composes a ledger, as it does every other subobject"),
-		Runtime->GetLedger());
-	TestNotNull(TEXT("and a pricing resolver"), Runtime->GetPricing());
-	return true;
-}
+// (AirportOps.Runtime.LedgerIsComposedByTheRuntime is AirportOps.Present.FlightBoardIsComposedByTheRuntime's now, #462 M8: the same
+// unattached runtime, and the equalities there pass with both sides null unless the two subobjects are asked for first.)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FLedgerRoundTripTest,

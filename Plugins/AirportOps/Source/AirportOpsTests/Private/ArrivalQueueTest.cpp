@@ -275,7 +275,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FQueueOverdueOnLoadTest, "AirportOps.Model.Arri
 bool FQueueOverdueOnLoadTest::RunTest(const FString& Parameters)
 {
 	// An Accepted flight whose ETA passed while the game was shut joins the queue - the queue,
-	// not a blind dispatch, decides whether the runway is free.
+	// not a blind dispatch, decides whether the runway is free. HELD, THEN FREE (merged with
+	// AirportOps.Model.FlightSave.AFlightDueWhileTheGameWasShutIsNotLost, #462 M15 - both planted an overdue Accepted flight and called
+	// RearmSchedules): the held half is "holding, not dispatched blind", the free half is "and cleared once the runway is free".
+	//
+	// The flight is put in the Accepted state DIRECTLY, because that is what a restore does - it deserialises phases and ETAs, and
+	// arms nothing. Accepting it through the board here would arm the clock, the clock would fire on its own, and the test would
+	// prove that the ordinary path works rather than that the load path does. Its slot passed while the game was closed: dropping it
+	// silently is the failure this guards - the player accepted a flight and it simply never came.
 	FQueueRig Rig;
 	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 	Flight->Airframe = QueueAirframe();
@@ -284,9 +291,19 @@ bool FQueueOverdueOnLoadTest::RunTest(const FString& Parameters)
 	Flight->RunwayPreference = Rig.Airport.Threshold;
 	Rig.Board->AddOffer(*Rig.Clock, Flight);
 	Rig.HoldRunway();
+	Rig.Clock->Advance(1.0);   // 1 game s: the ETA is already behind us
+	TestEqual(TEXT("nothing has been dispatched, because nothing was armed"), Rig.Dispatched, 0);
+	// THE PREMISE, ASKED OF THE FLIGHT: Dispatched == 0 holds with the runway held whether or not anything was armed, so it cannot fail. An
+	// armed arrival fires on that Advance and joins the queue - Inbound - which is what a flight left Accepted proves did not happen.
+	TestEqual(TEXT("and the flight is still Accepted - an armed arrival would already be Inbound"), Flight->GetPhase(), EFlightPhase::Accepted);
 	Rig.Board->RearmSchedules(*Rig.Traffic, *Rig.Airport.Net, *Rig.Clock);
 	TestEqual(TEXT("it is holding"), Flight->GetPhase(), EFlightPhase::Inbound);
 	TestEqual(TEXT("and nothing was dispatched onto the busy runway"), Rig.Dispatched, 0);
+
+	Rig.FreeRunway();
+	Rig.Tick();
+	TestEqual(TEXT("the queue clears it once the runway frees - a flight already due joins the queue at once, not dropped"), Rig.Dispatched, 1);
+	TestEqual(TEXT("so it is landing, not still waiting"), Flight->GetPhase(), EFlightPhase::Landing);
 	return true;
 }
 

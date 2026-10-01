@@ -32,6 +32,7 @@
 #include "Model/ServiceFleet.h"
 #include "Model/RoadAgent.h"
 #include "OpsEventsTestListener.h"
+#include "OpsSaveTestHelpers.h"
 #include "Misc/ScopeExit.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/OpsRuntime.h"
@@ -196,7 +197,7 @@ bool FOpsRuntimeBusLoadTest::RunTest(const FString&)
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
 	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
-	const FString Slot = TEXT("AirportOpsTest_BusLoad");
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_BusLoad"));
 	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
 
 	const int32 Before = RuntimeBusTestPhaseCount(*Runtime);
@@ -255,7 +256,8 @@ bool FOpsRuntimeBusSaveFromHandlerTest::RunTest(const FString&)
 	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
 	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
 	Listener->SaveOnCue = Runtime;
-	Listener->SaveSlot = TEXT("AirportOpsTest_BusAutosave");
+	const OpsSaveTest::FScopedSlot AutosaveSlot(TEXT("AirportOpsTest_BusAutosave"));
+	Listener->SaveSlot = AutosaveSlot;
 	Runtime->GetEvents()->OnSaveSlot.AddDynamic(Listener, &UOpsEventsTestListener::OnSaveSlotSave);
 
 	// A Blueprint autosave bound to a UOpsEvents face (the save-slot one since #445 retired the catch-all notification):
@@ -417,7 +419,7 @@ bool FOpsRuntimeBusOldSnapshotTest::RunTest(const FString&)
 		return false;
 	}
 	const FName First = Runtime->GetAirlineOffers()[0].Airline->GetFName();
-	const FString Slot = TEXT("AirportOpsTest_BusOldSnapshot");
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_BusOldSnapshot"));
 	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
 	FOpsSnapshot Snapshot;
 	if (!TestTrue(TEXT("and reads back"), OpsSave::ReadSlot(Slot, Snapshot))) { return false; }
@@ -500,9 +502,10 @@ bool FOpsRuntimeBusNetworkChangedOnceTest::RunTest(const FString&)
 	Facade->EndInteractiveEdit(/*bKeep*/ true);
 	TestEqual(TEXT("the drag's commit publishes once"), Published(), 2);
 
-	if (!TestTrue(TEXT("setup: the airport saves"), Runtime->SaveToSlot(TEXT("AirportOpsTest_NetworkChangedOnce")))) { return false; }
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_NetworkChangedOnce"));
+	if (!TestTrue(TEXT("setup: the airport saves"), Runtime->SaveToSlot(Slot))) { return false; }
 	const int32 BeforeLoad = Published();
-	if (!TestTrue(TEXT("setup: and loads"), Runtime->LoadFromSlot(TEXT("AirportOpsTest_NetworkChangedOnce")))) { return false; }
+	if (!TestTrue(TEXT("setup: and loads"), Runtime->LoadFromSlot(Slot))) { return false; }
 	TestEqual(TEXT("a load publishes FNetworkChangedEvent exactly once"), Published(), BeforeLoad + 1);
 	return true;
 }
@@ -583,7 +586,7 @@ bool FOpsRuntimeAlertsPassTest::RunTest(const FString&)
 	TestEqual(TEXT("overdrawn, the next pass raises it"), Listener->CountOf(Overdrawn), 1);
 	TestEqual(TEXT("and the runtime holds it"), HeldOverdrawn(), 1);
 
-	const FString Slot = TEXT("AirportOpsTest_AlertsLoad");
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_AlertsLoad"));
 	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
 	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
 	Runtime->GetEvents()->OnAlertsReset.AddDynamic(Listener, &UOpsEventsTestListener::OnAlertsReset);
@@ -721,7 +724,7 @@ bool FOpsRuntimeLoadFromHandlerTest::RunTest(const FString&)
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
 	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
-	const FString Slot = TEXT("AirportOpsTest_BusLoadFromHandler");
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_BusLoadFromHandler"));
 	if (!TestTrue(TEXT("setup: a save to load"), Runtime->SaveToSlot(Slot))) { return false; }
 	Runtime->Tick(0.0);
 
@@ -1144,6 +1147,11 @@ bool FSameFrameRedirectTest::RunTest(const FString&)
 	TestEqual(TEXT("a stale Parked moves no flight into Turnaround"), Rig.Flight->GetPhase(), EFlightPhase::TaxiIn);
 	TestFalse(TEXT("Turnaround was never shown"), Rig.Seen.Contains(EFlightPhase::Turnaround));
 	TestNull(TEXT("and no turnaround opened"), Rig.Jobs->TurnaroundFor(Rig.Agent));
+	// NONE ENDED EITHER (#463): the redirect that follows the stale Parked drops whatever turnaround the Parked opened, so the line
+	// above reads null whether the board read the event's goal or the live one - the opened-then-dropped turnaround is only visible as
+	// the FTurnaroundEndedEvent its drop publishes.
+	TestEqual(TEXT("and no turnaround ended - one that opened and was dropped by the redirect would have published its end"),
+		Rig.Ended.Num(), 0);
 	return true;
 }
 
@@ -1229,7 +1237,7 @@ bool FRuntimeLoadRunsEveryRepairTest::RunTest(const FString&)
 
 	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 	Runtime->Attach(Actor);
-	const FString Slot = TEXT("AirportOpsTest_LoadRepairs");
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_LoadRepairs"));
 	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
 
 	// BETWEEN THE SESSIONS.
@@ -1338,7 +1346,7 @@ bool FRuntimeLoadFallbackNewProcessTest::RunTest(const FString&)
 
 	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 	Runtime->Attach(Actor);
-	const FString Slot = TEXT("AirportOpsTest_FallbackNewProcess");
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_FallbackNewProcess"));
 	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
 
 	// A NEW PROCESS, AS FAR AS A PATH CAN TELL: the fallback keeps being the actor's (same object), under a name the

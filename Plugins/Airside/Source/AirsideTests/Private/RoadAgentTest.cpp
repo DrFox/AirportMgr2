@@ -494,7 +494,7 @@ bool FRoadAgentAirframeByReferenceTest::RunTest(const FString& Parameters)
 // armed (which re-describes LastMotion from the pose it just computed) and once where a
 // reverse leg is the LAST thing the route has left to drive (which did not, and handed back
 // the stale LastMotion from the frame BEFORE the reverse finished - still carrying
-// Reversing's own GroundSpeed). AirportOps.Ops.TruckNeverTeleportsOnItsRoundTrip and
+// Reversing's own GroundSpeed). AirportOps.Fuel.ShortTankGoesViaTheDepot's two-job run and
 // Airside.Model.ReverseRun already drive a reverse leg to its end; neither reads OutMotion
 // on the exact tick the handover happens, which is the only tick this bug is visible on.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
