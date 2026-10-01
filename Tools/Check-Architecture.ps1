@@ -4583,6 +4583,8 @@ $ranRules.Add('bus-reentry-guarded')
 #  (c) a listed file that is gone, or now fits the default, fails until its row goes, so the list cannot rot into a
 #      record of files that were once big.
 # Every line counts, a WHY comment included (rule 49's reason: a budget must not be gameable by deleting one).
+# RoadNetwork.cpp's figure was raised 2200 -> 2287 by #495 (#490/#450 load migrations: the depot number backfill, EnsureStandFrontages and the stand-entrance
+# default in PlaceEntity, each with its WHY comment) - the one raise, named in the row, that this rule's (a) asks for.
 # THE FIGURES ARE 2026-10-01's, measured after #427's extraction (JobBoard.cpp 1549 -> 1048, with #491's lines rebased in). The default is 800: on that
 # date the largest Model file under it was VehicleFit.cpp at 768, so no file was given room it had never had.
 # DOES NOT SEE: a responsibility added to a NEW file beside the old one (which is the extraction this wants, and review's to
@@ -4591,7 +4593,7 @@ $ranRules.Add('bus-reentry-guarded')
 $modelLineDefault = 800
 $modelLineSlack = 50
 $modelLineBudget = [ordered]@{
-    'Plugins\Airside\Source\Airside\Private\Model\RoadNetwork.cpp'            = 2200
+    'Plugins\Airside\Source\Airside\Private\Model\RoadNetwork.cpp'            = 2287   # raised from 2200 by #495: #490/#450 load migrations (depot backfill in EnsureStandNumbers, EnsureStandFrontages, the stand-entrance default in PlaceEntity)
     'Plugins\Airside\Source\Airside\Private\Model\GroundTraffic.cpp'          = 2121
     'Plugins\Airside\Source\Airside\Private\Model\TrafficClaims.cpp'          = 1898
     'Plugins\AirportOps\Source\AirportOps\Private\Model\FlightBoard.cpp'      = 1746

@@ -70,14 +70,17 @@ namespace ServiceText
 		// THE STAND BY ITS NUMBER, as the stand card and the sign painted at its turn-off say it (OpsNames::StandLabel) - not the entity index,
 		// which a delete recycles and which starts at 0 (#447). No job, no stand: INDEX_NONE, as before.
 		const FString Stand = Job != nullptr ? OpsNames::StandLabel(Network, Job->Stand) : FString::FromInt(INDEX_NONE);
+		// THE DEPOT BY ITS NUMBER TOO, as the depot card's title says it (OpsNames::DepotLabel, #490) - not Home.Index, which a bulldoze recycles into a different depot.
+		// The "Fuel:" / "Fleet:" log lines keep printing Home.Index: a diagnostic names the SLOT, and a grep of a log wants the same figure the code holds.
+		const FString Depot = OpsNames::DepotLabel(Network, Vehicle.Home);
 		switch (Vehicle.State)
 		{
 		case EServiceVehicleState::ToJob:      return FString::Printf(TEXT("to stand %s"), *Stand);
 		case EServiceVehicleState::Serving:    return FString::Printf(TEXT("fuelling at stand %s"), *Stand);
-		case EServiceVehicleState::ToFacility: return FString::Printf(TEXT("to depot %d"), Vehicle.Home.Index);
-		case EServiceVehicleState::AtFacility: return FString::Printf(TEXT("refilling at depot %d"), Vehicle.Home.Index);
+		case EServiceVehicleState::ToFacility: return FString::Printf(TEXT("to depot %s"), *Depot);
+		case EServiceVehicleState::AtFacility: return FString::Printf(TEXT("refilling at depot %s"), *Depot);
 		case EServiceVehicleState::Deciding:   return FString(TEXT("deciding where next"));
-		default:                               return FString::Printf(TEXT("at depot %d"), Vehicle.Home.Index);
+		default:                               return FString::Printf(TEXT("at depot %s"), *Depot);
 		}
 	}
 
