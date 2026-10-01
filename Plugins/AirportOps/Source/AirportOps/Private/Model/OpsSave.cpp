@@ -168,13 +168,24 @@ bool OpsSave::Restore(const FOpsSnapshot& In, TArrayView<IOpsPersistent* const> 
 bool OpsSave::WriteSlot(const FString& SlotName, const FOpsSnapshot& Snapshot)
 {
 	UOpsSaveGame* Save = Cast<UOpsSaveGame>(UGameplayStatics::CreateSaveGameObject(UOpsSaveGame::StaticClass()));
+	// A SAVE THAT DID NOT HAPPEN IS A WARNING, both ways it can fail (#499 review): it used to return false silently here, and
+	// log FAILED at Log below - so the one record of a lost save sat among the routine lines. UOpsEvents::NotifySaveSlot logs
+	// what the player was told at Log, relying on this.
 	if (Save == nullptr)
 	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Save to slot '%s': FAILED - no save game object could be created"), *SlotName);
 		return false;
 	}
 	Save->Snapshot = Snapshot;
 	const bool bOk = UGameplayStatics::SaveGameToSlot(Save, SlotName, 0);
-	UE_LOG(LogAirportOps, Log, TEXT("Save to slot '%s': %s"), *SlotName, bOk ? TEXT("ok") : TEXT("FAILED"));
+	if (bOk)
+	{
+		UE_LOG(LogAirportOps, Log, TEXT("Save to slot '%s': ok"), *SlotName);
+	}
+	else
+	{
+		UE_LOG(LogAirportOps, Warning, TEXT("Save to slot '%s': FAILED"), *SlotName);
+	}
 	return bOk;
 }
 

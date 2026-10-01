@@ -448,6 +448,8 @@ bool FToastsWordSavesAndPurchasesTest::RunTest(const FString& Parameters)
 		{ EOpsPurchaseKind::VehicleWithdrawn, 0.0, TEXT("Depot removed — Fuel bowser withdrawn"), ENotificationSeverity::Info },
 		{ EOpsPurchaseKind::ModuleBought, 45000.0, TEXT("Bought Fuel bowser — $45,000"), ENotificationSeverity::Info },
 		{ EOpsPurchaseKind::ModulesRefunded, 0.0, TEXT("No room on its plot — 1 Fuel bowser removed"), ENotificationSeverity::Warning },
+		// THE PAID REFUND (#499 review): the figure, and "refunded", when money came back.
+		{ EOpsPurchaseKind::ModulesRefunded, 45000.0, TEXT("No room on its plot — 1 Fuel bowser removed, $45,000 refunded"), ENotificationSeverity::Warning },
 	};
 	for (const FPurchaseCase& Case : PurchaseCases)
 	{

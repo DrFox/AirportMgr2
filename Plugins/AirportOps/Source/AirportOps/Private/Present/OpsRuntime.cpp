@@ -50,13 +50,6 @@ namespace
 		return false;
 	}
 	AIRSIDE_EXHAUSTIVE_SWITCH_END
-
-	/** The attached actor's traffic model, or null - the owner of the four notifications the bridges bind (#445 item 6). */
-	UGroundTraffic* TrafficModelOf(ARoadNetworkActor& Actor)
-	{
-		UAirsideTraffic* Traffic = Actor.GetTraffic();
-		return Traffic != nullptr ? Traffic->GetModel() : nullptr;
-	}
 }
 
 UOpsRuntime::UOpsRuntime()
@@ -879,45 +872,45 @@ TArray<UOpsRuntime::FAirsideBridge> UOpsRuntime::AirsideBridges()
 		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UAirsideTraffic* Traffic = Actor.GetTraffic()) { Traffic->OnAgentPhaseChanged.Remove(Handle); } } });
 	// THE FOUR PURE NOTIFICATIONS ARE BOUND ON THEIR OWNER, the traffic model (#445 item 6): UAirsideTraffic used to re-declare and
 	// re-broadcast each from a one-line handler that added nothing, so these bound a relay of a relay. Only AgentPhase stays on the
-	// presenter, whose relay adds the view (see UAirsideTraffic::OnAgentPhaseChanged). Asked for through GetModel() at the moment of
-	// the bind, and again on the way back, rather than held: the presenter owns which model it has (see its GetModel).
+	// presenter, whose relay adds the view (see UAirsideTraffic::OnAgentPhaseChanged). Asked for through the actor's GetGroundTraffic()
+	// at the moment of the bind, and again on the way back, rather than held: the presenter owns which model it has.
 	// ENFORCED BY: AirportOps.Present.Bus.ReattachDoesNotDouble (broadcasts each on the model), Check-Architecture rule 87
 	Out.Add({ TEXT("ArrivalRefused"),
 		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
 		{
-			UGroundTraffic* Model = TrafficModelOf(Actor);
+			UGroundTraffic* Model = Actor.GetGroundTraffic();
 			return Model == nullptr ? FDelegateHandle() : Model->OnArrivalRefused.AddWeakLambda(&Runtime,
 				[&Runtime](EArrivalRefusal Why) { Runtime.Bus.Publish(FArrivalRefusedEvent{ Why }); });
 		},
-		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UGroundTraffic* Model = TrafficModelOf(Actor)) { Model->OnArrivalRefused.Remove(Handle); } } });
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UGroundTraffic* Model = Actor.GetGroundTraffic()) { Model->OnArrivalRefused.Remove(Handle); } } });
 
 	// AIRSIDE'S DERIVED FREEDOM (ops batch 3 §5) - Airside never learns ops exists; it fires native delegates and these bridge them.
 	// ENFORCED BY: Check-Architecture rule 1b (cross-plugin) for "never learns"; AirportOps.Present.Bus.FreedIsBridged for the bridges
 	Out.Add({ TEXT("RunwayFreed"),
 		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
 		{
-			UGroundTraffic* Model = TrafficModelOf(Actor);
+			UGroundTraffic* Model = Actor.GetGroundTraffic();
 			return Model == nullptr ? FDelegateHandle() : Model->OnRunwayFreed.AddWeakLambda(&Runtime,
 				[&Runtime](FRoadSegmentId Seed) { Runtime.Bus.Publish(FRunwayFreedEvent{ Seed }); });
 		},
-		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UGroundTraffic* Model = TrafficModelOf(Actor)) { Model->OnRunwayFreed.Remove(Handle); } } });
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UGroundTraffic* Model = Actor.GetGroundTraffic()) { Model->OnRunwayFreed.Remove(Handle); } } });
 	Out.Add({ TEXT("StandsFreed"),
 		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
 		{
-			UGroundTraffic* Model = TrafficModelOf(Actor);
+			UGroundTraffic* Model = Actor.GetGroundTraffic();
 			return Model == nullptr ? FDelegateHandle() : Model->OnStandsFreed.AddWeakLambda(&Runtime,
 				[&Runtime](const TArray<FGuidelineNodeId>& PoseNodes) { Runtime.Bus.Publish(FStandsFreedEvent{ PoseNodes }); });
 		},
-		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UGroundTraffic* Model = TrafficModelOf(Actor)) { Model->OnStandsFreed.Remove(Handle); } } });
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UGroundTraffic* Model = Actor.GetGroundTraffic()) { Model->OnStandsFreed.Remove(Handle); } } });
 	// ENFORCED BY: AirportOps.Present.Bus.PushGroundFreedIsBridged
 	Out.Add({ TEXT("PushGroundFreed"),
 		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
 		{
-			UGroundTraffic* Model = TrafficModelOf(Actor);
+			UGroundTraffic* Model = Actor.GetGroundTraffic();
 			return Model == nullptr ? FDelegateHandle() : Model->OnPushGroundFreed.AddWeakLambda(&Runtime,
 				[&Runtime](int32 AgentId) { Runtime.Bus.Publish(FPushGroundFreedEvent{ AgentId }); });
 		},
-		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UGroundTraffic* Model = TrafficModelOf(Actor)) { Model->OnPushGroundFreed.Remove(Handle); } } });
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UGroundTraffic* Model = Actor.GetGroundTraffic()) { Model->OnPushGroundFreed.Remove(Handle); } } });
 
 	// "THE NETWORK CHANGED", BRIDGED LIKE THE ABOVE (#446) - it was a per-frame poll in Tick. See OnNetworkChanged, which adds behaviour (Geometry is no change).
 	Out.Add({ TEXT("NetworkChanged"),
@@ -995,6 +988,14 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	for (FAirsideBridge& Bridge : Bridges)
 	{
 		Bridge.Handle = Bridge.Bind(*this, *Target);
+		// A BRIDGE THAT BINDS NOTHING IS SAID, not silent (#499 review): an invalid handle means the actor lacks what the entry
+		// bridges (no facade, no traffic model), and every event of that delegate would then never reach the bus - a deaf board
+		// with nothing in the log to say why. A Warning, not a refusal: the rest of the airport still runs.
+		if (!Bridge.Handle.IsValid())
+		{
+			UE_LOG(LogAirportOps, Warning, TEXT("OpsRuntime: the '%s' bridge bound nothing on %s - its Airside events will not reach the ops bus"),
+				Bridge.Name, *Target->GetName());
+		}
 	}
 
 	// Content is resolved ONCE, here, and applied to the clock and the ledger.

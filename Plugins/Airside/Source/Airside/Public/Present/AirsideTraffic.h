@@ -93,7 +93,8 @@ public:
 	// handler and a bind on this layer besides the model's own - hand-paired, the five binds guarded by IsBoundToObject of the
 	// FIRST alone - and PushGroundFreed (2026-09-30) touched about twelve sites. Their reason for existing here ("the airport
 	// is reached through the actor, not down into Model/") no longer held on 2026-10-01: the ops layer read the model directly
-	// for every pass already. A listener binds UGroundTraffic's delegate through GetModel(); the ops plugin's bridges do.
+	// for every pass already. A listener binds UGroundTraffic's delegate through GetModel(), or the actor's GetGroundTraffic(),
+	// which forwards to it - the ops plugin's bridges do.
 	// ENFORCED BY: Check-Architecture rule 87 (relay-adds-behaviour: no delegate here but a relay that adds behaviour)
 
 	/**
