@@ -528,4 +528,46 @@ bool FQueueBodyOnStandQuietTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FQueueUnusableFreeRunwayTest, "AirportOps.Model.ArrivalQueue.FreeRunwayItCannotUseIsNoClearance",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FQueueUnusableFreeRunwayTest::RunTest(const FString& Parameters)
+{
+	// samples/refused.png (2026-10-01): two runways, the one the flight can use held, the other FREE but no use to it. The queue's
+	// gate asked "is ANY arrival runway free" (ArrivalPlanner::IsRunwayBusy) and the cached clearance ignores the runway, so it
+	// dispatched; the dispatch's own plan found the usable strip held and refused RunwayOccupied - every frame, about 200 refusals and
+	// toasts a second. Here the second runway is a 30 m strip on its own, too short and with no way off it: free, and useless.
+	FQueueRig Rig;
+	UGroundTraffic* Traffic = Rig.Traffic;
+	URoadNetwork* Net = Rig.Airport.Net;
+	const FRoadNodeId A = Net->AddNode(FVector2D(0.0, 300000.0));
+	const FRoadNodeId B = Net->AddNode(FVector2D(3000.0, 300000.0));
+	Net->AddStraightSegment(A, B, TestProfiles::Runway());
+	TestGraph::Rebuild(*Net);   // the whole derivation: Derive alone leaves the stands unlinked
+	Rig.Board->Dispatcher = [Traffic, Net](const FVector2D& Near, const FAirframe& Frame)
+	{
+		return Traffic->DispatchArrival(*Net, Near, Frame, 1.0) != 0;
+	};
+	UFlight* Flight = Rig.Accepted(1.0);
+	if (!TestNotNull(TEXT("accepted"), Flight)) { return false; }
+	Rig.HoldRunway();
+	TestFalse(TEXT("PRECONDITION: the useless strip is free, so 'any runway free' says go"),
+		ArrivalPlanner::IsRunwayBusy(*Net, Flight->RunwayPreference, &Traffic->GetOccupancy()));
+
+	FQueueRefusalSpy Spy;
+	for (int32 Pass = 0; Pass < 30; ++Pass)
+	{
+		Rig.Clock->Advance(1.0 / 30.0 + (Pass == 0 ? 2.0 : 0.0));
+		Rig.Tick();
+	}
+	TestEqual(TEXT("holding while the only runway it can use is held"), Flight->GetPhase(), EFlightPhase::Inbound);
+	TestEqual(TEXT("nothing dispatched into the refusal"), Traffic->GetAgentCount(), 0);
+	TestEqual(TEXT("and no refused-dispatch Warning, let alone one a pass"), Spy.Lines, 0);
+
+	Rig.FreeRunway();
+	Rig.Clock->Advance(1.0 / 30.0);
+	Rig.Tick();
+	TestEqual(TEXT("the frame its runway frees, it is cleared"), Flight->GetPhase(), EFlightPhase::Landing);
+	return true;
+}
+
 #endif
