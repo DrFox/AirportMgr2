@@ -73,8 +73,9 @@ void UBuildCameraComponent::CreateBuildCamera(APlayerController& Owner, double S
 		TEXT("Build camera: %.0f uu out at %.1f degrees. Pitch follows the zoom, %.0f to %.0f degrees."),
 		CurrentView.Distance, CurrentView.PitchDegrees(), ViewLimits.MinPitch, ViewLimits.MaxPitch);
 	UE_LOG(LogRoadBuild, Log,
-		TEXT("Miniature focus %s: blur at infinity %.3f of the frame, f/%.1f."),
-		bMiniatureFocus ? TEXT("ON") : TEXT("off"), MiniatureBlurAtInfinity, MiniatureFStop);
+		TEXT("Miniature focus %s: blur at infinity %.3f of the frame, f/%.1f, sharp inside %.0f uu, full at zoom <= %.0f uu, none from %.0f uu."),
+		bMiniatureFocus ? TEXT("ON") : TEXT("off"), MiniatureBlurAtInfinity, MiniatureFStop,
+		MiniatureSharpDistance, MiniatureFullBlurZoom, MiniatureNoBlurZoom);
 	ApplyMiniatureFocus();
 }
 
@@ -155,14 +156,16 @@ void UBuildCameraComponent::ApplyMiniatureFocus()
 	FMiniatureFocus Focus;
 	Focus.BlurAtInfinity = MiniatureBlurAtInfinity;
 	Focus.FStop = MiniatureFStop;
-	Focus.NoBlurDistanceUu = MiniatureNoBlurDistance;
-	Focus.FullBlurDistanceUu = MiniatureFullBlurDistance;
+	Focus.SharpDistanceUu = MiniatureSharpDistance;
+	Focus.FullBlurZoomUu = MiniatureFullBlurZoom;
+	Focus.NoBlurZoomUu = MiniatureNoBlurZoom;
 
 	// ActiveRig().Distance IS the camera-to-look-at distance in both rigs - CameraLocation
-	// backs off the focus by exactly Distance along the view direction - so no trace is
-	// needed to find what the player is looking at.
-	const double FocusUu = ActiveRig().Distance;
-	const double Sensor = bMiniatureFocus ? Focus.SensorWidthMm(FocusUu, FieldOfView) : 0.0;
+	// backs off the focus by exactly Distance along the view direction - so it is the zoom
+	// the fade reads, with no trace needed. It is no longer the FOCUS: that is the fixed
+	// SharpDistance, so a watched aircraft 15 m away stays sharp however it is framed.
+	const double FocusUu = Focus.SharpDistanceUu;
+	const double Sensor = bMiniatureFocus ? Focus.SensorWidthMm(ActiveRig().Distance, FieldOfView) : 0.0;
 
 	// A zero sensor means off (or a degenerate input): clear the overrides, so the level's
 	// post-process volume decides, rather than leaving the last frame's lens in place.

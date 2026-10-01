@@ -63,6 +63,32 @@ UDynamicMeshComponent* URoadSurfacePresenter::GetLayerComponent(ESurfaceLayer La
 	return LayerComponents.IsValidIndex(Index) ? LayerComponents[Index].Get() : nullptr;
 }
 
+void URoadSurfacePresenter::ForEachSurfaceTriangle(
+	TFunctionRef<void(const FVector2D&, const FVector2D&, const FVector2D&)> Visit) const
+{
+	for (const ESurfaceLayer Layer : { ESurfaceLayer::Road, ESurfaceLayer::Apron })
+	{
+		const UDynamicMeshComponent* Component = GetLayerComponent(Layer);
+		if (Component == nullptr)
+		{
+			continue;
+		}
+		// WORLD COORDINATES ALREADY: every layer component uses absolute location, rotation and
+		// scale (ARoadNetworkActor's constructor), and the builders emit world-space vertices.
+		Component->ProcessMesh([&Visit](const UE::Geometry::FDynamicMesh3& Mesh)
+		{
+			for (const int32 Triangle : Mesh.TriangleIndicesItr())
+			{
+				const UE::Geometry::FIndex3i Corners = Mesh.GetTriangle(Triangle);
+				const FVector3d A = Mesh.GetVertex(Corners.A);
+				const FVector3d B = Mesh.GetVertex(Corners.B);
+				const FVector3d C = Mesh.GetVertex(Corners.C);
+				Visit(FVector2D(A.X, A.Y), FVector2D(B.X, B.Y), FVector2D(C.X, C.Y));
+			}
+		});
+	}
+}
+
 int32 URoadSurfacePresenter::RebuildLayer(ESurfaceLayer Layer, TFunctionRef<int32(FRoadMeshBuffers&)> BuildFn,
 	UMaterialInterface* Material, const URoadMaterialSet* MaterialSet, bool bUseConstantColour,
 	FRoadMeshBuffers& OutBuffers, bool bQuiet)

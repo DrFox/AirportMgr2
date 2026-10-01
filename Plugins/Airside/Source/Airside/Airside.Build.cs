@@ -27,6 +27,6 @@ public class Airside : ModuleRules
 		// Public header (EveryAircraftType's own TArray<UAircraftType*> return type hides it,
 		// and no Public header names FAssetData or IAssetRegistry), so no consumer of Airside
 		// needs the module, only these two functions.
-		PrivateDependencyModuleNames.AddRange(new string[] { "GeometryFramework", "AssetRegistry" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "GeometryFramework", "AssetRegistry", "RHI" }); // RHI: the ground-cover GPU-time log line
 	}
 }

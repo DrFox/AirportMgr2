@@ -180,7 +180,7 @@ exists.
 | A | Lighting, sky, post-process | yes |
 | B | Landscape + `M_Ground` | yes |
 | G | Sun tracks the game clock, floored at dusk | yes, after A and B |
-| C | Grass scatter - `LandscapeGrassType` + clump meshes | no |
+| C | Grass scatter - superseded 2026-10-01 by `2026-10-01-ground-cover-grass-design.md` (own scatterer, not `LandscapeGrassType`) | no |
 | D | The surround - farmland, hedgerows, trees past the fence | no |
 | E | Field-length compression (section 2.2) | no - own spec |
 | F | Camera `MaxViewDistance` 600 m -> ~1.5 km | no - own change |
@@ -340,6 +340,28 @@ move everything. Look at the image.
   which looks like a real contribution and is entirely the volumetric clouds animating
   between the two captures (18.94 in the sky band, 0.37 below the horizon). **Diff by band,
   not by frame**, whenever anything in shot animates.
+
+### 4.6a Portscape look pass - 2026-10-01
+
+The owner picked Portscape (innercorestudios.com/games/portscape) as the reference for
+LIGHTING AND PALETTE only. Its blocky low-poly shapes are not adopted (bevels stand), and
+our ground variation is kept; grass materials were not touched. Set live at the build
+camera and judged by eye; values live in `build_environment.py` and `airside_palette.py`:
+
+| Knob | Was | Now |
+|---|---|---|
+| White balance | 5600 (M_Test was saved at 5200) | 6000 K |
+| Exposure lock | EV100 1.75 | 1.0 |
+| Sky light intensity | 1.0 | 1.6 |
+| Cloud shadow strength | 0.8 | 0.35 |
+| Clouds drawn | yes | no (`bRenderInMainPass` off; shadows kept) |
+| Sky atmosphere Mie / luminance factor | 0.004 / white | 0.0015 / (0.9, 1.0, 1.15) |
+| Fog inscattering | (0.15, 0.2, 0.3) | (0.2, 0.28, 0.42) |
+| Apron concrete / wear | #8E8D84 / #939289 | #ABA28C / #B3AA95 |
+
+Unexplained, measured: the exposure lock barely moves the frame (1.75 -> 1.0 is ~10%
+brighter), while white balance 5700 -> 6000 is ~35%. And MI_Clouds' Cloud_GlobalDensity at
+0 left the visible clouds unchanged. Neither is understood; do not reason from either knob.
 
 ### 4.7 What is NOT changed, and why
 
@@ -555,7 +577,8 @@ the direction *living airport diorama* and points here and at the modelling conv
 
 ## 10. Out of scope, named so it is not forgotten
 
-- **Slice C**, grass scatter: `LandscapeGrassType` assets driven from an
+- **Slice C**, grass scatter. **Superseded 2026-10-01** by `2026-10-01-ground-cover-grass-design.md`,
+  which replaces the plan below with its own scatterer; kept for history. Was: `LandscapeGrassType` assets driven from an
   `M_Ground` Landscape Grass Output, plus low-poly clump meshes. Needs the
   `GeometryScripting` plugin enabled if the clumps are to be authored headlessly.
 - **Slice D**, the surround: farmland fields, hedgerows and trees beyond the plot, so the

@@ -46,7 +46,11 @@ LEVEL = "/Game/Maps/M_Test"
 # rendering pipeline, so SceneCapture2D plus ExportRenderTarget writes nothing and logs
 # "render target has been released". The value has to be read in the interactive editor,
 # from the viewport's exposure readout, once there is grass under the camera.
-LOCK_EXPOSURE_EV100 = 1.75
+#
+# 2026-10-01: 1.75 -> 1.0 for the brighter Portscape-style look. NOTE it barely moves the
+# frame (mean ~10% brighter); the white balance below did most of the brightening, which is
+# not yet explained - measure before trusting either knob to set brightness alone.
+LOCK_EXPOSURE_EV100 = 1.0
 
 # Spec section 4.2. Slice G turns this pair into the noon point of a curve.
 SUN_PITCH = -42.0
@@ -85,7 +89,9 @@ CLOUD_SHADOW_RESOLUTION_SCALE = 4.0
 
 # Below 1.0 because section 1 wants a calm ground. Full-strength cloud shadow is a hard
 # dark patch that competes with the aircraft and vehicles for attention.
-CLOUD_SHADOW_STRENGTH = 0.8
+# 2026-10-01: 0.8 -> 0.35. With brighter exposure the patches read as dirt on the grass;
+# the reference has soft, lifted shade.
+CLOUD_SHADOW_STRENGTH = 0.35
 
 # How much sky has cloud in it, and how solid that cloud is.
 #
@@ -121,7 +127,9 @@ CLOUD_MATERIAL_PATH = "/Game/Environment/MI_Clouds"
 FOG_DENSITY = 0.15
 FOG_HEIGHT_FALLOFF = 0.35
 FOG_START_DISTANCE = 60000.0
-FOG_INSCATTERING = (0.15, 0.2, 0.3)
+# 2026-10-01: (0.15, 0.2, 0.3) -> (0.2, 0.28, 0.42) for a paler horizon. (0.4, 0.5, 0.65)
+# and (0.28, 0.36, 0.5) were tried: both turned the far field milky.
+FOG_INSCATTERING = (0.2, 0.28, 0.42)
 
 # White balance, in kelvin. 6500 is neutral; lower cools the image.
 #
@@ -137,7 +145,30 @@ FOG_INSCATTERING = (0.15, 0.2, 0.3)
 # 5600 rather than the sun's own 5800 because the blue sky light pulls the other way less
 # than the sun pushes. The sun still warms toward dusk against this fixed balance, which is
 # the point: dusk should look warmer than noon.
-WHITE_TEMP_KELVIN = 5600.0
+#
+# 2026-10-01: 5600 -> 6000, Portscape reference (innercorestudios.com/games/portscape):
+# warm and bright rather than neutral. Judged by eye at the build camera with the apron
+# re-picked to warm beige at the same time, so the concrete-not-dirt argument above was
+# deliberately traded for warmth. M_Test had been saved at 5200, NOT 5600 - the maps had
+# already drifted from this constant.
+WHITE_TEMP_KELVIN = 6000.0
+
+# Sky light, the shadow fill. Engine default 1.0 left the shade side of everything dark
+# against Portscape's lifted shadows; 1.6 set live 2026-10-01.
+SKY_LIGHT_INTENSITY = 1.6
+
+# Sky atmosphere. Less Mie (engine 0.003996) clears the milky haze from the sky dome, and a
+# blue-leaning luminance factor deepens it toward the clear pale blue of the reference.
+# Set live 2026-10-01.
+SKY_MIE_SCATTERING_SCALE = 0.0015
+SKY_LUMINANCE_FACTOR = (0.9, 1.0, 1.15)
+
+# THE CLOUDS CAST SHADOWS BUT ARE NOT DRAWN (2026-10-01). Seen from the low camera the layer
+# filled the sky with grey overcast, the opposite of the reference's clear sky. Cutting its
+# density to 0 in MI_Clouds changed NOTHING on screen (the parameter is not what the visible
+# layer reads; unexplained), so the component's bRenderInMainPass is turned off instead:
+# the layer still exists for the cloud shadows below, and only its image is gone.
+CLOUDS_RENDER_IN_MAIN_PASS = False
 
 
 def say(msg):
@@ -187,7 +218,15 @@ def set_sky_light(sky):
     comp = sky.get_component_by_class(unreal.SkyLightComponent)
     comp.set_editor_property("mobility", unreal.ComponentMobility.MOVABLE)
     comp.set_editor_property("real_time_capture", True)
-    say("sky light: real time capture on, movable")
+    comp.set_editor_property("intensity", SKY_LIGHT_INTENSITY)
+    say("sky light: real time capture on, movable, intensity %.2f" % SKY_LIGHT_INTENSITY)
+
+
+def set_sky_atmosphere(atmosphere):
+    comp = atmosphere.get_component_by_class(unreal.SkyAtmosphereComponent)
+    comp.set_editor_property("mie_scattering_scale", SKY_MIE_SCATTERING_SCALE)
+    comp.set_editor_property("sky_luminance_factor", unreal.LinearColor(*SKY_LUMINANCE_FACTOR, 1.0))
+    say("sky atmosphere: mie %.4f, luminance factor %r" % (SKY_MIE_SCATTERING_SCALE, SKY_LUMINANCE_FACTOR))
 
 
 def set_fog(fog):
@@ -291,7 +330,8 @@ def set_clouds(cloud):
     unreal.EditorAssetLibrary.save_asset(mi.get_path_name(), only_if_is_dirty=False)
 
     comp.set_editor_property("material", mi)
-    say("clouds: coverage %.2f, density %.3f via %s" % (CLOUD_COVERAGE, CLOUD_DENSITY, CLOUD_MATERIAL_PATH))
+    comp.set_editor_property("render_in_main_pass", CLOUDS_RENDER_IN_MAIN_PASS)
+    say("clouds: drawn %s, coverage %.2f, density %.3f via %s" % (CLOUDS_RENDER_IN_MAIN_PASS, CLOUD_COVERAGE, CLOUD_DENSITY, CLOUD_MATERIAL_PATH))
 
 
 def delete_floor():
@@ -371,6 +411,12 @@ def verify():
             ok = False
         else:
             say("PASS sky light real_time_capture on")
+        got = comp.get_editor_property("intensity")
+        if abs(got - SKY_LIGHT_INTENSITY) > 1e-4:
+            fail("sky light intensity is %r, expected %r" % (got, SKY_LIGHT_INTENSITY))
+            ok = False
+        else:
+            say("PASS sky light intensity = %r" % got)
 
     fog = find_one(unreal.ExponentialHeightFog)
     if fog is not None:
@@ -424,6 +470,9 @@ def run():
     cloud = find_one(unreal.VolumetricCloud)
     if cloud is not None:
         set_clouds(cloud)
+    atmosphere = find_one(unreal.SkyAtmosphere)
+    if atmosphere is not None:
+        set_sky_atmosphere(atmosphere)
     add_post_process()
     delete_floor()
 

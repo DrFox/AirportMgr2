@@ -20,6 +20,27 @@ class UAircraftType;
 class UPlotModuleKit;
 
 /**
+ * One density layer of the ground-cover grass - see GroundCover::FLayerSpec, which this is the
+ * authored, metre-denominated form of. ResolveGroundCover converts; nothing else reads it.
+ */
+USTRUCT(BlueprintType)
+struct FGroundCoverLayerSetting
+{
+	GENERATED_BODY()
+
+	FGroundCoverLayerSetting() = default;
+	FGroundCoverLayerSetting(float InTuftsPerSquareMetre, float InShowWithinMetres)
+		: TuftsPerSquareMetre(InTuftsPerSquareMetre), ShowWithinMetres(InShowWithinMetres) {}
+
+	UPROPERTY(EditAnywhere, Category = "Airside|GroundCover", meta = (ClampMin = "0"))
+	float TuftsPerSquareMetre = 0.0f;
+
+	/** Tufts of this layer further than this from the camera are culled per instance, on the GPU. */
+	UPROPERTY(EditAnywhere, Category = "Airside|GroundCover", meta = (ClampMin = "0"))
+	float ShowWithinMetres = 0.0f;
+};
+
+/**
  * The content this plugin reaches for when nothing has been assigned by hand.
  *
  * WHY IT EXISTS. These references used to be string literals in constructors, resolved by
@@ -420,4 +441,33 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TSoftClassPtr<UAnimInstance> UtilityTrailerAnimClass;
+
+	/**
+	 * The grass tufts scattered near the camera (spec 2026-10-01-ground-cover-grass-design.md):
+	 * meshes of 1-3 blades, each wearing M_Grass. Empty means no grass at all - the actor idles.
+	 * Authored by Tools/Python/build_grass_content.py, which also imports them with Nanite OFF:
+	 * Nanite's simplification deletes whole blades of a mesh this thin (measured 2026-10-01).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|GroundCover")
+	TArray<TSoftObjectPtr<UStaticMesh>> GroundCoverTufts;
+
+	/**
+	 * The density layers, summed: a nearer layer only adds tufts. LOW ON PURPOSE - the user
+	 * chose the sparse, Nanite-thinned look over every denser version (2026-10-01), so layer 0
+	 * IS the look and the rest are small top-ups so the ground under the camera is not bare.
+	 * Starting values, tuned by screenshot against docs/images/2026-10-01-grass/sparseCmp3m.jpg.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|GroundCover")
+	TArray<FGroundCoverLayerSetting> GroundCoverLayers = {
+		FGroundCoverLayerSetting(8.0f, 40.0f),
+		FGroundCoverLayerSetting(6.0f, 4.0f),
+		FGroundCoverLayerSetting(0.0f, 2.0f) };
+
+	/**
+	 * The streaming grid's cell side. 32 m: about sixteen cells live at the lowest zoom for the
+	 * 40 m layer, each built in one go when it enters - small enough to stream a pan over a few
+	 * frames, large enough that the component count stays in the tens.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|GroundCover", meta = (ClampMin = "1"))
+	float GroundCoverCellMetres = 32.0f;
 };
