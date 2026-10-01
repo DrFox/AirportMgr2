@@ -50,7 +50,7 @@ enum class ESendOutcome : uint8
  * as too narrow is repeated ungated and the route driven - a body a little wide for a corner scuffs a kerb - UNLESS it
  * folds the tow (VehicleFit::MayDriveUngated): a trailer past square is a jack-knife, stopped dead holding the road.
  * That is the whole of the mechanism. WHEN a caller should accept a scuffed kerb is its own policy, and Airside holds
- * none: see the caller (today UJobBoard::DriveVehicleTo, JobBoardDrive.cpp, and its reason).
+ * none: a caller that passes DriveAnyway says why at its call site.
  */
 enum class ENarrowRoad : uint8
 {

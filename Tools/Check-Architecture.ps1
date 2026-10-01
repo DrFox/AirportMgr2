@@ -3275,7 +3275,7 @@ $ranRules.Add('one-airport-lookup')
 #
 # PART 2 (#429) EMPTIED OPS: UGroundTraffic::SendAgentTo chooses how a vehicle turns, finishes or is rescued;
 # ReplanAroundBlocker / ReplanFromNextNode are the Unstick's replans (the resolver's own step and bound);
-# ReofferStand / RescueToStand its stand; RemainingDriveSeconds the bid's ETA. So in AirportOps it also bans what
+# ReofferStand its stand (a stranded one's from where it stands); RemainingDriveSeconds the bid's ETA. So in AirportOps it also bans what
 # computing a splice point or a ban needs - the plan-geometry statics (UGroundTraffic::CurrentStep / StepFromNode /
 # StepStart) and the refusal an agent is held by (GetBlockedStep / GetBlockedResource): with those, the Unstick
 # could copy the resolver's ban again, which is how its copy lost the resolver's upper bound.

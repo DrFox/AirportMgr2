@@ -776,9 +776,11 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	FRoadAgent& Agent = Agents[Index];
 	const EAgentPhase Before = Agent.Phase;
 	// STRANDED TOO (issue #396: a stranded taxi-in used to be Parked at that moment, and was redirected from here). A
-	// restart puts it at the plan's FIRST point, which is a teleport unless it stands there - so the stand re-offer
-	// RESCUES a stranded waiter from where it stands instead (UGroundTraffic::ReofferStand, #429 review), and a caller
-	// redirecting one must know it is at the new route's start.
+	// restart puts it at the plan's FIRST point, which is a teleport unless it stands there - so SendAgentTo redirects a
+	// stranded agent only when it is measured at the new route's start (its Stranded row), and the stand
+	// re-offer rescues any other stranded waiter from where it stands (UGroundTraffic::ReofferStand, #429 review).
+	// ENFORCED BY: Airside.Model.Traffic.ReofferWaiterStrandedAtItsExit, .ReofferStrandedWaiterIsRescued,
+	// .ReofferStrandedWaiterDoesNotJump
 	if (Before != EAgentPhase::Parked && Before != EAgentPhase::Taxiing && Before != EAgentPhase::Stranded)
 	{
 		UE_LOG(LogAirsideTraffic, Warning, TEXT("RedirectAgent %d refused: agent is %s"),
@@ -1965,9 +1967,10 @@ void UGroundTraffic::ReofferStands(const URoadNetwork& Network)
 		// Airside.Model.Traffic.ReofferTaxiingWaiterDoesNotJump). ExtendRoute splices the tail onto the live plan with
 		// Travelled, Speed and Heading kept, and its precondition - the tail starts where the live plan ends - is the
 		// very thing that made the route. A PARKED waiter is standing at GoalNode, so the restart is where it already is,
-		// and RedirectAgent is the only verb that gets a stopped aircraft going: it keeps it. A STRANDED one need not be
-		// at GoalNode - a second rebuild can strand it short of the node its first truncation left it - so it is
-		// offered its stand from where it stands and rescued there (#429 review; ReofferStrandedWaiterDoesNotJump).
+		// and RedirectAgent is the only verb that gets a stopped aircraft going: it keeps it. A STRANDED one is not
+		// assumed to be at GoalNode - a second rebuild can strand it short of the node its first truncation left it - so
+		// unless it is measured there (#396's exit) it is offered its stand from where it stands and rescued there (#429
+		// review; ReofferStrandedWaiterDoesNotJump, ReofferWaiterStrandedAtItsExit).
 		//
 		// ReOffered, NOT Redirected: the flight board keeps it in its taxi IN whatever its stand does next (review M1).
 		const FStandOffer Offer = ReofferStand(Id, Network, EAgentEvent::ReOffered);

@@ -32,6 +32,27 @@ namespace
 	constexpr double StandSearchRadius = 5000.0;
 
 	/**
+	 * How near its goal node a STRANDED agent must stand to be restarted from it, uu: half a metre. A restart from rest
+	 * puts the agent at its route's first point, so this is the jump it may make - under one frame of an aircraft's taxi.
+	 * The one stranded agent that is there is a taxi-in stranded before its handover, whose goal the rebuild set to the
+	 * exit it hands over at (#396): measured 10.8 uu from it on 2026-09-30 (Airside.Model.Traffic.
+	 * ReofferWaiterStrandedAtItsExit). Anything further is rescued instead, from where it stands.
+	 */
+	constexpr double AtGoalNodeTolerance = 50.0;
+
+	/**
+	 * Whether Agent MEASURABLY stands at its goal node - asked, never assumed. A stranded waiter used to be assumed there
+	 * (#396's exit case), and a second rebuild that strands one short of a live goal made the assumption a teleport.
+	 * ENFORCED BY: Airside.Model.Traffic.ReofferWaiterStrandedAtItsExit (there: sent from it),
+	 * Airside.Model.Traffic.ReofferStrandedWaiterDoesNotJump (not there: never put there)
+	 */
+	bool StandsAtItsGoalNode(const FRoadAgent& Agent, const URoadNetwork& Network)
+	{
+		const FGuidelineNode* Goal = Network.GetGuidelineNode(Agent.GoalNode);
+		return Goal != nullptr && FVector2D::Distance(Goal->Position, Agent.LastMotion.Position) <= AtGoalNodeTolerance;
+	}
+
+	/**
 	 * ONE SEARCH FROM Start ON THE CALLER'S TEMPLATE - and, when the vehicle gate refuses it as too narrow and the
 	 * caller allows it (ENarrowRoad::DriveAnyway), the same search UNGATED. Said ONCE per SendAgentTo in Result, as
 	 * DriveVehicleTo said it once per recall and not once per node tried. bOutUngated tells the caller the plan it got
@@ -155,9 +176,10 @@ namespace
 	}
 
 	/**
-	 * FROM REST, WHERE IT STANDS: its goal node - the service point or stand a PARKED agent is on, the one phase that is
-	 * always at its goal node - and a redirect, which keeps the agent's id and view (RedirectAgent accepts Parked: the
-	 * handover its header describes a service composing).
+	 * FROM REST, WHERE IT STANDS: its goal node - the service point or stand a PARKED agent is on (the one phase that is
+	 * always at its goal node), or a STRANDED one measured there (StandsAtItsGoalNode) - and a redirect, which keeps the
+	 * agent's id and view (RedirectAgent accepts Parked and Stranded: the handover its header describes a service
+	 * composing).
 	 *
 	 * JUDGED FROM THE LIVE CHAIN AND CAB (2026-09-27): the route away from a stand OPENS with the bay's reverse leg,
 	 * and VehicleFit::JudgePlan solves that reverse from where the tow is parked - its axles, its heading and its cab
@@ -240,15 +262,22 @@ FSendAgentResult UGroundTraffic::SendAgentTo(int32 AgentId, FGuidelineNodeId Goa
 		return SendFromRest(*this, *Agent, Goal, QueryTemplate, Network, Narrow, Cause);
 
 	case EAgentPhase::Stranded:
-		// A STRANDED AGENT is somewhere along a route that died under it, with no leg to finish: it would "turn where it
-		// parks" never. It is rescued onto pavement near where it stands toward Goal, or it is the caller's to decide
-		// what a vehicle nothing can move is (2026-09-29).
-		// ENFORCED BY: AirportOps.Model.AgentRescue.StrandedVehicleReleasesJobs
-		//
-		// NEVER RESTARTED AT ITS GOAL NODE, WAITER OR NOT. This row used to send a stranded aircraft waiting for a stand
-		// from its goal node, on the reading that a stranded waiter stands where its wait began (#396); a second rebuild
-		// that strands it short of that node falsifies the reading, and the restart put it there in one frame.
-		// ENFORCED BY: Airside.Model.Traffic.ReofferStrandedWaiterDoesNotJump
+		// A STRANDED AGENT MEASURED AT ITS GOAL NODE restarts from it, as a parked one does: the route's first point is
+		// where it stands, so the restart is no jump - a taxi-in stranded before its handover, whose goal is its exit
+		// (#396). The rescue would do worse there: it hops only onto pavement within 60 degrees of the agent's heading,
+		// which at a runway exit runs along the runway.
+		// ENFORCED BY: Airside.Model.Traffic.ReofferWaiterStrandedAtItsExit
+		if (StandsAtItsGoalNode(*Agent, Network))
+		{
+			return SendFromRest(*this, *Agent, Goal, QueryTemplate, Network, Narrow, Cause);
+		}
+		// ANY OTHER is somewhere along a route that died under it, with no leg to finish: it would "turn where it parks"
+		// never. It is rescued onto pavement near where it stands toward Goal, or it is the caller's to decide what a
+		// vehicle nothing can move is (2026-09-29). NOT ASSUMED TO BE AT ITS GOAL NODE: this row once sent a stranded
+		// aircraft waiting for a stand from its goal node on that assumption, and a second rebuild that strands a waiter
+		// short of the node falsifies it - the restart put it there in one frame.
+		// ENFORCED BY: AirportOps.Model.AgentRescue.StrandedVehicleReleasesJobs, Airside.Model.Traffic.SendAgentTo.ByPhase
+		// (a stranded aircraft waiting for a stand, short of its goal node: rescued, not restarted there)
 		Result.Outcome = RescueStranded(AgentId, Network, Goal) ? ESendOutcome::Rescued : ESendOutcome::NoPavement;
 		return Result;
 
@@ -282,12 +311,20 @@ namespace
 	 * 2026-09-29, an aeroplane stranded just off a runway exit found the runway's own node nearest (198 uu), and a
 	 * taxi-in search avoids runway edges, so no stand was reachable from there at all. See StandSearchRadius.
 	 *
-	 * NEVER ITS GOAL NODE, for the search or as a place to restart: a stranded aircraft need not be there. A second
-	 * rebuild strands a waiter short of the node its first truncation left it - a live node, so no rebuild re-points it -
-	 * and a restart there from rest was the aircraft appearing at it in one frame (#435's teleport by another door; red
-	 * before the #429 review on Airside.Model.Traffic.ReofferStrandedWaiterDoesNotJump). And the goal node may be the
-	 * very stand that went. RescueStranded hops it onto pavement where it actually stands, or it keeps waiting there.
-	 * ENFORCED BY: Airside.Model.Traffic.ReofferStrandedWaiterDoesNotJump, AirportOps.Model.AgentRescue.AircraftFindStand
+	 * FOR A STRANDED AIRCRAFT NOT MEASURED AT ITS GOAL NODE (StandsAtItsGoalNode) - it is not assumed to be there, for
+	 * the search or as a place to restart. A second rebuild strands a waiter short of the node its first truncation left
+	 * it - a live node, so no rebuild re-points it - and a restart there from rest was the aircraft appearing at it in
+	 * one frame (#435's teleport by another door; red before the #429 review on Airside.Model.Traffic.
+	 * ReofferStrandedWaiterDoesNotJump). And the goal node may be the very stand that went. RescueStranded hops it onto
+	 * pavement where it actually stands, or it keeps waiting there.
+	 *
+	 * THE AUTOMATIC ONE (Cause ReOffered, the stand re-offer) IS DRIVEN BY THE TAXI-IN'S POLICY (ArrivalPlanner::
+	 * TaxiInQuery), as the waiter's route would have been: the rescue's own default is the rebuild's errand, which will
+	 * use an unheld runway, and a taxi-in never does (#429 review). THE PLAYER'S (Rescued, the Unstick's "find a stand")
+	 * keeps the rescue's own route kind, as it always had - the player asked for the aircraft to be got moving, and a
+	 * rescue by the stricter policy refuses near a runway where the player's used to succeed (ruled 2026-09-30).
+	 * ENFORCED BY: Airside.Model.Traffic.ReofferStrandedWaiterDoesNotJump, .ReofferStrandedWaiterIsRescued,
+	 * Airside.Model.Traffic.RescueStranded.KeepsTheCallersRunwayPolicy, AirportOps.Model.AgentRescue.AircraftFindStand
 	 */
 	FStandOffer OfferFromWhereItStands(UGroundTraffic& Traffic, const FRoadAgent& Agent, const FAirframe& Airframe,
 		const URoadNetwork& Network, EAgentEvent Cause)
@@ -323,7 +360,9 @@ namespace
 		}
 
 		// Agent IS NOT READ AFTER THIS: the rescue announces the phase change, and a listener may retire the agent.
-		const bool bRescued = Traffic.RescueStranded(AgentId, Network, Offer.Stand, Cause);
+		const FRouteQuery TaxiIn = ArrivalPlanner::TaxiInQuery(Near, Airframe, Airframe.Wingspan);
+		const bool bRescued = Traffic.RescueStranded(AgentId, Network, Offer.Stand, Cause,
+			Cause == EAgentEvent::ReOffered ? &TaxiIn : nullptr);
 		Offer.Send.Outcome = bRescued ? ESendOutcome::Rescued : ESendOutcome::NoPavement;
 		Offer.Outcome = bRescued ? EStandOffer::Sent : EStandOffer::NoPavement;
 		return Offer;
@@ -344,8 +383,9 @@ FStandOffer UGroundTraffic::ReofferStand(int32 AgentId, const URoadNetwork& Netw
 	// shift the array the pointer is into.
 	const FAirframe Airframe = *Agent->AsAircraft();
 
-	// STRANDED: from where it stands, never its goal node - see OfferFromWhereItStands.
-	if (Agent->Phase == EAgentPhase::Stranded)
+	// STRANDED AND NOT MEASURED AT ITS GOAL NODE: from where it stands - see OfferFromWhereItStands. One that IS there
+	// (#396's exit) takes the goal node's path below, and SendAgentTo restarts it from where it stands.
+	if (Agent->Phase == EAgentPhase::Stranded && !StandsAtItsGoalNode(*Agent, Network))
 	{
 		return OfferFromWhereItStands(*this, *Agent, Airframe, Network, Cause);
 	}

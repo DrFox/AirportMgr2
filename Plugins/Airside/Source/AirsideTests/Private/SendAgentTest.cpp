@@ -379,6 +379,51 @@ bool FSendAgentByPhaseTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// STRANDED AIRCRAFT WAITING FOR A STAND, short of its goal node: rescued from where it stands - NOT restarted at its
+	// goal node, which it is not at (a stand re-offer's own row once assumed it was, #429 review).
+	{
+		const FAirframe Piper = TestAirframes::Piper();
+		FTestAirport Air = FTestAirport::Build(Piper, { .StandCount = 2 });
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Id = Traffic->DispatchArrival(*Air.Net, Air.Threshold, Piper, 1.0);
+		Traffic->Advance(0.05, Air.Net);
+		const FRoadAgent* Dispatched = Traffic->FindAgent(Id);
+		if (TestTrue(TEXT("an arrival is dispatched"), Dispatched != nullptr))
+		{
+			const FEntityInstanceId Target = (Dispatched->GoalNode == Air.Pose(Air.Stands[0])) ? Air.Stands[0] : Air.Stands[1];
+			const FEntityInstanceId Spare = (Target == Air.Stands[0]) ? Air.Stands[1] : Air.Stands[0];
+			constexpr int32 Holder = 4242;
+			Traffic->HoldStand(Holder, Air.Pose(Spare));
+			Air.Net->RemoveEntity(Target);
+			TestGraph::Rebuild(*Air.Net);
+			Traffic->OnGraphRebuilt(*Air.Net);
+			const bool bWaiting = RunUntil(*Traffic, *Air.Net, 600.0,
+				[&]() { const FRoadAgent* A = Traffic->FindAgent(Id); return A && A->Phase == EAgentPhase::Taxiing && A->bAwaitingStand; });
+			FGroundTrafficTestAccess(*Traffic).Strand(Id);
+			Traffic->ReleaseHold(Holder);
+			Traffic->Advance(0.05, Air.Net);
+			const FRoadAgent* Stranded = Traffic->FindAgent(Id);
+			const FGuidelineNode* GoalNode = Stranded != nullptr ? Air.Net->GetGuidelineNode(Stranded->GoalNode) : nullptr;
+			if (TestTrue(TEXT("an aircraft waiting for a stand, stranded well short of its goal node"), bWaiting && Stranded != nullptr
+				&& Stranded->Phase == EAgentPhase::Stranded && Stranded->bAwaitingStand && GoalNode != nullptr
+				&& FVector2D::Distance(GoalNode->Position, Stranded->LastMotion.Position) > UGroundTraffic::RescueRejoinRadius))
+			{
+				const FVector2D Was = Stranded->LastMotion.Position;
+				const FGuidelineNodeId Stand = Air.Pose(Spare);
+				const FSendAgentResult Sent = Traffic->SendAgentTo(Id, Stand,
+					ArrivalPlanner::TaxiInQuery(FGuidelineNodeId(), Piper, Piper.Wingspan), *Air.Net);
+				TestEqual(TEXT("a stranded waiter is rescued, not restarted at its goal node"), Sent.Outcome, ESendOutcome::Rescued);
+				const FRoadAgent* Agent = Traffic->FindAgent(Id);
+				if (TestNotNull(TEXT("still there"), Agent))
+				{
+					TestTrue(TEXT("taxiing for the stand"), Agent->Phase == EAgentPhase::Taxiing && Agent->GoalNode == Stand);
+					TestTrue(TEXT("from where it stood - a hop, never its goal node"),
+						FVector2D::Distance(Was, Agent->LastMotion.Position) <= UGroundTraffic::RescueRejoinRadius);
+				}
+			}
+		}
+	}
+
 	TestEqual(TEXT("an unknown agent is sent nowhere"),
 		NewObject<UGroundTraffic>(GetTransientPackage())->SendAgentTo(9999, F.E, FRouteQuery::For(ERouteErrand::VehicleToJob,
 			FGuidelineNodeId(), F.E, 0.0, ETraversalClass::GroundVehicle), *F.Net).Outcome, ESendOutcome::NotSendable);
@@ -462,9 +507,91 @@ bool FSendAgentUngatedFoldIsNotDrivenTest::RunTest(const FString& Parameters)
 		else
 		{
 			TestEqual(TEXT("control: a road its trailer holds is driven"), Sent.Outcome, ESendOutcome::Redirected);
+			TestFalse(TEXT("by its gated route - the gate took the U, so nothing was searched ungated"), Sent.bNarrow);
 			TestTrue(TEXT("with no fold named"), Sent.FoldWhy.IsEmpty());
 		}
 	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSendAgentRescueKeepsTheCallersRunwayPolicyTest,
+	"Airside.Model.Traffic.RescueStranded.KeepsTheCallersRunwayPolicy",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSendAgentRescueKeepsTheCallersRunwayPolicyTest::RunTest(const FString& Parameters)
+{
+	// A WAITER'S RESCUE IS ITS TAXI IN (#429 review): the stand re-offer rescues a stranded aircraft by the taxi-in's
+	// policy (ArrivalPlanner::TaxiInQuery), which never uses a runway. The rescue's own default is the rebuild's errand,
+	// which takes an UNHELD runway at a penalty. The graph gives them different answers: an aircraft stranded on a
+	// lead-in L -> A, bound for B, with the short way along a free strip (R1 -> R2, 4 km at the penalty) and a long
+	// way round by D (60 km). Two identical worlds, one rescue each. The Unstick's default takes the strip - the control
+	// that makes the other answer mean something - and the taxi-in's does not.
+	using namespace SendAgentTest;
+	auto Build = [](FGuidelineNodeId& OutB, FGuidelineEdgeId& OutStrip) -> TPair<URoadNetwork*, FGuidelineNodeId>
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FRoadNodeId RoadR1 = Net->AddNode(FVector2D(0.0, -1000.0));
+		const FRoadNodeId RoadR2 = Net->AddNode(FVector2D(4000.0, -1000.0));
+		const FRoadSegmentId Strip = Net->AddStraightSegment(RoadR1, RoadR2, TestProfiles::Runway());
+		const FGuidelineNodeId L = Net->AddGuidelineNode(FVector2D(-3000.0, 0.0));
+		const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+		OutB = Net->AddGuidelineNode(FVector2D(4000.0, 0.0));
+		const FGuidelineNodeId D = Net->AddGuidelineNode(FVector2D(2000.0, 30000.0));
+		const FGuidelineNodeId R1 = Net->AddGuidelineNode(FVector2D(0.0, -1000.0));
+		const FGuidelineNodeId R2 = Net->AddGuidelineNode(FVector2D(4000.0, -1000.0));
+		TestGraph::Join(*Net, L, A);
+		TestGraph::Join(*Net, A, D);
+		TestGraph::Join(*Net, D, OutB);
+		TestGraph::Join(*Net, A, R1);
+		TestGraph::Join(*Net, R2, OutB);
+		FGuidelineEdge Along;
+		Along.A = R1;
+		Along.B = R2;
+		Along.Control = FVector2D(2000.0, -1000.0);
+		Along.AllowedTraffic = FTrafficMask::All();
+		Along.DerivedFrom = Strip;
+		OutStrip = Net->AddGuidelineEdge(MoveTemp(Along));
+		return TPair<URoadNetwork*, FGuidelineNodeId>(Net, L);
+	};
+	auto Rescue = [this, &Build](bool bTaxiIn) -> TArray<FGuidelineEdgeId>
+	{
+		FGuidelineNodeId B;
+		FGuidelineEdgeId StripEdge;
+		const TPair<URoadNetwork*, FGuidelineNodeId> Graph = Build(B, StripEdge);
+		URoadNetwork* Net = Graph.Key;
+		// DISPATCHED DOWN THE LEAD-IN ONLY (L -> A): a route that ran along the strip would arm a departure, and this is a
+		// taxi in. The rescue is what chooses the way on to B.
+		const FGuidelineNodeId A = TestGraph::Probe(*Net, Graph.Value, B, ETraversalClass::Aircraft).Steps[0].To;
+		const FAirframe Airframe = TestAirframes::GroundOnly();
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Id = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, Graph.Value, A, ETraversalClass::Aircraft), Airframe,
+			ETraversalClass::Aircraft, 1.0);
+		RunUntil(*Traffic, *Net, 30.0, [&]() { const FRoadAgent* P = Traffic->FindAgent(Id); return P && P->Follower.Travelled > 1000.0; });
+		FGroundTrafficTestAccess(*Traffic).Strand(Id);
+		Traffic->Advance(0.05, Net);
+		const FRoadAgent* Stranded = Traffic->FindAgent(Id);
+		if (!TestTrue(TEXT("an aircraft stranded on the lead-in"), Stranded != nullptr && Stranded->Phase == EAgentPhase::Stranded))
+		{
+			return {};
+		}
+		const FRouteQuery TaxiIn = ArrivalPlanner::TaxiInQuery(FGuidelineNodeId(), Airframe, Airframe.Wingspan);
+		const bool bRescued = bTaxiIn ? Traffic->RescueStranded(Id, *Net, B, EAgentEvent::ReOffered, &TaxiIn)
+			: Traffic->RescueStranded(Id, *Net, B);
+		TestTrue(FString::Printf(TEXT("%s: rescued"), bTaxiIn ? TEXT("taxi-in") : TEXT("default")), bRescued);
+		TArray<FGuidelineEdgeId> Edges = EdgesOf(*Traffic, Id);
+		Edges.Add(StripEdge);   // the last entry is the strip's edge, for the caller to look for
+		return Edges;
+	};
+
+	TArray<FGuidelineEdgeId> Default = Rescue(false);
+	TArray<FGuidelineEdgeId> TaxiIn = Rescue(true);
+	if (!TestTrue(TEXT("both worlds were staged"), Default.Num() > 1 && TaxiIn.Num() > 1)) { return false; }
+	const FGuidelineEdgeId DefaultStrip = Default.Pop();
+	const FGuidelineEdgeId TaxiInStrip = TaxiIn.Pop();
+	TestTrue(TEXT("control: the rescue's own default takes the unheld strip - the short way"), Default.Contains(DefaultStrip));
+	TestFalse(TEXT("the taxi-in's rescue does not: it goes the long way round, as a taxi-in must"), TaxiIn.Contains(TaxiInStrip));
 	return true;
 }
 

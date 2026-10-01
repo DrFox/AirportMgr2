@@ -84,7 +84,9 @@ Every call logs one `LogAirportOps` line: `Unstick: agent N (Vehicle|Aircraft, <
 - `OnAgentPhase`: `To == Stranded` for a vehicle reopens its jobs - the follow-up from #399.
   AMENDED IN IMPLEMENTATION: it does NOT recall the vehicle. A recall would rescue it (an automatic
   hop) or retire it (every truck on a deleted road vanishing), both contradicting "nothing automatic
-  moves a stranded agent". It is set ToFacility and waits for the player's Unstick.
+  moves a stranded agent" (except, since #429's review, an aircraft waiting for a stand when one frees:
+  the re-offer rescues it from where it stands, or restarts it at its exit when it is measured there).
+  It is set ToFacility and waits for the player's Unstick.
 - Bids (`AssignOpenJobs`, `RebidQueued`) skip a vehicle whose agent is Stranded: ToFacility with no
   plan prices itself "home soon" and would win the job straight back.
 

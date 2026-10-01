@@ -1055,7 +1055,8 @@ public:
 	bool HasStalledFor(double Seconds) const { return WaitingOn != 0 && StalledSeconds > Seconds; }
 
 	/**
-	 * STUCK - THE ONE DEFINITION (#429): Stranded (its route died under it; nothing automatic moves it again), or a
+	 * STUCK - THE ONE DEFINITION (#429): Stranded (its route died under it; nothing automatic moves it again, except a
+	 * waiter rescued when a stand frees - UGroundTraffic::ReofferStand), or a
 	 * stalled waiter past Seconds. It was spelled three ways in two modules - the stall clock's own accrual rule
 	 * (GroundTraffic.cpp), the resolver's waiter test (GroundTrafficDeadlock.cpp) and the Unstick button's "looks stuck"
 	 * (AgentRescue.cpp, `Stranded || stall >= Seconds`, which neither asked who was waited on nor agreed on the bound).

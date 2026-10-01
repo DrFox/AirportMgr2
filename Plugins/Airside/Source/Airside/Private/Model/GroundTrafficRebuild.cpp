@@ -752,14 +752,8 @@ namespace
 	 */
 	constexpr double SplitRejoinRadius = 300.0;
 
-	/**
-	 * How far the PLAYER'S rescue of a stranded agent may hop it onto live pavement, uu: 15 m.
-	 * Spec 2026-09-29-unstick-agent. The two radii above find nothing here BY CONSTRUCTION - an
-	 * agent is stranded because the rebuild found no line within reach - so this must be larger
-	 * to be any use at all. 15 m is a visible hop the player asked for, and short of the next
-	 * road over on every layout seen (a lane is 3.5-4.5 m, a taxiway strip half-width 20 m+).
-	 */
-	constexpr double RescueRejoinRadius = 1500.0;
+	// THE RESCUE'S HOP (RescueRejoinRadius) is UGroundTraffic's own public constant since #429's review, with its reason
+	// on it: a test measures a rescue against it, and a figure retyped in a test is a second one that drifts.
 
 	/**
 	 * The nearest point, within Radius of the agent, on an edge running the way it is facing with
@@ -780,7 +774,7 @@ namespace
 	 */
 	bool RejoinNearby(const FRoadAgent& Agent, const FRoutePlan& Plan, const FTrafficContext& Context,
 		double Radius, FRoutePlan& OutPlan, double& OutTravelled, FVector2D& OutAt,
-		FGuidelineNodeId WantedGoal = FGuidelineNodeId())
+		FGuidelineNodeId WantedGoal = FGuidelineNodeId(), const FRouteQuery* QueryTemplate = nullptr)
 	{
 		const URoadNetwork& Network = Context.Network;
 		const FVector2D Here = Agent.LastMotion.Position;
@@ -907,11 +901,19 @@ namespace
 
 		for (const FCandidate& Candidate : Candidates)
 		{
-			FRouteQuery Query = FPlanReResolver::QueryFor(ERouteErrand::RebuildReResolve,
-				Candidate.From, Goal, Agent);
+			// THE CALLER'S KIND OF ROUTE when it names one (#429 review): a stand re-offer rescues a stranded waiter by
+			// the taxi-in's policy, which never uses a runway; the rebuild's errand here would take an unheld one.
+			FRouteQuery Query = QueryTemplate != nullptr ? *QueryTemplate
+				: FPlanReResolver::QueryFor(ERouteErrand::RebuildReResolve, Candidate.From, Goal, Agent);
+			Query.Start = Candidate.From;
+			Query.Goal = Goal;
 			// THE RULES IN FORCE, runway penalty included (#449): this took the congestion weight alone, so a level's
-			// tuned RunwayPenalty was obeyed everywhere except the rejoin every split, flip and Unstick takes.
-			Query.WithRules(Context.Rules, Context.Occupancy, Agent.Id);
+			// tuned RunwayPenalty was obeyed everywhere except the rejoin every split, flip and Unstick takes. ONLY FOR
+			// AN ERRAND THAT READS THE TABLE - every rebuild errand does; a taxi-in's must not (RouteSearch refuses it).
+			if (Query.Policy.Occupancy == EOccupancyUse::Required)
+			{
+				Query.WithRules(Context.Rules, Context.Occupancy, Agent.Id);
+			}
 			// THE REJOIN STARTS PART-WAY ALONG ITS FIRST STEP, so that is where its tow is judged
 			// from - the chain as it is, not laid straight - and AT THE FOLLOWER'S SPEED, which
 			// RejoinTaxi carries on for all three callers. This said "from rest (RestartTaxi below)"
@@ -1006,6 +1008,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		// agent still, for the reason above. The one automatic rescue is a stranded aircraft WAITING
 		// FOR A STAND when one frees (UGroundTraffic::ReofferStand, #429 review): the same hop the
 		// player's Unstick makes, because its only other move was a restart at a node it may not be at.
+		// ENFORCED BY: Airside.Model.Traffic.ReofferStrandedWaiterIsRescued
 		//
 		// AND IT NAMES THE RUNWAY WHEN THERE IS ONE. An agent stranded mid-crossing holds
 		// that strip until the player retires it, which is a runway out of service with no
@@ -1515,7 +1518,8 @@ bool FPlanReResolver::ReResolveSpan(FRoadAgent& Agent, FRoutePlan& Plan, int32 F
 	return true;
 }
 
-bool UGroundTraffic::RescueStranded(int32 AgentId, const URoadNetwork& Network, FGuidelineNodeId Goal, EAgentEvent Cause)
+bool UGroundTraffic::RescueStranded(int32 AgentId, const URoadNetwork& Network, FGuidelineNodeId Goal, EAgentEvent Cause,
+	const FRouteQuery* QueryTemplate)
 {
 	// HERE, BESIDE THE REBUILD, because RejoinNearby is this file's and the rescue is its third
 	// caller: the same projection onto an edge running the agent's way, the same route that must
@@ -1542,7 +1546,8 @@ bool UGroundTraffic::RescueStranded(int32 AgentId, const URoadNetwork& Network, 
 	FRoutePlan Rejoined;
 	double Travelled = 0.0;
 	FVector2D At = FVector2D::ZeroVector;
-	if (!RejoinNearby(Agent, Agent.Follower.Plan, Context, RescueRejoinRadius, Rejoined, Travelled, At, Goal))
+	const ERouteErrand Errand = QueryTemplate != nullptr ? QueryTemplate->Errand : ERouteErrand::RebuildReResolve;
+	if (!RejoinNearby(Agent, Agent.Follower.Plan, Context, RescueRejoinRadius, Rejoined, Travelled, At, Goal, QueryTemplate))
 	{
 		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("RescueStranded %d refused: no pavement within %.0f uu running its way with a route to node %d"),
@@ -1565,8 +1570,9 @@ bool UGroundTraffic::RescueStranded(int32 AgentId, const URoadNetwork& Network, 
 	const double Sideways = FVector2D::Distance(Agent.LastMotion.Position, At);
 	ChangeRoute(Agent, FRouteChange::Rejoin(Rejoined, Travelled, At), &Network);
 
-	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d rescued: %.0f uu sideways, %.0f uu to node %d"),
-		AgentId, Sideways, Rejoined.Length - Travelled, Agent.GoalNode.Index);
+	// THE ERRAND SAID: which kind of route the rescue drove by - the rebuild's, or a caller's (a stand re-offer's taxi-in).
+	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d rescued: %.0f uu sideways, %.0f uu to node %d (%s)"),
+		AgentId, Sideways, Rejoined.Length - Travelled, Agent.GoalNode.Index, *UEnum::GetValueAsString(Errand));
 	// LAST, and nothing read from Agent after it: a synchronous listener may retire the agent (the
 	// re-entrancy contract UGroundTraffic::AdvanceOnce states). Rescued, the player's Unstick (#436):
 	// the flight board keeps the taxi it was in, in whichever direction that was. ReOffered for the
