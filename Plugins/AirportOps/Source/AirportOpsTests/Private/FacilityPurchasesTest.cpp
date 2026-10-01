@@ -110,6 +110,7 @@ namespace
 			Placement.Heading = UE_DOUBLE_HALF_PI;
 			Placement.PoseRole = EServiceRole::Fuel;
 			Placement.Outline = { FVector2D(0.0, 0.0), FVector2D(3000.0, 0.0), FVector2D(3000.0, 2400.0), FVector2D(0.0, 2400.0) };
+			Placement.FrontageEdge = 0;   // the frontage is edge 0, Position its midpoint - see FEntityInstance::FrontageEdge
 			Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
 			Placement.Trucks = 0;
 			Depot = Net->PlaceEntity(Placement);
@@ -253,6 +254,33 @@ bool FFacilitySellTest::RunTest(const FString&)
 	TestEqual(TEXT("as a Fleet entry"), static_cast<int32>(F.Ledger->Entries().Last().Category), static_cast<int32>(ELedgerCategory::Fleet));
 	TestNull(TEXT("and it is gone"), F.Board->FindVehicle(Bought.VehicleId));
 	TestEqual(TEXT("one FleetChanged published"), F.Bus.QueuedCount(), Queued + 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilitySeededSaleQuotesNothingTest, "AirportOps.Model.Facility.SeededVehicleQuotesAndSellsForNothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFacilitySeededSaleQuotesNothingTest::RunTest(const FString&)
+{
+	// #487: A STARTER VEHICLE IS WORTH NOTHING BACK, and the depot card's Sell label and the sale's own result read the same
+	// FServiceFleet::RefundOf as the credit does - a label must not promise money the ledger never gets. A bought one beside it keeps
+	// its resale, so the zero is the origin's doing and not the row's.
+	FFacilityFixture F;
+	const int32 SeededId = F.Board->Fleet().Add(TEXT("FUEL"), F.Depot, EFleetOrigin::Seeded, 0.0);
+	const int32 BoughtId = F.Board->Fleet().Add(TEXT("FUEL"), F.Depot, EFleetOrigin::Bought, 0.0);
+	if (!TestTrue(TEXT("setup: a seeded and a bought vehicle at the depot"), SeededId != 0 && BoughtId != 0)) { return false; }
+
+	const FFacilityQuote Quote = F.Shop->Quote(*F.Net, F.Depot);
+	const FFleetRowQuote* SeededRow = Quote.Fleet.FindByPredicate([SeededId](const FFleetRowQuote& Row) { return Row.VehicleId == SeededId; });
+	const FFleetRowQuote* BoughtRow = Quote.Fleet.FindByPredicate([BoughtId](const FFleetRowQuote& Row) { return Row.VehicleId == BoughtId; });
+	if (!TestTrue(TEXT("both vehicles are on the card"), SeededRow != nullptr && BoughtRow != nullptr)) { return false; }
+	TestEqual(TEXT("the seeded vehicle's Sell quote is nothing"), SeededRow->Refund, 0.0, 1e-9);
+	TestEqual(TEXT("the bought one's is its resale, Price x ResaleFraction"), BoughtRow->Refund, 45000.0, 1e-9);
+
+	const double Before = F.Ledger->Balance();
+	const FPurchaseResult Sold = F.Shop->SellVehicle(SeededId);
+	if (!TestTrue(TEXT("the seeded vehicle still sells"), Sold.Succeeded())) { return false; }
+	TestEqual(TEXT("the sale's result says nothing came back"), Sold.Amount, 0.0, 1e-9);
+	TestEqual(TEXT("and the ledger agrees"), F.Ledger->Balance(), Before, 1e-9);
 	return true;
 }
 

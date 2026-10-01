@@ -269,9 +269,6 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	int32 GetAgentCount() const;
 
-	/** The most recently dispatched agent's actor, or null. Forwards to Traffic. */
-	ARoadAgentActor* GetNewestAgent() const;
-
 	/** Sends a parked agent to the runway and arms its take-off. Forwards to Traffic. */
 	EDepartureRefusal DepartAgent(int32 AgentId);
 
@@ -339,14 +336,6 @@ public:
 	 * its build purse, and the purse tests reach through it to substitute a recorder.
 	 */
 	URoadEditFacade* GetEditFacade() const { return Facade; }
-
-	/**
-	 * The per-letter stand Flyweights and the rebind step - see UStandDefinitionCache. READ
-	 * ACCESS TO THE SUBOBJECT, not a forwarder per method, for exactly the reason GetPresenter
-	 * above gives (issue #298). Airside.Present.DuplicatedActorOwnsItsSubobjects reaches
-	 * through it the same way it already does for Facade/Presenter/Traffic.
-	 */
-	UStandDefinitionCache* GetStandDefinitions() const { return StandDefinitions; }
 
 	/**
 	 * Multiplier applied to every Tick's DeltaSeconds before it reaches Traffic. Set by
@@ -632,9 +621,6 @@ public:
 	 * stays reachable at its old name" for a caller that is not virtual dispatch at all.
 	 */
 	FBuildSessionTunables MakeTunables(double ViewWorldWidth);
-
-	/** Both endpoints of a live segment, on the road plane. False if it is not live. */
-	bool GetSegmentEnds(int32 SegmentIndex, FVector2D& OutA, FVector2D& OutB) const;
 
 	// --- Aprons -----------------------------------------------------------------------
 
@@ -961,7 +947,9 @@ public:
 
 	/**
 	 * MOST the aprons sit below the road surface, in uu. Not a fixed drop - see
-	 * GetApronSurfaceZ.
+	 * URoadSurfacePresenter::GetApronSurfaceZ, which owns the ApronZOffset-as-maximum failure story in full and is
+	 * what the apron is built at (the actor's own forwarder, a BlueprintCallable no asset named, was test-only and
+	 * went in #450).
 	 *
 	 * Below, not above: a taxiway crossing an apron should win the depth test, which is
 	 * also how it reads in life - the taxiway is painted onto the apron. Coplanar would
@@ -969,14 +957,6 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Apron", meta = (ClampMin = "0.0"))
 	double ApronZOffset = 4.0;
-
-	/**
-	 * Height the apron surface is actually built at. Forwards to Presenter, which owns the
-	 * ApronZOffset-as-maximum failure story in full - see
-	 * URoadSurfacePresenter::GetApronSurfaceZ.
-	 */
-	UFUNCTION(BlueprintCallable, Category = "Airside|Apron")
-	double GetApronSurfaceZ() const;
 
 	/** Second component, carrying only the preview. Separate so showing and hiding the
 	 *  ghost never touches the real road's mesh. */
@@ -1299,6 +1279,17 @@ public:
 	/** TyreSmokeMaterial, else the content default. Null is supported: no smoke. */
 	UMaterialInterface* ResolveTyreSmokeMaterial() const;
 	UMaterialInterface* ResolveGhostMaterial() const;
+
+	/**
+	 * The ghost material THROUGH THE RESOLVED-CONTENT CACHE (RefreshResolvedContentCacheIfDirty), for a caller that paints
+	 * with it on every rebuild: AAirsideBuildingsActor::Rebuild, which colours its module ghosts on every Topology and Facts
+	 * change and used to call ResolveGhostMaterial() above - a GetContent() plus a LoadSynchronous per rebuild, around the
+	 * very cache #298 made the ghost path read (#450). NON-CONST because the refresh fills the cache.
+	 * The raw resolver stays for the cache's own fill; a caller that resolves fresh is the shape this replaced.
+	 * ENFORCED BY: Airside.Present.GhostDragDoesNotReresolveContent (phase 3: a Topology rebuild with a buildings actor bound),
+	 * Check-Architecture rule 4 row 'ARoadNetworkActor::ResolveGhostMaterial'
+	 */
+	UMaterialInterface* GetResolvedGhostMaterial();
 	URoadMaterialSet*   ResolveMaterialSet() const;
 	UEntityDefinition*  ResolveStandDefinition() const;
 
@@ -1306,7 +1297,8 @@ public:
 	 * A stand template for Letter - forwards to StandDefinitions (issue #298: moved off this
 	 * actor into UStandDefinitionCache, see that class's own header for the const_cast this
 	 * used to need, the Flyweight cache, and the null-when-it-does-not-fit-its-letter rule).
-	 * Still an actor method, not a bare GetStandDefinitions() accessor, because Code C's own
+	 * Still an actor method, not a bare subobject accessor (there is none: the one that existed, GetStandDefinitions,
+	 * had no production caller and went in #450 - the duplication test reads the member by reflection), because Code C's own
 	 * branch inside it calls back into THIS actor's ResolveStandDefinition() - the cache asks
 	 * the actor rather than duplicating what only the actor's authored StandDefinition and
 	 * content-default fallback can answer.

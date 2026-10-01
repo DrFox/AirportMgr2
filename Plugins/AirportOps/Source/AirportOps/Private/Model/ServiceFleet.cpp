@@ -28,6 +28,12 @@ double FServiceFleet::PriceOf(FName TypeCode) const
 	return Row != nullptr ? Row->Price : 0.0;
 }
 
+double FServiceFleet::RefundOf(const FServiceVehicle& Vehicle) const
+{
+	// THE ONE READ OF "DOES IT PAY" (#487) - see the header. Seeded is free to acquire and so worth nothing to give back.
+	return Vehicle.Origin == EFleetOrigin::Bought ? ResaleOf(Vehicle.TypeCode) : 0.0;
+}
+
 double FServiceFleet::ResaleOf(FName TypeCode) const
 {
 	const FServiceVehicleType* Row = Board.Catalogue.Find(TypeCode);
@@ -92,9 +98,10 @@ int32 FServiceFleet::ResolveCatalogue(const TMap<FName, FFuelVehicleSpec>& Rows,
 	return Board.Catalogue.Num();
 }
 
-FServiceVehicle& FServiceFleet::Create(FName TypeCode, EServiceRole Role, FEntityInstanceId Home, double Cargo)
+FServiceVehicle& FServiceFleet::Create(FName TypeCode, EServiceRole Role, FEntityInstanceId Home, double Cargo, EFleetOrigin Origin)
 {
 	FServiceVehicle& Vehicle = Board.Vehicles.Add_GetRef(FServiceVehicleLifecycle::Create(Board.NextVehicleId++, TypeCode, Role, Home, Cargo));
+	Vehicle.Origin = Origin;
 	// BOTH COUNTERS: the re-bid keys on the transition counter and the offer verdict on the composition one, and a vehicle
 	// that appeared moves each.
 	++Board.FleetRevision;
@@ -113,7 +120,7 @@ int32 FServiceFleet::Add(FName TypeCode, FEntityInstanceId Home, EFleetOrigin Or
 		return 0;
 	}
 	const FServiceVehicleType Type = Board.TypeFor(TypeCode);
-	FServiceVehicle& Vehicle = Create(TypeCode, Type.Role, Home, FFuelRolePolicy::CapacityOf(Type));
+	FServiceVehicle& Vehicle = Create(TypeCode, Type.Role, Home, FFuelRolePolicy::CapacityOf(Type), Origin);
 	// READ BEFORE ANYTHING ELSE CAN MOVE THE ARRAY: Publish only enqueues, but the ledger's post can notify.
 	const int32 Id = Vehicle.Id;
 	const double Cargo = Vehicle.Cargo;
@@ -173,6 +180,7 @@ bool FServiceFleet::Withdraw(int32 VehicleId, EFleetReason Reason, double Now)
 	const FName TypeCode = Board.Vehicles[Index].TypeCode;
 	const FEntityInstanceId Home = Board.Vehicles[Index].Home;
 	const int32 Id = Board.Vehicles[Index].Id;
+	const double Credit = RefundOf(Board.Vehicles[Index]);
 	if (Reason == EFleetReason::Sold)
 	{
 		UE_LOG(LogAirportOps, Log, TEXT("Fleet: vehicle %d %s leaves depot %d"), Id, *TypeCode.ToString(), Home.Index);
@@ -185,8 +193,11 @@ bool FServiceFleet::Withdraw(int32 VehicleId, EFleetReason Reason, double Now)
 	// the placement - is not a reason to lose its value. Resale, not the price: a vehicle that leaves for money leaves at
 	// one rate (FFuelVehicleSpec::ResaleValue). Undo never touches this (R8): a re-placed depot does not buy the vehicle
 	// back. A ZERO VALUE POSTS NO LINE: a row with no price has nothing to credit, and a "Sold X 0" line is noise.
-	// ENFORCED BY: AirportOps.Model.Facility.DepotRemovalCreditsItsVehicles, AirportOps.Model.Facility.SellCreditsResale
-	const double Credit = ResaleOf(TypeCode);
+	//
+	// ONLY WHAT WAS BOUGHT (#487): Credit is RefundOf, read above before the remove - zero for a SEEDED vehicle. A starter depot's
+	// free fleet paid out when the depot was bulldozed, and bulldoze-then-re-place made that a repeatable money source.
+	// ENFORCED BY: AirportOps.Model.Facility.DepotRemovalCreditsItsVehicles, AirportOps.Model.Facility.SellCreditsResale,
+	// AirportOps.Model.Fleet.SeededVehicleFetchesNothing
 	if (Board.Ledger != nullptr && Credit > 0.0)
 	{
 		const FText Line = Reason == EFleetReason::Sold
@@ -205,6 +216,31 @@ bool FServiceFleet::Withdraw(int32 VehicleId, EFleetReason Reason, double Now)
 			Reason == EFleetReason::Sold ? EFleetChange::Sold : EFleetChange::Withdrawn, Credit });
 	}
 	return true;
+}
+
+int32 FServiceFleet::ForgetRemovedDepots(const URoadNetwork& Network)
+{
+	// BY THE DEPOT, NOT BY ITS VEHICLES (#487, PR #491 review) - see the declaration. A sold-out starter depot has no vehicle to
+	// withdraw, so a forget keyed on withdrawals never reached it; asking the network which depots still stand reaches them all.
+	// A stale id (the slot's generation moved on) is null here too, so ids of depots bulldozed long ago are pruned as well.
+	TArray<FEntityInstanceId> Gone;
+	for (const FEntityInstanceId DepotId : Board.SeededDepots)
+	{
+		const FEntityInstance* Depot = Network.GetEntity(DepotId);
+		if (Depot == nullptr || !Depot->bAlive)
+		{
+			Gone.Add(DepotId);
+		}
+	}
+	for (const FEntityInstanceId DepotId : Gone)
+	{
+		Board.SeededDepots.Remove(DepotId);
+	}
+	if (Gone.Num() > 0)
+	{
+		UE_LOG(LogAirportOps, Log, TEXT("Fleet: %d removed depot(s) forgotten - one restored by an undo is seeded again"), Gone.Num());
+	}
+	return Gone.Num();
 }
 
 int32 FServiceFleet::SeedStarterFleets(const URoadNetwork& Network, double Now)
@@ -266,7 +302,9 @@ void FServiceFleet::Restored()
 
 FServiceVehicle& FServiceFleet::AddForTest(FName TypeCode, FEntityInstanceId Home, EServiceVehicleState State, double Cargo)
 {
-	FServiceVehicle& Vehicle = Create(TypeCode, EServiceRole::Fuel, Home, Cargo);
+	// BOUGHT, as every fixture built with this door has been treated since it was written: they model a fleet the player owns, and
+	// the tests that want a starter vehicle make one through Add(Seeded) - the door the game uses.
+	FServiceVehicle& Vehicle = Create(TypeCode, EServiceRole::Fuel, Home, Cargo, EFleetOrigin::Bought);
 	FServiceVehicleLifecycle::SeedStateForTest(Vehicle, State);
 	if (Home.IsSet())
 	{

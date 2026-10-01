@@ -2407,25 +2407,3 @@ TArray<int32> URoadEditFacade::SegmentsIncidentTo(int32 NodeIndex) const
 	}
 	return Found;
 }
-
-bool URoadEditFacade::GetSegmentEnds(int32 SegmentIndex, FVector2D& OutA, FVector2D& OutB) const
-{
-	FRoadSegmentId Id;
-	if (!MakeLiveSegmentId(SegmentIndex, Id))
-	{
-		return false;
-	}
-
-	const URoadNetwork* Network = GetNetwork();
-	const FRoadSegment* Segment = Network->GetSegment(Id);
-	const FRoadNode* EndA = Segment != nullptr ? Network->GetNode(Segment->A) : nullptr;
-	const FRoadNode* EndB = Segment != nullptr ? Network->GetNode(Segment->B) : nullptr;
-	if (EndA == nullptr || EndB == nullptr)
-	{
-		return false;
-	}
-
-	OutA = EndA->Position;
-	OutB = EndB->Position;
-	return true;
-}

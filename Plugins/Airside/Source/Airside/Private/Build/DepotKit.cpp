@@ -207,42 +207,32 @@ void DepotKit::ReportIncomplete(const URoadNetwork& Network, TArrayView<const Pl
 	}
 }
 
-bool DepotKit::RecoverFrontage(const FEntityInstance& Entity, FVector2D& OutA, FVector2D& OutB)
+EPlotLayout DepotKit::LayoutOf(const UEntityDefinition* Definition)
 {
-	// Which edge of the plot is its frontage, recovered from the entity alone.
+	// THE SCATTER FOR A DEFINITION THERE IS NONE OF - see the header. The tool, the facade and the built yard all read
+	// this, so none of them can fall back differently.
+	return Definition != nullptr ? Definition->Layout : EPlotLayout::Scatter;
+}
+
+PlotYard::FReservation DepotKit::SolveYard(TArrayView<const FVector2D> Outline,
+	FVector2D FrontageA, FVector2D FrontageB, const UEntityDefinition* Definition,
+	TArrayView<const PlotYard::FKitSpec> Specs)
+{
+	// THE GATE IS THE FRONTAGE MIDPOINT, which is also what PlaceEntityInPlot stores as the entity's own Position -
+	// DepotYardSeed keys off exactly that pose, so the solve the tool previews, the facade judges at commit and the
+	// presenter re-derives from the built entity all roll the same yard. (The midpoint of (A, B) and of (B, A) is the
+	// same float, so the facade's winding reversal, which swaps the two, cannot move the seed.)
 	//
-	// EXACT, NOT A GUESS, and not a second search either. URoadEditFacade::PlaceEntityInPlot
-	// puts the pose at the MIDPOINT of the frontage edge, so the edge whose midpoint equals
-	// Position is that edge by construction - this reads back a value rather than deriving a
-	// new opinion.
-	//
-	// ASKING FAnchorLink AGAIN WAS REJECTED. It would search the live graph, so a road laid
-	// or deleted after the depot was built could move the frontage, and every shed in the
-	// yard would jump to a new edge without the player touching the depot. Where the thing
-	// faces was decided when it was placed, and it stays decided.
-	double BestDistance = TNumericLimits<double>::Max();
-	int32 BestEdge = INDEX_NONE;
-
-	for (int32 I = 0; I < Entity.Outline.Num(); ++I)
-	{
-		const FVector2D& A = Entity.Outline[I];
-		const FVector2D& B = Entity.Outline[(I + 1) % Entity.Outline.Num()];
-		const double Distance = FVector2D::Distance((A + B) * 0.5, Entity.Position);
-		if (Distance < BestDistance)
-		{
-			BestDistance = Distance;
-			BestEdge = I;
-		}
-	}
-
-	if (BestEdge == INDEX_NONE)
-	{
-		return false;
-	}
-
-	OutA = Entity.Outline[BestEdge];
-	OutB = Entity.Outline[(BestEdge + 1) % Entity.Outline.Num()];
-	return true;
+	// THE ONE FPlotSite OF A DEPOT YARD (#450). It was typed at three sites, agreeing by comment, and ReservationOf
+	// recovered its frontage from the entity by the edge whose midpoint was nearest Position - a heuristic standing in for
+	// a fact the facade had been given and then forgot. Check-Architecture rule 4's 'FPlotSite' row keeps it here.
+	FPlotSite Site;
+	Site.Outline = Outline;
+	Site.FrontageA = FrontageA;
+	Site.FrontageB = FrontageB;
+	Site.Gate = (FrontageA + FrontageB) * 0.5;
+	Site.Seed = DepotYardSeed(Site.Gate);
+	return PlotLayoutFor(LayoutOf(Definition))->Solve(Site, Specs);
 }
 
 TOptional<PlotYard::FReservation> DepotKit::ReservationOf(const FEntityInstance& Depot,
@@ -252,21 +242,22 @@ TOptional<PlotYard::FReservation> DepotKit::ReservationOf(const FEntityInstance&
 	{
 		return {};
 	}
+
+	// THE STORED FRONTAGE, read back - FEntityInstance::FrontageEdge, written by the facade from the edge it was GIVEN.
+	// It used to be recovered here as the edge whose midpoint equalled Position ("EXACT, NOT A GUESS" - and exact only
+	// while Position stayed the midpoint of the edge the gesture chose). A depot with no stored frontage is unsolvable,
+	// the answer a plotless one gives: there is no ground to seat against.
+	//
+	// ASKING FAnchorLink AGAIN WAS REJECTED (see FEntityInstance::FrontageEdge): it would search the live graph, so a road
+	// laid or deleted after the depot was built could move the frontage.
 	FVector2D FrontageA = FVector2D::ZeroVector;
 	FVector2D FrontageB = FVector2D::ZeroVector;
-	if (!RecoverFrontage(Depot, FrontageA, FrontageB))
+	if (!Depot.GetFrontage(FrontageA, FrontageB))
 	{
 		return {};
 	}
 	// Depot.Outline OUTLIVES THE SOLVE - FPlotSite::Outline is a view (its own comment).
-	FPlotSite Site;
-	Site.Outline = Depot.Outline;
-	Site.FrontageA = FrontageA;
-	Site.FrontageB = FrontageB;
-	Site.Gate = Depot.Position;
-	Site.Seed = DepotYardSeed(Depot.Position);
-	const EPlotLayout Layout = Depot.Definition != nullptr ? Depot.Definition->Layout : EPlotLayout::Scatter;
-	return PlotLayoutFor(Layout)->Solve(Site, Specs);
+	return SolveYard(Depot.Outline, FrontageA, FrontageB, Depot.Definition, Specs);
 }
 
 TArray<EDepotModule> DepotKit::StarterModules()

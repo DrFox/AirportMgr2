@@ -137,6 +137,13 @@ bool FResolvedContentCachedAcrossRebuildsTest::RunTest(const FString& Parameters
  * do not own and this test must not blame on them. A Taxiway ghost's profile is ResolveProfile,
  * this actor's own on-demand fallback, which never calls GetContent - so GetContentCallCountForTest
  * here measures only the material resolution these two sites are actually responsible for.
+ *
+ * PHASE 3 (#450): THE SECOND HOME. AAirsideBuildingsActor::Rebuild coloured its module ghosts through
+ * ARoadNetworkActor::ResolveGhostMaterial() on every Topology and Facts change - a GetContent() plus a LoadSynchronous per rebuild,
+ * around the very cache the two phases above pin for the actor's own ghost path. It is pinned by CALIBRATION rather than by a bare
+ * zero, because that rebuild legitimately resolves three other things of its own (the depot kits, the fence kit, the module looks):
+ * they are called once directly to learn what they cost, and a Topology rebuild with a buildings actor bound must cost exactly that.
+ * One more is the ghost material resolved fresh.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FGhostDragDoesNotReresolveContentTest,
@@ -183,6 +190,44 @@ bool FGhostDragDoesNotReresolveContentTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("20 validity flips over a held ghost make zero GetContent calls - the resolved cache held"),
 		UAirsideSettings::GetContentCallCountForTest, 0);
+
+	// PHASE 3: A TOPOLOGY REBUILD WITH A BUILDINGS ACTOR BOUND (#450). Through the actor's own announcement, which is what the buildings
+	// actor hears (#482: OnNetworkChanged), so the road's whole rebuild is out of the measurement and only the buildings actor's
+	// handler is in it.
+	{
+		FAirsideTestWorld TestWorld;
+		ARoadNetworkActor* Road = TestWorld.Actor;
+		if (!TestNotNull(TEXT("a road actor in a world, with its buildings actor"), Road)) { return false; }
+		if (!TestNotNull(TEXT("and the buildings actor itself"), TestWorld.Buildings)) { return false; }
+		Road->PlaceNode(FVector2D(0.0, 0.0));
+		if (!TestNotNull(TEXT("a network"), Road->Network.Get())) { return false; }
+
+		// WARM, as a real session is by the time a depot is placed: the actor's own cache has been filled.
+		Road->MakeSurfaceSettingsForTest();
+
+		// CALIBRATION: what the buildings actor's three other resolutions cost, measured rather than assumed.
+		UAirsideSettings::ResetGetContentCallCountForTest();
+		Road->ResolveDepotKits();
+		UAirsideSettings::ResolveFenceKit();
+		UAirsideSettings::ResolveDepotLooks();
+		const int32 OwnResolutions = UAirsideSettings::GetContentCallCountForTest;
+		if (!TestTrue(TEXT("the premise: the buildings actor's own resolutions reach GetContent - else this would count nothing"), OwnResolutions > 0))
+		{
+			return false;
+		}
+
+		UAirsideSettings::ResetGetContentCallCountForTest();
+		Road->OnNetworkChanged.Broadcast(EChangeKind::Topology, *Road->Network);
+		TestEqual(TEXT("a Topology rebuild with a buildings actor bound makes only its own resolutions' GetContent calls - the ghost material "
+			"comes from the road actor's cache, not a fresh resolve (and equal, not fewer: the actor did hear it)"),
+			UAirsideSettings::GetContentCallCountForTest, OwnResolutions);
+
+		// AND A FACTS REBUILD, which it also hears (a module bought): the same cost, the same cache.
+		UAirsideSettings::ResetGetContentCallCountForTest();
+		Road->OnNetworkChanged.Broadcast(EChangeKind::Facts, *Road->Network);
+		TestEqual(TEXT("a Facts rebuild costs the same: no fresh ghost-material resolve there either"),
+			UAirsideSettings::GetContentCallCountForTest, OwnResolutions);
+	}
 
 	return true;
 }

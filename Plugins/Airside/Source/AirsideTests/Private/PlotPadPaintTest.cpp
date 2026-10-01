@@ -74,6 +74,7 @@ namespace
 		Placement.PoseRole = EServiceRole::Fuel;
 		Placement.Outline = { FVector2D(0.0, 0.0), FVector2D(1500.0, 0.0),
 		                      FVector2D(1500.0, 800.0), FVector2D(0.0, 800.0) };
+		Placement.FrontageEdge = 0;   // the frontage is edge 0, Position its midpoint - see FEntityInstance::FrontageEdge
 		Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
 		Actor->Network->PlaceEntity(Placement);
 	}

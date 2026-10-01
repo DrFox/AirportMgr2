@@ -195,8 +195,7 @@ PlotYard::FReservation FPlotPlaceTool::ReservationFor(
 	// FReservationPayload's comment.
 	const UEntityDefinition* Definition =
 		Context.Target != nullptr ? Context.Target->GetEntityDefinition(Kind) : nullptr;
-	const EPlotLayout Layout =
-		Definition != nullptr ? Definition->Layout : EPlotLayout::Scatter;
+	const EPlotLayout Layout = DepotKit::LayoutOf(Definition);
 
 	// WHAT THE PLOT WOULD HOLD, rather than where this tool's module list would stand.
 	// Capacity is a property of the ground being dragged out, decided once - so the ghost is
@@ -235,20 +234,14 @@ PlotYard::FReservation FPlotPlaceTool::ReservationFor(
 		return Memo.Payload.Reservation;
 	}
 
-	// The pose the facade will store for this depot, so DepotYardSeed gives the yard that
-	// gets BUILT rather than one that merely resembles it - see Build/DepotKit.h.
-	const FVector2D Pose = (Outline[0] + Outline[1]) * 0.5;
-
-	FPlotSite Site;
-	Site.Outline = Outline;
-	Site.FrontageA = Outline[0];
-	Site.FrontageB = Outline[1];
-	Site.Gate = Pose;
-	Site.Seed = DepotYardSeed(Pose);
-
+	// THE FRONTAGE IS EDGE 0->1 of the shown outline (Quad's own contract) and Place hands the facade exactly those two
+	// corners, so the gate SolveYard derives - their midpoint - is the pose the facade will store, and DepotYardSeed gives
+	// the yard that gets BUILT rather than one that merely resembles it - see Build/DepotKit.h. THE SOLVE ITSELF IS
+	// DepotKit::SolveYard's, not assembled here (#450): this function used to type its own FPlotSite, the second of three
+	// copies that agreed only by comment.
 	FReservationPayload Payload;
 	Payload.Layout = Layout;
-	Payload.Reservation = PlotLayoutFor(Layout)->Solve(Site, Specs);
+	Payload.Reservation = DepotKit::SolveYard(Outline, Outline[0], Outline[1], Definition, Specs);
 	Memo.Store(Outline, Payload);
 
 	// FOR TESTS ONLY, and only on the path that actually paid for a solve - see
@@ -375,7 +368,7 @@ void FPlotPlaceTool::DescribeReadout(const FToolContext& Context, TConstArrayVie
 
 	// THE SAME TWO QUESTIONS URoadEditFacade::PlaceEntityInPlot ASKS - issue #182. Definition
 	// is resolved through the target the same way ReservationFor resolves it for Layout, and
-	// Total comes from the SAME evaluator call (PlotLayoutFor(Layout)->Solve, memoized above)
+	// Total comes from the SAME evaluator call (DepotKit::SolveYard, memoized above)
 	// the facade runs again at commit - so Committable cannot light the Build button over a
 	// plot the facade is about to refuse, which is what `Committable(Stage == Confirm)` did
 	// regardless of whether the reservation placed anything.

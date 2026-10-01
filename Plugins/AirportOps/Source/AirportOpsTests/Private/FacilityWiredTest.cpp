@@ -472,6 +472,7 @@ bool FFacilityCapabilitySeamTest::RunTest(const FString&)
 	Placement.Heading = UE_DOUBLE_HALF_PI;
 	Placement.PoseRole = EServiceRole::Fuel;
 	Placement.Outline = Plot;
+	Placement.FrontageEdge = 0;   // the frontage is edge 0, Position its midpoint - see FEntityInstance::FrontageEdge
 	Placement.Modules = Owned;
 	const FEntityInstanceId Depot = Actor->Network->PlaceEntity(Placement);
 	if (!TestTrue(TEXT("setup: the depot is placed"), Depot.IsSet())) { return false; }
@@ -584,6 +585,7 @@ bool FFacilityCeilingIsTheSeatTest::RunTest(const FString&)
 		Placement.Heading = UE_DOUBLE_HALF_PI;
 		Placement.PoseRole = EServiceRole::Fuel;
 		Placement.Outline = Plot;
+		Placement.FrontageEdge = 0;   // the frontage is edge 0, Position its midpoint - see FEntityInstance::FrontageEdge
 		for (int32 I = 0; I < 50; ++I) { Placement.Modules.Add(Module); }
 		const FEntityInstanceId Depot = Actor->Network->PlaceEntity(Placement);
 		Actor->RebuildMesh();

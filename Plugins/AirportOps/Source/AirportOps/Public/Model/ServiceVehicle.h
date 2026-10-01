@@ -126,6 +126,19 @@ struct AIRPORTOPS_API FServiceVehicleType
 };
 
 /**
+ * How a vehicle came to be in a fleet: the two ways IN of FServiceFleet::Add. A UENUM since #487, when the vehicle began
+ * to carry it (FServiceVehicle::Origin) - it was a plain enum beside EFleetChange, which nothing reflected held.
+ */
+UENUM()
+enum class EFleetOrigin : uint8
+{
+	/** The player paid for it (UFacilityPurchases::BuyVehicle): charged the type's price, and worth its resale on the way out. */
+	Bought,
+	/** The starter fleet a placed depot begins with (Trucks > 0, SeedStarterFleets): free, and so worth nothing on the way out. */
+	Seeded
+};
+
+/**
  * One real vehicle. Owns its state, its cargo and its queue - user's ruling 1.
  *
  * EXISTS WHILE IDLE, which is the whole difference from what it replaced: a depot used to be an
@@ -148,6 +161,21 @@ struct AIRPORTOPS_API FServiceVehicle
 
 	/** The depot it belongs to and returns to - its facility, for fuel. */
 	UPROPERTY() FEntityInstanceId Home;
+
+	/**
+	 * HOW IT CAME (#487): only a vehicle the player BOUGHT is worth resale, which is what FServiceFleet::RefundOf reads it for.
+	 * SET WHERE THE VEHICLE IS MADE, FServiceFleet::Create - Add (the two ways in) and the test door AddForTest both make a vehicle
+	 * through it - so a writer anywhere else would be a second opinion on how a vehicle came.
+	 * ENFORCED BY: Check-Architecture rule 4 row 'FServiceVehicle::Origin write'
+	 * A removed depot used to credit the resale of every vehicle it held whatever its origin, so a
+	 * starter depot's free fleet paid out when it was bulldozed - and bulldozing then re-placing a plotless starter depot was a
+	 * repeatable money source.
+	 *
+	 * DEFAULTS TO Seeded, THE SAFE ANSWER: a vehicle nobody made through Add (a saved board from before this field) carries no
+	 * claim to a refund, and inventing one is the loop this closes. There are no player saves yet (owner ruling 2026-09-23), so
+	 * no save written before this field loses a real purchase; this is a layout break and the PR says so.
+	 */
+	UPROPERTY() EFleetOrigin Origin = EFleetOrigin::Seeded;
 
 	/**
 	 * WRITTEN ONLY BY FServiceVehicleLifecycle - with AgentId and CurrentJob, the three fields whose combination

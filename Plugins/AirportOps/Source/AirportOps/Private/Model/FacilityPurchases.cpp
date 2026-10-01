@@ -84,10 +84,12 @@ FText UFacilityPurchases::VehicleName(FName TypeCode) const
 	return JobBoard != nullptr ? JobBoard->Fleet().NameOf(TypeCode) : FText::FromName(TypeCode);
 }
 
-double UFacilityPurchases::RefundOf(FName TypeCode) const
+double UFacilityPurchases::RefundOf(const FServiceVehicle& Vehicle) const
 {
-	// THE FLEET'S OWN READ, so the card's "Sell" label and the credit the sale posts are one number.
-	return JobBoard != nullptr ? JobBoard->Fleet().ResaleOf(TypeCode) : 0.0;
+	// THE FLEET'S OWN READ, so the card's "Sell" label and the credit the sale posts are one number - and since #487 that number
+	// is the vehicle's, not its kind's: a starter vehicle is worth nothing, and the label says so rather than quoting money the
+	// ledger never gets.
+	return JobBoard != nullptr ? JobBoard->Fleet().RefundOf(Vehicle) : 0.0;
 }
 
 void UFacilityPurchases::LogRefused(int32 Depot, const FString& What, EPurchaseRefusal Why) const
@@ -224,7 +226,7 @@ FFacilityQuote UFacilityPurchases::Quote(const URoadNetwork& Network, FEntityIns
 		Row.VehicleId = Vehicle.Id;
 		Row.TypeCode = Vehicle.TypeCode;
 		Row.Line = JobBoard->VehicleLine(Vehicle, &Network);
-		Row.Refund = RefundOf(Vehicle.TypeCode);
+		Row.Refund = RefundOf(Vehicle);
 		Row.Refusal = JudgeSale(Vehicle.Id);
 		Row.SellLabel = FText::Format(LOCTEXT("SellLabel", "Sell {0}"), Money(Row.Refund));
 	}
@@ -314,7 +316,7 @@ FPurchaseResult UFacilityPurchases::SellVehicle(int32 VehicleId)
 	}
 	// THE REFUND, READ BEFORE THE REMOVE (which invalidates Vehicle): the fleet's door credits this same figure, posts the
 	// Fleet line and publishes FleetChanged{Sold}.
-	const double Refund = RefundOf(Vehicle->TypeCode);
+	const double Refund = RefundOf(*Vehicle);
 	if (!JobBoard->Fleet().Withdraw(VehicleId, EFleetReason::Sold, NowOrZero()))
 	{
 		// JudgeSale just said it could go; the door asks the same question (CanRemoveVehicle), so this is a race with

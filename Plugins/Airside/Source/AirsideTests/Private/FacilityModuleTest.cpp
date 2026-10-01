@@ -10,6 +10,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Tool/RoadEditTarget.h"
+#include "YardAgreement.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -34,6 +35,7 @@ namespace
 		Placement.Heading = UE_DOUBLE_HALF_PI;
 		Placement.PoseRole = EServiceRole::Fuel;
 		Placement.Outline = Plot;
+		Placement.FrontageEdge = 0;   // the frontage is edge 0, Position its midpoint - see FEntityInstance::FrontageEdge
 		Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
 		return Placement;
 	}
@@ -86,6 +88,121 @@ bool FDepotKitReservationOfTest::RunTest(const FString&)
 	const FEntityInstanceId Plotless = Actor->Network->PlaceEntity(Plain, Plain->Anchors, FVector2D(30000.0, 0.0), 0.0, 0.0, EServiceRole::Fuel, 1);
 	TestFalse(TEXT("a plotless depot reserves nothing - there is no ground to solve"),
 		DepotKit::ReservationOf(*Actor->Network->GetEntity(Plotless), Actor->ResolveDepotKits()).IsSet());
+	return true;
+}
+
+/**
+ * A BUILT DEPOT'S YARD IS SOLVED FROM THE FRONTAGE IT STORES, NOT FROM A GUESS (#450).
+ *
+ * DepotKit::ReservationOf used to RECOVER the frontage - the edge whose midpoint was nearest Position - which is exact only while
+ * Position stays the midpoint of the edge the gesture chose. The facade now stores the edge it was given
+ * (FEntityInstance::FrontageEdge), so this places a depot whose POSITION is the midpoint of edge 0 but whose stored frontage is the
+ * FAR edge 2: the old heuristic would solve edge 0 and face the yard at the road, the stored edge solves edge 2. Unset stores nothing
+ * to solve from, and an index that names no edge is the same answer.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDepotKitReservationOfReadsStoredFrontageTest, "Airside.Build.DepotKit.ReservationOfReadsTheStoredFrontage",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDepotKitReservationOfReadsStoredFrontageTest::RunTest(const FString&)
+{
+	UEntityDefinition* Definition = UEntityDefinition::MakeFuelDepotTransient();
+	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(nullptr);
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const TArray<FVector2D> Plot = FacilityModuleWidePlot();
+
+	const auto PlaceWithFrontageEdge = [&](int32 FrontageEdge)
+	{
+		FEntityPlacement Placement = FacilityModulePlacement(Definition, Plot);   // Position: the midpoint of edge 0
+		Placement.FrontageEdge = FrontageEdge;
+		return Net->PlaceEntity(Placement);
+	};
+
+	// THE PREMISE: the two edges solve to different yards - else "it read edge 2" and "it read edge 0" are the same answer.
+	const PlotYard::FReservation Edge0 = DepotKit::SolveYard(Plot, Plot[0], Plot[1], Definition, Specs);
+	const PlotYard::FReservation Edge2 = DepotKit::SolveYard(Plot, Plot[2], Plot[3], Definition, Specs);
+	if (!TestTrue(TEXT("the premise: both frontages reserve something"), Edge0.Stands.Num() > 0 && Edge2.Stands.Num() > 0)) { return false; }
+	if (!TestNotEqual(TEXT("and the near edge and the far edge solve different yards"), YardAgreement::Difference(Edge0, Edge2), FString())) { return false; }
+
+	const FEntityInstanceId FarFrontage = PlaceWithFrontageEdge(2);
+	const TOptional<PlotYard::FReservation> Far = DepotKit::ReservationOf(*Net->GetEntity(FarFrontage), Specs);
+	if (!TestTrue(TEXT("a depot storing its far edge solves"), Far.IsSet())) { return false; }
+	TestEqual(TEXT("and solves THAT edge, not the one whose midpoint its Position happens to be"),
+		YardAgreement::Difference(*Far, Edge2), FString());
+
+	const FEntityInstanceId NearFrontage = PlaceWithFrontageEdge(0);
+	const TOptional<PlotYard::FReservation> Near = DepotKit::ReservationOf(*Net->GetEntity(NearFrontage), Specs);
+	if (!TestTrue(TEXT("a depot storing its near edge solves"), Near.IsSet())) { return false; }
+	TestEqual(TEXT("and solves that one"), YardAgreement::Difference(*Near, Edge0), FString());
+
+	const FEntityInstanceId NoFrontage = PlaceWithFrontageEdge(INDEX_NONE);
+	TestFalse(TEXT("a depot with no stored frontage has nothing to solve from - the answer a plotless depot gives"),
+		DepotKit::ReservationOf(*Net->GetEntity(NoFrontage), Specs).IsSet());
+	const FEntityInstanceId OutOfRange = PlaceWithFrontageEdge(Plot.Num());
+	TestFalse(TEXT("an index that names no edge of its outline is the same answer, not a read past the array"),
+		DepotKit::ReservationOf(*Net->GetEntity(OutOfRange), Specs).IsSet());
+	return true;
+}
+
+/**
+ * A DEPOT SAVED BEFORE THE FRONTAGE WAS STORED KEEPS ITS YARD (#450).
+ *
+ * A level or a save written before FEntityInstance::FrontageEdge existed loads every plotted depot at INDEX_NONE, and ReservationOf
+ * (which no longer searches) would solve nothing for it: no yard, no fence, no pump - on the owner's authored maps. EnsureDepotFrontages
+ * is the one-shot migration, run by URoadNetwork::PostLoad for a level and by RepairLoadedNetwork for a save game (whose load is
+ * Serialize alone). The legacy depot here has its POSITION on the far edge's midpoint, so "the edge whose midpoint is Position" is edge
+ * 2, not the edge 0 a default would give; one that already stores an edge is left alone, and a stand and a plotless depot are untouched.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDepotFrontageMigrationTest, "Airside.Model.DepotFrontageMigration",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDepotFrontageMigrationTest::RunTest(const FString&)
+{
+	UEntityDefinition* Definition = UEntityDefinition::MakeFuelDepotTransient();
+	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(nullptr);
+	const TArray<FVector2D> Plot = FacilityModuleWidePlot();
+	const FVector2D FarMid = (Plot[2] + Plot[3]) * 0.5;
+
+	// A DEPOT AS A PRE-#450 LEVEL HOLDS IT: an outline and a Position, no stored frontage.
+	const auto PlaceLegacy = [&](URoadNetwork& Net, int32 StoredEdge)
+	{
+		FEntityPlacement Placement = FacilityModulePlacement(Definition, Plot);
+		Placement.Position = FarMid;
+		Placement.FrontageEdge = StoredEdge;
+		return Net.PlaceEntity(Placement);
+	};
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FEntityInstanceId Legacy = PlaceLegacy(*Net, INDEX_NONE);
+	const FEntityInstanceId AlreadyStored = PlaceLegacy(*Net, 1);   // Position on edge 2's midpoint, but it says edge 1: it is left alone
+	const FEntityInstanceId Plotless = Net->PlaceEntity(Definition, Definition->Anchors, FVector2D(30000.0, 0.0), 0.0, 0.0, EServiceRole::Fuel, 1);
+	UEntityDefinition* StandDefinition = NewObject<UEntityDefinition>(GetTransientPackage());
+	const FEntityInstanceId Stand = Net->PlaceEntity(StandDefinition, StandDefinition->Anchors, FVector2D(0.0, 30000.0), 0.0);
+	if (!TestEqual(TEXT("the premise: a legacy plotted depot stores no frontage"), Net->GetEntity(Legacy)->FrontageEdge, static_cast<int32>(INDEX_NONE))) { return false; }
+	TestFalse(TEXT("and so has nothing to solve from"), DepotKit::ReservationOf(*Net->GetEntity(Legacy), Specs).IsSet());
+
+	TestEqual(TEXT("the migration gives exactly the one legacy plotted depot a frontage"), Net->EnsureDepotFrontages(), 1);
+	TestEqual(TEXT("the edge whose midpoint is Position - the far edge, not edge 0"), Net->GetEntity(Legacy)->FrontageEdge, 2);
+	TestEqual(TEXT("a depot already storing an edge keeps it"), Net->GetEntity(AlreadyStored)->FrontageEdge, 1);
+	TestEqual(TEXT("a plotless depot stores none"), Net->GetEntity(Plotless)->FrontageEdge, static_cast<int32>(INDEX_NONE));
+	TestEqual(TEXT("and a stand stores none"), Net->GetEntity(Stand)->FrontageEdge, static_cast<int32>(INDEX_NONE));
+	TestEqual(TEXT("a second pass finds nothing to do"), Net->EnsureDepotFrontages(), 0);
+	const TOptional<PlotYard::FReservation> Migrated = DepotKit::ReservationOf(*Net->GetEntity(Legacy), Specs);
+	if (!TestTrue(TEXT("the migrated depot solves again"), Migrated.IsSet())) { return false; }
+	TestEqual(TEXT("and solves the yard its own frontage makes"),
+		YardAgreement::Difference(*Migrated, DepotKit::SolveYard(Plot, Plot[2], Plot[3], Definition, Specs)), FString());
+
+	// THE LEVEL'S LOAD: PostLoad runs the migration (unwired, an authored map loads its depots with no yard).
+	URoadNetwork* Loaded = NewObject<URoadNetwork>(GetTransientPackage());
+	const FEntityInstanceId LoadedDepot = PlaceLegacy(*Loaded, INDEX_NONE);
+	Loaded->PostLoad();
+	TestEqual(TEXT("PostLoad stores the legacy depot's frontage"), Loaded->GetEntity(LoadedDepot)->FrontageEdge, 2);
+
+	// A SAVE GAME'S LOAD, which is Serialize alone: the actor's repair runs the migration too.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->ClearNetwork();
+	const FEntityInstanceId SavedDepot = PlaceLegacy(*Actor->Network, INDEX_NONE);
+	Actor->RepairLoadedNetwork(ELoadedFrom::SaveGame);
+	TestEqual(TEXT("RepairLoadedNetwork stores the legacy depot's frontage for a save game"), Actor->Network->GetEntity(SavedDepot)->FrontageEdge, 2);
 	return true;
 }
 

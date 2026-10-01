@@ -12,6 +12,15 @@
  * a plot: what a closed outline commits to, what ctrl removes, and what the doomed preview
  * outlines. Those three are this interface; everything else is shared.
  *
+ * ONE CLIENT SINCE FPlotDrawTool WAS DELETED (#450, 2026-09-30): only FApronDrawTool implements this interface now, so the
+ * abstraction is a seam with nothing on its other side.
+ * ENFORCED BY: Check-Architecture rule 4 row 'IOutlineTarget / FOutlineDrawTool implementors' (ApronDrawTool.h alone)
+ *
+ * LEFT IN PLACE rather than folded into FApronDrawTool: the fold is a
+ * 324-line move of the state machine (OutlineDrawTool.cpp) plus FreeStartGuideTest's cast to FOutlineDrawTool, which is a
+ * refactor with its own diff and its own risk to the gesture's tests, and nothing in the repo names a second closing-polygon
+ * tool waiting to use it. Fold it the next time FApronDrawTool is touched; until then this note is the truth.
+ *
  * ONE STATE MACHINE AND NOT TWO, deliberately. A second copy of the closing rule and the
  * self-crossing rule would be two lists that must agree, and they would drift the first
  * time either was tuned - the player would meet one closing gesture on aprons and a subtly

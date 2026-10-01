@@ -8,6 +8,7 @@
 #include "Model/RoadNetwork.h"
 #include "Components/DynamicMeshComponent.h"
 #include "Present/RoadNetworkActor.h"
+#include "Present/RoadSurfacePresenter.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/ApronDrawTool.h"
 
@@ -276,22 +277,29 @@ bool FApronDrawToolTest::RunTest(const FString& Parameters)
 	{
 		Actor->ClearNetwork();
 
+		// THE PRESENTER'S OWN ANSWER for the actor's two figures: the actor's GetApronSurfaceZ forwarder was test-only (no production
+		// caller, and a BlueprintCallable no asset named) and went in #450 - a surface is built at what the presenter says.
+		const auto ApronSurfaceZ = [Actor]()
+		{
+			return Actor->GetPresenter()->GetApronSurfaceZ(Actor->SurfaceZ, Actor->ApronZOffset);
+		};
+
 		Actor->SurfaceZ = 1.0;
 		Actor->ApronZOffset = 4.0;
 
 		TestTrue(TEXT("a drop deeper than the road is high stays above the ground plane"),
-			Actor->GetApronSurfaceZ() > 0.0);
+			ApronSurfaceZ() > 0.0);
 		TestTrue(TEXT("and gives away at most half the height"),
-			FMath::IsNearlyEqual(Actor->GetApronSurfaceZ(), 0.5, 1e-9));
+			FMath::IsNearlyEqual(ApronSurfaceZ(), 0.5, 1e-9));
 
 		// With headroom the offset is honoured in full - the cap is a floor, not a policy.
 		Actor->SurfaceZ = 20.0;
 		TestTrue(TEXT("with headroom the full offset applies"),
-			FMath::IsNearlyEqual(Actor->GetApronSurfaceZ(), 16.0, 1e-9));
+			FMath::IsNearlyEqual(ApronSurfaceZ(), 16.0, 1e-9));
 
 		// Below the road, always: the taxiway has to win the depth test where they overlap.
 		TestTrue(TEXT("and the apron is always below the road"),
-			Actor->GetApronSurfaceZ() < Actor->SurfaceZ);
+			ApronSurfaceZ() < Actor->SurfaceZ);
 
 		// The mesh is built at that height, not at some second opinion of it.
 		Actor->SurfaceZ = 1.0;

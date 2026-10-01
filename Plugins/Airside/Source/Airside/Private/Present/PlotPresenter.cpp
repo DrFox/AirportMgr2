@@ -223,9 +223,9 @@ namespace
 			FVector(Where.X, Where.Y, BaseZ));
 	}
 
-	// RecoverFrontage MOVED to DepotKit (facility-upgrades spec, 2026-09-29), WHY comment with it:
-	// the purchase rules need the frontage this presenter draws with, through one solve -
-	// DepotKit::ReservationOf.
+	// RecoverFrontage MOVED to DepotKit (facility-upgrades spec, 2026-09-29) and was then DELETED (#450): the frontage
+	// is stored on the entity (FEntityInstance::FrontageEdge), not recovered, and the purchase rules need the frontage
+	// this presenter draws with, through one solve - DepotKit::ReservationOf.
 }
 
 void UPlotPresenter::Initialise(UInstancedStaticMeshComponent* InBoxes,
@@ -753,7 +753,7 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network,
 				TEXT("Plots: the plot gated at (%.0f, %.0f), %.1f x %.1f m (%s, %s), seats only %s - %d owned module(s) dropped"),
 				Entity.Position.X, Entity.Position.Y, Extents.GetSize().X / 100.0, Extents.GetSize().Y / 100.0,
 				*GetNameSafe(Entity.Definition),
-				*UEnum::GetValueAsString(Entity.Definition != nullptr ? Entity.Definition->Layout : EPlotLayout::Scatter),
+				*UEnum::GetValueAsString(DepotKit::LayoutOf(Entity.Definition)),
 				*DroppedKinds, PlotDropped);
 		}
 

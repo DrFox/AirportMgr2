@@ -168,6 +168,7 @@ bool FEveryFactMovesTheGuidelineRevisionTest::RunTest(const FString& Parameters)
 	Placement.Position = (Plot[0] + Plot[1]) * 0.5;
 	Placement.PoseRole = EServiceRole::Fuel;
 	Placement.Outline = Plot;
+	Placement.FrontageEdge = 0;   // the frontage is edge 0, Position its midpoint - see FEntityInstance::FrontageEdge
 	Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
 	FEntityInstanceId Depot;
 	Moves(TEXT("a depot placed"), [Net, &Placement, &Depot]() { Depot = Net->PlaceEntity(Placement); return Depot.IsSet(); });

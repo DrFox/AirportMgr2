@@ -23,6 +23,7 @@
 #include "Present/AirsideBuildingsActor.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/ToolReadout.h"
+#include "YardAgreement.h"
 #include "Model/SpeedProfile.h"
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
@@ -1721,6 +1722,7 @@ namespace
 		Placement.PoseRole = EServiceRole::Fuel;
 		Placement.Outline = { FVector2D(0.0, 0.0), FVector2D(3000.0, 0.0),
 		                      FVector2D(3000.0, 2400.0), FVector2D(0.0, 2400.0) };
+		Placement.FrontageEdge = 0;   // the frontage is edge 0, Position its midpoint - see FEntityInstance::FrontageEdge
 		Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank };
 		return Actor->Network->PlaceEntity(Placement).Index;
 	}
@@ -2239,6 +2241,99 @@ bool FSmallestAcceptedPlotSeatsStarterTest::RunTest(const FString& Parameters)
 	AddInfo(FString::Printf(TEXT("%s (%s kits): the smallest plot the tool accepts is %s; %d frontage(s) of %d accept one"),
 		*GetNameSafe(Definition), *GetNameSafe(Content), *Smallest, Accepted,
 		static_cast<int32>((4000.0 - PlotGesture::MinFrontageUu) / PlotGesture::FrontageStepUu) + 1));
+	return true;
+}
+
+/**
+ * THE TOOL'S PREVIEW, THE FACADE'S COMMIT AND THE BUILT DEPOT SOLVE ONE YARD, AS VALUES (#450).
+ *
+ * A depot yard's solve input - layout from the definition, gate = the frontage midpoint, seed = DepotYardSeed(gate), then Solve -
+ * was typed by hand at three sites that agreed only by comment (FPlotPlaceTool::ReservationFor, URoadEditFacade::ReserveForPlot,
+ * DepotKit::ReservationOf), and the tests beside it asked only whether each evaluator RAN. DepotKit::SolveYard is the one
+ * function now; this measures that the three answers are EQUAL, stand for stand, which is the property the preview exists to give.
+ *
+ * BOTH LAYOUTS, because the layout fallback is the part that drifted once already (a banded ghost, a scattered depot); and a
+ * CLOCKWISE plot through the facade, because the commit reverses a clockwise outline and swaps its frontage before it stores it,
+ * so a solve that read the winding would judge one yard and build another. The premise asserts each yard is non-empty: an
+ * equality of two empty reservations proves nothing.
+ *
+ * MUTATION-CHECKED 2026-09-30: swapping the frontage ends inside DepotKit::ReservationOf turns the built-yard comparisons red ("4
+ * stand(s) against 1"), and swapping them inside URoadEditFacade::ReserveForPlot turns the commit-judgement comparison red.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPlaceOneYardSolveTest,
+	"Airside.Tool.PlotPlace.ToolFacadeAndBuiltDepotSolveOneYard",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPlaceOneYardSolveTest::RunTest(const FString& Parameters)
+{
+	for (const EPlotLayout Layout : { EPlotLayout::FuelYardBands, EPlotLayout::Scatter })
+	{
+		const FString Named = Layout == EPlotLayout::FuelYardBands ? TEXT("bands") : TEXT("scatter");
+
+		FAirsideTestWorld TestWorld;
+		if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+		ARoadNetworkActor* Actor = TestWorld.Actor;
+		if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+		Actor->ClearNetwork();
+		Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+		Actor->FuelDepotDefinition->Layout = Layout;
+		LayServiceRoad(Actor, 0.0);
+		URoadEditFacade* Facade = Actor->GetEditFacade();
+		if (!TestNotNull(TEXT("a facade"), Facade)) { return false; }
+
+		// A 40 m x 30 m plot drawn with the tool to Confirm: room for the starter mix under either layout.
+		FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+		Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 200.0)));
+		TArray<FVector2D> Anchored;
+		Tool.Quad(PlotAt(Actor, FVector2D(0.0, 200.0)), Anchored);
+		if (!TestTrue(*FString::Printf(TEXT("%s: an anchor to draw from"), *Named), Anchored.Num() >= 1)) { return false; }
+		const FVector2D Anchor = Anchored[0];
+		Tool.OnClick(PlotAt(Actor, Anchor + FVector2D(4000.0, 0.0)));
+		Tool.OnClick(PlotAt(Actor, Anchor + FVector2D(4000.0, 3000.0)));
+		Tool.OnClick(PlotAt(Actor, Anchor + FVector2D(0.0, 3000.0)));
+		if (!TestEqual(*FString::Printf(TEXT("%s: all four corners pinned"), *Named),
+			static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Confirm))) { return false; }
+		const FToolContext Confirming = PlotAt(Actor, Anchor + FVector2D(0.0, 3000.0));
+		TArray<FVector2D> Shown;
+		Tool.Quad(Confirming, Shown);
+		if (!TestEqual(*FString::Printf(TEXT("%s: a confirmed plot has four corners"), *Named), Shown.Num(), 4)) { return false; }
+
+		// THE PREVIEW AND THE COMMIT'S JUDGEMENT, before anything is built.
+		const PlotYard::FReservation Previewed = Tool.GetReservationForTest(Confirming, Shown);
+		const PlotYard::FReservation Judged = Facade->ReserveForPlot(Shown, Shown[0], Shown[1], EPlaceableEntity::FuelDepot);
+		if (!TestTrue(*FString::Printf(TEXT("%s: the premise - the plot reserves something, or equality proves nothing"), *Named),
+			Previewed.Stands.Num() > 0)) { return false; }
+		TestEqual(*FString::Printf(TEXT("%s: the tool's preview and the facade's commit judgement are one yard"), *Named),
+			YardAgreement::Difference(Previewed, Judged), FString());
+
+		// THE BUILT ENTITY'S OWN SOLVE, the one the presenter and the purchase rules read.
+		Tool.OnCommit(Confirming);
+		const FEntityInstance* Built = nullptr;
+		for (const FEntityInstance& Entity : Actor->Network->GetEntities())
+		{
+			if (Entity.bAlive && Entity.IsDepot() && Entity.IsPlotted()) { Built = &Entity; }
+		}
+		if (!TestNotNull(*FString::Printf(TEXT("%s: the commit built a depot"), *Named), Built)) { return false; }
+		const TOptional<PlotYard::FReservation> Rebuilt = DepotKit::ReservationOf(*Built, Actor->ResolveDepotKits());
+		if (!TestTrue(*FString::Printf(TEXT("%s: the built depot solves"), *Named), Rebuilt.IsSet())) { return false; }
+		TestEqual(*FString::Printf(TEXT("%s: and what was previewed is what was built - the yard the preview promised"), *Named),
+			YardAgreement::Difference(Previewed, *Rebuilt), FString());
+
+		// A CLOCKWISE PLOT THROUGH THE FACADE: judged as given, built reversed with its frontage swapped.
+		const FVector2D Away(30000.0, 20000.0);
+		const TArray<FVector2D> Clockwise = { Away, Away + FVector2D(0.0, 3000.0), Away + FVector2D(4000.0, 3000.0), Away + FVector2D(4000.0, 0.0) };
+		if (!TestTrue(*FString::Printf(TEXT("%s: the premise - this outline is clockwise"), *Named), RoadGeom::PolygonArea(Clockwise) < 0.0)) { return false; }
+		const PlotYard::FReservation JudgedClockwise = Facade->ReserveForPlot(Clockwise, Clockwise[0], Clockwise[1], EPlaceableEntity::FuelDepot);
+		const int32 Index = Actor->PlaceEntityInPlot(Clockwise, Clockwise[0], Clockwise[1], TArray<EDepotModule>(), EPlaceableEntity::FuelDepot);
+		if (!TestTrue(*FString::Printf(TEXT("%s: the clockwise plot is placed"), *Named), Index != INDEX_NONE)) { return false; }
+		const FEntityInstance* BuiltClockwise = Actor->Network->GetEntity(Actor->Network->EntityIdAt(Index));
+		if (!TestNotNull(*FString::Printf(TEXT("%s: and reads back"), *Named), BuiltClockwise)) { return false; }
+		const TOptional<PlotYard::FReservation> RebuiltClockwise = DepotKit::ReservationOf(*BuiltClockwise, Actor->ResolveDepotKits());
+		if (!TestTrue(*FString::Printf(TEXT("%s: the built clockwise depot solves"), *Named), RebuiltClockwise.IsSet())) { return false; }
+		TestEqual(*FString::Printf(TEXT("%s: a clockwise plot is judged and built as ONE yard - the winding reversal moves nothing"), *Named),
+			YardAgreement::Difference(JudgedClockwise, *RebuiltClockwise), FString());
+	}
 	return true;
 }
 

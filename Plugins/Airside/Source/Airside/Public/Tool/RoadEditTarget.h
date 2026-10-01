@@ -511,6 +511,10 @@ public:
 	 *
 	 * INDEX_NONE when the plot has no road frontage or is smaller than one bay. The facade
 	 * logs which; see URoadEditFacade::PlaceEntityInPlot.
+	 *
+	 * FrontageA/FrontageB MUST BE THE TWO ENDS OF ONE EDGE OF Outline, in Outline's own order (#450): the facade stores that
+	 * edge's index on the entity (FEntityInstance::FrontageEdge), so a frontage that is no edge of its outline is refused
+	 * rather than guessed at.
 	 */
 	virtual int32 PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 		FVector2D FrontageA, FVector2D FrontageB,

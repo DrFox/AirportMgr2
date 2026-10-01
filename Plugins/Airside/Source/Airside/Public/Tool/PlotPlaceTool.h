@@ -120,6 +120,18 @@ public:
 	TArray<PlotYard::FKitSpec> GetSpecsForTest() const { return Specs; }
 
 	/**
+	 * What this tool would show for Outline - ReservationFor's own answer, through its memo and its specs.
+	 *
+	 * FOR TESTS ONLY - #450. Airside.Tool.PlotPlace.ToolFacadeAndBuiltDepotSolveOneYard compares it AS VALUES with the facade's
+	 * ReserveForPlot and DepotKit::ReservationOf over the built entity. Until then each evaluator was only shown to have RUN
+	 * (GetSolveCountForTest, PlotEvaluatorCountForTest), which passes whether or not they agree.
+	 */
+	PlotYard::FReservation GetReservationForTest(const FToolContext& Context, TArrayView<const FVector2D> Outline) const
+	{
+		return ReservationFor(Context, Outline);
+	}
+
+	/**
 	 * The plot as it stands THIS frame: pinned corners as placed, the moving one taken from
 	 * the cursor, in the outline's own winding with the frontage as edge 0->1.
 	 *

@@ -264,18 +264,92 @@ bool FFleetEveryChangeOwesTheSameTest::RunTest(const FString&)
 	Expect({ TEXT("seeded"), EFleetChange::Seeded, 0.0 }, Seeded, Balance, Fleet, Composition);
 	TestEqual(TEXT("seeded: and it posted no ledger line at all"), Ledger->Entries().Num(), 1);
 
+	// THE BOUGHT VEHICLE IS THE ONE SOLD, AND THE SEEDED ONE THE ONE THAT LEAVES WITH ITS DEPOT (#487): only a vehicle the player
+	// bought is worth resale, so a sale of the seeded one would post nothing and this row would no longer show a sale's credit. The
+	// starter vehicle's way out is asserted as what it is now - announced, counted, and worth nothing.
 	Balance = Ledger->Balance(); Fleet = Board->GetFleetRevision(); Composition = Board->GetFleetCompositionRevision();
-	TestTrue(TEXT("sold: an idle vehicle leaves"), Board->Fleet().Withdraw(Seeded, EFleetReason::Sold, 20.0));
-	Expect({ TEXT("sold"), EFleetChange::Sold, 12500.0 }, Seeded, Balance, Fleet, Composition);
+	TestTrue(TEXT("sold: an idle vehicle leaves"), Board->Fleet().Withdraw(Bought, EFleetReason::Sold, 20.0));
+	Expect({ TEXT("sold"), EFleetChange::Sold, 45000.0 }, Bought, Balance, Fleet, Composition);
 
 	Balance = Ledger->Balance(); Fleet = Board->GetFleetRevision(); Composition = Board->GetFleetCompositionRevision();
-	TestTrue(TEXT("withdrawn: a vehicle leaves with its depot"), Board->Fleet().Withdraw(Bought, EFleetReason::DepotRemoved, 30.0));
-	Expect({ TEXT("withdrawn"), EFleetChange::Withdrawn, 45000.0 }, Bought, Balance, Fleet, Composition);
-	TestEqual(TEXT("every posting is a Fleet line, and a seeded vehicle posted none: buy, sale, removal"), Ledger->Entries().Num(), 3);
+	TestTrue(TEXT("withdrawn: a vehicle leaves with its depot"), Board->Fleet().Withdraw(Seeded, EFleetReason::DepotRemoved, 30.0));
+	Expect({ TEXT("withdrawn"), EFleetChange::Withdrawn, 0.0 }, Seeded, Balance, Fleet, Composition);
+	TestEqual(TEXT("every posting is a Fleet line, and a seeded vehicle posted none, in or out: buy, sale"), Ledger->Entries().Num(), 2);
 	for (const FLedgerEntry& Entry : Ledger->Entries())
 	{
 		TestEqual(TEXT("filed under Fleet"), static_cast<int32>(Entry.Category), static_cast<int32>(ELedgerCategory::Fleet));
 	}
+	return true;
+}
+
+/**
+ * ONLY WHAT THE PLAYER BOUGHT FETCHES RESALE (#487).
+ *
+ * Withdraw credited ResaleOf whatever a vehicle's origin, so a starter depot's free fleet paid out when the depot was bulldozed - and
+ * bulldozing then re-placing a plotless starter depot (Trucks > 0; the player's own plots have Trucks 0, R3) was a repeatable money
+ * source. A vehicle now carries how it came (FServiceVehicle::Origin) and FServiceFleet::RefundOf is the one read of it. Three cases:
+ * a seeded depot bulldozed (the ledger does not move), a depot holding one bought and one seeded vehicle (only the bought one pays -
+ * the resale it always did), and a SOLD seeded vehicle (the card's label reads the same RefundOf, so it cannot promise what the
+ * ledger never gets).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFleetSeededVehicleFetchesNothingTest, "AirportOps.Model.Fleet.SeededVehicleFetchesNothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFleetSeededVehicleFetchesNothingTest::RunTest(const FString&)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	USimClock* Clock = NewObject<USimClock>(GetTransientPackage());
+	ULedger* Ledger = NewObject<ULedger>(GetTransientPackage());
+	Ledger->Clock = Clock;
+	Ledger->Open(500000.0);
+	UJobBoard* Board = FleetBoardWithSpecs();
+	Board->Ledger = Ledger;
+	Board->StarterFleet = { TEXT("FUEL"), TEXT("UTILITY") };
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+
+	// 1. A SEEDED STARTER DEPOT, BULLDOZED: the ledger does not move.
+	const FEntityInstanceId Starter = Net->PlaceEntity(Depot, Depot->Anchors, FVector2D(0.0, 0.0), 0.0, 0.0, EServiceRole::Fuel, 1);
+	Board->TickForTest(*Traffic, *Net, *Clock);
+	if (!TestEqual(TEXT("setup: the starter depot was seeded with one truck of each kind"), Board->VehiclesAt(Starter), 2)) { return false; }
+	for (const FServiceVehicle& Vehicle : Board->GetVehicles())
+	{
+		TestEqual(TEXT("setup: and each came as Seeded"), static_cast<int32>(Vehicle.Origin), static_cast<int32>(EFleetOrigin::Seeded));
+	}
+	const double BalanceBeforeBulldoze = Ledger->Balance();
+	const int32 EntriesBeforeBulldoze = Ledger->Entries().Num();
+	Net->RemoveEntity(Starter);
+	Board->TickForTest(*Traffic, *Net, *Clock);
+	TestEqual(TEXT("the seeded vehicles left with their depot"), Board->GetVehicles().Num(), 0);
+	TestEqual(TEXT("and the ledger did not move: a bulldozed starter depot pays nothing for the fleet it was given"),
+		Ledger->Balance(), BalanceBeforeBulldoze, 1e-9);
+	TestEqual(TEXT("and posted no line at all"), Ledger->Entries().Num(), EntriesBeforeBulldoze);
+
+	// 2. A DEPOT HOLDING ONE BOUGHT VEHICLE AND ITS SEEDED FLEET: only the bought one pays, at the resale it always did.
+	const FEntityInstanceId Mixed = Net->PlaceEntity(Depot, Depot->Anchors, FVector2D(9000.0, 0.0), 0.0, 0.0, EServiceRole::Fuel, 1);
+	Board->TickForTest(*Traffic, *Net, *Clock);
+	if (!TestEqual(TEXT("setup: the second starter depot is seeded too"), Board->VehiclesAt(Mixed), 2)) { return false; }
+	const int32 BoughtId = Board->Fleet().Add(TEXT("FUEL"), Mixed, EFleetOrigin::Bought, 0.0);
+	if (!TestTrue(TEXT("setup: and the player buys a bowser for it"), BoughtId != 0)) { return false; }
+	const double BalanceBeforeMixed = Ledger->Balance();
+	const int32 EntriesBeforeMixed = Ledger->Entries().Num();
+	Net->RemoveEntity(Mixed);
+	Board->TickForTest(*Traffic, *Net, *Clock);
+	TestEqual(TEXT("all three left with the depot"), Board->GetVehicles().Num(), 0);
+	TestEqual(TEXT("and the ledger gained exactly the bought bowser's resale, Price x ResaleFraction - the seeded two added nothing"),
+		Ledger->Balance() - BalanceBeforeMixed, 45000.0, 1e-6);
+	TestEqual(TEXT("in one line"), Ledger->Entries().Num(), EntriesBeforeMixed + 1);
+
+	// 3. A SOLD SEEDED VEHICLE: worth nothing, and the quote says so.
+	const FEntityInstanceId Third = Net->PlaceEntity(Depot, Depot->Anchors, FVector2D(18000.0, 0.0), 0.0, 0.0, EServiceRole::Fuel, 1);
+	Board->TickForTest(*Traffic, *Net, *Clock);
+	const FServiceVehicle* Seeded = nullptr;
+	for (const FServiceVehicle& Vehicle : Board->GetVehicles()) { if (Vehicle.Home == Third) { Seeded = &Vehicle; } }
+	if (!TestNotNull(TEXT("setup: the third depot's seeded vehicle"), Seeded)) { return false; }
+	const int32 SeededId = Seeded->Id;
+	TestEqual(TEXT("its refund, as the card's Sell label and the sale both read it, is nothing"), Board->Fleet().RefundOf(*Seeded), 0.0, 1e-9);
+	const double BalanceBeforeSale = Ledger->Balance();
+	TestTrue(TEXT("an idle seeded vehicle still sells"), Board->Fleet().Withdraw(SeededId, EFleetReason::Sold, 0.0));
+	TestEqual(TEXT("and the ledger did not move"), Ledger->Balance(), BalanceBeforeSale, 1e-9);
 	return true;
 }
 

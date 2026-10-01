@@ -35,7 +35,7 @@ class AIRSIDE_API URoadNetwork : public UObject
 
 public:
 	/**
-	 * Super::PostLoad() then EnsureStandOutlines() and EnsureStandNumbers() - see those
+	 * Super::PostLoad() then EnsureStandOutlines(), EnsureStandNumbers() and EnsureDepotFrontages() - see those
 	 * functions. The only override this class had until Serialize (below, #426) joined it
 	 * - and a LEVEL'S load only: a save game's load is Serialize alone, which is why
 	 * ARoadNetworkActor::RepairLoadedNetwork runs the pair again. Needed because
@@ -858,6 +858,23 @@ public:
 	 * the exact PostLoad path. ENFORCED BY: Airside.Model.StandNumbers.
 	 */
 	int32 EnsureStandNumbers();
+
+	/**
+	 * Store the frontage edge of every alive plotted depot that has none: the edge whose midpoint is nearest Position. Returns how
+	 * many it gave one; logs LogAirside when more than zero. A LOAD MIGRATION, like EnsureStandOutlines and EnsureStandNumbers
+	 * beside it, for a level or a save written before FEntityInstance::FrontageEdge existed (#450) - which loads every plotted
+	 * depot at INDEX_NONE, so DepotKit::ReservationOf would solve nothing and the depot would stand with no yard, no fence and no pump.
+	 *
+	 * THE OLD HEURISTIC, RUN ONCE HERE AT LOAD, which is the point: PlaceEntityInPlot stored Position as the midpoint of the
+	 * frontage edge, so the edge whose midpoint IS Position is that edge by construction - exact for every depot the facade ever
+	 * placed, and the only fact a pre-#450 depot kept. The reader, DepotKit::ReservationOf, reads the stored edge instead of searching.
+	 * ENFORCED BY: Airside.Build.DepotKit.ReservationOfReadsTheStoredFrontage (a reader that searched would solve the wrong edge there)
+	 *
+	 * It leaves an edge already stored alone, so it is idempotent, and it never touches a stand or a plotless depot. Public beside its
+	 * siblings so a test can drive the exact PostLoad path.
+	 * ENFORCED BY: Airside.Model.DepotFrontageMigration (the migration and its two load paths)
+	 */
+	int32 EnsureDepotFrontages();
 
 	/** The number the next placed stand will be issued. See NextStandNumber. */
 	int32 GetNextStandNumber() const { return NextStandNumber; }

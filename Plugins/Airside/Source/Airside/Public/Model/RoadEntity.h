@@ -324,6 +324,52 @@ struct AIRSIDE_API FEntityInstance
 	UPROPERTY() TArray<FVector2D> Outline;
 
 	/**
+	 * Which edge of Outline is the plot's FRONTAGE - the one on the road - as the index i of the edge
+	 * Outline[i] -> Outline[(i + 1) % Num]. INDEX_NONE for a plop with no plot and for a stand, whose
+	 * entrance the stand code still finds by its own rule (#450 stored the depot's frontage and left those readers).
+	 *
+	 * STORED, NOT RECOVERED. A plotted depot's frontage was a fact the gesture knew and the entity
+	 * forgot, so three readers each re-derived it by their own heuristic (the depot by the edge whose
+	 * midpoint is nearest Position, the stand cache by the rearmost midpoint, the stand paint by the
+	 * rearmost corner) and agreed only while a comment said they would. The facade writes the edge it was
+	 * GIVEN (URoadEditFacade::PlaceEntityInPlot), so DepotKit::ReservationOf hands the solve exactly what
+	 * the tool's preview and the commit handed it.
+	 * ENFORCED BY: Check-Architecture rule 4 row 'FEntityInstance::FrontageEdge write' (the facade, PlaceEntity's copy and
+	 * EnsureDepotFrontages are the only production writers)
+	 *
+	 * ASKING FAnchorLink AGAIN WAS REJECTED, as the old recovery's comment said: it would search the live
+	 * graph, so a road laid or deleted after the depot was built could move the frontage, and every shed
+	 * in the yard would jump to a new edge without the player touching the depot. Where the thing faces
+	 * was decided when it was placed, and it stays decided.
+	 *
+	 * An INDEX INTO Outline, so a rewrite of Outline must rewrite this with it (a placed plot is not edited
+	 * today, and the day one is, this is what to move); FEntityInstance::GetFrontage checks the index is still
+	 * in range before it reads. A level or a save written before this field loads every plotted depot at
+	 * INDEX_NONE; URoadNetwork::EnsureDepotFrontages (PostLoad, and ARoadNetworkActor::RepairLoadedNetwork for a
+	 * save game) stores the edge once, so the authored maps keep their yards. Until then, unsolvable - the same
+	 * answer a plotless depot gives.
+	 */
+	UPROPERTY() int32 FrontageEdge = INDEX_NONE;
+
+	/**
+	 * The frontage edge's two ends, in Outline's own order (the order PlotYard::InwardOf reads the
+	 * interior side from). False, with both left at zero, when no frontage is stored or the index no
+	 * longer names an edge.
+	 */
+	bool GetFrontage(FVector2D& OutA, FVector2D& OutB) const
+	{
+		OutA = FVector2D::ZeroVector;
+		OutB = FVector2D::ZeroVector;
+		if (!Outline.IsValidIndex(FrontageEdge) || Outline.Num() < 3)
+		{
+			return false;
+		}
+		OutA = Outline[FrontageEdge];
+		OutB = Outline[(FrontageEdge + 1) % Outline.Num()];
+		return true;
+	}
+
+	/**
 	 * Has a drawn outline - a depot plot OR a drawn stand. The one test for "was this drawn
 	 * rather than stamped", so a count is not re-spelled at each new call site.
 	 *
@@ -422,6 +468,9 @@ struct AIRSIDE_API FEntityPlacement
 	/** The drawn plot, world space, implicitly closed. Empty for an ordinary plop. */
 	TArray<FVector2D> Outline;
 
+	/** Which edge of Outline is the frontage - see FEntityInstance::FrontageEdge. INDEX_NONE for a plop and a stand. */
+	int32 FrontageEdge = INDEX_NONE;
+
 	/** What fills the bays, in bay order. Empty for an ordinary plop. */
 	TArray<EDepotModule> Modules;
 
@@ -429,8 +478,9 @@ struct AIRSIDE_API FEntityPlacement
 	 * How far along Heading the pose NODE stands from Position, uu. Zero - on Position - for
 	 * everything but a drawn depot.
 	 *
-	 * A DEPOT'S Position IS ITS GATE and stays its gate: the fence's gap, the frontage the
-	 * presenter recovers and the yard's seed are all read off it. Its NODE is where its trucks
+	 * A DEPOT'S Position IS ITS GATE and stays its gate: the fence's gap reads Position, and the yard's seed
+	 * reads the midpoint of the stored frontage (FrontageEdge), which PlaceEntityInPlot makes equal to Position
+	 * - two reads that agree because the facade stored them so, not one read of one value. Its NODE is where its trucks
 	 * live and leave from, and on the gate that was on the kerb - too close to the road for the
 	 * truck to turn out onto it (FAnchorLink::PoseSetbackFor). So the two part company here, and
 	 * only here.

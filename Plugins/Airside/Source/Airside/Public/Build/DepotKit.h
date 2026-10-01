@@ -55,11 +55,12 @@ AIRSIDE_API FString DepotKitLabel(EDepotModule Module);
 /**
  * The seed that lays out the yard of a depot posed at Where.
  *
- * ONE FUNCTION, TWO CALLERS, and the agreement is the whole point: UPlotPresenter seeds off
- * the placed entity's Position, and FPlotPlaceTool's readout seeds off the midpoint of the
- * frontage it is dragging - which is the value URoadEditFacade::PlaceEntityInPlot will store
- * as that Position. Same seed, same yard, so the count previewed is the count built. Two
- * copies of this arithmetic would be a preview quietly describing a different depot.
+ * ONE CALLER SINCE #450, and the agreement is the whole point: DepotKit::SolveYard seeds every yard - the
+ * tool's preview, the facade's commit and the built depot's presenter - off the midpoint of the frontage it
+ * is given, which is the value URoadEditFacade::PlaceEntityInPlot stores as the entity's Position. Same
+ * seed, same yard, so the count previewed is the count built. Two copies of this arithmetic would be a
+ * preview quietly describing a different depot.
+ * ENFORCED BY: Check-Architecture rule 4 row 'DepotYardSeed' (DepotKit.cpp, SolveYard's own call, is the one production caller)
  *
  * QUANTISED to whole uu: a float that came back from a save one bit different would re-roll
  * that depot and only that depot, which is the kind of bug that takes a day.
@@ -67,6 +68,8 @@ AIRSIDE_API FString DepotKitLabel(EDepotModule Module);
 AIRSIDE_API int32 DepotYardSeed(FVector2D Where);
 
 class URoadNetwork;
+class UEntityDefinition;
+enum class EPlotLayout : uint8;
 
 /**
  * DepotKit's own true namespace, holding only ReportIncomplete (#306) - every OTHER symbol
@@ -104,16 +107,42 @@ namespace DepotKit
 	AIRSIDE_API void ReportIncomplete(const URoadNetwork& Network, TArrayView<const PlotYard::FKitSpec> Specs = {});
 
 	/**
-	 * Which edge of a placed plot is its frontage, recovered from the entity alone. MOVED FROM
-	 * PlotPresenter.cpp's anonymous namespace (facility-upgrades spec) with its WHY comment in the .cpp:
-	 * the purchase rules need the same answer the presenter draws with.
+	 * The layout a depot definition asks for; the scatter when there is none. THE FALLBACK IS TYPED HERE, AND IN NO OTHER
+	 * PRODUCTION FILE.
+	 * ENFORCED BY: Check-Architecture rule 4 row 'EPlotLayout fallback ternary'
+	 *
+	 * It was a ternary in the tool, another in the facade and a third in ReservationOf, and the tool's
+	 * copy drifted once already (DA_FuelDepot was authored before EPlotLayout existed, so it carried the
+	 * Scatter default while the tool's own Kind map said FuelYardBands: the player dragged out a banded ghost
+	 * and got a scattered depot). The tool reads it too, as the extra key of its memo, which is why it is
+	 * public. A definition the caller cannot resolve falls back to the scatter, which is what an unauthored
+	 * plot type would have drawn anyway.
 	 */
-	AIRSIDE_API bool RecoverFrontage(const FEntityInstance& Entity, FVector2D& OutA, FVector2D& OutB);
+	AIRSIDE_API EPlotLayout LayoutOf(const UEntityDefinition* Definition);
+
+	/**
+	 * THE ONE YARD SOLVE (#450): layout from Definition (LayoutOf), gate = the frontage's midpoint, seed =
+	 * DepotYardSeed(gate), then PlotLayoutFor(layout)->Solve. It was hand-assembled at three sites that agreed
+	 * only by comment - the tool's preview (FPlotPlaceTool::ReservationFor), the facade's commit
+	 * (URoadEditFacade::ReserveForPlot) and the built yard (ReservationOf below) - each typing its own FPlotSite.
+	 *
+	 * FRONTAGE IS GIVEN, NEVER SEARCHED FOR: the ends of the edge on the road, in Outline's winding
+	 * (PlotYard::InwardOf reads the interior side from that direction, so they travel with the outline).
+	 * Outline is a VIEW and must outlive the call, as FPlotSite::Outline's own comment says.
+	 *
+	 * THE GATE IS DERIVED, NOT PASSED: it is the pose URoadEditFacade::PlaceEntityInPlot stores, and a caller
+	 * that could pass another would be the drift this function exists to stop.
+	 * ENFORCED BY: Airside.Tool.PlotPlace.ToolFacadeAndBuiltDepotSolveOneYard; Check-Architecture rule 4 row 'FPlotSite'
+	 */
+	AIRSIDE_API PlotYard::FReservation SolveYard(TArrayView<const FVector2D> Outline,
+		FVector2D FrontageA, FVector2D FrontageB, const UEntityDefinition* Definition,
+		TArrayView<const PlotYard::FKitSpec> Specs);
 
 	/**
 	 * Everything a PLACED plotted depot's plot has room for - the SAME solve UPlotPresenter::RebuildFrom
-	 * draws from (its definition's layout, the recovered frontage, the pose as gate and seed). Unset for
-	 * anything that is not a live plotted depot, or whose frontage cannot be recovered.
+	 * draws from: SolveYard over the entity's own outline, its STORED frontage (FEntityInstance::FrontageEdge,
+	 * written by the facade from the edge it was given) and its definition. Unset for anything that is not a
+	 * live plotted depot, or that stores no frontage.
 	 *
 	 * ONE SOLVE, TWO READERS: the presenter's lit/ghosted bays and UFacilityPurchases' "free reserved
 	 * slot" (R9) are one fact, so a Buy shed that lights nothing cannot happen. Modules play no part -

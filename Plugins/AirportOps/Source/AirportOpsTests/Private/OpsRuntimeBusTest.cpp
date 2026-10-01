@@ -1136,6 +1136,16 @@ bool FOpsRuntimeFleetToastsTest::RunTest(const FString&)
 	Runtime->GetBus().Publish(FFleetChangedEvent{ 1, 9, TEXT("FUEL"), EFleetChange::Sold, 45000.0 });
 	Runtime->Tick(0.0);
 	TestEqual(TEXT("and a purchase and a sale still toast, as before"), Listener->CountOf(TEXT("note:")), Before + 3);
+	TestTrue(TEXT("a paid sale names its money"), Listener->Seen.Last().Contains(TEXT("\u2014")));
+
+	// A SALE WORTH NOTHING (#487: a seeded vehicle fetches no resale) toasts without a figure, as a removal that credited nothing
+	// says "withdrawn" rather than "credited $0".
+	Runtime->GetBus().Publish(FFleetChangedEvent{ 1, 10, TEXT("FUEL"), EFleetChange::Sold, 0.0 });
+	Runtime->Tick(0.0);
+	if (!TestEqual(TEXT("a worthless sale still toasts"), Listener->CountOf(TEXT("note:")), Before + 4)) { return false; }
+	const FString Worthless = Listener->Seen.Last();
+	TestTrue(FString::Printf(TEXT("and says the vehicle was sold ('%s')"), *Worthless), Worthless.Contains(TEXT("Sold")));
+	TestFalse(TEXT("without the em dash and a $0 after it"), Worthless.Contains(TEXT("\u2014")));
 	return true;
 }
 
