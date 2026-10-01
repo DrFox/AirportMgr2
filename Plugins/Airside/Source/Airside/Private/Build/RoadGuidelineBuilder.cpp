@@ -333,7 +333,12 @@ namespace
 					// Acute, folded from AngleBetween rather than acos(|dot|) - Check-Architecture rule 18.
 					const double AxisCrossing = RoadGeom::AngleBetween(Axis, RunwayAxis);
 					const double AxisAngle = FMath::Min(AxisCrossing, UE_DOUBLE_PI - AxisCrossing);
-					Length = FMath::Max(Length, ExitGeometry::TaxiwayEndFloor(RunwayHalfWidth, TaxiwayHalfWidth, AxisAngle));
+					// ONE RUNWAY ARM IS THE RUNWAY'S END: the slab lies on one side of the node
+					// only, and a taxiway leaving away from it clears it at the end line, not
+					// the side - see TaxiwayEndFloorAtRunwayEnd for the 81 m bar this replaced.
+					Length = FMath::Max(Length, ContinuousArms == 1
+						? ExitGeometry::TaxiwayEndFloorAtRunwayEnd(RunwayHalfWidth, TaxiwayHalfWidth, RunwayAxis, Axis)
+						: ExitGeometry::TaxiwayEndFloor(RunwayHalfWidth, TaxiwayHalfWidth, AxisAngle));
 
 					// AND NEVER INSIDE THE FLARE: at least the pavement cut, which is where the
 					// ribbon begins at the taxiway's own width. Between the runway and that cut
@@ -358,6 +363,25 @@ namespace
 							TEXT("Taxiway segment %d is shorter than its own cut at the runway (%.0f uu of %.0f): ")
 							TEXT("its holding position stays at %.0f, inside the flare"),
 							ArmSeg.Index, ArmLength, Cut, Length);
+					}
+
+					// NEVER PAST ITS OWN TAXIWAY. The floors above are distances from the
+					// junction, blind to how long the arm is; the end is placed along the arm's
+					// tangent from the node, so a floor longer than the arm put the guideline end
+					// - and the holding position on it - out in the grass beyond the far node, and
+					// the route drove there and back (samples/colours.png). At the far cut at most:
+					// short of it is pavement this taxiway owns. A GUARD, unreached on 2026-10-01:
+					// the in-line runway end was the one floor that outran its arm, and
+					// TaxiwayEndFloorAtRunwayEnd now answers it; a side stub short enough to need
+					// this is shorter than its own corner cut and fails to solve first.
+					const double Room = ArmLength - (bEndA ? Arm->TrimB : Arm->TrimA);
+					if (Room > 0.0 && Length > Room)
+					{
+						UE_LOG(LogAirside, Warning,
+							TEXT("Taxiway segment %d is too short to clear the runway: its holding position wants %.0f uu ")
+							TEXT("from the junction and the taxiway has %.0f; it stays at %.0f. Draw it longer."),
+							ArmSeg.Index, Length, Room, Room);
+						Length = Room;
 					}
 				}
 				if (Length <= 0.0)

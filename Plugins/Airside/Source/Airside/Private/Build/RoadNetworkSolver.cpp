@@ -184,6 +184,24 @@ namespace
 			OutArmSegments.Add(SegmentId);
 		}
 
+		// A TAXIWAY CARRYING ON FROM A RUNWAY'S END, IN LINE, IS STRAIGHT THROUGH: the runway arm
+		// is solved on the taxiway's line, so its end edge squares to the taxiway and the node is
+		// the width step every straight node is. As a corner it has no answer - see
+		// ExitGeometry::IsInLineAtRunwayEnd. Bending the runway's ARM, not the taxiway's: the
+		// runway's cut vertices are its end edge and nothing else, while the taxiway's ribbon and
+		// guidelines must stay on the line the player drew. Only the edge's direction moves; the
+		// ribbon is still welded to these exact cut vertices, as every arm's is.
+		// ENFORCED BY: Airside.Build.RunwayEnd.InLineEndIsPaved
+		if (OutInput.Arms.Num() == 2 && OutInput.Arms[0].bContinuous != OutInput.Arms[1].bContinuous)
+		{
+			FJunctionArm& Runway = OutInput.Arms[0].bContinuous ? OutInput.Arms[0] : OutInput.Arms[1];
+			const FJunctionArm& Taxiway = OutInput.Arms[0].bContinuous ? OutInput.Arms[1] : OutInput.Arms[0];
+			if (ExitGeometry::IsInLineAtRunwayEnd(Runway.Tangent, Taxiway.Tangent))
+			{
+				Runway.Tangent = -Taxiway.Tangent;
+			}
+		}
+
 		// A BEND RUNS AT ONE WIDTH, THE WIDER (2026-09-25): a two-arm service-road bend whose arms
 		// differ in width is solved as if both were the wider, so its fillets, its arcs and its lanes
 		// are one bend's; the narrower arm keeps its own ribbon width at its cut

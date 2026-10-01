@@ -2,6 +2,7 @@
 
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/RoadGeom.h"
 
 namespace ExitGeometry
 {
@@ -55,5 +56,28 @@ namespace ExitGeometry
 		const double Acute = FMath::Abs(FMath::UnwindRadians(AxisAngle));
 		const double Sine = FMath::Max(FMath::Sin(FMath::Min(Acute, PI - Acute)), FMath::Sin(FMath::DegreesToRadians(10.0)));
 		return (RunwayHalfWidth + TaxiwayHalfWidth) / Sine;
+	}
+
+	double TaxiwayEndFloorAtRunwayEnd(double RunwayHalfWidth, double TaxiwayHalfWidth,
+		const FVector2D& RunwayTangent, const FVector2D& TaxiwayTangent)
+	{
+		const FVector2D R = RunwayTangent.GetSafeNormal();
+		const FVector2D A = TaxiwayTangent.GetSafeNormal();
+		const double Along = FVector2D::DotProduct(A, R);
+		const double Across = FMath::Abs(FVector2D::CrossProduct(A, R));
+		const double Side = TaxiwayEndFloor(RunwayHalfWidth, TaxiwayHalfWidth, RoadGeom::AngleBetween(A, R));
+		if (Along >= 0.0)
+		{
+			return Side;   // back alongside the body: the side case
+		}
+		// Each corner of the bar is at L * A +/- T * (A rotated), its distance into the runway
+		// L * Along +/- T * Across; both are behind the end line once L >= T * Across / -Along.
+		return FMath::Min(TaxiwayHalfWidth * Across / -Along, Side);
+	}
+
+	bool IsInLineAtRunwayEnd(const FVector2D& RunwayTangent, const FVector2D& TaxiwayTangent)
+	{
+		return RoadGeom::AngleBetween(RunwayTangent, TaxiwayTangent)
+			>= PI - FMath::DegreesToRadians(InLineEndDegrees);
 	}
 }
