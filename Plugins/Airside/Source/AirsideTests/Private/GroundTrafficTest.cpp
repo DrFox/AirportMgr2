@@ -3204,7 +3204,7 @@ bool FReofferStandsRetireReentrancyTest::RunTest(const FString& Parameters)
 
 	// BOTH STANDS GONE, exactly like StandRetargetTest's own step 2: the aircraft lands with
 	// nowhere to go, sets bAwaitingStand, and parks at the node it waited at. That is the
-	// state ReofferStands' Waiting list is built from.
+	// state the stand retry's (RetryWaiters') waiter list is built from.
 	A.Net->RemoveEntity(Target);
 	TestGraph::Rebuild(*A.Net);
 	Traffic->OnGraphRebuilt(*A.Net);
@@ -3218,7 +3218,7 @@ bool FReofferStandsRetireReentrancyTest::RunTest(const FString& Parameters)
 	}
 
 	// THE LISTENER STANDS IN FOR WHAT UJobBoard::OnAgentPhase WAS: it retires this agent the moment
-	// it sees ITS phase change away from Parked - which is the redirect ReofferStands is about
+	// it sees ITS phase change away from Parked - which is the redirect the stand retry (RetryWaiters) is about
 	// to drive - and does so exactly once, so the Gone broadcast RetireAgent itself raises does
 	// not recurse.
 	bool bRetiredDuringRedirect = false;
@@ -3234,7 +3234,7 @@ bool FReofferStandsRetireReentrancyTest::RunTest(const FString& Parameters)
 			}
 		});
 
-	// A STAND APPEARS. Advance's re-offer pass (ReofferStands) finds the waiter, plans a route
+	// A STAND APPEARS. Advance's re-offer pass (RetryWaiters) finds the waiter, plans a route
 	// to it, and calls RedirectAgent - which is where the listener above fires. On unfixed code
 	// this crashes (Agents[INDEX_NONE]) rather than merely failing, which is why this is the
 	// regression: a green run here means the re-entrancy is actually safe, not just unassessed.
@@ -4368,7 +4368,7 @@ bool FTrafficReofferTaxiingWaiterDoesNotJumpTest::RunTest(const FString& Paramet
 /**
  * A TAXIING WAITER WHOSE EXTENSION IS REFUSED KEEPS WAITING - IT IS NEVER REDIRECTED (issue #435, review of #453).
  *
- * ReofferStands extends a Taxiing waiter and never falls back to RedirectAgent, because the fallback
+ * The stand retry (RetryWaiters) extends a Taxiing waiter and never falls back to RedirectAgent, because the fallback
  * is the teleport again in the one case nothing had measured. Only the success path was tested.
  * The refusal is staged the one way an aircraft's extension can be refused: its goal is pointed
  * somewhere its live plan does not end (the plan's own start, where the taxi-in began), so the
@@ -5368,7 +5368,7 @@ bool FTrafficRebuildDuringReverseStrandsWhenTheSpanEndIsGoneTest::RunTest(const 
 /**
  * A WAITER WHOSE EXTENSION WAS REFUSED IS OFFERED A STAND AGAIN WHEN IT STOPS (issue #455, item 5).
  *
- * ReofferStands consumes bStandsMayHaveFreed whether or not it placed anyone, and a Taxiing waiter whose
+ * The stand retry (RetryWaiters) consumes bStandsMayHaveFreed whether or not it placed anyone, and a Taxiing waiter whose
  * ExtendRoute was refused was told it keeps waiting and is asked again "when something frees". The stand it was
  * offered was already free, so nothing freed: the aircraft taxied to the end of its truncated route, parked there
  * still waiting, and sat beside a free stand for good. Its own stop is the retry.

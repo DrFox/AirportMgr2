@@ -185,7 +185,9 @@ struct AIRSIDE_API FRunwayEnd
 	UPROPERTY() FRoadSegmentId Seed;
 
 	/** The point Along uu down the strip from Threshold (negative is short of it) - the one spelling of
-	 *  "Threshold + Direction * x", which FLandingRun and FTakeoffRun each wrote into their pose (issue #444). */
+	 *  "Threshold + Direction * x", which FLandingRun and FTakeoffRun each wrote into their pose, the taxi's
+	 *  runway-entry guard into its entry, and the two runway probes into a point just inside an end (issue #444).
+	 *  ENFORCED BY: Check-Architecture rule 4 ('runway point spelled by hand (rule 83)') */
 	FVector2D PointAt(double Along) const { return Threshold + Direction * Along; }
 
 	/** The strip's other end: Threshold walked the whole Length along Direction. */

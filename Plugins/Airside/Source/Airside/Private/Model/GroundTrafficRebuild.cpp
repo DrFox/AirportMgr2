@@ -1253,13 +1253,12 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	// turnaround (2026-09-28). StandAdmission::Judge closes it to NEW choices only.
 	// ENFORCED BY: Airside.Model.Traffic.StripClosedStandKeepsItsOccupant
 	//
-	// AND NOT A DEPARTURE HOLDING FOR ITS WAY OUT (issue #444). A held taxi out is DISARMED (the taxi's runway-entry
-	// guard and the push-end handover both disarm it), so `!bDepartureArmed` let this branch take a departing aeroplane
+	// AND NOT A DEPARTURE HOLDING FOR ITS WAY OUT (issue #444). A held taxi out is DISARMED (the rebuild that stales it
+	// and the taxi's runway-entry guard both disarm it), so `!bDepartureArmed` let this branch take a departing aeroplane
 	// for a taxi-in whose stand had gone: retargeted to a stand, or armed to wait for one beside its taxi-out wait - the
-	// double wait two flags allowed and EAgentWait cannot hold. It is a departure; its own retry plans it a way out.
-	// Traced, not measured: no test drives a held departure's live plan through a rebuild that loses its goal (a held
-	// taxi out on a STRANDED route is skipped above as not valid). Airside.Model.RoadAgent.OneWaitAtATime pins only
-	// that the two waits cannot be held at once - without this guard the stand wait would REPLACE the taxi-out one.
+	// double wait two flags allowed. With one wait, the stand's would REPLACE the taxi out's. It is a departure; its own
+	// retry plans it a way out.
+	// ENFORCED BY: Airside.Model.Traffic.HeldTaxiOut.RebuildDoesNotRetargetItToAStand
 	if (!Goal.IsSet() && Agent.Class == ETraversalClass::Aircraft && Agent.AsAircraft() != nullptr
 		&& !Agent.bDepartureArmed && !Agent.IsWaitingFor(EAgentWait::ForTaxiOutRoute)
 		&& Failed < Plan.Steps.Num())

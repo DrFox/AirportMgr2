@@ -1069,8 +1069,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 			// a route planned to the entry ends ON it; a hand-drawn one may end beside the
 			// centreline, within a strip's half width - never hundreds of metres away.
 			constexpr double DepartureEntryToleranceUu = 3000.0;
-			const FVector2D Entry = DepartureOrder.End.Threshold
-				+ DepartureOrder.End.Direction * DepartureOrder.EntryOffset;
+			const FVector2D Entry = DepartureOrder.End.PointAt(DepartureOrder.EntryOffset);
 			if (bDepartureArmed && FVector2D::Distance(LastMotion.Position, Entry) > DepartureEntryToleranceUu)
 			{
 				UE_LOG(LogAirsideTraffic, Log,

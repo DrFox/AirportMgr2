@@ -74,11 +74,12 @@ enum class EAgentPhase : uint8
 };
 
 /**
- * WHAT A STOPPED AGENT IS WAITING FOR, beside the phase it waits in (issue #444). Replaces three
- * representations of one idea: a flag and a goal (bAwaitingStand), a flag triple (bTaxiOutStale,
- * bTaxiOutHoldSaid, TaxiOutRefusedAt), and the Stranded phase - each with its own retry loop and
- * its own UI story. ONE ENUM, so an agent waiting for a stand AND for a way to the runway - which
- * the two flags let a rebuild arm on a held departure - is not a state anything can be in.
+ * WHAT A STOPPED AGENT IS WAITING FOR, beside the phase it waits in (issue #444). Replaces two of
+ * the three representations the issue found of one idea - a flag and a goal (bAwaitingStand) and a
+ * flag triple (bTaxiOutStale, bTaxiOutHoldSaid, TaxiOutRefusedAt), each with its own retry loop and
+ * its own UI story; the third, the Stranded phase, stays (below). ONE ENUM, so an agent waiting for
+ * a stand AND for a way to the runway - which the two flags let a rebuild arm on a held departure -
+ * is not a state anything can be in.
  *
  * NOT A PHASE, and that is why it is a second enum rather than three more EAgentPhase values. A
  * wait is INTENT DATA, like FDepartureOrder: a waiting aircraft is Taxiing to its route's end, or
@@ -88,8 +89,10 @@ enum class EAgentPhase : uint8
  * waiting for a stand as well.
  *
  * Written only through FRoadAgent::WaitFor / EndWait - the one door, which keeps each wait's
- * payload (below) and the enum together.
- * ENFORCED BY: the compiler (FRoadAgent::Wait and its payload are private); Airside.Model.RoadAgent.OneWaitAtATime
+ * payload (below) and the enum together. The fields are private, but UGroundTraffic and FClaimPass
+ * are FRoadAgent's friends, so the compiler alone does not hold this.
+ * ENFORCED BY: Check-Architecture rule 4 ('agent wait written outside its door (rule 82)');
+ * Airside.Model.RoadAgent.OneWaitAtATime
  */
 UENUM()
 enum class EAgentWait : uint8

@@ -173,7 +173,7 @@ namespace DeparturePlanner
 			// used to be a point inside EACH end, which is how a departure came to take off from
 			// whichever end was nearer its stand; Plan now resolves the end in use itself, so
 			// both probes would plan the same departure twice.
-			const FVector2D OnRunway = Runway.Threshold + Runway.Direction * 10.0;
+			const FVector2D OnRunway = Runway.PointAt(10.0);
 			const FDeparturePlan Candidate = Plan(Network, Start, OnRunway, Airframe, Class);
 			if (Candidate.IsValid())
 			{

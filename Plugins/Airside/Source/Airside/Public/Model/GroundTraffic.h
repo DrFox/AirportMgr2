@@ -85,7 +85,9 @@ struct FGraphRebuildSummary
  *                                OnGraphRebuilt and FDeadlockResolver call into;
  *   - GroundTrafficSend.cpp      SendAgentTo, ReofferStand and RemainingDriveSeconds
  *                                (issue #429): the operations that CHOOSE which route change an
- *                                agent gets by its phase, so no caller outside this class does.
+ *                                agent gets by its phase, so no caller outside this class does;
+ *   - GroundTrafficWaiters.cpp   RetryWaiters, ReplanHeldTaxiOut and ReofferWaiter (issue #444):
+ *                                the one retry pass for every stopped waiter, by FRoadAgent::GetWait.
  *
  * UGroundTraffic keeps the registry, dispatch, tick order and events; it owns one FClaimPass
  * (constructed fresh per Arbitrate call - it carries no state of its own), one
@@ -1026,8 +1028,12 @@ private:
 	 * LAST IN AdvanceOnce, after every agent has claimed, moved and been replanned, so whatever it sends starts the
 	 * next tick at the top of Arbitrate like any other new route - the reason the stand re-offer always ran there.
 	 * The taxi-out replan ran BEFORE the motion until #444; at the end of the step a hold that has just begun is
-	 * planned on the step it began (the push hands over on the next, as it did), and a Taxiing restart is claimed by
-	 * the next Arbitrate before it moves rather than moving on a route no claim pass has seen.
+	 * planned on the step it began (the push hands over on the next, as it did). That move buys NO MOTION: a
+	 * restart is from rest, so the step it is made in moves the aeroplane 0 uu in either order, and the next step's
+	 * Arbitrate claims the new route before it moves in both (measured 2026-10-01 - the test below passes on the old
+	 * order too). It is the one pass's place, not a fix.
+	 * ENFORCED BY: Airside.Model.Traffic.HeldTaxiOut.RestartIsClaimedBeforeItMoves (a restart toward a held node does
+	 * not move into it - a behaviour pin, not an order pin)
 	 *
 	 * BY ID, collected first: a stand's SendAgentTo can announce a phase change, and a listener may retire any agent
 	 * and shift the array (the re-entrancy contract AdvanceOnce states).

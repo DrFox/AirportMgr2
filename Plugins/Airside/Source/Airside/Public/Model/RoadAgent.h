@@ -421,8 +421,9 @@ public:
 	bool IsWaitingFor(EAgentWait Why) const { return Wait == Why; }
 
 	/**
-	 * THE ONE DOOR INTO A WAIT (with EndWait - the fields are private).
-	 * ENFORCED BY: the compiler; Airside.Model.RoadAgent.OneWaitAtATime
+	 * THE ONE DOOR INTO A WAIT (with EndWait). The fields are private, and UGroundTraffic and FClaimPass - the
+	 * friends - are held off them by the lint, not by access.
+	 * ENFORCED BY: Check-Architecture rule 4 ('agent wait written outside its door (rule 82)'); Airside.Model.RoadAgent.OneWaitAtATime
 	 *
 	 * A wait already of this kind is LEFT AS IT IS - payload and all -
 	 * because the push-end hold re-enters every frame it holds (FRoadAgent::Advance's Manoeuvring

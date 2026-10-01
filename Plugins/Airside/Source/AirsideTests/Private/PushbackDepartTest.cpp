@@ -234,7 +234,7 @@ bool FPushbackDepartReleasesStandTest::RunTest(const FString& Parameters)
 	// (SetGoalFrom/ArmDepartureIfRunway/ClaimGoalNodeAtDispatch) by hand and never called
 	// ReleaseGoal first - the one thing RedirectAgent and ExtendRoute already do before
 	// TakeGoal. The stand the aeroplane is LEAVING stayed claimed against it for the rest of
-	// the session, so a waiter re-offered stands (ReofferStands) could never be sent there
+	// the session, so a waiter re-offered stands (RetryWaiters) could never be sent there
 	// even after the aeroplane had climbed away and gone.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());

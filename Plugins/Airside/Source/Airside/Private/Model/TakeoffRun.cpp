@@ -83,7 +83,7 @@ bool FTakeoffRun::Start(const FRunwayEnd& InEnd, const FAirframe& InAirframe, do
 	// fresh from its caller every frame instead.
 
 	// FROM THE ENTRY, which is the threshold only for a backtrack: the position this
-	// reports is End.Threshold + End.Direction * Travelled, so starting Travelled here is
+	// reports is End.PointAt(Travelled), so starting Travelled here is
 	// what keeps the aircraft where the taxi left it instead of jumping to the threshold.
 	Travelled = EntryOffset;
 	Altitude = 0.0;

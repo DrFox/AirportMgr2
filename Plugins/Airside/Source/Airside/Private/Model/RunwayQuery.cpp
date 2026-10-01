@@ -480,7 +480,7 @@ namespace RunwayQuery
 				// InUseRunwayAt resolves the end in use itself, so both probes would answer the same end twice.
 				// The use is read off the resolved end's seed: every member of a strip carries the strip's facts.
 				FRunwayEnd End;
-				if (InUseRunwayAt(Network, R.End.Threshold + R.End.Direction * 10.0, End)
+				if (InUseRunwayAt(Network, R.End.PointAt(10.0), End)
 					&& TakesTraffic(RunwayFactsFor(Network, End.Seed).Use, Traffic))
 				{
 					Out.Add(End);
