@@ -59,7 +59,7 @@ namespace
 	/**
 	 * The ground a plot has, and what has been stood on it so far.
 	 *
-	 * EXTRACTED FROM LayOut RATHER THAN COPIED, because Reserve needs the identical sampler.
+	 * EXTRACTED FROM THE DELETED LayOut RATHER THAN COPIED, because Reserve needed the identical sampler.
 	 * Two samplers would be two answers to "does this fit", and the preview would stop being
 	 * the thing that gets built - which is the one property the reservation design rests on.
 	 */
@@ -128,10 +128,13 @@ namespace
 			const double HalfLength = Footprint.LengthUu * 0.5;
 
 			// WRITTEN AS WE PROBE, not held in a local and copied out on success. A shed that
-			// fits nowhere keeps its LAST CLAMPED pose rather than falling back to the origin,
-			// and Airside.Solve.PlotYardStandsTheShedAtTheBack asserts exactly that on a plot
-			// too shallow to hold it: "a shallow plot keeps the shed off the road". Writing
-			// only on success moved a dropped shed to (0,0), which is out across the road.
+			// fits nowhere keeps its LAST CLAMPED pose rather than falling back to the origin:
+			// writing only on success moved a dropped shed to (0,0), which is out across the
+			// road. That was the contract while LayOut handed dropped stands back (its test
+			// asserted "a shallow plot keeps the shed off the road"); Reserve returns only
+			// what it placed, so no caller reads a dropped pose today and #462 deleted that
+			// assertion with LayOut. Kept as it was - a probe loop that writes as it goes is no
+			// dearer than one that does not - but nothing pins it any more.
 			OutStand.Heading = InwardBearing;
 
 			TArray<FVector2D> Corners;
@@ -159,7 +162,7 @@ namespace
 				}
 				if (bInside)
 				{
-					// TAKEN HERE, not by a second pass afterwards. LayOut used to collect
+					// TAKEN HERE, not by a second pass afterwards. The deleted LayOut used to collect
 					// placed stands into Taken in a loop of its own; folding it in is what
 					// lets Reserve interleave back-fence and sampled placement in one walk
 					// without the two disagreeing about what ground is spoken for.
@@ -245,7 +248,8 @@ namespace
 					// THE DEPTH BOUND IS LOAD-BEARING, not tidiness. Unbounded, the lane cuts
 					// the plot in two and forbids anything crossing the middle - which took
 					// acceptance to roughly 8% a try, so 24 tries dropped a module about one
-					// time in eight and Airside.Solve.PlotYardLeavesTheGateClear caught it on
+					// time in eight and the gate-clear test (then PlotYardLeavesTheGateClear,
+					// now Airside.Solve.PlotReserveLeavesTheGateClear) caught it on
 					// seed 3. It is also simply the wrong rule: the truck needs room to get
 					// off the pad and turn, and once it is clear of the fence it can weave.
 					const FVector2D FromGate = Corner - Gate;
@@ -317,7 +321,7 @@ namespace
 
 		// SEEDED BEFORE ANY PLACEMENT, and nothing draws from it until the first TryPlace -
 		// the back-fence pass decides its pose rather than sampling. So the draw sequence is
-		// the one LayOut had when it built its stream after that pass.
+		// the one the deleted LayOut had when it built its stream after that pass.
 		Out.Stream = FRandomStream(Seed);
 		return true;
 	}
@@ -365,71 +369,6 @@ void PlotYard::StandCorners(const FStand& Stand, const FFootprint& Footprint,
 	OutCorners.Add(Stand.Centre - Forward * HalfLength + Side * HalfWidth);
 }
 
-PlotYard::FYard PlotYard::LayOut(TArrayView<const FVector2D> Outline,
-	FVector2D FrontageA, FVector2D FrontageB, FVector2D Gate,
-	TArrayView<const FFootprint> Footprints, int32 Seed,
-	const FFootprint& RoomForFootprint)
-{
-	FYard Yard;
-	Yard.Stands.SetNum(Footprints.Num());
-
-	FYardSpace Space;
-	if (!MakeYardSpace(Outline, FrontageA, FrontageB, Gate, Seed, Space))
-	{
-		return Yard;
-	}
-
-	// The back-standing modules first: their pose is decided, not sampled, so they take their
-	// ground before anything is allowed to sample into it. PlaceAgainstTheBackFence adds each
-	// one to Taken itself, which is why the separate collect-the-placed loop that used to sit
-	// here is gone.
-	for (int32 Index = 0; Index < Footprints.Num(); ++Index)
-	{
-		if (!Footprints[Index].bAgainstTheBackFence)
-		{
-			continue;
-		}
-		Space.PlaceAgainstTheBackFence(Footprints[Index], Yard.Stands[Index]);
-	}
-
-	// LARGEST FIRST, through an index order rather than by sorting Yard.Stands, whose order
-	// is the caller's contract. A tank placed after four pumps have taken the middle has
-	// nowhere left to go, and the player loses the biggest object rather than the smallest.
-	TArray<int32> Order;
-	for (int32 Index = 0; Index < Footprints.Num(); ++Index)
-	{
-		if (!Footprints[Index].bAgainstTheBackFence)
-		{
-			Order.Add(Index);
-		}
-	}
-	Order.Sort([&Footprints](int32 A, int32 B)
-	{
-		return Footprints[A].LengthUu * Footprints[A].WidthUu
-			> Footprints[B].LengthUu * Footprints[B].WidthUu;
-	});
-
-	for (const int32 Index : Order)
-	{
-		Space.TryPlace(Footprints[Index], Yard.Stands[Index]);
-	}
-
-	// HOW MANY MORE WOULD FIT, from the same pass that places things - so the number the
-	// player reads is produced by the code that would actually put the thing down. A
-	// separate free-area calculation would be a second opinion about one question.
-	//
-	// Each phantom is added to Taken by TryPlace, which is what makes this terminate: it
-	// occupies ground the next one cannot use. The cap is a backstop against a zero-area
-	// footprint looping forever, not an expected limit.
-	FStand Phantom;
-	while (Yard.RoomForMore < 64 && Space.TryPlace(RoomForFootprint, Phantom))
-	{
-		++Yard.RoomForMore;
-	}
-
-	return Yard;
-}
-
 PlotYard::FReservation PlotYard::Reserve(TArrayView<const FVector2D> Outline,
 	FVector2D FrontageA, FVector2D FrontageB, FVector2D Gate,
 	TArrayView<const FKitSpec> Kits, int32 Seed)
@@ -446,7 +385,7 @@ PlotYard::FReservation PlotYard::Reserve(TArrayView<const FVector2D> Outline,
 	// building the order up front keeps the loop below a plain walk rather than three nested
 	// counters that have to agree with each other.
 	//
-	// LARGEST FIRST WITHIN A CYCLE, which is LayOut's lesson kept rather than re-learnt: a
+	// LARGEST FIRST WITHIN A CYCLE, which is the deleted LayOut's lesson kept rather than re-learnt: a
 	// tank offered the yard after four pumps have taken the middle has nowhere left to go,
 	// and the player loses the big object rather than the small one. Ties hold their kit
 	// order so the cycle stays deterministic.
@@ -554,7 +493,7 @@ PlotYard::FReservation PlotYard::Reserve(TArrayView<const FVector2D> Outline,
 	// would waste the corner the player paid for.
 	//
 	// The cap is a backstop against a zero-area footprint looping forever, not an expected
-	// limit - the same role the cap plays in LayOut's RoomForMore loop.
+	// limit - the same role the cap played in the deleted LayOut's RoomForMore loop.
 	bool bPlacedAny = true;
 	while (bPlacedAny && Reservation.Stands.Num() < 256)
 	{

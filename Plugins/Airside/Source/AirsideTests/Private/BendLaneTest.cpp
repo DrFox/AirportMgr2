@@ -77,14 +77,6 @@ namespace BendLane
 		return FVector2D::DotProduct(Inner.TangentA - Node, Along);
 	}
 
-	/** The mean distance of a chain's arc samples from Centre - the arc's radius when it is one. */
-	double MeanRadius(const BendProbe::FTurnChain& Chain, const FVector2D& Centre)
-	{
-		double Sum = 0.0;
-		for (const FVector2D& P : Chain.Path) { Sum += FVector2D::Distance(P, Centre); }
-		return Chain.Path.Num() > 0 ? Sum / Chain.Path.Num() : 0.0;
-	}
-
 	/** A plain right angle, (0,0) -> (8000,0) -> (8000,8000), derived the production way.
 	 *  #310: TestGraph::FCornerFixture at its default points - kept as its own name here
 	 *  since every call site in this file reads Bend.Corner, not a generic First/Second. */

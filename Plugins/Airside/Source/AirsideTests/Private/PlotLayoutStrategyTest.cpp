@@ -41,21 +41,6 @@ namespace
 		return { Shed, Tank, Pump };
 	}
 
-	/**
-	 * A plot that is NOT a rectangle: the back edge is wider than the frontage.
-	 *
-	 * THE ORDINARY CASE, not an edge case. The gesture pins four corners freely, so a slightly
-	 * off-square plot is what a player actually draws - and every other fixture here is a
-	 * rectangle, which is why a column placed at the plot's WIDEST lateral extent looked
-	 * correct in tests and put both columns outside the plot in PIE.
-	 */
-	TArray<FVector2D> FlaredRect(double FrontWidth, double BackWidth, double Depth)
-	{
-		const double Flare = (BackWidth - FrontWidth) * 0.5;
-		return { FVector2D(0.0, 0.0), FVector2D(FrontWidth, 0.0),
-		         FVector2D(FrontWidth + Flare, Depth), FVector2D(-Flare, Depth) };
-	}
-
 	FPlotSite StrategySite(const TArray<FVector2D>& Outline, double Width)
 	{
 		FPlotSite Site;
@@ -331,6 +316,10 @@ bool FFuelYardKeepsApronsClearTest::RunTest(const FString& Parameters)
 		Out.WidthUu = Kit.Footprint.WidthUu * Stand.RunLength + Kit.ApronUu.Y * 2.0;
 		return Out;
 	};
+
+	// A FLOOR OVER THE PAIR LOOP (#463): with 0 or 1 stands there is no pair, the loop asserts nothing, and the test is green for
+	// a layout that placed nothing at all.
+	if (!TestTrue(TEXT("the layout reserved at least two stands, so there is a pair to compare"), R.Stands.Num() >= 2)) { return false; }
 
 	for (int32 A = 0; A < R.Stands.Num(); ++A)
 	{

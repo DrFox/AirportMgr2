@@ -12,6 +12,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RouteSearch.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/IcaoCode.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -191,6 +192,13 @@ bool FLeadInSweepTest::RunTest(const FString& Parameters)
 		int32 OnTaxiwayLeft = 0;
 		int32 OnTaxiwayRight = 0;
 		int32 AtTheCorner = 0;
+		int32 BeyondReach = 0;
+
+		// WITHIN REACH OF THE CORNER, NOT ANYWHERE ON THE TAXIWAY (#463). The taxiway's own dead ends sit at x = +-30000 and
+		// are nodes on its centreline whatever the lead-in does, so "a node west of the corner" and "east of it" held with the
+		// sweep deleted. A Code C sweep leaves the taxiway one fillet radius from the corner (tan 45 = 1, the lead-in being
+		// square to it) - 2500 uu here - so twice that is a margin that still excludes the far ends by a factor of six.
+		const double Reach = 2.0 * IcaoCode::RadiusForLetter(EIcaoCode::C);
 
 		for (const FGuidelineNode& Node : Net->GetGuidelineNodes())
 		{
@@ -200,12 +208,14 @@ bool FLeadInSweepTest::RunTest(const FString& Parameters)
 			}
 
 			if (FMath::Abs(Node.Position.X) < 1.0)      { ++AtTheCorner; }
+			else if (FMath::Abs(Node.Position.X) > Reach) { ++BeyondReach; }
 			else if (Node.Position.X < 0.0)             { ++OnTaxiwayLeft; }
 			else                                        { ++OnTaxiwayRight; }
 		}
 
+		TestTrue(TEXT("the taxiway's own far ends are on the centreline too, which is what the reach excludes"), BeyondReach > 0);
 		TestEqual(TEXT("nothing joins at the corner the lead-in ray strikes"), AtTheCorner, 0);
-		TestTrue(TEXT("the sweep meets the taxiway west of the corner"), OnTaxiwayLeft > 0);
+		TestTrue(TEXT("the sweep meets the taxiway west of the corner, within reach of it"), OnTaxiwayLeft > 0);
 		TestTrue(TEXT("and east of it"), OnTaxiwayRight > 0);
 	}
 

@@ -163,29 +163,6 @@ bool FBuildPurseConnectRefusesUnofferedPavementTest::RunTest(const FString& Para
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FBuildPurseNullBuildsFreeTest,
-	"Airside.Present.BuildPurseNullBuildsFree",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FBuildPurseNullBuildsFreeTest::RunTest(const FString& Parameters)
-{
-	// THE EDITOR MODE'S TEST, and it is not incidental. URoadBuildEdMode and every existing
-	// tool test build with no purse at all, and a default that silently began charging would
-	// break design-time building with nothing anywhere to say why.
-	FAirsideTestWorld World;
-	PriceTheTaxiway(*World.Actor);
-
-	const int32 A = World.Actor->PlaceNode(FVector2D(0.0, 0.0));
-	const int32 B = World.Actor->PlaceNode(FVector2D(10000.0, 0.0));
-
-	TestTrue(TEXT("with no purse, building is free and always allowed"),
-		World.Actor->ConnectNodes(A, B, ERoadKind::Taxiway, INDEX_NONE));
-	TestEqual(TEXT("and the segment really is there"),
-		World.Actor->GetNetwork()->GetSegments().Num(), 1);
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FBuildPurseUndoReversesTest,
 	"Airside.Present.BuildPurseUndoReverses",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -591,7 +568,11 @@ bool FBuildPurseRefusalAnnouncedTest::RunTest(const FString& Parameters)
 	const int32 A = World.Actor->PlaceNode(FVector2D(0.0, 0.0));
 	const int32 B = World.Actor->PlaceNode(FVector2D(10000.0, 0.0));
 
-	// DESIGN TIME FIRST - no purse, so building is free and nothing is refused or announced.
+	// DESIGN TIME FIRST - no purse, so building is free and nothing is refused or announced. THE EDITOR MODE'S
+	// TEST, and not incidental: URoadBuildEdMode and every existing tool test build with no purse at all, and a default
+	// that silently began charging would break design-time building with nothing anywhere to say why. (This
+	// carries what Airside.Present.BuildPurseNullBuildsFree asserted, same fixture, deleted by #462 - the segment
+	// really being laid is Airside.Present.NetworkActor's, :66-67.)
 	TestTrue(TEXT("with no purse the build is free"), World.Actor->ConnectNodes(A, B, ERoadKind::Taxiway, INDEX_NONE));
 	TestEqual(TEXT("and no refusal is announced"), Heard.Num(), 0);
 

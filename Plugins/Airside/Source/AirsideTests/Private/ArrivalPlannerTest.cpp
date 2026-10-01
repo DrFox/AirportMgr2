@@ -43,9 +43,17 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FArrivalPlannerRunwayTooShortTest::RunTest(const FString& Parameters)
 {
-	const FAirframe Airframe = TestAirframes::Piper();
+	// THE ROLL CHECK IS WHAT IS UNDER TEST, SO THE PUBLISHED FIGURES ARE CLEARED (#479). TestAirframes::Piper() is the
+	// real Meridian now, and a real airframe's published landing field (510 m for the Meridian) covers the model's own
+	// roll (461 m) BY CONSTRUCTION - Airside.Model.FieldLengthsCoverTheRoll - so ADMISSION refuses any strip shorter than
+	// the roll first, as NotAdmitted, and RunwayTooShort can only fire for an airframe whose published figures say less
+	// than its model needs. The hand copy this fixture used to be had no figures at all, which is the only reason this
+	// passed. The order is pinned below rather than loosened away: both refusals, each from the airframe that earns it.
+	FAirframe Airframe = TestAirframes::Piper();
 	const double Needed = FLandingRun::RequiredLandingDistance(
 		Airframe.Chassis.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
+	const FAirframe Published = Airframe;
+	Airframe.Requirements = FRunwayRequirements();
 
 	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
 	URoadProfile* Runway = TestProfiles::Runway();
@@ -64,6 +72,12 @@ bool FArrivalPlannerRunwayTooShortTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("a runway shorter than the landing distance refuses RunwayTooShort"),
 		Plan.Why, EArrivalRefusal::RunwayTooShort);
 	TestEqual(TEXT("and Needed is reported so the refusal can say by how much"), Plan.Needed, Needed);
+
+	// THE SAME STRIP, THE MERIDIAN'S OWN PUBLISHED FIGURES: admission answers first. A strip under the roll is also
+	// under the published landing field, so the roll refusal above is the second line of defence, not the first.
+	const FArrivalPlan PublishedPlan = ArrivalPlanner::Plan(*Network, FVector2D::ZeroVector, Published);
+	TestEqual(TEXT("with its published figures the Meridian is refused by admission first, NotAdmitted"),
+		PublishedPlan.Why, EArrivalRefusal::NotAdmitted);
 	return true;
 }
 
@@ -151,38 +165,6 @@ bool FArrivalPlannerSearchCountTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("at least one search ran (the exit loop found a stand)"), SearchesWithOneStand > 0);
 	TestEqual(TEXT("the search count does not grow with the number of stands - #190's whole point"),
 		SearchesWithSixStands, SearchesWithOneStand);
-	return true;
-}
-
-// ---------------------------------------------------------------------------------------
-// (d) VacateAt is the chosen exit's own projection onto the runway direction - measured
-// from the SAME node the plan chose, not re-derived from the query point or the exit index.
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FArrivalPlannerVacateAtTest,
-	"Airside.Model.ArrivalPlanner.VacateAt",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FArrivalPlannerVacateAtTest::RunTest(const FString& Parameters)
-{
-	const FAirframe Airframe = TestAirframes::Piper();
-	const FTestAirport Airport = FTestAirport::Build(Airframe, { .ExitCount = 2 });
-
-	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Airport.Net, Airport.Threshold, Airframe);
-	if (!TestTrue(TEXT("the arrival is accepted"), Plan.IsValid()))
-	{
-		return false;
-	}
-
-	const FGuidelineNode* ExitNode = Airport.Net->GetGuidelineNode(Plan.Exit);
-	if (!TestNotNull(TEXT("the chosen exit resolves to a guideline node"), ExitNode))
-	{
-		return false;
-	}
-
-	const double Expected = Plan.End.OffsetOf(ExitNode->Position);
-	TestEqual(TEXT("VacateAt is the chosen exit's own projection onto the runway direction"),
-		Plan.VacateAt, Expected);
-
 	return true;
 }
 

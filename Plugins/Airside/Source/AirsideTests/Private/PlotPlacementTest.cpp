@@ -6,6 +6,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
 #include "Build/DepotKit.h"
 #include "YardAgreement.h"
@@ -204,6 +205,18 @@ bool FPlotOutlineIsAlwaysCounterClockwiseTest::RunTest(const FString& Parameters
 	// the winding assertion alone would not catch.
 	TestTrue(TEXT("and the pose sits on the frontage, not across the road"),
 		Entities[0].Position.Y > -1.0 && Entities[0].Position.Y < 1.0);
+
+	// THE INWARD DIRECTION, WHICH IS WHAT THE COMMENT ABOVE PROMISES (#463). The pose is the frontage's MIDPOINT, and a midpoint
+	// is the same point whichever way round the two ends are given, so the assertion above held with the frontage left
+	// unswapped. What a missing swap changes is the DIRECTION of the stored frontage: PlotYard::InwardOf reads the interior
+	// side off it and the winding, so unswapped it points out across the road and every module is laid the wrong way.
+	FVector2D FrontageStart;
+	FVector2D FrontageEnd;
+	if (TestTrue(TEXT("the stored depot has a frontage"), Entities[0].GetFrontage(FrontageStart, FrontageEnd)))
+	{
+		TestTrue(TEXT("and the interior lies NORTH of it, into the plot, not across the road"),
+			PlotYard::InwardOf(Stored, FrontageStart, FrontageEnd).Y > 0.9);
+	}
 
 	return true;
 }

@@ -81,6 +81,11 @@ FAirframe UAirsideSettings::ResolveDefaultAirframe()
 		}
 	}
 
+	return ContentlessDefaultAirframe();
+}
+
+FAirframe UAirsideSettings::ContentlessDefaultAirframe()
+{
 	// TODO(#30): author DA_PiperMeridian and set UAirsideContent::DefaultAircraft. Until an
 	// asset exists to point it at, this is the fallback every project runs on - including
 	// every automation test, which configures no content set at all (and DA_AirsideContent
@@ -95,6 +100,9 @@ FAirframe UAirsideSettings::ResolveDefaultAirframe()
 	// FAirframe field added from now on arrives here through Airframe() with nothing to remember.
 	// Built per call: the callers are a Land with no chosen type and test fixtures, not a frame loop - 1 production
 	// caller (OpsRuntime.cpp LandNear), 2026-09-30.
+	// A BRANCH OF ResolveDefaultAirframe, split out so a test can reach it whatever content is configured (#479) -
+	// the day #30 lands this is no longer what ResolveDefaultAirframe returns, and a test that could only compare
+	// through it would skip.
 	// ENFORCED BY: Airside.Content.DefaultAirframeIsTheMeridiansOwn (every property), Check-Architecture
 	// rule 4 ('PiperMeridian fallback' - no PiperMeridian*() call in this file)
 	UAircraftType* Meridian = NewObject<UAircraftType>(GetTransientPackage());

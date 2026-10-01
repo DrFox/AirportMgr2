@@ -126,30 +126,14 @@ bool FStandWidthIsDerivedFromClearanceTest::RunTest(const FString& Parameters)
 			0.5);
 	}
 
-	// THE BANDS TILE. A width belonging to no letter, or to two, is what a stored maximum
-	// beside the next row's minimum would eventually produce; derived, one letter's ceiling IS
-	// the next one's floor, and every width above the smallest stand letter's floor has exactly
-	// one answer.
-	//
-	// A DROPPED FROM THE LADDER (2026-09-27 merge): A and B are now ONE tile, not two adjacent
-	// ones - MaxStandWidthForLetter(A) reads B's own ceiling (C's floor), not "the next letter's
-	// (B's) floor" this loop asserts, so A is no longer a tile EDGE for it to walk. The alias
-	// itself ("A's stand width IS B's") is asserted below instead.
-	const EIcaoCode Ladder[] = { EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E };
-	for (const EIcaoCode Code : Ladder)
-	{
-		// The enum's own ordinal gives "the next letter" now that FString::Chr(Letter[0] + 1)
-		// has nothing to increment - one more reason the table functions are safer keyed this
-		// way: there is no letter past F for this to walk off the end of, by construction.
-		const EIcaoCode Next = static_cast<EIcaoCode>(static_cast<uint8>(Code) + 1);
-		TestEqual(
-			*FString::Printf(TEXT("%s's ceiling is the next letter's floor"), IcaoCode::ToLetter(Code)),
-			IcaoCode::MaxStandWidthForLetter(Code),
-			IcaoCode::StandWidthForLetter(Next),
-			0.5);
-	}
-	TestTrue(TEXT("Code F has no ceiling - nothing is too wide to be a stand"),
-		IcaoCode::MaxStandWidthForLetter(EIcaoCode::F) > 1.0e9);
+	// THE BANDS TILE, measured through the one consumer that needs them to (#462). This block used to
+	// assert MaxStandWidthForLetter(Code) == StandWidthForLetter(next) - a function with no production
+	// caller, equal to the next row's floor by how it was written, so it could not fail. What a player
+	// feels is LetterForStandSize, whose C-floor and one-under-C-floor cases below pin the B/C edge; the
+	// top of the ladder is pinned here: nothing is too wide to be a stand, so a stand a kilometre wide at
+	// F's own depth is still F rather than no letter.
+	TestEqual(TEXT("Code F has no ceiling - a stand a kilometre wide at F's depth is still F"),
+		IcaoCode::LetterForStandSize(100000.0, IcaoCode::StandDepthForLetter(EIcaoCode::F)), FString(TEXT("F")));
 
 	// A MERGED INTO B (user, 2026-09-27): the difference between them was 5.5 m of depth, which
 	// no player chose on purpose; the choice at the small end is now the SURFACE. No rectangle

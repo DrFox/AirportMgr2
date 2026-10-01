@@ -219,8 +219,8 @@ namespace IcaoCode
 		 * THE LARGER OF THE SPAN DERIVATION AND THE ROW'S TowLaneWidth, since 2026-09-26: the
 		 * aeroplane decides it for C-F, the utility tow's lane for B - see that column. NOT A,
 		 * since the 2026-09-27 merge: row A carries no TowLaneWidth of its own any more (nor is
-		 * it ever asked to - StandWidthForLetter/MaxStandWidthForLetter read RowFor(StandLetterFor
-		 * (Code)), so Code A's question lands on this same row through the alias instead).
+		 * it ever asked to - StandWidthForLetter reads RowFor(StandLetterFor(Code)), so Code A's
+		 * question lands on this same row through the alias instead).
 		 *
 		 * The lane is in it twice because there is one down each side: a vehicle cannot cross
 		 * under the aeroplane, so each side of the stand is reached and left on its own lane,
@@ -231,13 +231,6 @@ namespace IcaoCode
 			return FMath::Max(Row.TowLaneWidth,
 				Row.MaxWingspan + 2.0 * (Row.WingtipClearance + IcaoCode::ServiceLaneWidth())
 					+ Row.AftEdgeAllowance);
-		}
-
-		/** The row after this one, or null at Code F. */
-		static const FRow* RowAbove(const FRow& Row)
-		{
-			const int32 Index = static_cast<int32>(&Row - &Rows[0]);
-			return Index + 1 < UE_ARRAY_COUNT(Rows) ? &Rows[Index + 1] : nullptr;
 		}
 
 		/**
@@ -402,15 +395,6 @@ namespace IcaoCode
 	double StandWidthForLetter(EIcaoCode Code)
 	{
 		return WidthOf(RowFor(StandLetterFor(Code)));
-	}
-
-	double MaxStandWidthForLetter(EIcaoCode Code)
-	{
-		const FRow* Above = RowAbove(RowFor(StandLetterFor(Code)));
-
-		// UNBOUNDED AT THE TOP. Code F has no letter above it, so there is no width at which a
-		// stand stops being one - and a stand wider than any aeroplane needs is not an error.
-		return Above != nullptr ? WidthOf(*Above) : TNumericLimits<double>::Max();
 	}
 
 	double WingtipClearanceForLetter(EIcaoCode Code)

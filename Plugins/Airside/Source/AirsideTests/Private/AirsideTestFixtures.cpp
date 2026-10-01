@@ -36,12 +36,17 @@ FToolContext TestTool::ContextAt(IRoadEditTarget& Target, const FVector2D& Where
 
 FAirframe TestAirframes::Piper()
 {
-	FAirframe A;
-	A.Chassis.Ground = UAircraftType::PiperMeridianGround();
-	A.Climb = UAircraftType::PiperMeridianClimb();
-	A.Approach = UAircraftType::PiperMeridianApproach();
-	A.Engine = UAircraftType::PiperMeridianEngine();
-	return A;
+	// THE MERIDIAN READ THE WAY AN ASSET IS READ (#479): BuildPiperMeridian, then UAircraftType::Airframe() - the
+	// mapping the content-less production default uses (UAirsideSettings::ContentlessDefaultAirframe), reached here
+	// through PiperType() rather than through the resolver so a content set that names a DefaultAircraft cannot
+	// change what 120-odd call sites measure.
+	//
+	// THIS WAS A HAND COPY, AND A WRONG ONE: the four performance structs and nothing else, so the vehicle every
+	// traffic test took had the FChassis default Pivot steer law (every modelled aeroplane rolls on its mains), no
+	// wheelbase, a steered final turn, no body centre, no wingspan, TypeCode, requirements or fuel. #477 removed the
+	// same drift from production and found six traffic tests measuring the nose where the body centre was meant.
+	// ENFORCED BY: Airside.Content.FixturePiperIsTheMeridiansOwn (every FAirframe property, by reflection)
+	return PiperType()->Airframe();
 }
 
 FVehicle TestAirframes::Van()

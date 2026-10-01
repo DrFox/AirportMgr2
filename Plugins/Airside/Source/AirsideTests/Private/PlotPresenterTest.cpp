@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
 #include "Components/DynamicMeshComponent.h"
+#include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "Engine/StaticMesh.h"
@@ -384,6 +385,21 @@ bool FPlotPresenterSurvivesDuplicationTest::RunTest(const FString& Parameters)
 	// which they cannot if it is still filling the CDO's component.
 	TestTrue(TEXT("the duplicate's own boxes stand up"),
 		Dup->GetPlotPresenter()->GetFencePostCount() > 0);
+
+	// WHERE THE POSTS WENT, NOT HOW MANY WERE COUNTED (#463). The counter increments whoever owns the component the presenter was
+	// handed, so a presenter still filling the CDO's posts counts them just the same and the assertion above is green with the PIE
+	// bug in. The duplicate's OWN post component has to hold them - owned by the duplicate, in its world, with the instances in it:
+	// the same checks Airside.Present.PlotPresenterDuplicateOwnsItsMeshComponents makes on the mesh pool, plus the instance count
+	// that says the presenter filled THIS component and not another.
+	const UHierarchicalInstancedStaticMeshComponent* Posts = Dup->GetFencePostsForTest();
+	if (TestNotNull(TEXT("the duplicate has a fence post component"), Posts))
+	{
+		TestEqual(TEXT("owned by the duplicate, not the class default - a CDO-owned component has no world"),
+			static_cast<const UObject*>(Posts->GetOwner()), static_cast<const UObject*>(Dup));
+		TestTrue(TEXT("and it has the duplicate's world to render in"), Posts->GetWorld() == TestWorld.World);
+		TestTrue(*FString::Printf(TEXT("and the posts the presenter counted are IN it (%d instances)"), Posts->GetInstanceCount()),
+			Posts->GetInstanceCount() > 0);
+	}
 
 	return true;
 }

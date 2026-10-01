@@ -20,38 +20,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 /**
- * What falls out of the geometry without a planner change, measured rather than assumed:
- * the first strip node past the landing distance that reaches a stand is now the arc's
- * start, so the rollout ends where the taxi begins.
- */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FArrivalExitAtArcStartTest,
-	"Airside.Model.ArrivalExitAtArcStart",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FArrivalExitAtArcStartTest::RunTest(const FString& Parameters)
-{
-	FExitArcAirport A = ExitArcBuildAirport(GetTransientPackage(), /*bWithStand=*/true);
-	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
-	const FArrivalPlan Plan = ArrivalPlanner::Plan(*A.Net, A.Threshold - FVector2D(1000.0, 0.0), Airframe);
-	if (!TestTrue(FString::Printf(TEXT("the arrival is planned: %s"), *ArrivalPlanner::DescribeRefusal(Plan)), Plan.IsValid()))
-	{
-		return false;
-	}
-	double Miss = 0.0;
-	const FGuidelineNodeId SUp = ExitArcNodeNear(*A.Net, A.XAt - FVector2D(A.ExitLength, 0.0), Miss);
-	TestTrue(TEXT("the upstream arc start exists"), Miss < 1.0);
-	TestTrue(TEXT("the planner's exit IS the arc start, not the junction node"), Plan.Exit == SUp);
-	const double Expected = FVector2D::DotProduct(A.XAt - FVector2D(A.ExitLength, 0.0) - A.Threshold, FVector2D(1.0, 0.0));
-	TestTrue(FString::Printf(TEXT("so the rollout vacates at the arc start (%.0f of %.0f)"), Plan.VacateAt, Expected),
-		FMath::Abs(Plan.VacateAt - Expected) < 1.0);
-	TestTrue(TEXT("and the taxi-in begins on the centreline there"),
-		Plan.TaxiIn.Polyline.Num() > 1
-		&& FVector2D::Distance(Plan.TaxiIn.Polyline[0], A.Net->GetGuidelineNode(SUp)->Position) < 1.0);
-	return true;
-}
-
-/**
  * THE REPORT OF 2026-09-06: "rolls out to the exit, stops (immediately to 0 m/s), then
  * seems to respawn facing the exit route and accelerates along the taxiway". Two motion
  * models met at a point and neither carried anything across. This measures the whole
@@ -233,6 +201,12 @@ bool FArrivalTakesTheArcNotTheJunctionTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("the exit is the arc start (vacating at %.0f, arc start %.0f, junction %.0f)"),
 			Plan.VacateAt, ArcStart, Needed + 3000.0),
 		Plan.Exit == SUp && FMath::Abs(Plan.VacateAt - ArcStart) < 1.0);
+	// MOVED IN FROM Airside.Model.ArrivalExitAtArcStart (#462, merge M10), which asserted the same exit at the
+	// same helper and this one's harder case is the stronger place for it: the taxi-in BEGINS ON THE CENTRELINE
+	// at that exit - its first polyline point is the exit node, not a point short of it that a hand-off would snap.
+	TestTrue(TEXT("and the taxi-in begins on the centreline there"),
+		Plan.TaxiIn.Polyline.Num() > 1
+		&& FVector2D::Distance(Plan.TaxiIn.Polyline[0], A.Net->GetGuidelineNode(SUp)->Position) < 1.0);
 
 	bool bAlongRunway = false;
 	for (const FRouteStep& Step : Plan.TaxiIn.Steps)

@@ -176,6 +176,7 @@ bool FPlotReserveNeverOverlapsTest::RunTest(const FString& Parameters)
 	const TArray<FVector2D> Outline = ReserveRect(3200.0, 2400.0);
 	const TArray<PlotYard::FKitSpec> Specs = DepotSpecs();
 
+	int32 Pairs = 0;
 	for (int32 Seed = 0; Seed < 8; ++Seed)
 	{
 		const PlotYard::FReservation Reservation = PlotYard::Reserve(
@@ -192,9 +193,12 @@ bool FPlotReserveNeverOverlapsTest::RunTest(const FString& Parameters)
 				TestTrue(*FString::Printf(
 					TEXT("seed %d: stands %d and %d do not overlap"), Seed, A, B),
 					bSeparated);
+				++Pairs;
 			}
 		}
 	}
+	// COUNTED, NOT ASSUMED (#463): a Reserve that returned nothing for every seed would pass every loop above.
+	TestTrue(*FString::Printf(TEXT("pairs were actually compared across the seeds (%d)"), Pairs), Pairs >= 8);
 
 	return true;
 }
@@ -330,6 +334,7 @@ bool FPlotReserveLeavesTheGateClearTest::RunTest(const FString& Parameters)
 	const FVector2D Inward(0.0, 1.0);
 	const FVector2D Across(1.0, 0.0);
 
+	int32 CornersChecked = 0;
 	for (int32 Seed = 0; Seed < 8; ++Seed)
 	{
 		const PlotYard::FReservation Reservation = PlotYard::Reserve(
@@ -359,9 +364,12 @@ bool FPlotReserveLeavesTheGateClearTest::RunTest(const FString& Parameters)
 						< PlotYard::GateCorridorUu * 0.5;
 				TestFalse(*FString::Printf(TEXT("seed %d keeps the gate clear"), Seed),
 					bInCorridor);
+				++CornersChecked;
 			}
 		}
 	}
+	// COUNTED, NOT ASSUMED (#463): over 8 seeds a Reserve that placed no sampled stand would check nothing and pass.
+	TestTrue(*FString::Printf(TEXT("corners were actually checked against the corridor (%d)"), CornersChecked), CornersChecked >= 8);
 
 	return true;
 }

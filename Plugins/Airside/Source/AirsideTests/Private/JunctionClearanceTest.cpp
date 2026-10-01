@@ -94,6 +94,16 @@ bool FJunctionClearanceTest::RunTest(const FString& Parameters)
 
 			TestEqual(TEXT("the reach a tool sees is the cut the mesh actually makes"),
 				Reach, Widest);
+
+			// THE BOUND THE COMMENT BELOW STATES, MEASURED PER ARM (#463). This was `Reach > 0.0`, which follows from the
+			// `Reach > 100.0` four lines up and says nothing about the pavement. The profile is 200 wide, so a half width of 100:
+			// the furthest pavement corner of an arm is at sqrt(Cut^2 + HalfWidth^2), and Cut + HalfWidth can only exceed it.
+			for (const FJunctionArmResult& Arm : Junction->Arms)
+			{
+				const double FurthestCorner = FMath::Sqrt(FMath::Square(Arm.CutDistance) + FMath::Square(100.0));
+				TestTrue(*FString::Printf(TEXT("the reach (%.1f) never understates an arm's furthest pavement corner (%.1f)"),
+					Reach, FurthestCorner), Reach >= FurthestCorner - 1.0e-6);
+			}
 		}
 		else
 		{
@@ -101,8 +111,7 @@ bool FJunctionClearanceTest::RunTest(const FString& Parameters)
 		}
 
 		// Conservative by construction: the furthest pavement corner is at
-		// sqrt(Cut^2 + HalfWidth^2), which Cut + HalfWidth can only exceed.
-		TestTrue(TEXT("the reach never understates the pavement"), Reach > 0.0);
+		// sqrt(Cut^2 + HalfWidth^2), which Cut + HalfWidth can only exceed - asserted per arm above.
 	}
 
 	// --- The snap that closes the overlap --------------------------------------------

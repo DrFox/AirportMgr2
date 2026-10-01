@@ -287,35 +287,6 @@ bool FParallelGuideFollowsTheNearestRoadTest::RunTest(const FString& Parameters)
 }
 
 /**
- * A SERVICE ROAD IS NOT A TAXIWAY, and a label that called it one would be the kind of wrong
- * that survives review because each reader assumes the other's definition.
- */
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FRoadNamingSaysWhatARoadAdmitsTest,
-	"Airside.Tool.RoadNamingSaysWhatARoadAdmits",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FRoadNamingSaysWhatARoadAdmitsTest::RunTest(const FString& Parameters)
-{
-	FAirsideTestWorld TestWorld;
-	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
-	ARoadNetworkActor* Actor = TestWorld.Actor;
-	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
-
-	Lay(Actor, FVector2D(-10000.0, 0.0), FVector2D(10000.0, 0.0), ERoadKind::Taxiway);
-	Lay(Actor, FVector2D(-10000.0, 5000.0), FVector2D(10000.0, 5000.0), ERoadKind::ServiceRoad);
-
-	TestEqual(TEXT("a taxiway is called one"),
-		RoadNaming::Describe(*Actor->Network, Actor->Network->SegmentIdAt(0)),
-		FString(TEXT("the taxiway")));
-	TestEqual(TEXT("and a service road is not called a taxiway"),
-		RoadNaming::Describe(*Actor->Network, Actor->Network->SegmentIdAt(1)),
-		FString(TEXT("the service road")));
-
-	return true;
-}
-
-/**
  * IN LINE WITH A ROAD IS NOT THE SAME AS PARALLEL TO IT. A cursor past the end of a taxiway,
  * dead on its centreline, is collinear with it; a cursor the same distance to the SIDE is
  * parallel and not collinear. The two sources must disagree there, or one is redundant.

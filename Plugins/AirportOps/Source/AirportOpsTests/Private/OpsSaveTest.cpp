@@ -76,7 +76,8 @@ bool FOpsSaveRoundTripTest::RunTest(const FString& Parameters)
 
 	const FAirsideCapability Cap = AirsideCapability::Summarise(*Restored);
 	TestEqual(TEXT("the runway is still a runway after load - the profile reference resolved"), Cap.Runways.Num(), 1);
-	TestEqual(TEXT("with its length"), Cap.LongestRunway(), 40000.0, 1.0);
+	// Runways[0], not a LongestRunway() - that had no production caller and went in #462.
+	TestEqual(TEXT("with its length"), Cap.Runways.Num() == 1 ? Cap.Runways[0].End.Length : 0.0, 40000.0, 1.0);
 
 	// Handles: the SAME id must still name the same node, generation included.
 	const FRoadNode* NodeB = Restored->GetNode(B);

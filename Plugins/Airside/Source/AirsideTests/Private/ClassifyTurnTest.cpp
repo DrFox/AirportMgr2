@@ -56,13 +56,17 @@ namespace ClassifyTurnFixture
 	 * the question this pins. Chord when nothing qualifies (no turn at all, or an end whose
 	 * segment vanished), which is also ClassifyTurn's own default so a missing fixture never
 	 * misreads as one of the other two shapes.
+	 *
+	 * UNSET WHEN IT NEVER ASKED (#463): the Chord fallback is also the T-junction's CORRECT answer, so a helper that
+	 * returned Chord for "no turn found" let Airside.Build.ClassifyTurn.PlainTJunction pass without the question being put
+	 * to ClassifyTurn at all. The fallbacks below now return nothing, and that test asserts the question was put.
 	 */
-	ETurnShape ClassifyFirstTurnAt(const URoadNetwork& Net, const FRoadSolveResult& Solved, FRoadNodeId Node)
+	TOptional<ETurnShape> ClassifyFirstTurnAt(const URoadNetwork& Net, const FRoadSolveResult& Solved, FRoadNodeId Node)
 	{
 		const TArray<BendProbe::FTurnChain> Turns = BendProbe::TurnsAt(Net, Node);
 		if (Turns.Num() == 0)
 		{
-			return ETurnShape::Chord;
+			return TOptional<ETurnShape>();
 		}
 		const FEnd From = EndOf(Net, Turns[0].From);
 		const FEnd To = EndOf(Net, Turns[0].To);
@@ -70,7 +74,7 @@ namespace ClassifyTurnFixture
 		const TArray<FRoadSegmentId>* ArmSegments = Solved.NodeArmSegments.Find(Node.Index);
 		if (Junction == nullptr || ArmSegments == nullptr || From.Profile == nullptr || To.Profile == nullptr)
 		{
-			return ETurnShape::Chord;
+			return TOptional<ETurnShape>();
 		}
 		// Turn.Control is only ever WRITTEN by ClassifyTurn (the TaperS case); its value going in
 		// is never read, so a zeroed scratch edge is exactly as good as the one Build builds.
@@ -95,8 +99,8 @@ bool FClassifyTurnBendTest::RunTest(const FString& Parameters)
 	// BendLaneTest's own right-angle fixture, default corner: a real two-arm bend, both lanes
 	// GroundVehicle-classed, concentric with a rounded inner corner.
 	const TestGraph::FCornerFixture Bend = TestGraph::Corner(Tiers[0]);
-	const ETurnShape Shape = ClassifyTurnFixture::ClassifyFirstTurnAt(*Bend.Net, Bend.Solved, Bend.Corner);
-	return TestTrue(TEXT("a two-arm road bend classifies as BendArc"), Shape == ETurnShape::BendArc);
+	const TOptional<ETurnShape> Shape = ClassifyTurnFixture::ClassifyFirstTurnAt(*Bend.Net, Bend.Solved, Bend.Corner);
+	return TestTrue(TEXT("a two-arm road bend classifies as BendArc"), Shape.IsSet() && Shape.GetValue() == ETurnShape::BendArc);
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FClassifyTurnWidthTaperTest, "Airside.Build.ClassifyTurn.WidthTaper",
@@ -112,8 +116,8 @@ bool FClassifyTurnWidthTaperTest::RunTest(const FString& Parameters)
 	// the lane ends are offset but the arms are not a corner.
 	const TestGraph::FCornerFixture Step = TestGraph::Corner(
 		Tiers[0], Tiers[2], FVector2D(6000.0, 0.0), FVector2D(12000.0, 0.0));
-	const ETurnShape Shape = ClassifyTurnFixture::ClassifyFirstTurnAt(*Step.Net, Step.Solved, Step.Corner);
-	return TestTrue(TEXT("a straight width step classifies as TaperS"), Shape == ETurnShape::TaperS);
+	const TOptional<ETurnShape> Shape = ClassifyTurnFixture::ClassifyFirstTurnAt(*Step.Net, Step.Solved, Step.Corner);
+	return TestTrue(TEXT("a straight width step classifies as TaperS"), Shape.IsSet() && Shape.GetValue() == ETurnShape::TaperS);
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FClassifyTurnPlainTJunctionTest, "Airside.Build.ClassifyTurn.PlainTJunction",
@@ -133,8 +137,11 @@ bool FClassifyTurnPlainTJunctionTest::RunTest(const FString& Parameters)
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
 	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveRoadDesignVehicles());
 
-	const ETurnShape Shape = ClassifyTurnFixture::ClassifyFirstTurnAt(*Net, Solved, Hub);
-	return TestTrue(TEXT("a three-arm T-junction classifies as Chord"), Shape == ETurnShape::Chord);
+	// THE FOUND-TURNS FLOOR: ClassifyTurn was actually asked about this junction. Chord is also what a helper that found no
+	// turn at all would say, so the answer below proves nothing until the question is known to have been put (#463).
+	const TOptional<ETurnShape> Shape = ClassifyTurnFixture::ClassifyFirstTurnAt(*Net, Solved, Hub);
+	if (!TestTrue(TEXT("a turn was found at the hub, so ClassifyTurn was asked"), Shape.IsSet())) { return false; }
+	return TestTrue(TEXT("a three-arm T-junction classifies as Chord"), Shape.GetValue() == ETurnShape::Chord);
 }
 
 #endif

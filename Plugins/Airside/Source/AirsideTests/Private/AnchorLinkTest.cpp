@@ -445,53 +445,6 @@ bool FGuidelineGeomTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("at its end"), FMath::IsNearlyEqual(Fraction, 1.0, 1e-9));
 	}
 
-	// CLOSEST APPROACH BETWEEN TWO POLYLINES. Both directions are tried, because for two
-	// PARALLEL segments the closest pair contains no endpoint of the longer one - and a
-	// service road drawn alongside a row of stands is exactly that case. Measured on the
-	// SHORT one's own span, so a one-directional search reporting a corner would fail here.
-	{
-		const TArray<FVector2D> Lane = { FVector2D(-1000.0, 0.0), FVector2D(1000.0, 0.0) };
-		const TArray<FVector2D> Road = { FVector2D(-9000.0, -500.0), FVector2D(9000.0, -500.0) };
-
-		int32 LaneIndex = -1, RoadIndex = -1;
-		double LaneFraction = -1.0, RoadFraction = -1.0;
-		const double Distance = GuidelineGeom::NearestBetweenPolylines(
-			Lane, Road, LaneIndex, LaneFraction, RoadIndex, RoadFraction);
-
-		TestEqual(TEXT("500 apart, whichever end you measure from"), Distance, 500.0);
-		TestEqual(TEXT("on the lane's only span"), LaneIndex, 0);
-		TestEqual(TEXT("and the road's only span"), RoadIndex, 0);
-
-		// AND WHERE ON IT: THE MIDDLE, not the first corner that happened to tie.
-		//
-		// Every point of a lane side is the same distance from a road parallel to it, so
-		// "the nearest" is an INTERVAL and not a point, and a strict search answers with
-		// whichever member it examined first. That was the lane's first vertex - a corner -
-		// which FAnchorLink then split the lane at, against its own comment saying entry is
-		// in the middle of a side. Measured here rather than there because the tie is a
-		// property of this function, and every caller inherits whichever member it picks.
-		TestTrue(TEXT("the tie is broken at the middle of the lane, not at its corner"),
-			FMath::IsNearlyEqual(LaneFraction, 0.5, 1e-9));
-
-		// A ROAD THAT COVERS ONLY HALF THE LANE. The tied interval is now the overlap, and
-		// its middle is a quarter along the lane - which no vertex of either line sits at.
-		// This is the case that says the rule is "the middle of the tie" and not "the middle
-		// of the side": a lane running off the end of a road must enter over the road.
-		const TArray<FVector2D> ShortRoad = { FVector2D(-9000.0, -500.0), FVector2D(0.0, -500.0) };
-		GuidelineGeom::NearestBetweenPolylines(
-			Lane, ShortRoad, LaneIndex, LaneFraction, RoadIndex, RoadFraction);
-		TestTrue(TEXT("a half-covering road is entered at the middle of the OVERLAP"),
-			FMath::IsNearlyEqual(LaneFraction, 0.25, 1e-9));
-
-		// A SHORT LINE OFF ONE END. Here the closest pair IS an endpoint, and the second
-		// sweep must not overwrite the answer the first one found.
-		const TArray<FVector2D> Stub = { FVector2D(4000.0, 0.0), FVector2D(4000.0, 400.0) };
-		const double Corner = GuidelineGeom::NearestBetweenPolylines(
-			Lane, Stub, LaneIndex, LaneFraction, RoadIndex, RoadFraction);
-		TestEqual(TEXT("end to end, 3000 apart"), Corner, 3000.0);
-		TestTrue(TEXT("at the lane's far end"), FMath::IsNearlyEqual(LaneFraction, 1.0, 1e-9));
-	}
-
 	return true;
 }
 

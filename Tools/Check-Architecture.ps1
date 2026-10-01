@@ -431,6 +431,17 @@ $AllowedCallers = @(
         ProdReason  = 'a new production caller resolves the default airframe a second way instead of taking it from context - route it through one of the rows above or extend this row and say why'
     },
     @{
+        # THE CONTENT-LESS BRANCH ALONE (#479). ResolveDefaultAirframe is the door: it prefers the content set's
+        # DefaultAircraft and falls back to this. A production caller of THIS directly skips the content default - the
+        # day #30 authors DA_PiperMeridian it would still fly the hand-built Meridian. Public for tests, which compare
+        # TestAirframes::Piper() and the fallback against it (AirsideContentTest.cpp).
+        Name        = 'UAirsideSettings::ContentlessDefaultAirframe'
+        Pattern     = 'UAirsideSettings::ContentlessDefaultAirframe\s*\('
+        ProdAllowed = @('Public\Content\AirsideSettings.h', 'Private\Content\AirsideSettings.cpp')
+        TestExempt  = $true
+        ProdReason  = 'go through UAirsideSettings::ResolveDefaultAirframe, which prefers the content set''s DefaultAircraft and falls back to this'
+    },
+    @{
         # FRoadAgent's bundles are private since 2026-09-23 so the unused one of the two cannot
         # be read; this is the one writable door, and it exists for test fixtures only.
         Name        = 'FRoadAgent::EditAirframeForTest'

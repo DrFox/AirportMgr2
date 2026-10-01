@@ -35,9 +35,8 @@ namespace PushGroundFreedTest
 		URoadNetwork* Net = nullptr;
 		UGroundTraffic* Traffic = nullptr;
 		FGuidelineNodeId A, B, J, E, F;
-		FGuidelineEdgeId AJ, JE, JB;
+		FGuidelineEdgeId AJ, JE;
 		FRoadSegmentId Runway1;
-		FRoadSegmentId Runway2;
 
 		void Build(bool bTwoRunways)
 		{
@@ -55,7 +54,7 @@ namespace PushGroundFreedTest
 				const FRoadNodeId SA = Net->AddNode(FVector2D(100000.0, -90000.0));
 				const FRoadNodeId SM = Net->AddNode(FVector2D(100000.0, -10000.0));
 				const FRoadNodeId SB = Net->AddNode(FVector2D(100000.0, 70000.0));
-				Runway2 = Net->AddStraightSegment(SA, SM, Strip);
+				Net->AddStraightSegment(SA, SM, Strip);
 				Net->AddStraightSegment(SM, SB, Strip);
 			}
 
@@ -68,7 +67,7 @@ namespace PushGroundFreedTest
 			TestGraph::FJoinOptions Options;
 			Options.bDerived = false;
 			AJ = TestGraph::Join(*Net, A, J, Options);
-			JB = TestGraph::Join(*Net, J, B, Options);
+			TestGraph::Join(*Net, J, B, Options);
 			JE = TestGraph::Join(*Net, J, E, Options);
 			TestGraph::Join(*Net, E, F, Options);
 		}
