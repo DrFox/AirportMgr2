@@ -504,7 +504,11 @@ bool FTaxiingDepartureStrandedDoesNotJumpTest::RunTest(const FString& Parameters
 
 		double WorstJump = 0.0;
 		bool bDeparted = false;
-		bool bHeld = false;
+		// THE HOLD, COUNTED BY ITS REPLAN rather than seen between frames (issue #444): the held taxi out's replan is
+		// UGroundTraffic::RetryWaiters' arm now, at the END of the step the hold began in, so a hold that can be planned
+		// at once is over before any frame boundary a test can look at - the aeroplane stands still the same one step
+		// (the restart moves it from the next). The attempt counter counts only an agent that IsHoldingForTaxiOut.
+		const int32 ReplansBefore = Traffic->TaxiOutReplanAttemptsForTest();
 		// ONE SECOND INTO THE ROLL TOO: the take-off puts the aeroplane at its entry on the first
 		// frame it ROLLS, the frame after the phase says Departing - a first version stopped at the
 		// phase change and passed on the code that jumped (2026-09-27). A second of roll from
@@ -517,7 +521,6 @@ bool FTaxiingDepartureStrandedDoesNotJumpTest::RunTest(const FString& Parameters
 			if (Now == nullptr) { break; }
 			WorstJump = FMath::Max(WorstJump, FVector2D::Distance(Last, Now->LastMotion.Position));
 			Last = Now->LastMotion.Position;
-			bHeld |= Now->IsHoldingForTaxiOut();
 			if (Now->Phase == EAgentPhase::Departing) { bDeparted = true; ++RollFrames; }
 		}
 		TestTrue(FString::Printf(TEXT("%s: it never jumps: worst frame-to-frame move %.0f uu"), Name, WorstJump), WorstJump < 200.0);
@@ -525,8 +528,9 @@ bool FTaxiingDepartureStrandedDoesNotJumpTest::RunTest(const FString& Parameters
 		if (!bDrag)
 		{
 			// THE GUARD THIS TEST EXISTS FOR, reached: a stranded taxi out holds and replans - it is
-			// neither Stranded (a departure has a way back: ReplanHeldTaxiOuts) nor lined up.
-			TestTrue(FString::Printf(TEXT("%s: it went through the taxi-complete guard's hold"), Name), bHeld);
+			// neither Stranded (a departure has a way back: RetryWaiters) nor lined up.
+			TestTrue(FString::Printf(TEXT("%s: it went through the taxi-complete guard's hold"), Name),
+				Traffic->TaxiOutReplanAttemptsForTest() > ReplansBefore);
 		}
 	}
 	return true;
@@ -600,6 +604,41 @@ bool FPushbackRefusedIntoABackingTruckTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the truck retires"), Traffic->RetireAgent(TruckId));
 	TestEqual(TEXT("and with it gone the push is cleared - the truck was the reason"),
 		Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None);
+	return true;
+}
+
+/**
+ * THE SELECTED AEROPLANE'S ROUTE IS DRAWN DURING ITS PUSH TOO (issue #444). UGroundTraffic::RemainingRouteRuns answered
+ * Taxiing and Reversing by name, so for the whole of a push the select tool drew nothing - the one moment an aeroplane
+ * is going backwards across the apron. It answers every phase that walks a route now (FAgentPhaseTraits::bOnRoute):
+ * the push's own line, as a REVERSE run (the body backs along it), then the taxi out it hands over to, forward.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPushbackRouteIsDrawnTest,
+	"Airside.Model.Traffic.PushRouteIsDrawn",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPushbackRouteIsDrawnTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FPushbackGraph G = PushbackBuildGraph(*Net);
+
+	// Parked facing south from B -> A, so leaving means a push onto E, then E -> J -> B.
+	const int32 Id = PushbackParkFacing(*Traffic, *Net, G.B, G.A);
+	if (!TestTrue(TEXT("parked"), Id > 0)) { return false; }
+	if (!TestEqual(TEXT("departs by pushing back"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None)) { return false; }
+	for (int32 Tick = 0; Tick < 10; ++Tick) { Traffic->Advance(1.0 / 30.0, Net); }
+	const FRoadAgent* Agent = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("still in the manoeuvre"), Agent != nullptr && Agent->Phase == EAgentPhase::Manoeuvring)) { return false; }
+
+	const TArray<FRouteRun> Runs = Traffic->RemainingRouteRuns(Id);
+	if (!TestTrue(TEXT("a pushing aeroplane has a route to draw"), Runs.Num() >= 2)) { return false; }
+	TestTrue(TEXT("the push is drawn as a reverse run"), Runs[0].bReverse);
+	TestTrue(TEXT("along the push's own line"), Runs[0].Points == Agent->Pushback.Plan.Polyline);
+	TestFalse(TEXT("then the taxi out, forward"), Runs[1].bReverse);
+	TestTrue(TEXT("which begins where the push ends"),
+		Runs[1].Points.Num() > 0 && Runs[1].Points[0].Equals(Agent->TaxiOutPlan.Polyline[0], 1.0));
 	return true;
 }
 

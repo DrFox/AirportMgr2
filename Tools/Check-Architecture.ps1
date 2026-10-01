@@ -4033,6 +4033,76 @@ if ($phaseSwitchesSeen -eq 0) {
 }
 $ranRules.Add('flight-phase-groupings')
 
+# --- 81. NO default: IN A SWITCH ON EAgentPhase (#444) ----------------------------------------------------------------
+# What each agent phase MEANS was spelled by its consumers, behind default: arms - StatusOf's `case Taxiing: default:` put a
+# push and a reverse on the card as "Taxiing" while the flight board said Manoeuvring; DistanceAlongPlan, SpeedAlongPlan and
+# DescribeMotion gave a phase they did not name the follower's figures; FRoadAgent::Advance would have returned false ("drop
+# this agent") for one. Reversing (2026-09-17) and Stranded (2026-09-28) each fell into somebody's default on arrival. What a
+# phase means is FAgentPhaseTraits' row now (Model/AgentPhase.h, whose count fails the build for a phase with no row); a
+# switch that still decides per phase names EVERY phase. A switch whose body has a `case EAgentPhase::` (rule 58(d)'s shape:
+# comments and strings stripped, the body flattened to its own depth so a nested switch's default is not this one's), in any
+# production file of Airside, AirsideEditor, AirportOps or the game module, FAILS when:
+#   a. it has a `default:` - a new phase becomes that switch's fallback, silently;
+#   b. it is not inside AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN/_END - C4062 is off on this toolchain, so "no default" alone is a
+#      comment, not a contract (ExhaustiveSwitch.h): a phase missing from the switch would compile and fall through.
+# NOT BANNED: an `if` on one phase, a grouping by `||` (not linted - see below), and anything in a test. WHAT NO REGEX SEES:
+# a phase set spelled as an OR of comparisons (`Phase == Parked || Phase == Stranded`) - rule 58(b)'s shape for flight
+# phases; for agent phases the remaining ones are transition tests and arms of one-off decisions (#444's PR lists them), and
+# the pin on the MEANING is Airside.Model.Traffic.IsOnRouteClassifiesEveryPhase (every column, every phase). Not allow-listed:
+# UJobBoard::OnAgentPhase (#427's) has no switch on a phase. The rule fails, rather than passes, when it sees no switch on
+# EAgentPhase at all - FRoadAgent::Advance is one. Mutation-checked 2026-10-01 (the PR body has the output).
+$agentPhaseTrees = @($plugin, $editor, $ops, (Join-Path $Root 'Source\AirportMgr'))
+$agentPhaseSwitchesSeen = 0
+foreach ($agentPhaseTree in $agentPhaseTrees) {
+    foreach ($file in Get-Sources $agentPhaseTree @('.cpp', '.h')) {
+        if ($file.Name -like '*Test.cpp' -or $file.Name -like '*Test.h' -or $file.FullName -match '[\\/]Testing[\\/]') { continue }
+        $lines = Get-Content -LiteralPath $file.FullName
+        if (-not ($lines -match 'case\s+EAgentPhase::')) { continue }
+        $inBlock = $false
+        $codeLines = New-Object System.Collections.Generic.List[string]
+        $exhaustiveAt = New-Object System.Collections.Generic.List[bool]
+        $exhaustive = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            if ($code -match '\bAIRSIDE_EXHAUSTIVE_SWITCH_BEGIN\b') { $exhaustive = $true }
+            $codeLines.Add($code)
+            $exhaustiveAt.Add($exhaustive)
+            if ($code -match '\bAIRSIDE_EXHAUSTIVE_SWITCH_END\b') { $exhaustive = $false }
+        }
+        for ($i = 0; $i -lt $codeLines.Count; $i++) {
+            if ($codeLines[$i] -notmatch '\bswitch\s*\(') { continue }
+            $open = -1
+            for ($j = $i; $j -lt [Math]::Min($i + 4, $codeLines.Count); $j++) { if ($codeLines[$j].Contains('{')) { $open = $j; break } }
+            if ($open -lt 0) { continue }
+            $depth = 0
+            $flat = New-Object System.Text.StringBuilder
+            $closed = $false
+            for ($j = $open; $j -lt $codeLines.Count -and -not $closed; $j++) {
+                foreach ($ch in $codeLines[$j].ToCharArray()) {
+                    if ($ch -eq '{') { $depth++; if ($depth -gt 1) { [void]$flat.Append(' ') } }
+                    elseif ($ch -eq '}') { $depth--; if ($depth -eq 0) { $closed = $true; break } else { [void]$flat.Append(' ') } }
+                    elseif ($depth -eq 1) { [void]$flat.Append($ch) }
+                    else { [void]$flat.Append(' ') }
+                }
+                [void]$flat.Append(' ')
+            }
+            $body = $flat.ToString()
+            if ($body -notmatch '\bcase\s+EAgentPhase::') { continue }
+            $agentPhaseSwitchesSeen++
+            if ($body -match '\bdefault\s*:') {
+                $failures.Add("agent-phase-switch: $($file.FullName):$($i + 1) switches on EAgentPhase with a default - name every phase, so a new one is a build error here and not this switch's fallback; what a phase MEANS is FAgentPhaseTraits' row (#444)")
+            }
+            if (-not $exhaustiveAt[$i]) {
+                $failures.Add("agent-phase-switch: $($file.FullName):$($i + 1) switches on EAgentPhase outside AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN/_END - C4062 is off on this toolchain, so a new phase would pass it silently (#444)")
+            }
+        }
+    }
+}
+if ($agentPhaseSwitchesSeen -eq 0) {
+    $failures.Add("agent-phase-switch: found no switch on EAgentPhase in the production trees - FRoadAgent::Advance is one; rule 81's switch check no longer sees its shape; update it, do not let it check nothing")
+}
+$ranRules.Add('agent-phase-switch')
+
 # --- 66. THE WINDOWS A KEY OPENS ARE TOGGLED WINDOWS (#447) ----------------------------------------------------
 # Whether a window is open is the HOST'S (UUiWindowHost::Toggle/IsShown), and what its close button means is FUiWindowSpec::bToggled: a toggled window's
 # close IS the toggle, an untoggled one's sticks. UBuildHudLayer::PanelFor is the list of windows a key or a bar button toggles, and every panel on it must

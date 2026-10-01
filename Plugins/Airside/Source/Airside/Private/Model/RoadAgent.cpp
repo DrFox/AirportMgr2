@@ -206,6 +206,10 @@ FGearPose FRoadAgent::GearPose() const
 	return Airframe.Gear.FractionsAt(GearCycleSeconds, GearPhase == EGearPhase::Raising);
 }
 
+// EVERY PHASE NAMED in the speed switch below, no default (issue #444): the follower's speed was the default: arm, which
+// is the very trap the switch's own comment describes - a phase missing from it is a phase reporting someone else's speed.
+// ENFORCED BY: AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (C4062 as an error over this function); Check-Architecture rule 81
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
 FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	double Altitude, double PitchDegrees) const
 {
@@ -262,7 +266,7 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	case EAgentPhase::Parked:
 	case EAgentPhase::Stranded:
 	case EAgentPhase::Gone:        Motion.GroundSpeed = 0.0; break;
-	default:                       Motion.GroundSpeed = Follower.Speed;  break;
+	case EAgentPhase::Taxiing:     Motion.GroundSpeed = Follower.Speed;  break;
 	}
 
 	// WHERE IT PITCHES ABOUT, which is a fact about the airframe rather than about this
@@ -332,6 +336,7 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 
 	return Motion;
 }
+AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 bool FRoadAgent::StartArrival(const FRunwayEnd& End, const FAirframe& InAirframe, double VacateAt,
 	const FRoutePlan& InTaxiInPlan)
@@ -555,24 +560,40 @@ void FRoadAgent::RejoinTaxi(const FRoutePlan& Plan, double InitialTravelled, con
 	LastMotion.Position = At;
 }
 
-void FRoadAgent::MarkTaxiOutStale()
+void FRoadAgent::WaitFor(EAgentWait Why, FGuidelineNodeId From)
 {
-	bTaxiOutStale = true;
-	bTaxiOutHoldSaid = false;
-	TaxiOutRefusedAt.Reset();
+	if (Why == EAgentWait::None)
+	{
+		EndWait();
+		return;
+	}
+	// THE GOAL MOVES WITH A STAND WAIT EVERY TIME, re-armed or not - SetAwaitingStand's contract, kept: the rebuild
+	// re-arms in place, naming the node it waits from each time.
+	if (Why == EAgentWait::ForStand)
+	{
+		GoalNode = From;
+	}
+	// THE SAME WAIT AGAIN CHANGES NOTHING ELSE - see the declaration: the push-end hold re-enters every frame.
+	if (Wait == Why)
+	{
+		return;
+	}
+	Wait = Why;
+	bWaitSaid = false;
+	WaitRefusedAt.Reset();
+}
+
+void FRoadAgent::EndWait()
+{
+	Wait = EAgentWait::None;
+	bWaitSaid = false;
+	WaitRefusedAt.Reset();
 }
 
 void FRoadAgent::AdoptTaxiOut(const FRoutePlan& Route)
 {
 	TaxiOutPlan = Route;
-	EndTaxiOutHold();
-}
-
-void FRoadAgent::EndTaxiOutHold()
-{
-	bTaxiOutStale = false;
-	bTaxiOutHoldSaid = false;
-	TaxiOutRefusedAt.Reset();
+	EndWait();
 }
 
 // ONE FUNCTION, SWITCHED ON EVERY ONE OF THE THREE ENUMS WITH NO default: - a fourth motion, release or goal is a
@@ -629,7 +650,7 @@ void FRoadAgent::ApplyRouteChange(const FRouteChange& Change, ERouteGoal Goal, F
 		else
 		{
 			// THE ENGINE WAS NOT RUNNING (#107 item 2) - DepartAgent on a parked aircraft that ran
-			// out its post-arrival shutdown pause, or ReofferStands on one that is stranded and
+			// out its post-arrival shutdown pause, or the stand retry on one that is stranded and
 			// parked with its own shutdown countdown running. StartEngineAtSpeed's own header says
 			// what it is FOR - "as it is for an aeroplane that has spent a turnaround ... before it
 			// taxied out" - which presumes the engine was already running; calling it
@@ -638,7 +659,7 @@ void FRoadAgent::ApplyRouteChange(const FRouteChange& Change, ERouteGoal Goal, F
 			//
 			// PriorRPM RESTORED, NOT LEFT AT ZERO: bEngineRunning false does not mean the
 			// propeller has actually stopped turning - AdvanceEngine spools it DOWN over
-			// SpoolDownSeconds, so a redirect that lands mid-decay (the ReofferStands case above)
+			// SpoolDownSeconds, so a redirect that lands mid-decay (the stand retry's case above)
 			// still has real RPM on it. RestartTaxi's own cold start just wrote EngineRPM=0.0 over
 			// that, which would have snapped a spooling-down propeller to a dead stop and then
 			// spooled it back UP from zero - the same one-frame snap this fix exists to remove,
@@ -810,6 +831,10 @@ void FRoadAgent::ArmDeparture(const FRunwayEnd& End, double EntryOffset)
 	DepartureOrder.EntryOffset = EntryOffset;
 }
 
+// EVERY PHASE NAMED, no default (issue #444): Gone shared its arm with a default: that would have returned false - "drop
+// this agent" - for a phase added and forgotten here.
+// ENFORCED BY: AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (C4062 as an error over this function); Check-Architecture rule 81
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
 bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEvent& OutEvent)
 {
 	// NONE ON THE COMMON FRAME, overwritten below only at an actual handover - see
@@ -943,14 +968,16 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 			// planned (above); a rebuild during the push can leave the taxi out stranded, or
 			// starting somewhere else, and starting it anyway put the aeroplane on its first
 			// point - a jump across the airfield (2026-09-27). HOLD at the end of the push
-			// instead, still Manoeuvring and at rest, until UGroundTraffic::ReplanHeldTaxiOuts
+			// instead, still Manoeuvring and at rest, until UGroundTraffic::RetryWaiters
 			// supplies a route from here. 10 uu: the planned case is exact, so this only ever
 			// has to tell exact from wrong.
 			constexpr double HandoverToleranceUu = 10.0;
-			if (bTaxiOutStale || !TaxiOutPlan.IsValid() || TaxiOutPlan.Polyline.Num() == 0
+			if (IsWaitingFor(EAgentWait::ForTaxiOutRoute) || !TaxiOutPlan.IsValid() || TaxiOutPlan.Polyline.Num() == 0
 				|| FVector2D::Distance(TaxiOutPlan.Polyline[0], PushAt) > HandoverToleranceUu)
 			{
-				bTaxiOutStale = true;
+				// THROUGH THE DOOR, which leaves a hold it re-enters every frame as it was (said, refused) - the
+				// reason this was a bare write of the flag before #444, not the mutator.
+				WaitFor(EAgentWait::ForTaxiOutRoute);
 				LastMotion = DescribeMotion(PushAt, PushHeading);
 				OutMotion = LastMotion;
 				return true;
@@ -1026,9 +1053,9 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		// ENFORCED BY: Airside.Model.RoadAgent.EveryPhaseChangeNamesItsEvent
 		if (OutEvent == EAgentEvent::None && Follower.HasArrived())
 		{
-			// HOLDING FOR A NEW WAY TO THE RUNWAY - see bTaxiOutStale. Neither a take-off nor a
-			// park: UGroundTraffic::ReplanHeldTaxiOuts restarts the taxi from here when it can.
-			if (bTaxiOutStale)
+			// HOLDING FOR A NEW WAY TO THE RUNWAY - see EAgentWait::ForTaxiOutRoute. Neither a take-off nor a
+			// park: UGroundTraffic::RetryWaiters restarts the taxi from here when it can.
+			if (IsWaitingFor(EAgentWait::ForTaxiOutRoute))
 			{
 				OutMotion = LastMotion;
 				return true;
@@ -1050,7 +1077,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 					TEXT("Taxi ended %.0f uu from its runway entry; holding for a new way to the runway."),
 					FVector2D::Distance(LastMotion.Position, Entry));
 				DisarmDeparture();
-				MarkTaxiOutStale();
+				WaitFor(EAgentWait::ForTaxiOutRoute);
 				OutMotion = LastMotion;
 				return true;
 			}
@@ -1324,10 +1351,11 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 	}
 
 	case EAgentPhase::Gone:
-	default:
 		return false;
 	}
+	return false;
 }
+AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 void FRoadAgent::Park(const FVector2D& At, double Heading, FAgentMotion& OutMotion)
 {

@@ -1005,7 +1005,7 @@ namespace
 			Traffic->OnGraphRebuilt(*Field.Net);
 			Drain();
 			const FRoadAgent* P = Aircraft();
-			return P != nullptr && P->bAwaitingStand
+			return P != nullptr && P->IsWaitingFor(EAgentWait::ForStand)
 				&& RunUntil(600.0, [this]() { const FRoadAgent* A = Aircraft(); return A != nullptr && A->Phase == EAgentPhase::Parked; }, bDrain);
 		}
 	};

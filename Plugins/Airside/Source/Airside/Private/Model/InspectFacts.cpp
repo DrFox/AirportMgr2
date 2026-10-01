@@ -67,6 +67,38 @@ namespace InspectFacts
 	namespace
 	{
 		/**
+		 * The card's line for what the agent is WAITING FOR (EAgentWait), or null when it says nothing - no wait, or a
+		 * taxi out marked stale while the push that leads to it is still running (it is waited for from the push's end,
+		 * FRoadAgent::IsHoldingForTaxiOut). Outranks motion: a waiting agent is stood still, whatever its phase.
+		 * A HELD TAXI-OUT HAD NO LINE (issue #444) and read "Taxiing", stood still at the end of a dead route.
+		 * ENFORCED BY: AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (a wait added is a build error here until it has a line);
+		 * Airside.Model.InspectFacts.HeldTaxiOutIsNotTaxiing
+		 */
+		AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+		const TCHAR* WaitLine(const FRoadAgent& Agent)
+		{
+			switch (Agent.GetWait())
+			{
+			case EAgentWait::None:
+				return nullptr;
+			case EAgentWait::ForStand:
+				return TEXT("No stand - waiting");
+			case EAgentWait::ForTaxiOutRoute:
+				return Agent.IsHoldingForTaxiOut() ? TEXT("No way to the runway - waiting") : nullptr;
+			}
+			return nullptr;
+		}
+		AIRSIDE_EXHAUSTIVE_SWITCH_END
+
+		/** The three facts that OUTRANK MOTION on the card - a wait, an armed departure, a hold - asked in one place by
+		 *  StatusOf (to choose StatusWithHold) and by StatusWithHold's own fall-through check, so the two cannot disagree. */
+		bool OutranksMotion(const FRoadAgent& Agent)
+		{
+			return WaitLine(Agent) != nullptr || (Agent.bDepartureArmed && Agent.Phase == EAgentPhase::Taxiing)
+				|| Agent.GetWaitingOn() != 0;
+		}
+
+		/**
 		 * StatusOf's precedence, with the hold line composed from Hold and BlockerName and
 		 * bOutIsHold saying whether it won. ONE BODY for the public StatusOf and DescribeAgent -
 		 * the latter knows the runway and the blocker's class, the former neither - so the
@@ -75,9 +107,9 @@ namespace InspectFacts
 		FString StatusWithHold(const FRoadAgent& Agent, const FAgentHold& Hold, const FString& BlockerName, bool& bOutIsHold)
 		{
 			bOutIsHold = false;
-			if (Agent.bAwaitingStand)
+			if (const TCHAR* Waiting = WaitLine(Agent))
 			{
-				return TEXT("No stand - waiting");
+				return Waiting;
 			}
 			if (Agent.bDepartureArmed && Agent.Phase == EAgentPhase::Taxiing)
 			{
@@ -91,9 +123,9 @@ namespace InspectFacts
 				return HoldLine(Hold, BlockerName, FString());
 			}
 			// NO RECURSION BACK: StatusOf only calls here when one of the three branches above will
-			// return - awaiting a stand, armed, or waiting (HoldOf sets the hold from GetWaitingOn,
+			// return - a wait, armed, or waiting on another (HoldOf sets the hold from GetWaitingOn,
 			// the very test StatusOf made). The check() pins that the fall-through cannot re-enter.
-			check(!Agent.bAwaitingStand && !(Agent.bDepartureArmed && Agent.Phase == EAgentPhase::Taxiing) && Agent.GetWaitingOn() == 0);
+			check(!OutranksMotion(Agent));
 			return StatusOf(Agent);
 		}
 
@@ -107,9 +139,15 @@ namespace InspectFacts
 		}
 	}
 
+	// EVERY PHASE NAMED, no default (issue #444): `case Taxiing: default: return "Taxiing"` put a push and a reverse on
+	// the card as taxiing while the flight board said Manoeuvring. The phase's own word is FAgentPhaseTraits'; the switch
+	// says only which phases refine it from a sub-state.
+	// ENFORCED BY: AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (C4062 as an error over this function); Check-Architecture rule 81;
+	// Airside.Model.InspectFacts.StatusDistinctPerPhase
+	AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
 	FString StatusOf(const FRoadAgent& Agent)
 	{
-		if (Agent.bAwaitingStand || (Agent.bDepartureArmed && Agent.Phase == EAgentPhase::Taxiing) || Agent.GetWaitingOn() != 0)
+		if (OutranksMotion(Agent))
 		{
 			// THE THREE THAT OUTRANK MOTION go through StatusWithHold's one ordering; a bare agent
 			// has no network to name a runway by and no traffic to class its blocker.
@@ -121,25 +159,27 @@ namespace InspectFacts
 		{
 			return TEXT("Crossing runway");
 		}
+		const TCHAR* Word = Agent.PhaseTraits().DisplayText;
 		switch (Agent.Phase)
 		{
 		case EAgentPhase::Parked:
 			return Agent.ShutdownCountdown > 0.0
 				? FString::Printf(TEXT("Shutting down (%.0fs)"), Agent.ShutdownCountdown)
-				: FString(TEXT("Parked"));
+				: FString(Word);
 		case EAgentPhase::Arriving:
-			return Agent.LastMotion.bAirborne ? TEXT("On final") : TEXT("Landing roll");
+			return Agent.LastMotion.bAirborne ? FString(TEXT("On final")) : FString(Word);
 		case EAgentPhase::Departing:
-			return Agent.LastMotion.bAirborne ? TEXT("Climbing") : TEXT("Rolling");
-		case EAgentPhase::Gone:
-			return TEXT("Gone");
-		case EAgentPhase::Stranded:
-			return TEXT("Stranded - retire it");
+			return Agent.LastMotion.bAirborne ? FString(TEXT("Climbing")) : FString(Word);
 		case EAgentPhase::Taxiing:
-		default:
-			return TEXT("Taxiing");
+		case EAgentPhase::Manoeuvring:
+		case EAgentPhase::Reversing:
+		case EAgentPhase::Gone:
+		case EAgentPhase::Stranded:
+			return Word;
 		}
+		return Word;
 	}
+	AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 	bool DescribeAgent(const UGroundTraffic& Traffic, const URoadNetwork* Network, int32 AgentId, FAgentFacts& Out)
 	{

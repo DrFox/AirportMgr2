@@ -77,8 +77,8 @@ bool FTakeoffRun::Start(const FRunwayEnd& InEnd, const FAirframe& InAirframe, do
 		return false;
 	}
 
+	// AS GIVEN, NOT RE-NORMALISED - FLandingRun::Start's reason (issue #444): the end's Direction is unit by contract.
 	End = InEnd;
-	End.Direction = InEnd.Direction.GetSafeNormal();
 	// Ground/Climb are NOT copied here any more (issue #83) - Advance takes the airframe
 	// fresh from its caller every frame instead.
 
@@ -205,7 +205,7 @@ bool FTakeoffRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 		break;
 	}
 
-	OutPosition = End.Threshold + End.Direction * Travelled;
+	OutPosition = End.PointAt(Travelled);
 	OutHeading = Heading;
 	OutAltitude = Altitude;
 	OutPitch = Pitch;

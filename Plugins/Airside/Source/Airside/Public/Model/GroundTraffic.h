@@ -132,7 +132,7 @@ public:
 	/**
 	 * Stand pose nodes that were held - a reservation (HoldStand) or an agent's goal or body - and are not now,
 	 * one broadcast per Advance (or rebuild) that freed any. Same diff as OnRunwayFreed. The bStandsMayHaveFreed
-	 * sites are NOT this signal: they gate ReofferStands inside this class, and stay as they are.
+	 * sites are NOT this signal: they gate RetryWaiters' stand arm inside this class, and stay as they are.
 	 * ENFORCED BY: Airside.Model.Traffic.RunwayFreed.StandsDiff
 	 */
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnStandsFreed, const TArray<FGuidelineNodeId>& /*PoseNodes*/);
@@ -157,8 +157,8 @@ public:
 	int32 PushWatchCountForTest() const { return PushWatch.Num(); }
 
 	// NO RunwayFreedCount (removed in ops batch 3 PR E's review, 2026-09-30): PR D added it for PR E's two pollers,
-	// and neither reads a held runway - a held taxi out's replan is only RANKED by one (see ReplanHeldTaxiOuts'
-	// gate), and LandChoices::Build is given no traffic model at all. A counter nothing consumes is a list declared
+	// and neither reads a held runway - a held taxi out's replan is only RANKED by one (see RetryWaiters'
+	// taxi-out gate), and LandChoices::Build is given no traffic model at all. A counter nothing consumes is a list declared
 	// and never read (CLAUDE.md); OnRunwayFreed itself is what AirportOps and the tests count.
 
 	/**
@@ -170,7 +170,7 @@ public:
 	 */
 	uint32 StandHoldChangeCount() const { return StandHoldChanges; }
 
-	/** How many times ReplanHeldTaxiOuts has actually tried to plan a held taxi out - its gate's counter. */
+	/** How many times RetryWaiters has actually tried to plan a held taxi out - its taxi-out gate's counter. */
 	int32 TaxiOutReplanAttemptsForTest() const { return TaxiOutReplanAttempts; }
 
 	/**
@@ -238,7 +238,7 @@ public:
 	 * DispatchAgent does, through the same helper.
 	 *
 	 * Cause is what the phase change it makes is announced with (#436): Redirected for a caller with no more specific
-	 * reason; ReofferStands says ReOffered, DepartAgent's straight-out DepartOrdered, the player's Unstick Rescued -
+	 * reason; the stand retry (RetryWaiters) says ReOffered, DepartAgent's straight-out DepartOrdered, the player's Unstick Rescued -
 	 * the facts UFlightBoard used to re-derive from the live agent a drain late (a taxi in or a taxi out).
 	 *
 	 * A RESTART THROUGH ChangeRoute (issue #429): the old route's reservations let go and a waiter's wait ended - its
@@ -523,7 +523,7 @@ public:
 		const URoadNetwork& Network, ENarrowRoad Narrow = ENarrowRoad::Refuse, EAgentEvent Cause = EAgentEvent::Redirected);
 
 	/**
-	 * ONE AIRCRAFT OFFERED A STAND (issue #429) - ReofferStands' move for each waiter, and the player's Unstick "find a
+	 * ONE AIRCRAFT OFFERED A STAND (issue #429) - the stand retry's move for each waiter (RetryWaiters, ReofferWaiter), and the player's Unstick "find a
 	 * stand" (Cause Rescued; ReOffered for the pass). By where it can start from:
 	 *   - PARKED OR TAXIING: the best free stand it fits reachable from its GOAL NODE - where a parked one stands, where
 	 *     a moving one's route ends - (ArrivalPlanner::ChooseStand, by ArrivalPlanner::TaxiInQuery), then SendAgentTo
@@ -675,16 +675,9 @@ public:
 	 */
 	int32 HolderOfNode(FGuidelineNodeId Node) const;
 
-	/**
-	 * AgentId's planned polyline, road-plane, or an empty array if there is no such agent or
-	 * it is not Taxiing. NOT trimmed to what is actually left to drive - Travelled advances a
-	 * point along this same array (see FRouteFollower::Advance) but nothing shortens the
-	 * array itself, so this is the whole plan every frame. Good enough for the one picture
-	 * that reads it (FSelectTool's route preview); a true "from here to the end" trim is
-	 * future work if something needs it. Exists so Tool/ names the agent it wants rather than
-	 * reaching Agent->Follower.Plan.Polyline itself (#104).
-	 */
-	const TArray<FVector2D>& RemainingRoute(int32 AgentId) const;
+	// RemainingRoute (the polyline alone, Taxiing only) DELETED (issue #444): nothing called it - FSelectTool's route
+	// preview reads RemainingRouteRuns, below, since the 2026-09-26 route styles - and its Taxiing-only guard was one
+	// more hand-spelled phase set. Its "Tool/ names the agent, not Agent->Follower.Plan" reason (#104) is the runs'.
 
 	/**
 	 * How long AgentId's route has left to drive, in MOVEMENT seconds at its own cruise (its chassis' Taxi.SpeedCap, at
@@ -697,11 +690,20 @@ public:
 	double RemainingDriveSeconds(int32 AgentId) const;
 
 	/**
-	 * RemainingRoute cut into forward and reverse runs (FRoutePlan::DescribeRuns), for the route
-	 * view's two styles (spec 2026-09-26 §5) - and answered while Reversing too, which
-	 * RemainingRoute is not. While a TOW is backing, the run it is backing along is the path its
-	 * solved trailer axle actually takes (FTowReverseRun's samples), not the raw leg: what is
-	 * drawn is what is driven. Empty for no such agent or one neither taxiing nor reversing.
+	 * AgentId's planned route, road-plane, cut into forward and reverse runs (FRoutePlan::DescribeRuns), for
+	 * the route view's two styles (spec 2026-09-26 §5). NOT trimmed to what is actually left to drive - the
+	 * follower's Travelled advances along this same array but nothing shortens it - which is good enough for the
+	 * one picture that reads it (FSelectTool's route preview). Exists so Tool/ names the agent it wants rather
+	 * than reaching Agent->Follower.Plan itself (#104).
+	 *
+	 * EVERY PHASE ON A ROUTE (FAgentPhaseTraits::bOnRoute, issue #444) - it answered Taxiing and Reversing by
+	 * name, so for the whole of a push the selected aeroplane had no route drawn. A PUSH is its own line, drawn
+	 * as a reverse run (bBodyBacks: the body backs along it), then the taxi out it hands over to - unless that
+	 * taxi out is waiting to be planned again (EAgentWait::ForTaxiOutRoute), when there is none to draw. While a
+	 * TOW is backing, the run it is backing along is the path its solved trailer axle actually takes
+	 * (FTowReverseRun's samples), not the raw leg: what is drawn is what is driven. Empty for no such agent or
+	 * one on no route.
+	 * ENFORCED BY: Airside.Model.Traffic.PushRouteIsDrawn
 	 */
 	TArray<FRouteRun> RemainingRouteRuns(int32 AgentId) const;
 
@@ -967,7 +969,7 @@ private:
 	 * follower, the claims it gives back, the wait, the engine and the pose, its goal Kept - bracketed by the goal's
 	 * claim: ReleaseGoal before, TakeGoal after (release before take: ReleaseGoal reads the goal the agent had, TakeGoal
 	 * the plan it now has). Every operation here that hands a live agent a new plan (RedirectAgent, ExtendRoute,
-	 * RerouteAgent, RescueStranded, ReplanHeldTaxiOuts) is a guard over this call and nothing else; the replan
+	 * RerouteAgent, RescueStranded, RetryWaiters' taxi-out restart) is a guard over this call and nothing else; the replan
 	 * mechanism (FPlanReResolver), which has no UGroundTraffic and whose goal does not move, calls the agent's half
 	 * directly and keeps or re-points it. Network is TakeGoal's, for the departure arming and the claim.
 	 * ENFORCED BY: Airside.Model.RouteChange.* (each entry point's aftermath, at this level, with real agents),
@@ -1016,17 +1018,33 @@ private:
 	void Arbitrate(const URoadNetwork& Network);
 
 	/**
-	 * Every aeroplane holding at the end of a push for a taxi out it can drive (see
-	 * FRoadAgent::bTaxiOutStale) is given one: DeparturePlanner::PlanAny from the live node
-	 * nearest where it stands, joined to it by a short leg so it DRIVES there rather than
-	 * appearing there, and re-armed from the new route's end. None found: it keeps holding,
-	 * said once, and is asked again when the guideline graph moves - the player's fix is an
-	 * edit, and every edit moves it - so the fix releases it, the user's ruling for this case
-	 * (2026-09-27). It was asked every tick until ops batch 3 PR E; see the .cpp for why the
-	 * graph's revision is every input of a refusal. Not while the graph is mid-edit: the route
-	 * must be on the lines the player is about to see.
+	 * THE ONE RETRY PASS FOR EVERY STOPPED WAITER (issue #444), dispatching on FRoadAgent::GetWait: a ForStand
+	 * waiter is offered a stand (ReofferWaiter) when bStandsMayHaveFreed, and a ForTaxiOutRoute hold is planned a
+	 * way to the runway (ReplanHeldTaxiOut). It replaces two loops that each scanned every agent for their own flag
+	 * - ReplanHeldTaxiOuts before the agents moved, ReofferStands after - one wait per agent being the enum's point.
+	 *
+	 * LAST IN AdvanceOnce, after every agent has claimed, moved and been replanned, so whatever it sends starts the
+	 * next tick at the top of Arbitrate like any other new route - the reason the stand re-offer always ran there.
+	 * The taxi-out replan ran BEFORE the motion until #444; at the end of the step a hold that has just begun is
+	 * planned on the step it began (the push hands over on the next, as it did), and a Taxiing restart is claimed by
+	 * the next Arbitrate before it moves rather than moving on a route no claim pass has seen.
+	 *
+	 * BY ID, collected first: a stand's SendAgentTo can announce a phase change, and a listener may retire any agent
+	 * and shift the array (the re-entrancy contract AdvanceOnce states).
+	 * ENFORCED BY: Airside.Model.Traffic.HeldTaxiOut.AsksOncePerEdit, Airside.Model.Traffic.ReofferTaxiingWaiterDoesNotJump
 	 */
-	void ReplanHeldTaxiOuts(const URoadNetwork& Network);
+	void RetryWaiters(const URoadNetwork& Network);
+
+	/**
+	 * A ForTaxiOutRoute hold is given a taxi out it can drive: DeparturePlanner::PlanAny from the live node
+	 * nearest where it stands, joined to it by a short leg so it DRIVES there rather than appearing there, and
+	 * re-armed from the new route's end. None found: it keeps holding, said once, and is asked again when the
+	 * guideline graph moves - the player's fix is an edit, and every edit moves it - so the fix releases it, the
+	 * user's ruling for this case (2026-09-27). It was asked every tick until ops batch 3 PR E; see the .cpp for why
+	 * the graph's revision is every input of a refusal. Not while the graph is mid-edit: the route must be on the
+	 * lines the player is about to see. RetryWaiters' arm for one agent; GraphNow is the revision it gates on.
+	 */
+	void ReplanHeldTaxiOut(int32 AgentId, const URoadNetwork& Network, uint32 GraphNow);
 
 	/** One bounded step. Advance splits a long frame into these - see FTrafficRules::MaxSubstepSeconds. */
 	void AdvanceOnce(double DeltaSeconds, const URoadNetwork* Network);
@@ -1082,9 +1100,9 @@ private:
 	void GateReverseLeg(FRoadAgent& Agent) const;
 
 	/**
-	 * Offers every waiting aircraft (bAwaitingStand) the best free stand reachable from where
-	 * its route ends, by the verb its phase calls for (below). Runs at the end of Advance when
-	 * bStandsMayHaveFreed; one pass, then the flag clears whether or not anyone was placed.
+	 * Offers one waiting aircraft (EAgentWait::ForStand) the best free stand reachable from where
+	 * its route ends, by the verb its phase calls for (below). RetryWaiters' stand arm, asked of every
+	 * such waiter when bStandsMayHaveFreed; one pass, then the flag clears whether or not anyone was placed.
 	 *
 	 * BY PHASE, NOT BY GOAL (issue #435): a TAXIING waiter is still moving, and its GoalNode is
 	 * the end of the route it has not finished - so the way to a stand starts exactly where its live
@@ -1105,7 +1123,7 @@ private:
 	 * ENFORCED BY: Airside.Model.Traffic.ReofferTaxiingWaiterDoesNotJump (the extension),
 	 * Airside.Model.Traffic.ReofferRefusedExtensionKeepsWaiting (the refusal)
 	 */
-	void ReofferStands(const URoadNetwork& Network);
+	void ReofferWaiter(int32 AgentId, const URoadNetwork& Network);
 
 	/**
 	 * Set when a stand claim is released (redirect, retire, Gone) or the graph is rebuilt;
@@ -1166,9 +1184,21 @@ private:
 	/** Re-reads RunwaySeeds when the network object or its topology moved, or bForce (a rebuild). */
 	void RefreshRunwaySeeds(const URoadNetwork& Network, bool bForce);
 
-	/** The strips IsChainHeld says are held now, over RunwaySeeds - the set DiffFreedom diffs, and the push
-	 *  watch's record of what PlanAny ranked by. */
-	TSet<FRoadSegmentId> RunwaysHeldNow(const URoadNetwork& Network) const;
+	/**
+	 * The strips IsChainHeld says are held now, over RunwaySeeds, into Out - the set DiffFreedom diffs, and the push
+	 * watch's record of what PlanAny ranked by. THROUGH RunwayChains (issue #446 item 8): each strip's chain is walked
+	 * once per topology, as the claim pass's are, not once per strip per frame through the seed's own walk.
+	 * ENFORCED BY: Airside.Model.Traffic.RunwayFreed.DiffWalksNoChainPerFrame
+	 */
+	void RunwaysHeldNow(const URoadNetwork& Network, TSet<FRoadSegmentId>& Out) const;
+
+	/**
+	 * DiffFreedom's "held now" sets, KEPT as members (issue #446 item 8) and swapped with the baselines above each call
+	 * rather than built fresh: a set and a map allocated every frame for a diff that, on most frames, finds nothing.
+	 * Emptied after each swap (Reset keeps the allocation) - scratch, read nowhere outside DiffFreedom.
+	 */
+	TSet<FRoadSegmentId> RunwaysNowScratch;
+	TMap<FEntityInstanceId, FGuidelineNodeId> StandsNowScratch;
 
 	/**
 	 * THE PLANNING HALF OF DepartAgent, with no log line and no side effect: PlanAny, the straight-out test, the
@@ -1220,7 +1250,7 @@ private:
 	int32 TaxiOutReplanAttempts = 0;
 
 	/**
-	 * The network ReplanHeldTaxiOuts last gated against. A revision numbers ONE network's edits, and a new network
+	 * The network RetryWaiters' taxi-out arm last gated against. A revision numbers ONE network's edits, and a new network
 	 * object (ClearNetwork, a load) starts its own count - so a refusal remembered on the old one is forgotten when
 	 * this changes, rather than matched by coincidence against the new one's number. Identity only, never
 	 * dereferenced; weak for the same reason DiffNetwork is.
@@ -1284,7 +1314,7 @@ private:
 
 	/**
 	 * Points AgentId's GoalNode at Goal without touching its plan, so the goal no longer names
-	 * where the live plan ends. The one state that makes ReofferStands' ExtendRoute REFUSE for an
+	 * where the live plan ends. The one state that makes the stand retry's ExtendRoute REFUSE for an
 	 * aircraft (its re-offered route starts at GoalNode, and Splice wants it to start where the
 	 * live plan ends) - a state nothing in production can reach, which is exactly why the "keeps
 	 * waiting, never redirected" path needs a hook to be tested at all (issue #435's review).

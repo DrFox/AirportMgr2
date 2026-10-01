@@ -3476,7 +3476,7 @@ bool FTrafficExtendRouteMovesTheGoalTest::RunTest(const FString& Parameters)
 		TestGraph::Rebuild(*Air.Net);
 		Traffic->OnGraphRebuilt(*Air.Net);
 		if (!TestTrue(TEXT("it lands and taxis on, waiting for a stand"), RunUntil(*Traffic, *Air.Net, 600.0,
-			[&]() { const FRoadAgent* P = Traffic->FindAgent(Id); return P && P->Phase == EAgentPhase::Taxiing && P->bAwaitingStand; })))
+			[&]() { const FRoadAgent* P = Traffic->FindAgent(Id); return P && P->Phase == EAgentPhase::Taxiing && P->IsWaitingFor(EAgentWait::ForStand); })))
 		{
 			return false;
 		}
@@ -3486,13 +3486,13 @@ bool FTrafficExtendRouteMovesTheGoalTest::RunTest(const FString& Parameters)
 		TestGraph::Rebuild(*Air.Net);
 		Traffic->OnGraphRebuilt(*Air.Net);
 		const FRoadAgent* Waiter = Traffic->FindAgent(Id);
-		if (!TestTrue(TEXT("still taxiing and waiting after the rebuild"), Waiter != nullptr && Waiter->Phase == EAgentPhase::Taxiing && Waiter->bAwaitingStand)) { return false; }
+		if (!TestTrue(TEXT("still taxiing and waiting after the rebuild"), Waiter != nullptr && Waiter->Phase == EAgentPhase::Taxiing && Waiter->IsWaitingFor(EAgentWait::ForStand))) { return false; }
 		const FGuidelineNodeId From = Waiter->Follower.Plan.Steps.Num() > 0 ? Waiter->Follower.Plan.Steps.Last().To : Waiter->Follower.Plan.Start;
 		const FGuidelineNodeId StandPose = Air.Pose(Placed);
 		const FRoutePlan Tail = M2TrafficRoute(*Air.Net, From, StandPose, ETraversalClass::Aircraft);
 		if (!TestTrue(TEXT("a route from the waiter's route end to the new stand exists"), Tail.IsValid())) { return false; }
 		if (!TestTrue(TEXT("the extension onto the stand is accepted"), Traffic->ExtendRoute(Id, Air.Net, Tail))) { return false; }
-		TestFalse(TEXT("the waiter is no longer waiting - it has a stand to go to"), Traffic->FindAgent(Id)->bAwaitingStand);
+		TestFalse(TEXT("the waiter is no longer waiting - it has a stand to go to"), Traffic->FindAgent(Id)->IsWaitingFor(EAgentWait::ForStand));
 		int32 Holder = 0;
 		TestTrue(TEXT("and the new stand is claimed, for it"),
 			Traffic->GetOccupancy().IsHeld(FTrafficResource::OfNode(StandPose), 0, &Holder) && Holder == Id);
@@ -4190,21 +4190,28 @@ bool FTrafficIsOnRouteClassifiesEveryPhaseTest::RunTest(const FString& Parameter
 	// bReplannable IS THE SECOND COLUMN (#455): the deadlock resolver, ReplanAt and the alert's filter all ask
 	// IsReplannable, and the answer is a taxi and nothing else - a push and a reverse have no other line to be sent
 	// along. Named per phase here so a phase added is decided for both questions, not just the first.
+	// bRedirectable AND bBodyBacks ARE THE THIRD AND FOURTH (issue #444): RedirectAgent's guard and the stand retry's waiter
+	// filter spelled the three redirectable phases each, and the claim pass and the route view spelled the two that back.
+	// THIS TABLE IS TYPED BY HAND, NOT READ FROM FAgentPhaseTraits: a test that compared the table with itself would
+	// pass whatever the table said. Each predicate is also checked against its column, so a predicate that stops asking
+	// the table (the seam unwired) and drifts from it is named here.
 	struct FPhaseAnswer
 	{
 		EAgentPhase Phase;
 		bool bOnRoute;
 		bool bReplannable;
+		bool bRedirectable;
+		bool bBodyBacks;
 	};
 	const FPhaseAnswer Table[] = {
-		{ EAgentPhase::Arriving,    false, false },   // on the runway: FLandingRun, the strip's claims only
-		{ EAgentPhase::Taxiing,     true,  true },
-		{ EAgentPhase::Departing,   false, false },   // on the runway: FTakeoffRun
-		{ EAgentPhase::Parked,      false, false },   // stands on its own node
-		{ EAgentPhase::Manoeuvring, true,  false },   // a push walks its lead-in: the only line off the stand
-		{ EAgentPhase::Reversing,   true,  false },   // a back-out walks a span of its route: the bay's only leg
-		{ EAgentPhase::Gone,        false, false },
-		{ EAgentPhase::Stranded,    false, false },   // its route died
+		{ EAgentPhase::Arriving,    false, false, false, false },   // on the runway: FLandingRun, the strip's claims only
+		{ EAgentPhase::Taxiing,     true,  true,  true,  false },
+		{ EAgentPhase::Departing,   false, false, false, false },   // on the runway: FTakeoffRun
+		{ EAgentPhase::Parked,      false, false, true,  false },   // stands on its own node: a route can begin there
+		{ EAgentPhase::Manoeuvring, true,  false, false, true },    // a push walks its lead-in: the only line off the stand
+		{ EAgentPhase::Reversing,   true,  false, false, true },    // a back-out walks a span of its route: the bay's only leg
+		{ EAgentPhase::Gone,        false, false, false, false },
+		{ EAgentPhase::Stranded,    false, false, true,  false },   // its route died; redirected only from where it stands
 	};
 
 	const UEnum* Enum = StaticEnum<EAgentPhase>();
@@ -4227,6 +4234,11 @@ bool FTrafficIsOnRouteClassifiesEveryPhaseTest::RunTest(const FString& Parameter
 		Agent.Phase = Phase;
 		TestEqual(*FString::Printf(TEXT("IsOnRoute for %s"), *Name), Agent.IsOnRoute(), Answer->bOnRoute);
 		TestEqual(*FString::Printf(TEXT("IsReplannable for %s"), *Name), Agent.IsReplannable(), Answer->bReplannable);
+		TestEqual(*FString::Printf(TEXT("IsRedirectable for %s"), *Name), Agent.IsRedirectable(), Answer->bRedirectable);
+		TestEqual(*FString::Printf(TEXT("bBodyBacks for %s"), *Name), Agent.PhaseTraits().bBodyBacks, Answer->bBodyBacks);
+		TestTrue(*FString::Printf(TEXT("the traits row for %s is its own"), *Name), Agent.PhaseTraits().Phase == Phase);
+		TestTrue(*FString::Printf(TEXT("%s has a word for the card"), *Name),
+			Agent.PhaseTraits().DisplayText != nullptr && FCString::Strlen(Agent.PhaseTraits().DisplayText) > 0);
 	}
 	return true;
 }
@@ -4239,7 +4251,7 @@ namespace
 	 * cases 2 and 3 use, built up to the frame a stand has appeared and the graph been rebuilt, and no
 	 * further: the re-offer that runs at the end of the next Advance has not run yet.
 	 *
-	 * An arrival whose stands are all removed lands and taxis on with bAwaitingStand set; then one
+	 * An arrival whose stands are all removed lands and taxis on waiting for a stand (EAgentWait::ForStand); then one
 	 * stand appears beside the exit. Shared by the test that the re-offer extends it without a jump and
 	 * the one that a refused extension leaves it waiting, which are the two halves of one decision.
 	 */
@@ -4269,7 +4281,7 @@ namespace
 			TestGraph::Rebuild(*Air.Net);
 			Traffic->OnGraphRebuilt(*Air.Net);
 			if (!Test.TestTrue(TEXT("it lands and taxis on, waiting for a stand"), RunUntil(*Traffic, *Air.Net, 600.0,
-				[&]() { const FRoadAgent* P = Traffic->FindAgent(Id); return P && P->Phase == EAgentPhase::Taxiing && P->bAwaitingStand; })))
+				[&]() { const FRoadAgent* P = Traffic->FindAgent(Id); return P && P->Phase == EAgentPhase::Taxiing && P->IsWaitingFor(EAgentWait::ForStand); })))
 			{
 				return false;
 			}
@@ -4280,7 +4292,7 @@ namespace
 			TestGraph::Rebuild(*Air.Net);
 			Traffic->OnGraphRebuilt(*Air.Net);
 			const FRoadAgent* Waiter = Traffic->FindAgent(Id);
-			if (!Test.TestTrue(TEXT("still taxiing and waiting after the rebuild"), Waiter != nullptr && Waiter->Phase == EAgentPhase::Taxiing && Waiter->bAwaitingStand)) { return false; }
+			if (!Test.TestTrue(TEXT("still taxiing and waiting after the rebuild"), Waiter != nullptr && Waiter->Phase == EAgentPhase::Taxiing && Waiter->IsWaitingFor(EAgentWait::ForStand))) { return false; }
 			const FGuidelineNode* GoalNode = Air.Net->GetGuidelineNode(Waiter->GoalNode);
 			if (!Test.TestNotNull(TEXT("its goal, the end of its truncated route, is live"), GoalNode)) { return false; }
 
@@ -4347,7 +4359,7 @@ bool FTrafficReofferTaxiingWaiterDoesNotJumpTest::RunTest(const FString& Paramet
 	// AND IT GOT THE STAND, by driving there.
 	const FRoadAgent* Done = Traffic->FindAgent(Id);
 	if (!TestNotNull(TEXT("the aircraft is still there"), Done)) { return false; }
-	TestFalse(TEXT("it is no longer waiting"), Done->bAwaitingStand);
+	TestFalse(TEXT("it is no longer waiting"), Done->IsWaitingFor(EAgentWait::ForStand));
 	TestTrue(TEXT("it parked on the stand that appeared"), bParked && Done->GoalNode == Air.Pose(Placed));
 	return true;
 }
@@ -4416,7 +4428,7 @@ bool FTrafficReofferRefusedExtensionKeepsWaitingTest::RunTest(const FString& Par
 	const FRoadAgent* After = W.Traffic->FindAgent(W.Id);
 	if (!TestNotNull(TEXT("the aircraft is still there"), After)) { return false; }
 	TestEqual(TEXT("still Taxiing: the refused extension did not restart it"), After->Phase, EAgentPhase::Taxiing);
-	TestTrue(TEXT("and still waiting for a stand"), After->bAwaitingStand);
+	TestTrue(TEXT("and still waiting for a stand"), After->IsWaitingFor(EAgentWait::ForStand));
 	TestTrue(*FString::Printf(TEXT("no frame moved it more than one frame of taxi speed (worst %.1f uu, budget %.1f)"), MaxStep, PerFrame), MaxStep <= PerFrame);
 	TestTrue(TEXT("the refusal was said: a keeps-waiting line"), Spy.KeepsWaiting >= 1);
 	TestEqual(TEXT("and no redirect was made in its place"), Spy.Redirected, 0);
@@ -4466,7 +4478,7 @@ bool FTrafficReofferStrandedWaiterDoesNotJumpTest::RunTest(const FString& Parame
 	TestGraph::Rebuild(*Air.Net);
 	Traffic->OnGraphRebuilt(*Air.Net);
 	if (!TestTrue(TEXT("it lands and taxis on, waiting for a stand"), RunUntil(*Traffic, *Air.Net, 600.0,
-		[&]() { const FRoadAgent* P = Traffic->FindAgent(Id); return P && P->Phase == EAgentPhase::Taxiing && P->bAwaitingStand; })))
+		[&]() { const FRoadAgent* P = Traffic->FindAgent(Id); return P && P->Phase == EAgentPhase::Taxiing && P->IsWaitingFor(EAgentWait::ForStand); })))
 	{
 		return false;
 	}
@@ -4494,7 +4506,7 @@ bool FTrafficReofferStrandedWaiterDoesNotJumpTest::RunTest(const FString& Parame
 	// STRANDED IN PLACE: the rebuild marks its route dead (the phase follows on the next tick, whose re-offer then runs
 	// in the same Advance - so the summary is the witness, not a Stranded phase seen between ticks).
 	if (!TestEqual(TEXT("precondition: the second rebuild stranded it in place"), Traffic->GetLastRebuildSummaryForTest().Stranded, 1)) { return false; }
-	if (!TestTrue(TEXT("precondition: still waiting, its goal still W"), Traffic->FindAgent(Id)->bAwaitingStand && Traffic->FindAgent(Id)->GoalNode == W)) { return false; }
+	if (!TestTrue(TEXT("precondition: still waiting, its goal still W"), Traffic->FindAgent(Id)->IsWaitingFor(EAgentWait::ForStand) && Traffic->FindAgent(Id)->GoalNode == W)) { return false; }
 
 	FVector2D Last = Traffic->FindAgent(Id)->LastMotion.Position;
 	double MaxStep = 0.0;
@@ -4511,7 +4523,7 @@ bool FTrafficReofferStrandedWaiterDoesNotJumpTest::RunTest(const FString& Parame
 	const FRoadAgent* After = Traffic->FindAgent(Id);
 	if (!TestNotNull(TEXT("the aircraft is still there"), After)) { return false; }
 	AddInfo(FString::Printf(TEXT("after the re-offer: %s, waiting %s, worst frame %.0f uu, closest to W %.0f uu"),
-		*UEnum::GetValueAsString(After->Phase), After->bAwaitingStand ? TEXT("yes") : TEXT("no"), MaxStep, ClosestToW));
+		*UEnum::GetValueAsString(After->Phase), After->IsWaitingFor(EAgentWait::ForStand) ? TEXT("yes") : TEXT("no"), MaxStep, ClosestToW));
 	TestTrue(*FString::Printf(TEXT("no frame moved it further than a rescue's hop (worst %.0f uu, budget %.0f)"), MaxStep, RescueHop + PerFrame),
 		MaxStep <= RescueHop + PerFrame);
 	TestTrue(*FString::Printf(TEXT("and it was never put at W, the goal node it was not at (closest %.0f uu)"), ClosestToW),
@@ -4553,7 +4565,7 @@ bool FTrafficReofferStrandedWaiterIsRescuedTest::RunTest(const FString& Paramete
 	TestGraph::Rebuild(*Air.Net);
 	Traffic->OnGraphRebuilt(*Air.Net);
 	if (!TestTrue(TEXT("it lands and taxis on, waiting for a stand"), RunUntil(*Traffic, *Air.Net, 600.0,
-		[&]() { const FRoadAgent* P = Traffic->FindAgent(Id); return P && P->Phase == EAgentPhase::Taxiing && P->bAwaitingStand; })))
+		[&]() { const FRoadAgent* P = Traffic->FindAgent(Id); return P && P->Phase == EAgentPhase::Taxiing && P->IsWaitingFor(EAgentWait::ForStand); })))
 	{
 		return false;
 	}
@@ -4601,7 +4613,7 @@ bool FTrafficReofferStrandedWaiterIsRescuedTest::RunTest(const FString& Paramete
 		*UEnum::GetValueAsString(After->Phase), MaxStep, *Spy.Rescued));
 	TestEqual(TEXT("rescued: taxiing again"), After->Phase, EAgentPhase::Taxiing);
 	TestEqual(TEXT("to the stand that freed"), After->GoalNode, Air.Pose(Spare));
-	TestFalse(TEXT("and no longer waiting"), After->bAwaitingStand);
+	TestFalse(TEXT("and no longer waiting"), After->IsWaitingFor(EAgentWait::ForStand));
 	TestTrue(*FString::Printf(TEXT("no frame moved it further than a rescue's hop (worst %.0f uu, budget %.0f)"), MaxStep,
 		UGroundTraffic::RescueRejoinRadius + PerFrame), MaxStep <= UGroundTraffic::RescueRejoinRadius + PerFrame);
 	TestTrue(TEXT("announced as the re-offer's, not the player's"), Causes.Num() == 1 && Causes[0] == EAgentEvent::ReOffered);
@@ -4651,7 +4663,7 @@ bool FTrafficReofferWaiterStrandedAtItsExitTest::RunTest(const FString& Paramete
 	Traffic->OnGraphRebuilt(*Air.Net);
 	const FRoadAgent* Rolling = Traffic->FindAgent(Id);
 	if (!TestTrue(TEXT("still on the runway, now waiting"), Rolling != nullptr && Rolling->Phase == EAgentPhase::Arriving
-		&& Rolling->bAwaitingStand && Rolling->TaxiInPlan.Steps.Num() > 0)) { return false; }
+		&& Rolling->IsWaitingFor(EAgentWait::ForStand) && Rolling->TaxiInPlan.Steps.Num() > 0)) { return false; }
 
 	// TWO: the taxi-in's first edge goes - nothing of it survives.
 	const FGuidelineEdgeId First = Rolling->TaxiInPlan.Steps[0].Edge;
@@ -4675,7 +4687,7 @@ bool FTrafficReofferWaiterStrandedAtItsExitTest::RunTest(const FString& Paramete
 	const FRoadAgent* Waiting = Traffic->FindAgent(Id);
 	const FGuidelineNode* GoalNode = Waiting != nullptr ? Air.Net->GetGuidelineNode(Waiting->GoalNode) : nullptr;
 	if (!TestTrue(TEXT("precondition: still stranded and waiting, its goal a live node"),
-		Waiting != nullptr && Waiting->Phase == EAgentPhase::Stranded && Waiting->bAwaitingStand && GoalNode != nullptr)) { return false; }
+		Waiting != nullptr && Waiting->Phase == EAgentPhase::Stranded && Waiting->IsWaitingFor(EAgentWait::ForStand) && GoalNode != nullptr)) { return false; }
 	AddInfo(FString::Printf(TEXT("stranded %.1f uu from its goal node, heading %.0f deg"),
 		FVector2D::Distance(Waiting->LastMotion.Position, GoalNode->Position), FMath::RadiansToDegrees(Waiting->LastMotion.Heading)));
 
@@ -4716,7 +4728,7 @@ bool FTrafficReofferWaiterStrandedAtItsExitTest::RunTest(const FString& Paramete
 		Spy.Redirected == 1 && Spy.Rescued == 0);
 	TestEqual(TEXT("sent: taxiing"), After->Phase, EAgentPhase::Taxiing);
 	TestEqual(TEXT("to the stand that freed"), After->GoalNode, Air.Pose(Spare));
-	TestFalse(TEXT("and no longer waiting"), After->bAwaitingStand);
+	TestFalse(TEXT("and no longer waiting"), After->IsWaitingFor(EAgentWait::ForStand));
 	TestTrue(*FString::Printf(TEXT("from where it stood - no frame moved it further than taxi speed allows (worst %.0f uu, budget %.0f)"),
 		MaxStep, PerFrame), MaxStep <= PerFrame);
 	return true;
@@ -5387,7 +5399,7 @@ bool FTrafficReofferRefusedExtensionRetriesWhenItStopsTest::RunTest(const FStrin
 	TestFalse(TEXT("the refused pass consumed the freed flag: nothing asks again unless something frees"), W.Traffic->StandsMayHaveFreedForTest());
 	Waiter = W.Traffic->FindAgent(W.Id);
 	if (!TestNotNull(TEXT("the aircraft is still there"), Waiter)) { return false; }
-	if (!TestTrue(TEXT("still Taxiing and still waiting: it was not redirected"), Waiter->Phase == EAgentPhase::Taxiing && Waiter->bAwaitingStand)) { return false; }
+	if (!TestTrue(TEXT("still Taxiing and still waiting: it was not redirected"), Waiter->Phase == EAgentPhase::Taxiing && Waiter->IsWaitingFor(EAgentWait::ForStand))) { return false; }
 
 	// THE CAUSE CLEARS: the plan's end is its goal again. No stand frees from here on.
 	if (!TestTrue(TEXT("the goal is put back at the plan's end"), Access.SetGoal(W.Id, LiveEnd))) { return false; }
@@ -5395,7 +5407,7 @@ bool FTrafficReofferRefusedExtensionRetriesWhenItStopsTest::RunTest(const FStrin
 	const bool bPlaced = RunUntil(*W.Traffic, *W.Air.Net, 600.0, [&]()
 	{
 		const FRoadAgent* P = W.Traffic->FindAgent(W.Id);
-		return P != nullptr && P->Phase == EAgentPhase::Parked && !P->bAwaitingStand;
+		return P != nullptr && P->Phase == EAgentPhase::Parked && !P->IsWaitingFor(EAgentWait::ForStand);
 	});
 	const FRoadAgent* Done = W.Traffic->FindAgent(W.Id);
 	if (!TestNotNull(TEXT("the aircraft is still there at the end"), Done)) { return false; }

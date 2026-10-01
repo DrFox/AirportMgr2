@@ -382,4 +382,29 @@ bool FRunwayFreedRebuildLeavingStandTest::RunTest(const FString&)
 	return true;
 }
 
+/**
+ * THE DIFF READS THE STRIPS THROUGH THE CHAIN CACHE (issue #446 item 8). DiffFreedom asked IsChainHeld per runway per
+ * frame, and each ask walked the runway's chain from scratch (URoadNetwork::RunwaySurfaces), beside the
+ * FRunwayChainCache the claim pass already keeps for exactly this walk (closed #170's per-frame walk, re-opened). Now the
+ * chain is walked once per strip per topology, and a frame on which nothing moves walks nothing.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRunwayFreedChainCachedTest, "Airside.Model.Traffic.RunwayFreed.DiffWalksNoChainPerFrame",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FRunwayFreedChainCachedTest::RunTest(const FString&)
+{
+	// THE STRIP AND NOBODY ON IT: no agent means no claim pass, so every walk counted is the diff's own.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	FCrossingFixture::Build(*Net);
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	if (!TestEqual(TEXT("nothing walked before the first diff"), Traffic->GetRunwayChainWalksForTest(), 0)) { return false; }
+	Traffic->Advance(0.05, Net);
+	TestEqual(TEXT("the first diff walks the one strip once, through the cache"), Traffic->GetRunwayChainWalksForTest(), 1);
+	for (int32 Frame = 0; Frame < 100; ++Frame)
+	{
+		Traffic->Advance(0.05, Net);
+	}
+	TestEqual(TEXT("100 frames with no occupancy or topology change walk no chain"), Traffic->GetRunwayChainWalksForTest(), 1);
+	return true;
+}
+
 #endif

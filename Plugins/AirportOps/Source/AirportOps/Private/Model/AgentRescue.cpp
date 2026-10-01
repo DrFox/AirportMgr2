@@ -15,6 +15,10 @@ namespace
 	// THE STAND SEARCH'S RADIUS (StandSearchRadius) went to Airside with the search itself (#429): it is
 	// UGroundTraffic::ReofferStand's figure now (its stranded row), beside the reason it is 50 m.
 
+	// EVERY PHASE NAMED, no default (issue #444): the default: arm was where a phase added in Airside would have been
+	// refused with no sentence of its own. Taxiing, Parked and Stranded are answered by Decide before it gets here.
+	// ENFORCED BY: AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (C4062 as an error over this function); Check-Architecture rule 81
+	AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
 	FText PhaseRefusal(EAgentPhase Phase)
 	{
 		switch (Phase)
@@ -24,9 +28,13 @@ namespace
 		case EAgentPhase::Manoeuvring: return LOCTEXT("Manoeuvring", "Coming off its stand - wait for it to finish");
 		case EAgentPhase::Reversing:   return LOCTEXT("Reversing", "Reversing - wait for it to finish");
 		case EAgentPhase::Gone:        return LOCTEXT("Gone", "Already gone");
-		default:                       return LOCTEXT("NotNow", "Not in a state to do that");
+		case EAgentPhase::Taxiing:
+		case EAgentPhase::Parked:
+		case EAgentPhase::Stranded:    return LOCTEXT("NotNow", "Not in a state to do that");
 		}
+		return LOCTEXT("NotNow", "Not in a state to do that");
 	}
+	AIRSIDE_EXHAUSTIVE_SWITCH_END
 }
 
 FUnstickVerdict UAgentRescue::CanUnstick(const UGroundTraffic& Traffic, int32 AgentId, EUnstickAction Action) const
@@ -72,7 +80,7 @@ FUnstickVerdict UAgentRescue::Decide(const FRoadAgent& Agent, EUnstickAction Act
 			// a reverse, parked, stranded).
 			return FUnstickVerdict::Yes();
 		}
-		if (Agent.Phase == EAgentPhase::Stranded || (Agent.Phase == EAgentPhase::Parked && Agent.bAwaitingStand))
+		if (Agent.Phase == EAgentPhase::Stranded || (Agent.Phase == EAgentPhase::Parked && Agent.IsWaitingFor(EAgentWait::ForStand)))
 		{
 			return FUnstickVerdict::Yes();
 		}
@@ -200,7 +208,7 @@ FUnstickVerdict UAgentRescue::FindStand(UGroundTraffic& Traffic, const URoadNetw
 		return FUnstickVerdict::No(LOCTEXT("NoAirframe", "Not an aircraft"));
 	}
 
-	// EXACTLY UGroundTraffic::ReofferStands' MOVE, asked now instead of when a stand next frees - ReofferStand, the one
+	// EXACTLY UGroundTraffic::RetryWaiters' STAND MOVE, asked now instead of when a stand next frees - ReofferStand, the one
 	// waiter's move (#429), whose phase decides how: PARKED waiting for a stand, from the node it waits on and a redirect
 	// from rest where it stands; STRANDED, a stand chosen from the node ahead on its dead route (else the nearest) and a
 	// rescue from wherever it hops onto - never a restart at its goal node, which it need not be at. RESCUED, the

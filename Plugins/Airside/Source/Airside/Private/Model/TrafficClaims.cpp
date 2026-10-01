@@ -319,8 +319,9 @@ double FClaimPass::CentreOf(const FRoadAgent& Agent)
 	// reports, see FRoadAgent::ReverseProgress - is the TRAILING one of the two axles in plan
 	// distance and the body centre, aft of it, is further along.
 	// ENFORCED BY: Airside.Model.ClaimCentre (a reversing body's centre, measured from its fixed axle)
+	// WHICH PHASES BACK is FAgentPhaseTraits::bBodyBacks (issue #444) - the push and the reverse were spelled here.
 	const double Ahead = Agent.Chassis().BodyCentreX - Agent.Chassis().SteerAxleX;
-	const bool bBodyBacks = Agent.Phase == EAgentPhase::Manoeuvring || Agent.Phase == EAgentPhase::Reversing;
+	const bool bBodyBacks = Agent.PhaseTraits().bBodyBacks;
 	const double Sign = bBodyBacks ? -1.0 : 1.0;
 	return Agent.DistanceAlongPlan() + Sign * Ahead;
 }

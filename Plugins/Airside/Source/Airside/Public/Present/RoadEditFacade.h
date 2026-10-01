@@ -14,6 +14,22 @@ class FRoadEditScope;
 class IBuildPurse;
 
 /**
+ * Where URoadEditFacade's interactive edit (a drag, bracketed by BeginInteractiveEdit / EndInteractiveEdit) is.
+ * AN ENUM, NOT TWO BOOLS (issue #444): bGeometryChangedDuringEdit meant something only while
+ * bInteractiveEditOpen, and "a phase is an enum" - the pair's fourth state is now not representable.
+ * Plain, not a UENUM: the field it types is not reflected.
+ */
+enum class EInteractiveEdit : uint8
+{
+	/** No drag open. */
+	Idle,
+	/** A drag is open and nothing has moved yet: closing it owes the derived graph nothing. */
+	Open,
+	/** A drag is open and moved something: closing it owes the one Topology catch-up (issue #165). */
+	OpenMoved
+};
+
+/**
  * Every graph edit, undo, and query the build tools drive - split out of ARoadNetworkActor
  * by issue #32.
  *
@@ -119,12 +135,12 @@ class IBuildPurse;
  *   - INTERACTIVE EDITS CANNOT BEGIN INSIDE A BATCH. A batch is synchronous - one call on
  *     one frame - and a drag spans frames, repainting Geometry every one of them;
  *     BeginInteractiveEdit inside a batch would freeze the pavement under the cursor until
- *     some later close. So it logs an Error and REFUSES (bInteractiveEditOpen stays false,
+ *     some later close. So it logs an Error and REFUSES (InteractiveEdit stays Idle,
  *     EndInteractiveEdit then no-ops, and any MoveNode in between is a bare call that
  *     notifies Topology into the batch - see ApplyInteractiveMutation's bare-call trap).
  *     THE OTHER NESTING IS LEGAL: a batch opened while a drag is already open folds that
  *     frame's notifies and closes before the frame ends; the drag's own EndInteractiveEdit
- *     catch-up is untouched, because bGeometryChangedDuringEdit is still set where it was.
+ *     catch-up is untouched, because InteractiveEdit is still OpenMoved where it was.
  *   - MergeNodes' ALWAYS-Topology RULE HOLDS: it is the KIND a merge records, and
  *     CombineChangeKinds never weakens a Topology.
  *   - RollBackOpenEdit / AdoptNetwork / Undo / Redo / ClearNetwork IN A BATCH: the network is
@@ -761,14 +777,14 @@ private:
 	 * purpose:
 	 *
 	 *   - false (MoveNode, MoveApronCorner): GEOMETRY ONLY WHILE AN INTERACTIVE EDIT IS STILL
-	 *     OPEN - THE BARE-CALL TRAP (review follow-up on #165). bInteractiveEditOpen true means
+	 *     OPEN - THE BARE-CALL TRAP (review follow-up on #165). IsInteractiveEditOpen() true means
 	 *     this call joined a drag BeginInteractiveEdit started and EndInteractiveEdit has not
 	 *     yet closed - the ONLY case where something downstream (EndInteractiveEdit's own
 	 *     Topology notify) is guaranteed to catch the derived graph up later. Anything else has
 	 *     no EndInteractiveEdit coming and must do the whole job itself, Topology, right here: a
 	 *     BARE call (bOwnsEdit was true - this very call opened and closed its own tiny history
 	 *     edit, with no surrounding BeginInteractiveEdit at all) never set the flag in the first
-	 *     place. bInteractiveEditOpen, NOT `Use != nullptr && Use->IsEditing()` (issue #190) -
+	 *     place. IsInteractiveEditOpen(), NOT `Use != nullptr && Use->IsEditing()` (issue #190) -
 	 *     that test was always false in an editor world, where HistoryForEdit() is a deliberate
 	 *     no-op (see its own comment), so an editor-mode drag notified Topology on every frame
 	 *     regardless of URoadBuildEdMode's own Begin/EndInteractiveEdit calls bracketing it
@@ -777,7 +793,7 @@ private:
 	 *   - true (MergeNodes): ALWAYS Topology, drag or no drag. A merge removes a node - the
 	 *     graph's SHAPE changed, not merely a position - and drop-to-merge runs from inside an
 	 *     already-open drag (FEditTool::OnDragEnd calls it before EndInteractiveEdit), so
-	 *     bInteractiveEditOpen reads true at exactly the moment a merge succeeds. Deferring to
+	 *     IsInteractiveEditOpen() reads true at exactly the moment a merge succeeds. Deferring to
 	 *     EndInteractiveEdit's catch-up the way a plain drag frame does would not be WRONG - the
 	 *     same Topology notify would still land, one call later - but it would fire TWICE (once
 	 *     here mislabelled Geometry, once more at EndInteractiveEdit), a second rebuild the
@@ -851,8 +867,13 @@ private:
 	mutable int32 PlotEvaluatorCount = 0;
 
 	/**
-	 * Whether MoveNode or MoveApronCorner actually moved something during the CURRENT
-	 * interactive edit - cleared in BeginInteractiveEdit, set by ApplyInteractiveMutation's
+	 * WHERE THE INTERACTIVE EDIT IS - one enum where two bools were (issue #444): "moved during the edit" means
+	 * nothing while no edit is open, so the pair had a state (closed, moved) no reader could give a meaning to.
+	 * Idle between drags; Open from BeginInteractiveEdit; OpenMoved once a move landed. Each half's own reasoning
+	 * follows, as it stood on its bool.
+	 *
+	 * OPEN-MOVED: whether MoveNode or MoveApronCorner actually moved something during the CURRENT
+	 * interactive edit - Open in BeginInteractiveEdit, OpenMoved on ApplyInteractiveMutation's
 	 * Geometry notify (issue #299 moved the setter off MoveNode/MoveApronCorner themselves).
 	 *
 	 * WHAT THIS GUARDS (issue #165 follow-up review). Before #165, every MoveNode/
@@ -871,11 +892,8 @@ private:
 	 * NOT read on the CanAfford-revert branch inside bKeep=true - that branch already
 	 * notifies Topology itself via RollBackOpenEdit, unconditionally, because a reverted drag always
 	 * changed something (the charge check only runs after a real move).
-	 */
-	bool bGeometryChangedDuringEdit = false;
-
-	/**
-	 * Whether an interactive edit is open RIGHT NOW - set in BeginInteractiveEdit, cleared in
+	 *
+	 * OPEN: whether an interactive edit is open RIGHT NOW - Open in BeginInteractiveEdit, Idle in
 	 * EndInteractiveEdit - issue #190.
 	 *
 	 * TRACKED INDEPENDENTLY OF URoadEditHistory::IsEditing(), which MoveNode and
@@ -887,11 +905,14 @@ private:
 	 * Begin/EndInteractiveEdit calls were doing. Every editor-mode drag frame therefore
 	 * notified Topology - the full derived-graph rebuild #165 exists to skip - and
 	 * EndInteractiveEdit's own early-return on `History == nullptr` meant nothing ever fired
-	 * the one catch-up notify a real drag needs either. This bool answers "is a drag open"
+	 * the one catch-up notify a real drag needs either. This state answers "is a drag open"
 	 * on its own terms, true in both worlds for exactly the span BeginInteractiveEdit and
 	 * EndInteractiveEdit bracket, so the split applies wherever a drag does.
 	 */
-	bool bInteractiveEditOpen = false;
+	EInteractiveEdit InteractiveEdit = EInteractiveEdit::Idle;
+
+	/** Open or OpenMoved - the question every reader but EndInteractiveEdit's catch-up asks. See InteractiveEdit. */
+	bool IsInteractiveEditOpen() const { return InteractiveEdit != EInteractiveEdit::Idle; }
 
 	/**
 	 * THE STATE THE OPEN INTERACTIVE EDIT BEGAN IN, in a world with no undo history (issue #437) -

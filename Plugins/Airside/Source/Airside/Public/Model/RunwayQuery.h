@@ -296,11 +296,20 @@ namespace RunwayQuery
 	/**
 	 * Is any segment of Seed's strip held - by anyone, a reservation included? False with no occupancy. Moved
 	 * here from ArrivalPlanner on 2026-09-30 (#433) so RankRunway can ask it for either kind of traffic;
-	 * ArrivalPlanner::IsChainHeld forwards to this at its old name, which is what UGroundTraffic's OnRunwayFreed
-	 * diff and the tests still call.
+	 * ArrivalPlanner::IsChainHeld forwards to this at its old name, which the tests still call.
 	 * ENFORCED BY: Airside.Model.RunwayUse.RankOrdersFreeDedicatedShortest (asserts the forwarder answers as this does).
 	 */
 	AIRSIDE_API bool IsChainHeld(const URoadNetwork& Network, FRoadSegmentId Seed, const FTrafficOccupancy* Occupancy);
+
+	/**
+	 * The same question of a strip whose segments the caller already holds - RunwayChainOrSeed's answer, as an
+	 * FRunwayChainCache entry gives it - so the chain is not walked again to ask it. The seed overload above is this
+	 * over a fresh walk: ONE definition of "held", the split IsGuidelineNodeOnRunway already makes (#170).
+	 * UGroundTraffic's OnRunwayFreed diff asks this once per strip per frame through its cache (issue #446 item 8:
+	 * it walked every strip's chain every frame through the seed overload).
+	 * ENFORCED BY: Airside.Model.Traffic.RunwayFreed.DiffWalksNoChainPerFrame
+	 */
+	AIRSIDE_API bool IsChainHeld(TConstArrayView<FRoadSegmentId> ChainOrSeed, const FTrafficOccupancy* Occupancy);
 
 	/**
 	 * The rank of the runway End for Traffic: held is IsChainHeld of its strip - the claim a movement makes at its

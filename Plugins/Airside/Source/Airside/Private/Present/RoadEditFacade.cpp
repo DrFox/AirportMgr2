@@ -516,9 +516,9 @@ bool URoadEditFacade::ApplyInteractiveMutation(const TCHAR* Label,
 	// GEOMETRY ONLY WHILE AN INTERACTIVE EDIT IS STILL OPEN, AND ONLY WHEN THIS MUTATION DOES
 	// NOT CHANGE THE GRAPH'S SHAPE - see this method's own header comment (the bare-call trap,
 	// issue #165/#190, and bChangesGraphShape, issue #299) for the full reasoning.
-	if (!bChangesGraphShape && bInteractiveEditOpen)
+	if (!bChangesGraphShape && IsInteractiveEditOpen())
 	{
-		bGeometryChangedDuringEdit = true;
+		InteractiveEdit = EInteractiveEdit::OpenMoved;
 		NotifyChanged(EChangeKind::Geometry);
 	}
 	else
@@ -1398,7 +1398,7 @@ bool URoadEditFacade::AddEntityModule(FEntityInstanceId Entity, EDepotModule Mod
 	// EndInteractiveEdit would then land a whole drag with no undo step. The inspector's Buy is a click the
 	// player makes between drags, but nothing in the UI makes that impossible, so the facade says no.
 	// ENFORCED BY: AirportOps.Present.Facility.ShedRefusedDuringADrag
-	if (bInteractiveEditOpen)
+	if (IsInteractiveEditOpen())
 	{
 		UE_LOG(LogRoadMesh, Warning, TEXT("AddEntityModule refused: depot %d - an interactive edit is open"), Entity.Index);
 		return false;
@@ -1431,7 +1431,7 @@ int32 URoadEditFacade::RemoveUnseatedModules(FEntityInstanceId Entity, EDepotMod
 	}
 	// REFUSED WHILE A DRAG IS OPEN, AddEntityModule's reason: the ClearHistory below would drop the drag's pending
 	// snapshot. Deferred, not lost: the repair asks again on the next network change it hears.
-	if (bInteractiveEditOpen)
+	if (IsInteractiveEditOpen())
 	{
 		UE_LOG(LogRoadMesh, Warning, TEXT("RemoveUnseatedModules deferred: depot %d - an interactive edit is open"), Entity.Index);
 		return 0;
@@ -1575,7 +1575,7 @@ void URoadEditFacade::BeginInteractiveEdit(const FString& Label)
 {
 	// REFUSED INSIDE A REBUILD BATCH - see the class comment's REBUILD BATCHES: a drag spans
 	// frames and repaints every one, a batch is one synchronous call. Refused BEFORE any field
-	// is touched, so bInteractiveEditOpen stays false and the matching EndInteractiveEdit
+	// is touched, so InteractiveEdit stays Idle and the matching EndInteractiveEdit
 	// no-ops on its own guard.
 	if (RebuildBatchDepth > 0)
 	{
@@ -1591,7 +1591,7 @@ void URoadEditFacade::BeginInteractiveEdit(const FString& Label)
 	{
 		Use->BeginEdit(*Network, Label);
 	}
-	else if (Network != nullptr && Use == nullptr && !bInteractiveEditOpen)
+	else if (Network != nullptr && Use == nullptr && !IsInteractiveEditOpen())
 	{
 		// THE HISTORY-LESS WORLD'S SNAPSHOT (issue #437): the state a Verify failure in the middle
 		// of this drag - a drop-to-merge the solver cannot corner - has to come back to. Taken here,
@@ -1606,31 +1606,32 @@ void URoadEditFacade::BeginInteractiveEdit(const FString& Label)
 	// the extra pavement is free - MoveNode creates no segment, so nothing else charges for it.
 	PavementValueAtDragStart = QuoteForAllPavement().BaseAmount();
 
-	// A FRESH EDIT HAS MOVED NOTHING YET - see the field's own comment for what
-	// EndInteractiveEdit does with this.
-	bGeometryChangedDuringEdit = false;
-
+	// A FRESH EDIT HAS MOVED NOTHING YET (Open, not OpenMoved) - see the field's own comment for
+	// what EndInteractiveEdit does with this.
+	//
 	// SET UNCONDITIONALLY, WHATEVER Use AND Network TURNED OUT TO BE - see the field's own
-	// comment (issue #190). PavementValueAtDragStart and bGeometryChangedDuringEdit above are
-	// already set the same way, and this is the flag MoveNode/MoveApronCorner now decide
-	// Geometry vs Topology on, so it has to be true for every world BeginInteractiveEdit is
-	// called in, not only the one with a History to open.
-	bInteractiveEditOpen = true;
+	// comment (issue #190). PavementValueAtDragStart above is already set the same way, and this
+	// is the state MoveNode/MoveApronCorner now decide Geometry vs Topology on, so it has to be
+	// open for every world BeginInteractiveEdit is called in, not only the one with a History to open.
+	InteractiveEdit = EInteractiveEdit::Open;
 }
 
 void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 {
-	// GATED ON bInteractiveEditOpen, NOT ON History (issue #190) - see that field's own
+	// GATED ON InteractiveEdit BEING OPEN, NOT ON History (issue #190) - see that field's own
 	// comment. History is null in an editor world by HistoryForEdit()'s own design, and the
 	// old `History == nullptr || !History->IsEditing()` guard treated that exactly like "no
 	// edit is open", so an editor-mode drag's EndInteractiveEdit call was always a no-op: no
 	// bookkeeping reset, and no chance to fire the Topology notify a drag that moved
 	// something still owes the derived graph.
-	if (!bInteractiveEditOpen)
+	if (!IsInteractiveEditOpen())
 	{
 		return;
 	}
-	bInteractiveEditOpen = false;
+	// READ BEFORE THE CLOSE: the branches below decide on whether the drag moved anything, and the edit is
+	// closed first, as it always was, so nothing they call sees a drag still open.
+	const bool bMovedDuringEdit = InteractiveEdit == EInteractiveEdit::OpenMoved;
+	InteractiveEdit = EInteractiveEdit::Idle;
 
 	// THE DRAG IS OVER, kept or not, so nothing may restore to its start any more: let the point go
 	// (issue #437). Before the branches below, none of which reads it - the cannot-afford revert is
@@ -1660,11 +1661,10 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 		// costs nothing, same as it always has. bHasHistoryEdit's absence changes nothing
 		// here: an editor-world abandon has no snapshot to drop either way, only the same
 		// catch-up notify to fire.
-		if (bGeometryChangedDuringEdit)
+		if (bMovedDuringEdit)
 		{
 			NotifyChanged(EChangeKind::Topology);
 		}
-		bGeometryChangedDuringEdit = false;
 		return;
 	}
 
@@ -1756,11 +1756,10 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 	// refused) is not a drag at all - before #165 that sequence fired no notify whatsoever,
 	// since MoveNode's own notify simply never happened, and an unconditional Topology notify
 	// here would be a full rebuild that never used to run.
-	if (bGeometryChangedDuringEdit)
+	if (bMovedDuringEdit)
 	{
 		NotifyChanged(EChangeKind::Topology);
 	}
-	bGeometryChangedDuringEdit = false;
 }
 
 bool URoadEditFacade::MoveApronCorner(int32 ApronIndex, int32 CornerIndex, FVector2D To)

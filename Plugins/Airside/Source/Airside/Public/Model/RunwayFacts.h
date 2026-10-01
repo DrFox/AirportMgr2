@@ -184,8 +184,12 @@ struct AIRSIDE_API FRunwayEnd
 	/** The runway segment the query actually named, or landed nearest. */
 	UPROPERTY() FRoadSegmentId Seed;
 
+	/** The point Along uu down the strip from Threshold (negative is short of it) - the one spelling of
+	 *  "Threshold + Direction * x", which FLandingRun and FTakeoffRun each wrote into their pose (issue #444). */
+	FVector2D PointAt(double Along) const { return Threshold + Direction * Along; }
+
 	/** The strip's other end: Threshold walked the whole Length along Direction. */
-	FVector2D FarEnd() const { return Threshold + Direction * Length; }
+	FVector2D FarEnd() const { return PointAt(Length); }
 
 	/** How far along the strip, from Threshold, Position projects. Negative is short of it. */
 	double OffsetOf(const FVector2D& Position) const

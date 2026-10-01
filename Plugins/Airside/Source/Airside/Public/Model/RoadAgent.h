@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/AgentMotion.h"
+#include "Model/AgentPhase.h"
 #include "Model/Airframe.h"
 #include "Model/LandingRun.h"
 #include "Model/PushbackRun.h"
@@ -46,66 +47,7 @@ enum class EAgentBody : uint8
 	Vehicle
 };
 
-/**
- * Where an agent has got to. Replaces five independent bools - bArriving, bDeparting,
- * bDepartOnArrival, bParked, plus the implicit "none of the above means taxiing" - that
- * could represent illegal combinations (bArriving && bDeparting) nothing ever checked for.
- *
- * See FRoadAgent for why the states stay separate structs (FLandingRun, FRouteFollower,
- * FTakeoffRun) rather than becoming subclasses of one.
- */
-UENUM()
-enum class EAgentPhase : uint8
-{
-	/** The landing drives it, before the taxi to the stand. */
-	Arriving,
-
-	/** The follower drives it. Also the phase between a plain dispatch and any handover. */
-	Taxiing,
-
-	/** The take-off run drives it, after a taxi that ended on a runway with one armed. */
-	Departing,
-
-	/** At the stand, taxi over, running down the post-arrival shutdown pause. */
-	Parked,
-
-	/**
-	 * Coming off the stand: backed down the lead-in and swung onto the taxiway. The push
-	 * drives it - see FPushbackRun.
-	 *
-	 * NOT CALLED Pushback, and that distinction is the point of the feature rather than
-	 * pedantry: a Twin Otter reverses under its own power and is not being pushed by
-	 * anything. The PHASE is the manoeuvre; the SERVICE that performs it for an aeroplane
-	 * which cannot manage alone is pushback, and that is the job board's business.
-	 */
-	Manoeuvring,
-
-	/**
-	 * A GROUND VEHICLE backing into its service bay. FReverseRun drives it.
-	 *
-	 * SEPARATE FROM Manoeuvring, which is an aeroplane coming off a stand. The two look alike
-	 * from outside - something reversing - and are different kinematics: a pushed aeroplane
-	 * pivots about its NOSE GEAR because that is where the tug couples, so the steered axle
-	 * still leads. A truck backing up pivots about its FIXED axle, and can hold a tighter arc
-	 * for it. Sharing a phase would mean sharing a motion law they do not share.
-	 */
-	Reversing,
-
-	/** The take-off has cleared. FRoadAgent::Advance returns false from here on. */
-	Gone,
-
-	/**
-	 * The route died under it (a rebuild's Strand): it stands where it stopped, at no goal, until
-	 * the player retires it or a stand re-offer redirects it.
-	 *
-	 * NOT PARKED, and that difference is issue #396. A stranded plan counts as arrived
-	 * (FRouteFollower::HasArrived: not drivable), and Parked at that moment told the ops layer -
-	 * which reads GoalNode as the stand an aircraft parked on - that an aeroplane half way along a
-	 * taxiway was on its stand: a truck fuelled the empty stand and the pushback started from it,
-	 * a jump. APPENDED, after Gone, so no existing value moves.
-	 */
-	Stranded
-};
+// EAgentPhase MOVED to Model/AgentPhase.h (issue #444), beside the table of what each phase means - see it there.
 
 /**
  * What FRoadAgent::Advance did THIS FRAME, for UGroundTraffic::AdvanceOnce to switch on
@@ -165,7 +107,7 @@ enum class EAgentEvent : uint8
 	Dispatched,
 	/** A new route from UGroundTraffic::RedirectAgent, for no reason more specific than a caller's choice. */
 	Redirected,
-	/** UGroundTraffic::ReofferStands sent an aircraft waiting for a stand to one that freed - still its taxi IN. */
+	/** UGroundTraffic::RetryWaiters sent an aircraft waiting for a stand to one that freed - still its taxi IN. */
 	ReOffered,
 	/** The player's Unstick moved a stuck agent: UGroundTraffic::RescueStranded, or a redirect on the player's behalf. */
 	Rescued,
@@ -471,52 +413,69 @@ public:
 	UPROPERTY() FRoutePlan TaxiOutPlan;
 
 	/**
-	 * TaxiOutPlan can no longer be driven from where the push ends: a rebuild stranded it, or
-	 * it does not begin where the aeroplane stands. The push-end handover then HOLDS instead of
-	 * starting it, and UGroundTraffic::ReplanHeldTaxiOuts plans a new one from where the push
-	 * actually ended (2026-09-27: a stranded taxi-out was started anyway, and the aeroplane
-	 * jumped to where the old runway began - Airside.Model.PushbackStrandedTaxiOutReplans).
-	 * Session state, like the rest of a manoeuvre - not saved.
+	 * WHAT IT IS STOPPED AND WAITING FOR - see EAgentWait, which replaced bAwaitingStand and the
+	 * bTaxiOutStale / bTaxiOutHoldSaid / TaxiOutRefusedAt triple (issue #444). Read here; written
+	 * only through WaitFor and EndWait, so a wait's payload never outlives or predates the wait.
 	 */
-	bool bTaxiOutStale = false;
-
-	/** The hold's "no route yet" line has been said - one line for a hold that lasts minutes. */
-	bool bTaxiOutHoldSaid = false;
+	EAgentWait GetWait() const { return Wait; }
+	bool IsWaitingFor(EAgentWait Why) const { return Wait == Why; }
 
 	/**
-	 * The guideline revision a replan from this hold was last REFUSED at - UGroundTraffic::ReplanHeldTaxiOuts
-	 * asks again only once the graph has moved past it (ops batch 3 PR E). Unset: never refused, ask. Reset
-	 * wherever bTaxiOutHoldSaid is, so a new hold always asks at once. Session state, not saved.
+	 * THE ONE DOOR INTO A WAIT (with EndWait - the fields are private).
+	 * ENFORCED BY: the compiler; Airside.Model.RoadAgent.OneWaitAtATime
+	 *
+	 * A wait already of this kind is LEFT AS IT IS - payload and all -
+	 * because the push-end hold re-enters every frame it holds (FRoadAgent::Advance's Manoeuvring
+	 * arm), and a hold that forgot its said line and its refusal each frame would say the line and
+	 * ask the planner every frame: the triple's direct `bTaxiOutStale = true` there existed for
+	 * exactly that. A wait of ANOTHER kind is replaced, its payload with it - one wait at a time,
+	 * which is the point of the enum.
+	 *
+	 * ForStand takes the node the re-offer searches from and makes it the goal, GOAL AND WAIT
+	 * TOGETHER, so the wait can never be armed without the node it searches from - the invariant
+	 * the #174 review found maintained only by convention. Usually the node it already was (the
+	 * rebuild re-arms in place); taking it as a parameter rather than reading GoalNode inside means
+	 * a caller cannot arm the wait without saying, at the call site, what it is waiting FROM.
+	 * ForTaxiOutRoute ignores From: its retry plans from where the aeroplane stands. None is EndWait.
 	 */
-	TOptional<uint32> TaxiOutRefusedAt;
+	void WaitFor(EAgentWait Why, FGuidelineNodeId From = FGuidelineNodeId());
 
-	/** The taxi out cannot be driven from where the push ends - see bTaxiOutStale. Its hold
-	 *  line is to be said afresh. The rebuild calls this for a stranded taxi out. */
-	void MarkTaxiOutStale();
+	/** Ends the wait - a stand was found, a taxi out planned, or the agent moved on some other
+	 *  way - and forgets its payload. The new goal, if there is one, is set separately
+	 *  (SetGoal/SetGoalFrom): a caller that just found a stand already knows where it sends it.
+	 *  A TAXIING hold's new route is not started here: UGroundTraffic::ReplanHeldTaxiOut restarts it
+	 *  through ChangeRoute - which keeps its pose, heading and engine spool, as EndTaxiOutHold's caller
+	 *  used to by calling RestartTaxi itself before issue #429 put every route change through one seam. */
+	void EndWait();
 
-	/** A new taxi out, beginning where the aeroplane stands - UGroundTraffic::ReplanHeldTaxiOuts. */
+	/** A ForTaxiOutRoute hold's "no route yet" line has been said - one line for a hold that lasts minutes. */
+	bool HasSaidWait() const { return bWaitSaid; }
+	void MarkWaitSaid() { bWaitSaid = true; }
+
+	/**
+	 * The guideline revision a replan from a ForTaxiOutRoute hold was last REFUSED at -
+	 * UGroundTraffic::RetryWaiters asks again only once the graph has moved past it (ops batch 3 PR E).
+	 * Unset: never refused, ask. Forgotten with the wait, so a new hold always asks at once.
+	 */
+	bool WasWaitRefusedAt(uint32 GuidelineRevision) const
+	{
+		return WaitRefusedAt.IsSet() && WaitRefusedAt.GetValue() == GuidelineRevision;
+	}
+	void MarkWaitRefusedAt(uint32 GuidelineRevision) { WaitRefusedAt = GuidelineRevision; }
+
+	/** Forget the refusal - a new network object, whose revisions are not comparable. See WasWaitRefusedAt. */
+	void ForgetWaitRefusal() { WaitRefusedAt.Reset(); }
+
+	/** A new taxi out, beginning where the aeroplane stands - UGroundTraffic::RetryWaiters. Ends the
+	 *  ForTaxiOutRoute wait: the push-end handover starts it on the next Advance. */
 	void AdoptTaxiOut(const FRoutePlan& Route);
 
-	/** The hold's "no route yet" line has been said - see bTaxiOutHoldSaid. */
-	void MarkTaxiOutHoldSaid() { bTaxiOutHoldSaid = true; }
-
-	/** A replan from this hold was refused on this guideline revision - see TaxiOutRefusedAt. */
-	void MarkTaxiOutRefusedAt(uint32 GuidelineRevision) { TaxiOutRefusedAt = GuidelineRevision; }
-
-	/** Forget the refusal - a new network object, whose revisions are not comparable. See TaxiOutRefusedAt. */
-	void ForgetTaxiOutRefusal() { TaxiOutRefusedAt.Reset(); }
-
-	/** The hold for a taxi out is over: a new route has been found (AdoptTaxiOut's, or for a TAXIING aeroplane that
-	 *  held where the taxi-complete guard stopped it, UGroundTraffic::ReplanHeldTaxiOuts' restart through
-	 *  ChangeRoute - which keeps its pose, heading and engine spool, as this used to by calling RestartTaxi itself
-	 *  before issue #429 put every route change through one seam). Its hold line and refusal are forgotten. */
-	void EndTaxiOutHold();
-
-	/** Waiting for a way to the runway it can drive - see bTaxiOutStale. At the end of a push,
-	 *  or where a stranded taxi out left it. */
+	/** Waiting for a way to the runway it can drive, AND stopped where the wait applies - at the end
+	 *  of a push, or where a stranded taxi out left it. A taxi out marked stale part way through a
+	 *  push (the rebuild's) is waited for from the moment the push ends, not before. */
 	bool IsHoldingForTaxiOut() const
 	{
-		return bTaxiOutStale
+		return Wait == EAgentWait::ForTaxiOutRoute
 			&& ((Phase == EAgentPhase::Manoeuvring && Pushback.HasArrived())
 				|| (Phase == EAgentPhase::Taxiing && Follower.HasArrived()));
 	}
@@ -534,29 +493,8 @@ public:
 	 */
 	UPROPERTY() bool bDepartureArmed = false;
 
-	/**
-	 * No stand could be found for this aircraft: it stops at the end of what remains of its
-	 * route and is re-offered one whenever a stand may have freed. INTENT DATA, like
-	 * FDepartureOrder, not a phase - a waiting aircraft is Taxiing to its prefix's end and
-	 * then Parked there, and either is true while it waits. Set only by the rebuild path
-	 * (UGroundTraffic::ReResolvePlan) in v1; cleared by the re-offer (ReofferStands).
-	 */
-	UPROPERTY() bool bAwaitingStand = false;
-
-	/**
-	 * Arms the wait: GOAL AND FLAG TOGETHER, so bAwaitingStand can never be true without the
-	 * node the re-offer pass (ReofferStands) searches from - the invariant this codebase's
-	 * review flagged as maintained only by convention (issue #174). Goal is usually the same
-	 * node it already was (the rebuild path re-arms in place); taking it as a parameter
-	 * rather than reading GoalNode inside the method means a caller cannot arm the wait
-	 * without saying, at the call site, what it is waiting FROM.
-	 */
-	void SetAwaitingStand(FGuidelineNodeId Goal) { GoalNode = Goal; bAwaitingStand = true; }
-
-	/** Ends the wait - a stand was found, or the agent moved on some other way. The new
-	 *  goal, if there is one, is set separately (SetGoal/SetGoalFrom): a caller that just
-	 *  found a stand already knows where it is sending the agent. */
-	void ClearAwaitingStand() { bAwaitingStand = false; }
+	// bAwaitingStand / SetAwaitingStand / ClearAwaitingStand: EAgentWait::ForStand through WaitFor / EndWait now
+	// (issue #444) - see GetWait above, and EAgentWait::ForStand for the payload that travelled with them.
 
 	/**
 	 * The engine is turning. NOT the same question as whether the aircraft is moving -
@@ -581,6 +519,26 @@ private:
 	 *  not actually stopped - see RestoreEngineRPM's own comment for why that restore is now a
 	 *  named call instead of a bare field write. */
 	UPROPERTY() double EngineRPM = 0.0;
+
+	/**
+	 * See GetWait and EAgentWait. PRIVATE, behind WaitFor / EndWait, so no site arms a wait without its payload.
+	 *
+	 * WHO ARMS EACH: ForStand only the rebuild (FPlanReResolver::ReResolvePlan, a stand gone and none free); ended by
+	 * the goal moving (UGroundTraffic::ReleaseGoal) or a retarget. ForTaxiOutRoute the rebuild (a taxi out that did
+	 * not survive it), the push-end handover (a taxi out that does not begin where the push ended) and the taxi's
+	 * runway-entry guard (2026-09-27: a stranded taxi-out was started anyway, and the aeroplane jumped to where the old
+	 * runway began - Airside.Model.PushbackStrandedTaxiOutReplans); ended by the retry pass finding a route.
+	 *
+	 * A UPROPERTY, as bAwaitingStand was - every FRoadAgent field is (see bDepartureArmed). The ForTaxiOutRoute
+	 * payload below is session state, like the rest of a manoeuvre, as the triple was: not reflected.
+	 */
+	UPROPERTY() EAgentWait Wait = EAgentWait::None;
+
+	/** See HasSaidWait. */
+	bool bWaitSaid = false;
+
+	/** See WasWaitRefusedAt. */
+	TOptional<uint32> WaitRefusedAt;
 
 public:
 	/** Read-only outside StartEngineAtSpeed/RestoreEngineRPM/AdvanceEngine - see EngineRPM's
@@ -737,14 +695,24 @@ public:
 	{
 		return Phase == EAgentPhase::Manoeuvring ? Pushback.Plan : Follower.Plan;
 	}
+	// EVERY PHASE NAMED, no default (issue #444): the follower's figure was the default: arm, so a phase added would
+	// have read the follower's distance and speed whether or not the follower drove it - the trap that hid the push.
+	// ENFORCED BY: AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (C4062 as an error over both); Check-Architecture rule 81
+	AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
 	double DistanceAlongPlan() const
 	{
 		switch (Phase)
 		{
 		case EAgentPhase::Manoeuvring: return Pushback.Travelled;
 		case EAgentPhase::Reversing:   return Follower.Travelled + ReverseProgress();
-		default:                       return Follower.Travelled;
+		case EAgentPhase::Arriving:
+		case EAgentPhase::Taxiing:
+		case EAgentPhase::Departing:
+		case EAgentPhase::Parked:
+		case EAgentPhase::Gone:
+		case EAgentPhase::Stranded:    return Follower.Travelled;
 		}
+		return Follower.Travelled;
 	}
 	double SpeedAlongPlan() const
 	{
@@ -752,9 +720,16 @@ public:
 		{
 		case EAgentPhase::Manoeuvring: return Pushback.Speed;
 		case EAgentPhase::Reversing:   return Vehicle.HasTrailer() ? TowReverse.Speed : Reverse.Speed;
-		default:                       return Follower.Speed;
+		case EAgentPhase::Arriving:
+		case EAgentPhase::Taxiing:
+		case EAgentPhase::Departing:
+		case EAgentPhase::Parked:
+		case EAgentPhase::Gone:
+		case EAgentPhase::Stranded:    return Follower.Speed;
 		}
+		return Follower.Speed;
 	}
+	AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 	/**
 	 * How far the reverse playback has carried a Reversing agent along its span, uu, measured as
@@ -826,13 +801,10 @@ public:
 	 *  and OnGraphRebuilt names its phases arm by arm, so widening this moves neither of them.
 	 *  ENFORCED BY: Airside.Model.Traffic.ReversingHoldsItsSpan (ReplanAt refuses a reversing agent)
 	 *
-	 *  A PHASE ADDED TO EAGENTPHASE IS CLASSIFIED HERE, in the table that names all of them.
+	 *  A PHASE ADDED TO EAGENTPHASE IS CLASSIFIED in FAgentPhaseTraits' table, which names all of them
+	 *  (issue #444: this used to be the table, spelled as an OR of three phases).
 	 *  ENFORCED BY: Airside.Model.Traffic.IsOnRouteClassifiesEveryPhase */
-	bool IsOnRoute() const
-	{
-		return Phase == EAgentPhase::Taxiing || Phase == EAgentPhase::Manoeuvring
-			|| Phase == EAgentPhase::Reversing;
-	}
+	bool IsOnRoute() const { return PhaseTraits().bOnRoute; }
 
 	/**
 	 * Whether the deadlock resolver may send this agent along another route: a TAXI, and nothing else on a route.
@@ -848,8 +820,23 @@ public:
 	 * is refused - so the two that decide whether a jam is the player's cannot disagree about who can be turned.
 	 * ENFORCED BY: Check-Architecture.ps1 rule 46 (the resolver's file spells no `Phase == Taxiing`)
 	 * ENFORCED BY: Airside.Model.Traffic.IsOnRouteClassifiesEveryPhase (the replannable column names every phase)
+	 *
+	 * AND THE TWO THAT CHANGE A MOVING ROUTE IN PLACE (issue #444): UGroundTraffic::ExtendRoute and RerouteAgent
+	 * splice onto the live follower, which only a taxi has - they spelled it `Phase != Taxiing` too.
 	 */
-	bool IsReplannable() const { return Phase == EAgentPhase::Taxiing; }
+	bool IsReplannable() const { return PhaseTraits().bReplannable; }
+
+	/**
+	 * Whether UGroundTraffic::RedirectAgent may restart this agent on a new route: taxiing, or standing still where
+	 * a route can begin (Parked; Stranded, since #396). RedirectAgent's guard and the stand retry's waiter filter
+	 * spelled the same three phases each (issue #444, extending #313's "redirectable phase guards spelled per call
+	 * site"). A push, a reverse, a landing and a take-off are each driven by something a restart would throw away.
+	 * ENFORCED BY: Airside.Model.Traffic.IsOnRouteClassifiesEveryPhase (the redirectable column names every phase)
+	 */
+	bool IsRedirectable() const { return PhaseTraits().bRedirectable; }
+
+	/** This agent's phase's row - see FAgentPhaseTraits. The one place a consumer learns what Phase MEANS. */
+	const FAgentPhaseTraits& PhaseTraits() const { return AgentPhaseTraits::Of(Phase); }
 
 	/**
 	 * Whether the deadlock resolver can turn this agent where it stands: replannable (a taxi), and not refused AT A
