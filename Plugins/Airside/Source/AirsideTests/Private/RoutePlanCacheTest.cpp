@@ -15,11 +15,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FRoutePlanCacheHitsAfterOneFindTest::RunTest(const FString& Parameters)
 {
 	// LIFTED OFF ARigTestCourse's own PlanCacheKnowsItsVehicle and FitCacheDropsOnRebuild
-	// (#301): the FIRST ask for a (start, goal, vehicle) is a genuine Find; the SAME ask again
-	// is answered from the cache; a DIFFERENT vehicle's figures or a bumped guideline revision
-	// are both misses. Measured against RouteSearch::SearchCallCountForTest - a FACT about the
-	// engine actually running, not a caller-owned counter a broken cache could still satisfy by
-	// never being consulted at all.
+	// (#301): the FIRST ask for a (start, goal, vehicle) is a miss the CALLER answers with a Find
+	// and a Store; the SAME ask again is answered from the cache; a DIFFERENT vehicle's figures or a
+	// bumped guideline revision are both misses. NO SEARCH COUNTER here: this asserted that exactly one
+	// Find had run after the Store, which counted the one Find THIS TEST runs itself a few lines down -
+	// 1 whatever Lookup answered. A hit is shown by the cached plan being the one Stored, below.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(0.0, 0.0), /*bDerived=*/false);
 	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(10000.0, 0.0), /*bDerived=*/false);
@@ -38,12 +38,10 @@ bool FRoutePlanCacheHitsAfterOneFindTest::RunTest(const FString& Parameters)
 	Cache.EnsureFresh(*Net);
 	if (!TestNull(TEXT("nothing cached before the first ask"), Cache.Lookup(A, B, Vehicle))) { return false; }
 
-	RouteSearch::ResetSearchCallCountForTest();
 	const FRouteQuery Query = FRouteQuery::For(ERouteErrand::GraphProbe, A, B, 0.0, ETraversalClass::GroundVehicle);
 	const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
 	if (!TestTrue(TEXT("the fixture route is found"), Plan.IsValid())) { return false; }
 	Cache.Store(A, B, Vehicle, Plan, FString());
-	TestEqual(TEXT("one Find ran to answer the first ask"), RouteSearch::SearchCallCountForTest(), 1);
 
 	const FCachedRoutePlan* Hit = Cache.Lookup(A, B, Vehicle);
 	if (!TestNotNull(TEXT("the same ask hits"), Hit)) { return false; }

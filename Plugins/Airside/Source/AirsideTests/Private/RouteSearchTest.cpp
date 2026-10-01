@@ -64,7 +64,7 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 
 	Join(*Net, West, North);
 	Join(*Net, North, East);
-	const FGuidelineEdgeId WestSouth = Join(*Net, West, South);
+	Join(*Net, West, South);
 	Join(*Net, South, East);
 
 	// #312: was a hand-built FRouteQuery that skipped AvoidRunways.

@@ -306,6 +306,56 @@ bool FRouteRunwaySeedMemoTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+namespace
+{
+	/**
+	 * THE RUNWAY SHORTCUT, laid once for the tests that ask what a route does about a strip. A(0,0) to
+	 * B(20000,0): along the runway strip is the SHORT way (A -> R1 -> R2 -> B, three steps) and, when
+	 * bDetour, a longer legal way round via D (A -> D -> B, two steps). D sits 8000 north: the detour is
+	 * roughly 34000 uu against the strip's ~22000, so it loses on plain length and wins at a penalty of ten.
+	 * A margin, not a hair - a detour that only just won would be measuring floating-point noise.
+	 */
+	struct FRunwayShortcut
+	{
+		URoadNetwork* Net = nullptr;
+		FRoadSegmentId Strip;
+		FGuidelineNodeId A, B, D, R1, R2;
+
+		bool ViaRunway(const FRoutePlan& Plan) const { return Plan.IsValid() && Plan.Steps.Num() == 3 && Plan.Steps[0].To == R1; }
+		bool ViaDetour(const FRoutePlan& Plan) const { return Plan.IsValid() && Plan.Steps.Num() == 2 && Plan.Steps[0].To == D; }
+
+		static FRunwayShortcut Lay(bool bDetour)
+		{
+			FRunwayShortcut Out;
+			Out.Net = NewObject<URoadNetwork>(GetTransientPackage());
+			URoadProfile* Runway = TestProfiles::Runway();
+			const FRoadNodeId RoadR1 = Out.Net->AddNode(FVector2D(0.0, -1000.0));
+			const FRoadNodeId RoadR2 = Out.Net->AddNode(FVector2D(20000.0, -1000.0));
+			Out.Strip = Out.Net->AddStraightSegment(RoadR1, RoadR2, Runway);
+
+			Out.A = Out.Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+			Out.B = Out.Net->AddGuidelineNode(FVector2D(20000.0, 0.0));
+			Out.R1 = Out.Net->AddGuidelineNode(FVector2D(0.0, -1000.0));
+			Out.R2 = Out.Net->AddGuidelineNode(FVector2D(20000.0, -1000.0));
+			if (bDetour)
+			{
+				Out.D = Out.Net->AddGuidelineNode(FVector2D(10000.0, 8000.0));
+				TestGraph::Join(*Out.Net, Out.A, Out.D); TestGraph::Join(*Out.Net, Out.D, Out.B);
+			}
+			TestGraph::Join(*Out.Net, Out.A, Out.R1); TestGraph::Join(*Out.Net, Out.R2, Out.B);
+			{
+				FGuidelineEdge Along;
+				Along.A = Out.R1; Along.B = Out.R2;
+				Along.Control = FVector2D(10000.0, -1000.0);
+				Along.AllowedTraffic = FTrafficMask::All();
+				Along.DerivedFrom = Out.Strip;
+				Out.Net->AddGuidelineEdge(MoveTemp(Along));
+			}
+			return Out;
+		}
+	};
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRouteRunwayPenaltyTest,
 	"Airside.Model.RouteSearch.RunwayPenalty",
@@ -316,111 +366,33 @@ bool FRouteRunwayPenaltyTest::RunTest(const FString& Parameters)
 	// A(0,0) to B(20000,0). Along the strip is SHORT; the detour via D is longer but legal.
 	// The penalty is the only thing that can make the longer way win, which is what makes
 	// this measure the rule rather than name it: at a multiplier of 1.0 it must go red.
-	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = TestProfiles::Runway();
-	const FRoadNodeId RoadR1 = Net->AddNode(FVector2D(0.0, -1000.0));
-	const FRoadNodeId RoadR2 = Net->AddNode(FVector2D(20000.0, -1000.0));
-	const FRoadSegmentId Strip = Net->AddStraightSegment(RoadR1, RoadR2, Runway);
-	if (!TestTrue(TEXT("the strip is a runway segment"), Net->IsRunwaySegment(Strip))) { return false; }
-
-	const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
-	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(20000.0, 0.0));
-	// D at 8000 north: the detour is roughly 34000 uu against the strip's ~22000, so it
-	// loses on plain length and wins at a penalty of ten. A margin, not a hair - a detour
-	// that only just won would be measuring floating-point noise.
-	const FGuidelineNodeId D = Net->AddGuidelineNode(FVector2D(10000.0, 8000.0));
-	const FGuidelineNodeId R1 = Net->AddGuidelineNode(FVector2D(0.0, -1000.0));
-	const FGuidelineNodeId R2 = Net->AddGuidelineNode(FVector2D(20000.0, -1000.0));
-	TestGraph::Join(*Net, A, D); TestGraph::Join(*Net, D, B);
-	TestGraph::Join(*Net, A, R1); TestGraph::Join(*Net, R2, B);
-	{
-		FGuidelineEdge Along;
-		Along.A = R1; Along.B = R2;
-		Along.Control = FVector2D(10000.0, -1000.0);
-		Along.AllowedTraffic = FTrafficMask::All();
-		Along.DerivedFrom = Strip;
-		Net->AddGuidelineEdge(MoveTemp(Along));
-	}
-
-	auto ViaRunway = [&](const FRoutePlan& Plan) { return Plan.IsValid() && Plan.Steps.Num() == 3 && Plan.Steps[0].To == R1; };
-	auto ViaDetour = [&](const FRoutePlan& Plan) { return Plan.IsValid() && Plan.Steps.Num() == 2 && Plan.Steps[0].To == D; };
+	const FRunwayShortcut G = FRunwayShortcut::Lay(/*bDetour=*/true);
+	if (!TestTrue(TEXT("the strip is a runway segment"), G.Net->IsRunwaySegment(G.Strip))) { return false; }
 
 	const FAirframe Airframe;
+	auto Query = [&](ERouteErrand Errand)
+	{
+		return FRouteQuery::For(Errand, G.A, G.B, Airframe.Wingspan, ETraversalClass::Aircraft);
+	};
 
 	// GraphProbe: no filter, no penalty. The strip is ordinary line and the short way wins.
-	const FRouteQuery Probe = FRouteQuery::For(ERouteErrand::GraphProbe, A, B, Airframe.Wingspan, ETraversalClass::Aircraft);
 	TestTrue(TEXT("with no policy at all the strip is ordinary line - the short way"),
-		ViaRunway(RouteSearch::Find(*Net, Probe)));
+		G.ViaRunway(RouteSearch::Find(*G.Net, Query(ERouteErrand::GraphProbe))));
 
 	// PlayerIssued: no filter, but a penalty. Same graph, opposite answer.
-	FRouteQuery Player = FRouteQuery::For(ERouteErrand::PlayerIssued, A, B, Airframe.Wingspan, ETraversalClass::Aircraft);
+	FRouteQuery Player = Query(ERouteErrand::PlayerIssued);
 	TestTrue(TEXT("the penalty alone sends a player-issued route round the strip"),
-		ViaDetour(RouteSearch::Find(*Net, Player)));
+		G.ViaDetour(RouteSearch::Find(*G.Net, Player)));
 
 	// AND THE PENALTY IS THE THING DOING IT, not the errand: turn the multiplier off and the
 	// same errand takes the strip again. Without this the test would still pass on a build
 	// where PlayerIssued had quietly been given an All filter instead.
 	Player.RunwayPenalty = 1.0;
 	TestTrue(TEXT("at a multiplier of one the same errand takes the strip"),
-		ViaRunway(RouteSearch::Find(*Net, Player)));
+		G.ViaRunway(RouteSearch::Find(*G.Net, Player)));
 
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FRouteRunwayOnlyWayTest,
-	"Airside.Model.RouteSearch.RunwayPenaltyStillRoutesWhenItIsTheOnlyWay",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FRouteRunwayOnlyWayTest::RunTest(const FString& Parameters)
-{
-	// THE DEGRADATION PlayerIssued EXISTS FOR. No detour at all: a filter would report
-	// Unreachable and read as a broken tool, where a penalty takes the only way there is.
-	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = TestProfiles::Runway();
-	const FRoadNodeId RoadR1 = Net->AddNode(FVector2D(0.0, -1000.0));
-	const FRoadNodeId RoadR2 = Net->AddNode(FVector2D(20000.0, -1000.0));
-	const FRoadSegmentId Strip = Net->AddStraightSegment(RoadR1, RoadR2, Runway);
-
-	const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
-	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(20000.0, 0.0));
-	const FGuidelineNodeId R1 = Net->AddGuidelineNode(FVector2D(0.0, -1000.0));
-	const FGuidelineNodeId R2 = Net->AddGuidelineNode(FVector2D(20000.0, -1000.0));
-	TestGraph::Join(*Net, A, R1); TestGraph::Join(*Net, R2, B);
-	{
-		FGuidelineEdge Along;
-		Along.A = R1; Along.B = R2;
-		Along.Control = FVector2D(10000.0, -1000.0);
-		Along.AllowedTraffic = FTrafficMask::All();
-		Along.DerivedFrom = Strip;
-		Net->AddGuidelineEdge(MoveTemp(Along));
-	}
-
-	const FAirframe Airframe;
-
-	const FRoutePlan Player = RouteSearch::Find(*Net,
-		FRouteQuery::For(ERouteErrand::PlayerIssued, A, B, Airframe.Wingspan, ETraversalClass::Aircraft));
-	TestTrue(TEXT("a penalty is expensive, not impossible: the only way through is still found"),
-		Player.IsValid());
-
-	// THE CONTRAST THAT GIVES THAT ITS MEANING. An errand with a filter reports Unreachable
-	// on the very same graph - so the assertion above is about the penalty, not about the
-	// graph happening to be routable.
-	const FRoutePlan TaxiIn = RouteSearch::Find(*Net,
-		FRouteQuery::For(ERouteErrand::ArrivalTaxiIn, A, B, Airframe.Wingspan, ETraversalClass::Aircraft));
-	TestEqual(TEXT("a filtered errand refuses the same graph outright"),
-		TaxiIn.Result, ERouteResult::Unreachable);
-
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FRouteChangedErrandsTest,
-	"Airside.Model.RouteSearch.ErrandsThatGainedAFilter",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FRouteChangedErrandsTest::RunTest(const FString& Parameters)
-{
+	// --- THE ERRANDS THAT GAINED A FILTER (the table; this was Airside.Model.RouteSearch.ErrandsThatGainedAFilter) ---
+	//
 	// THE 2026-09-21 REPORT, PINNED: "aircraft see the runway as a taxi route".
 	//
 	// Four call sites declared no runway policy and got the permissive one by omission.
@@ -434,64 +406,59 @@ bool FRouteChangedErrandsTest::RunTest(const FString& Parameters)
 	// private to the plugin, so the taxi-out route cannot be asked for by name from a test
 	// module. This pins the ROW those planners now resolve. The route an actual pushback
 	// produces is still only shown by the in-editor repro.
-	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = TestProfiles::Runway();
-	const FRoadNodeId RoadR1 = Net->AddNode(FVector2D(0.0, -1000.0));
-	const FRoadNodeId RoadR2 = Net->AddNode(FVector2D(20000.0, -1000.0));
-	const FRoadSegmentId Strip = Net->AddStraightSegment(RoadR1, RoadR2, Runway);
-	if (!TestTrue(TEXT("the strip is a runway segment"), Net->IsRunwaySegment(Strip))) { return false; }
-
-	// The strip is the SHORT way; the detour via D exists and is longer. An errand with no
-	// rule takes the strip, which is precisely the reported behaviour.
-	const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
-	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(20000.0, 0.0));
-	const FGuidelineNodeId D = Net->AddGuidelineNode(FVector2D(10000.0, 8000.0));
-	const FGuidelineNodeId R1 = Net->AddGuidelineNode(FVector2D(0.0, -1000.0));
-	const FGuidelineNodeId R2 = Net->AddGuidelineNode(FVector2D(20000.0, -1000.0));
-	TestGraph::Join(*Net, A, D); TestGraph::Join(*Net, D, B);
-	TestGraph::Join(*Net, A, R1); TestGraph::Join(*Net, R2, B);
+	//
+	// THE CONTROL IS THE GraphProbe ASSERTION ABOVE: the strip is the SHORT way and the detour via D
+	// exists and is longer, so an errand with no rule takes the strip - precisely the reported
+	// behaviour - and every row below is about the errand's row, not about the graph preferring the
+	// detour anyway.
+	struct FErrandRow { ERouteErrand Errand; bool bViaRunway; const TCHAR* Reason; };
+	const FErrandRow Rows[] = {
+		// The two pushback errands. PushbackTaxiOut is the long taxi from where a push ends to
+		// the runway entry, and is the site that reproduces the report.
+		{ ERouteErrand::PushbackTaxiOut,   false, TEXT("PushbackTaxiOut no longer taxis down the strip") },
+		{ ERouteErrand::PushbackClear,     false, TEXT("PushbackClear no longer taxis down the strip") },
+		// And the errands that already had a rule, so a future edit to the table cannot quietly
+		// swap two rows and leave this file green.
+		{ ERouteErrand::ArrivalTaxiIn,     false, TEXT("ArrivalTaxiIn still refuses the strip") },
+		{ ERouteErrand::DepartureToEntry,  false, TEXT("DepartureToEntry still refuses the strip") },
+		// THE EXCEPTION, asserted rather than assumed. A backtrack exists to use the strip, and
+		// an over-eager ban would silently strand every intersection departure.
+		{ ERouteErrand::DepartureBacktrack, true, TEXT("DepartureBacktrack still MAY use the strip - the one errand that must") },
+	};
+	for (const FErrandRow& Row : Rows)
 	{
-		FGuidelineEdge Along;
-		Along.A = R1; Along.B = R2;
-		Along.Control = FVector2D(10000.0, -1000.0);
-		Along.AllowedTraffic = FTrafficMask::All();
-		Along.DerivedFrom = Strip;
-		Net->AddGuidelineEdge(MoveTemp(Along));
+		const FRoutePlan Plan = RouteSearch::Find(*G.Net, Query(Row.Errand));
+		TestTrue(Row.Reason, Row.bViaRunway ? G.ViaRunway(Plan) : G.ViaDetour(Plan));
 	}
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRouteRunwayOnlyWayTest,
+	"Airside.Model.RouteSearch.RunwayPenaltyStillRoutesWhenItIsTheOnlyWay",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRouteRunwayOnlyWayTest::RunTest(const FString& Parameters)
+{
+	// THE DEGRADATION PlayerIssued EXISTS FOR. No detour at all: a filter would report
+	// Unreachable and read as a broken tool, where a penalty takes the only way there is.
+	const FRunwayShortcut G = FRunwayShortcut::Lay(/*bDetour=*/false);
+
 	const FAirframe Airframe;
-	auto ViaRunway = [&](const FRoutePlan& Plan) { return Plan.IsValid() && Plan.Steps.Num() == 3 && Plan.Steps[0].To == R1; };
-	auto ViaDetour = [&](const FRoutePlan& Plan) { return Plan.IsValid() && Plan.Steps.Num() == 2 && Plan.Steps[0].To == D; };
 
-	// THE CONTROL FIRST. Without a rule the strip wins - so every assertion below is about
-	// the errand's row, not about the graph preferring the detour anyway.
-	TestTrue(TEXT("an errand with no rule takes the strip - the behaviour reported"),
-		ViaRunway(RouteSearch::Find(*Net,
-			FRouteQuery::For(ERouteErrand::GraphProbe, A, B, Airframe.Wingspan, ETraversalClass::Aircraft))));
+	const FRoutePlan Player = RouteSearch::Find(*G.Net,
+		FRouteQuery::For(ERouteErrand::PlayerIssued, G.A, G.B, Airframe.Wingspan, ETraversalClass::Aircraft));
+	TestTrue(TEXT("a penalty is expensive, not impossible: the only way through is still found"),
+		Player.IsValid());
 
-	// The two pushback errands. PushbackTaxiOut is the long taxi from where a push ends to
-	// the runway entry, and is the site that reproduces the report.
-	TestTrue(TEXT("PushbackTaxiOut no longer taxis down the strip"),
-		ViaDetour(RouteSearch::Find(*Net,
-			FRouteQuery::For(ERouteErrand::PushbackTaxiOut, A, B, Airframe.Wingspan, ETraversalClass::Aircraft))));
-	TestTrue(TEXT("PushbackClear no longer taxis down the strip"),
-		ViaDetour(RouteSearch::Find(*Net,
-			FRouteQuery::For(ERouteErrand::PushbackClear, A, B, Airframe.Wingspan, ETraversalClass::Aircraft))));
-
-	// And the errands that already had a rule, so a future edit to the table cannot quietly
-	// swap two rows and leave this file green.
-	TestTrue(TEXT("ArrivalTaxiIn still refuses the strip"),
-		ViaDetour(RouteSearch::Find(*Net,
-			FRouteQuery::For(ERouteErrand::ArrivalTaxiIn, A, B, Airframe.Wingspan, ETraversalClass::Aircraft))));
-	TestTrue(TEXT("DepartureToEntry still refuses the strip"),
-		ViaDetour(RouteSearch::Find(*Net,
-			FRouteQuery::For(ERouteErrand::DepartureToEntry, A, B, Airframe.Wingspan, ETraversalClass::Aircraft))));
-
-	// THE EXCEPTION, asserted rather than assumed. A backtrack exists to use the strip, and
-	// an over-eager ban would silently strand every intersection departure.
-	TestTrue(TEXT("DepartureBacktrack still MAY use the strip - the one errand that must"),
-		ViaRunway(RouteSearch::Find(*Net,
-			FRouteQuery::For(ERouteErrand::DepartureBacktrack, A, B, Airframe.Wingspan, ETraversalClass::Aircraft))));
+	// THE CONTRAST THAT GIVES THAT ITS MEANING. An errand with a filter reports Unreachable
+	// on the very same graph - so the assertion above is about the penalty, not about the
+	// graph happening to be routable.
+	const FRoutePlan TaxiIn = RouteSearch::Find(*G.Net,
+		FRouteQuery::For(ERouteErrand::ArrivalTaxiIn, G.A, G.B, Airframe.Wingspan, ETraversalClass::Aircraft));
+	TestEqual(TEXT("a filtered errand refuses the same graph outright"),
+		TaxiIn.Result, ERouteResult::Unreachable);
 
 	return true;
 }

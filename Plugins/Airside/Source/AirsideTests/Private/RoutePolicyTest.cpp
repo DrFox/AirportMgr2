@@ -76,36 +76,6 @@ bool FRoutePolicyTableTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FRoutePolicyCallSitesTest,
-	"Airside.Model.RoutePolicy.MatchesCallSitesAsShipped",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FRoutePolicyCallSitesTest::RunTest(const FString& Parameters)
-{
-	// THE REFACTOR CONTRACT, pinned. Each row below is what that call site set by hand on
-	// 2026-09-21, before the table existed. This test fails if the migration quietly
-	// changed a rule it promised not to - which is the only way a "no behaviour change"
-	// claim can be measured rather than asserted.
-	//
-	// The five sites the spec says DO change behaviour are deliberately absent: they had no
-	// policy to preserve. See the spec's section 7.
-	auto Row = [this](ERouteErrand Errand, ERunwayAvoidance Avoidance, EOccupancyUse Occupancy, const TCHAR* Site)
-	{
-		const FRoutePolicy Policy = FRoutePolicy::For(Errand);
-		TestEqual(*FString::Printf(TEXT("%s kept its runway avoidance"), Site), Policy.Avoidance, Avoidance);
-		TestEqual(*FString::Printf(TEXT("%s kept its occupancy use"), Site), Policy.Occupancy, Occupancy);
-	};
-
-	Row(ERouteErrand::ArrivalTaxiIn,       ERunwayAvoidance::All,  EOccupancyUse::Never,    TEXT("ArrivalPlanner.cpp:36"));
-	Row(ERouteErrand::DepartureToEntry,    ERunwayAvoidance::All,  EOccupancyUse::Never,    TEXT("DeparturePlanner.cpp:88"));
-	Row(ERouteErrand::DepartureBacktrack,  ERunwayAvoidance::None, EOccupancyUse::Never,    TEXT("DeparturePlanner.cpp:106"));
-	Row(ERouteErrand::Replan,              ERunwayAvoidance::Held, EOccupancyUse::Required, TEXT("GroundTrafficRebuild.cpp:95"));
-	Row(ERouteErrand::CandidateComparison, ERunwayAvoidance::All,  EOccupancyUse::Never,    TEXT("FuelService.cpp:234"));
-
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRoutePolicyQueryTest,
 	"Airside.Model.RoutePolicy.QueryResolvesTheTable",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -115,24 +85,43 @@ bool FRoutePolicyQueryTest::RunTest(const FString& Parameters)
 	FAirframe Airframe;
 	Airframe.Wingspan = 3000.0;
 
-	const FRouteQuery TaxiIn = FRouteQuery::For(
-		ERouteErrand::ArrivalTaxiIn, FGuidelineNodeId(), FGuidelineNodeId(),
-		Airframe.Wingspan, ETraversalClass::Aircraft);
+	// THE ROWS AS RULED. Each row below is what the call that names it set by hand on 2026-09-21,
+	// before the table existed (this test was a parity pin against those sites, MatchesCallSitesAsShipped,
+	// and failed if the migration quietly changed a rule it promised not to). The "as shipped" side is
+	// gone - the sites ask the table - so what stands is the rows themselves: an edit that swaps two of
+	// them, or loosens one, fails here.
+	//
+	// The five errands the spec says DO change behaviour are deliberately absent: they had no policy to
+	// preserve. See the spec's section 7; the pushback errands among them gained their filter in
+	// Airside.Model.RouteSearch.RunwayPenalty's errand table.
+	//
+	// EACH ROW IS ASKED TWICE - of the table (FRoutePolicy::For) and of the query that resolves it
+	// (FRouteQuery::For) - because they are two places a row could be lost: a query factory that
+	// copied the wrong field would read the right table.
+	auto Row = [this, &Airframe](ERouteErrand Errand, ERunwayAvoidance Avoidance, EOccupancyUse Occupancy, const TCHAR* Name)
+	{
+		const FRoutePolicy Policy = FRoutePolicy::For(Errand);
+		TestEqual(*FString::Printf(TEXT("%s kept its runway avoidance"), Name), Policy.Avoidance, Avoidance);
+		TestEqual(*FString::Printf(TEXT("%s kept its occupancy use"), Name), Policy.Occupancy, Occupancy);
 
-	TestEqual(TEXT("the errand is carried, so the search can refuse an unset one"),
-		TaxiIn.Errand, ERouteErrand::ArrivalTaxiIn);
-	TestEqual(TEXT("avoidance comes from the table, not from the caller"),
-		TaxiIn.AvoidRunways, ERunwayAvoidance::All);
-	TestEqual(TEXT("the resolved policy travels with the query for the cost to read"),
-		TaxiIn.Policy.Occupancy, EOccupancyUse::Never);
-	TestEqual(TEXT("the factory still fills wingspan from the airframe"),
-		TaxiIn.Wingspan, 3000.0);
+		const FRouteQuery Query = FRouteQuery::For(
+			Errand, FGuidelineNodeId(), FGuidelineNodeId(), Airframe.Wingspan, ETraversalClass::Aircraft);
+		TestEqual(*FString::Printf(TEXT("%s: the errand is carried, so the search can refuse an unset one"), Name),
+			Query.Errand, Errand);
+		TestEqual(*FString::Printf(TEXT("%s: avoidance comes from the table, not from the caller"), Name),
+			Query.AvoidRunways, Avoidance);
+		TestEqual(*FString::Printf(TEXT("%s: the resolved policy travels with the query for the cost to read"), Name),
+			Query.Policy.Occupancy, Occupancy);
+		TestEqual(*FString::Printf(TEXT("%s: the factory still fills wingspan from the airframe"), Name),
+			Query.Wingspan, 3000.0);
+	};
 
-	const FRouteQuery Backtrack = FRouteQuery::For(
-		ERouteErrand::DepartureBacktrack, FGuidelineNodeId(), FGuidelineNodeId(),
-		Airframe.Wingspan, ETraversalClass::Aircraft);
-	TestEqual(TEXT("the one errand that must use a strip is not given a filter"),
-		Backtrack.AvoidRunways, ERunwayAvoidance::None);
+	Row(ERouteErrand::ArrivalTaxiIn,       ERunwayAvoidance::All,  EOccupancyUse::Never,    TEXT("ArrivalTaxiIn"));
+	Row(ERouteErrand::DepartureToEntry,    ERunwayAvoidance::All,  EOccupancyUse::Never,    TEXT("DepartureToEntry"));
+	// THE ONE ERRAND THAT MUST USE A STRIP is not given a filter.
+	Row(ERouteErrand::DepartureBacktrack,  ERunwayAvoidance::None, EOccupancyUse::Never,    TEXT("DepartureBacktrack"));
+	Row(ERouteErrand::Replan,              ERunwayAvoidance::Held, EOccupancyUse::Required, TEXT("Replan"));
+	Row(ERouteErrand::CandidateComparison, ERunwayAvoidance::All,  EOccupancyUse::Never,    TEXT("CandidateComparison"));
 
 	// TWO DEFAULTS THAT MUST AGREE, checked rather than trusted. FRouteQuery carries its own
 	// RunwayPenalty because a query built without any FTrafficRules to hand must still be

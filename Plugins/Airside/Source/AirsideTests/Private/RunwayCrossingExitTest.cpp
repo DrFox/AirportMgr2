@@ -291,8 +291,11 @@ namespace
 	 * rule was written for. It passed with and without that rule (A's tail is off the strip long
 	 * before J, so B crosses and J is free), i.e. it measured nothing, and the rule went with it.
 	 */
-	FCrossingExitHeadOnOutcome CrossingExitHeadOnOffTheCycle(UObject* Outer, double CrossY)
+	FCrossingExitHeadOnOutcome CrossingExitHeadOnOffTheCycle(UObject* Outer)
 	{
+		// ONE VALUE, no longer a parameter: the second variant that passed a different one was dropped
+		// (see above), and a parameter nothing varies reads as a knob someone is meant to turn.
+		constexpr double CrossY = 0.0;
 		FCrossingExitHeadOnOutcome Out;
 		URoadNetwork* Net = NewObject<URoadNetwork>(Outer);
 		URoadProfile* Runway = TestProfiles::Runway();
@@ -390,7 +393,7 @@ bool FTrafficCrossingHeadOnReplansOffTheCycleTest::RunTest(const FString& Parame
 	// crossing, and so on every retry window: measured before the fix, 76 deadlock lines in
 	// 400 s, B replanned back and forth between its two routes, neither aircraft reaching its goal -
 	// the PIE log's own alternation, and its flapping alert.
-	const FCrossingExitHeadOnOutcome Out = CrossingExitHeadOnOffTheCycle(GetTransientPackage(), 0.0);
+	const FCrossingExitHeadOnOutcome Out = CrossingExitHeadOnOffTheCycle(GetTransientPackage());
 	if (!TestTrue(TEXT("staged: B holding at F1, A crossing at Z"), Out.bStaged)) { return false; }
 	TestTrue(TEXT("A left the strip and reached N1 once B had gone"), Out.bAParked);
 	TestTrue(TEXT("B went round by crossing 2 and reached S1"), Out.bBParked);

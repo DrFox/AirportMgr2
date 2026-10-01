@@ -595,7 +595,15 @@ bool FProfileResolutionIsOneRuleTest::RunTest(const FString& Parameters)
 	// it ignored the index outright, because the only list was the taxiways' and an index
 	// reaching a road would have laid a taxiway's width on a lane meant for vans. Every index
 	// the road list can answer must still be a road: two lanes, never one aircraft line.
-	for (int32 Tier = 0; Tier < Target->GetWidthCount(ERoadKind::ServiceRoad); ++Tier)
+	//
+	// A FLOOR ON THE LOOP: with no road tiers it runs zero times and "every index resolves to a road" holds
+	// of nothing - this test passed with GetWidthCount(ServiceRoad) returning 0.
+	const int32 RoadTiers = Target->GetWidthCount(ERoadKind::ServiceRoad);
+	if (!TestTrue(*FString::Printf(TEXT("the content set offers service-road tiers to resolve (%d)"), RoadTiers), RoadTiers > 0))
+	{
+		return false;
+	}
+	for (int32 Tier = 0; Tier < RoadTiers; ++Tier)
 	{
 		const URoadProfile* Road = Target->ResolveProfileFor(ERoadKind::ServiceRoad, Tier);
 		TestTrue(TEXT("a road index resolves to a two-lane road"), Road != nullptr && Road->Guidelines.Num() == 2);
@@ -606,18 +614,15 @@ bool FProfileResolutionIsOneRuleTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("a taxiway always resolves something"),
 		Target->ResolveProfileFor(ERoadKind::Taxiway, INDEX_NONE));
 
-	// AND AN INDEX THE CONTENT SET CAN ANSWER GIVES THAT ONE, not the fallback. Reported rather
-	// than failed when the content set is empty: this is a rule about resolution, not about what
-	// a particular project happens to ship.
-	if (Target->GetWidthCount(ERoadKind::Taxiway) > 0)
+	// AND AN INDEX THE CONTENT SET CAN ANSWER GIVES THAT ONE, not the fallback. This used to REPORT and
+	// pass when the content set had no taxiway widths ("a rule about resolution, not about what a
+	// particular project ships"): the same skip-to-green as the loop above. This suite runs against the
+	// project's own content set, so a missing width is a failure here, not a note.
+	if (TestTrue(TEXT("the content set offers taxiway widths to resolve"), Target->GetWidthCount(ERoadKind::Taxiway) > 0))
 	{
 		TestEqual(TEXT("an index resolves to that width"),
 			Target->ResolveProfileFor(ERoadKind::Taxiway, 0),
 			Target->ResolveWidthProfile(ERoadKind::Taxiway, 0));
-	}
-	else
-	{
-		AddInfo(TEXT("No taxiway widths in the content set; index resolution not checked"));
 	}
 
 	return true;

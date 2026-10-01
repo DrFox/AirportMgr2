@@ -154,8 +154,8 @@ enum class EOccupancyUse : uint8
  * One errand's routing policy. THE one table - see FRoutePolicy::For.
  *
  * A NAMED PUBLIC TYPE rather than a constexpr array hidden in RouteSearch.cpp, so the table
- * can be swept by a test (Airside.Model.RoutePolicy.EveryErrandHasARow) and pinned against
- * what the call sites shipped (MatchesCallSitesAsShipped). A table nothing can enumerate is
+ * can be swept by a test (Airside.Model.RoutePolicy.EveryErrandHasARow) and pinned row by row
+ * against the rulings (QueryResolvesTheTable). A table nothing can enumerate is
  * a fourth outing for the bug in CLAUDE.md's "Check where a list is CONSUMED".
  */
 USTRUCT()

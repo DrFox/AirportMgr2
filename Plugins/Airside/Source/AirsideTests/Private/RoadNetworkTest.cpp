@@ -155,10 +155,11 @@ bool FRoadNetworkTest::RunTest(const FString& Parameters)
 
 	// --- NodeIdAt/SegmentIdAt/GuidelineEdgeIdAt/ApronIdAt: dead, out-of-range, and live (#79 review) ---
 	//
-	// Every one of these is RoadSlot::HandleAt, already proven generically by
-	// Airside.Model.SlotMap - this pins the four call sites themselves rather than trusting
-	// each forwards to it correctly, since a copy-paste of the wrong array would compile and
-	// silently answer for a different collection.
+	// Every one of these is RoadSlot::HandleAt. This block is what exercises it, through the four
+	// call sites below, and what pins each forwarder against a copy-paste of the wrong array, which
+	// would compile and silently answer for a different collection. (This note used to say HandleAt
+	// was "already proven generically" by Airside.Model.SlotMap. On 2026-10-01 that test measures Add,
+	// IsValid, Get and Remove and does not call HandleAt, so nothing else stood behind the forwarders.)
 	{
 		URoadNetwork* IdAtNet = NewObject<URoadNetwork>(GetTransientPackage());
 		URoadProfile* IdAtProfile = URoadProfile::MakeTransient(2300.0, 1500.0);

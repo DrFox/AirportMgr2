@@ -284,6 +284,13 @@ bool FLargestServiceVehiclePassedDownMatchesSelfResolvedTest::RunTest(const FStr
 	const FRoadMeshBuffers& Self = BuilderSelfResolved.GetBuffers();
 	const FRoadMeshBuffers& Passed = BuilderPassedDown.GetBuffers();
 
+	// A FLOOR FIRST: two empty buffers are equal, so everything below would pass on a build that made no
+	// surface at all, a vehicle that turned the fixture's three roads into nothing included.
+	if (!TestTrue(*FString::Printf(TEXT("the self-resolved path built a surface (%d vertices, %d indices)"),
+		Self.Positions.Num(), Self.Indices.Num()), Self.Positions.Num() > 0 && Self.Indices.Num() > 0))
+	{
+		return false;
+	}
 	if (!TestEqual(TEXT("same vertex count"), Self.Positions.Num(), Passed.Positions.Num()))
 	{
 		return false;
@@ -296,6 +303,17 @@ bool FLargestServiceVehiclePassedDownMatchesSelfResolvedTest::RunTest(const FStr
 		TestTrue(FString::Printf(TEXT("vertex %d bitwise unchanged"), Index),
 			Self.Positions[Index] == Passed.Positions[Index]);
 	}
+
+	// THE ATTRIBUTES RIDE WITH THE VERTICES, and the vertices alone were compared: a vehicle passed down
+	// that moved a fillet would move UV1 (lateral, along) and the junction blend (UV2) with it, and a
+	// wrong material id per triangle would sit beside identical positions. Every array the sink carries,
+	// and bitwise for the same reason as the positions.
+	TestTrue(TEXT("UV0 (world-aligned) is bitwise unchanged"), Self.UV0 == Passed.UV0);
+	TestTrue(TEXT("UV1 (lateral, along) is bitwise unchanged"), Self.UV1 == Passed.UV1);
+	TestTrue(TEXT("UV2 (the masks) is bitwise unchanged"), Self.UV2 == Passed.UV2);
+	TestTrue(TEXT("the material id per triangle is unchanged"), Self.MaterialIDs == Passed.MaterialIDs);
+	TestEqual(TEXT("and UV1 has an entry per vertex, so the comparison above covered every one"),
+		Self.UV1.Num(), Self.Positions.Num());
 
 	TestEqual(TEXT("same triangle count"), Self.Indices.Num(), Passed.Indices.Num());
 	for (int32 Index = 0; Index < FMath::Min(Self.Indices.Num(), Passed.Indices.Num()); ++Index)

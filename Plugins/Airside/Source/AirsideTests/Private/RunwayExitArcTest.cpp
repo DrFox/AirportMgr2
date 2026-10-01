@@ -75,21 +75,6 @@ namespace
 		}
 		return Fit;
 	}
-
-	/** The solver's cut distance for Segment's arm at road node NodeIndex, or 0. Unused
-	 *  today - kept from before the split rather than deleted as a change this issue did not
-	 *  ask for. */
-	double ExitArcCutDistance(const FRoadSolveResult& Solved, int32 NodeIndex, FRoadSegmentId Segment)
-	{
-		const FJunctionResult* Result = Solved.NodeResults.Find(NodeIndex);
-		const TArray<FRoadSegmentId>* Arms = Solved.NodeArmSegments.Find(NodeIndex);
-		if (Result == nullptr || Arms == nullptr) { return 0.0; }
-		for (int32 Index = 0; Index < Arms->Num() && Index < Result->Arms.Num(); ++Index)
-		{
-			if ((*Arms)[Index] == Segment) { return Result->Arms[Index].CutDistance; }
-		}
-		return 0.0;
-	}
 }
 
 /**
