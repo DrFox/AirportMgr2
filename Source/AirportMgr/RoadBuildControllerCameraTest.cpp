@@ -197,9 +197,11 @@ bool FBuildCameraPlayerScalesTest::RunTest(const FString& Parameters)
  *
  * FMiniatureFocus is proven world-free (AirportMgr.Sky.MiniatureFocus.*); that proves nothing
  * about whether UBuildCameraComponent calls it. Dropping the ApplyMiniatureFocus call from
- * UpdateFreeView would pass every isolated test and ship a lens focused where the camera was
- * spawned - sharp at the start zoom, wrong everywhere else. So: spawn, zoom, tick, and read
- * the spawned camera's own post-process settings.
+ * UpdateFreeView would pass every isolated test and ship whatever lens the camera spawned
+ * with - none at the start zoom, so the close-zoom blur would never appear, or a stale one
+ * that never cleared on the way back out. So: spawn, zoom, tick, and read the spawned
+ * camera's own post-process settings. Reversed 2026-10-01 with the effect itself: the lens
+ * is ON at close zoom and OFF from the start view out.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRoadBuildControllerMiniatureFocusTest,
@@ -231,18 +233,37 @@ bool FRoadBuildControllerMiniatureFocusTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("the build camera was spawned"), Camera)) { return false; }
 	const FPostProcessSettings& Settings = Camera->GetCameraComponent()->PostProcessSettings;
 
-	C->ZoomIn();
 	CameraComp->UpdateView(1.0f, 0.0, 0.0, 0.0, 0.0, Target);
-	TestTrue(TEXT("the focal distance is overridden"), Settings.bOverride_DepthOfFieldFocalDistance);
-	TestEqual(TEXT("focused on the look-at point after the zoom"),
-		static_cast<double>(Settings.DepthOfFieldFocalDistance), CameraComp->ActiveRig().Distance, 1.0);
-	const float SensorNear = Settings.DepthOfFieldSensorWidth;
+	TestTrue(*FString::Printf(TEXT("no lens at the start zoom (%.0f uu)"), CameraComp->ActiveRig().Distance),
+		!Settings.bOverride_DepthOfFieldFocalDistance);
 
-	C->ZoomOut();
-	C->ZoomOut();
-	CameraComp->UpdateView(1.0f, 0.0, 0.0, 0.0, 0.0, Target);
-	TestTrue(TEXT("zooming out widens the sensor, holding the blur fraction"),
-		Settings.DepthOfFieldSensorWidth > SensorNear);
+	// Zoom in until the fade is at full strength. Bounded: the rig stops at MinDistance, so a
+	// zoom that never got there would otherwise loop forever rather than fail.
+	for (int32 Notch = 0; Notch < 60 && CameraComp->ActiveRig().Distance > CameraComp->MiniatureFullBlurZoom; ++Notch)
+	{
+		C->ZoomIn();
+		CameraComp->UpdateView(1.0f, 0.0, 0.0, 0.0, 0.0, Target);
+	}
+	TestTrue(TEXT("zoomed in to full strength"), CameraComp->ActiveRig().Distance <= CameraComp->MiniatureFullBlurZoom);
+	TestTrue(TEXT("the focal distance is overridden at close zoom"), Settings.bOverride_DepthOfFieldFocalDistance);
+	TestEqual(TEXT("focused at the fixed sharp distance, not the look-at point"),
+		static_cast<double>(Settings.DepthOfFieldFocalDistance), CameraComp->MiniatureSharpDistance, 1.0);
+	TestTrue(TEXT("a real sensor at close zoom"), Settings.DepthOfFieldSensorWidth > 0.0f);
+
+	// And back out: the overrides must CLEAR, not freeze at the last close-zoom lens.
+	for (int32 Notch = 0; Notch < 60 && CameraComp->ActiveRig().Distance < CameraComp->MiniatureNoBlurZoom; ++Notch)
+	{
+		C->ZoomOut();
+		CameraComp->UpdateView(1.0f, 0.0, 0.0, 0.0, 0.0, Target);
+	}
+	TestFalse(TEXT("zooming out to the plan view clears the lens"), Settings.bOverride_DepthOfFieldFocalDistance);
+
+	// Back in for the off switch, so it is tested against a lens that is actually on.
+	for (int32 Notch = 0; Notch < 60 && CameraComp->ActiveRig().Distance > CameraComp->MiniatureFullBlurZoom; ++Notch)
+	{
+		C->ZoomIn();
+		CameraComp->UpdateView(1.0f, 0.0, 0.0, 0.0, 0.0, Target);
+	}
 
 	// Off must CLEAR the overrides, so a level post-process volume decides again rather than
 	// the last frame's lens sticking.

@@ -86,7 +86,10 @@ BASE_COLOUR = palette.APRON_CONCRETE
 # for a real pale slab, and at 1.39 : 1 against the base it was the worst offender in the
 # frame. It stays in the palette for anything that wants an actual highlight; wear is not
 # that thing.
-WEAR_COLOUR = "#939289"
+#
+# 2026-10-01: #939289 -> #B3AA95 with the base's move to warm beige (see airside_palette's
+# APRON_CONCRETE); 1.11 : 1 against the new base, set live in the editor and judged by eye.
+WEAR_COLOUR = "#B3AA95"
 
 # Larger than the road's 40 m: an apron is a wide open pad rather than a ribbon, so its
 # variation can afford to be read across, and slab-scale patches would read as damage.

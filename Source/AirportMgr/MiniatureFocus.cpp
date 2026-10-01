@@ -16,31 +16,32 @@ namespace
 	}
 }
 
-double FMiniatureFocus::BlurAt(double FocusDistanceUu) const
+double FMiniatureFocus::BlurAt(double ZoomUu) const
 {
-	// A fade range that is empty or inverted is a step at FullBlurDistanceUu, not a division
-	// by zero.
-	if (FullBlurDistanceUu <= NoBlurDistanceUu)
+	// A fade range that is empty or inverted is a step at NoBlurZoomUu, not a division by
+	// zero.
+	if (NoBlurZoomUu <= FullBlurZoomUu)
 	{
-		return FocusDistanceUu >= FullBlurDistanceUu ? BlurAtInfinity : 0.0;
+		return ZoomUu < NoBlurZoomUu ? BlurAtInfinity : 0.0;
 	}
 	const double Alpha = FMath::Clamp(
-		(FocusDistanceUu - NoBlurDistanceUu) / (FullBlurDistanceUu - NoBlurDistanceUu), 0.0, 1.0);
+		(NoBlurZoomUu - ZoomUu) / (NoBlurZoomUu - FullBlurZoomUu), 0.0, 1.0);
 	return BlurAtInfinity * FMath::SmoothStep(0.0, 1.0, Alpha);
 }
 
-double FMiniatureFocus::SensorWidthMm(double FocusDistanceUu, double HorizontalFovDegrees) const
+double FMiniatureFocus::SensorWidthMm(double ZoomUu, double HorizontalFovDegrees) const
 {
 	const double T = HalfFovTan(HorizontalFovDegrees);
-	const double S = FocusDistanceUu * MmPerUu;
-	const double Blur = BlurAt(FocusDistanceUu);
+	const double S = SharpDistanceUu * MmPerUu;
+	const double Blur = BlurAt(ZoomUu);
 	if (T <= 0.0 || S <= 0.0 || FStop <= 0.0 || Blur <= 0.0)
 	{
 		return 0.0;
 	}
 
-	// Solved exactly rather than with the s >> f shortcut, because at the 6 m close zoom the
-	// focal length this produces is no longer negligible against s:
+	// Solved exactly rather than with the s >> f shortcut, because the focal length this
+	// produces is not negligible against s (written for a 6 m focus; at 50 m it matters
+	// less, but the exact form costs nothing):
 	//   B = f^2 / (N (s - f) w),  w = 2 T f
 	//   => f = 2 B N T (s - f)  => f = 2BNT s / (1 + 2BNT)
 	const double K = 2.0 * Blur * FStop * T;

@@ -84,9 +84,9 @@ public:
 
 	// --- Miniature focus ------------------------------------------------------------------
 	//
-	// Spec section 4.1's depth-of-field hint: things far behind the look-at point go faintly
-	// soft, the way a photograph of a model does. See FMiniatureFocus for why it scales with
-	// the zoom rather than using a fixed lens.
+	// Spec section 4.1's depth-of-field hint: at close, near-horizontal zoom, things well past
+	// the near ground go soft, the way a photograph of a model does. See FMiniatureFocus for
+	// why the sensor is solved for, and why the effect was reversed on 2026-10-01.
 
 	/**
 	 * ON while it is being judged (2026-09-30). The spec says off by default and "comes out
@@ -99,11 +99,11 @@ public:
 	 * Blur of a point at infinity as a fraction of the frame width. See FMiniatureFocus.
 	 *
 	 * 0.01, judged in PIE 2026-09-30. At 0.01 with no fade, a close shallow view
-	 * (samples/blur.png) blurred the aircraft just past the focus and smeared the foreground;
-	 * that is fixed by the close-zoom fade (MiniatureNoBlurDistance) and by capping near blur
-	 * with r.DOF.Kernel.MaxForegroundRadius in DefaultEngine.ini - NOT by weakening this.
-	 * 0.003 was tried in between and was invisible from the steep far camera ("there doesn't
-	 * seem to be any on it again").
+	 * (samples/blur.png) blurred the aircraft just past the focus and smeared the foreground.
+	 * The near field is now held sharp by r.DOF.Kernel.MaxForegroundRadius=0 in
+	 * DefaultEngine.ini and the fixed MiniatureSharpDistance focus - NOT by weakening this.
+	 * 0.003 was tried in between and was invisible ("there doesn't seem to be any on it
+	 * again").
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|View|Miniature focus", meta = (ClampMin = "0.0", ClampMax = "0.1"))
 	double MiniatureBlurAtInfinity = 0.01;
@@ -112,13 +112,20 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|View|Miniature focus", meta = (ClampMin = "1.0", ClampMax = "32.0"))
 	double MiniatureFStop = 4.0;
 
-	/** Focus distance, uu, at and inside which there is no blur at all. See FMiniatureFocus. */
-	UPROPERTY(EditAnywhere, Category = "Airside|View|Miniature focus", meta = (ClampMin = "0.0"))
-	double MiniatureNoBlurDistance = 3000.0;
+	/** Focus distance, uu: nearer is sharp, farther goes soft. 50 m, the owner's figure. */
+	UPROPERTY(EditAnywhere, Category = "Airside|View|Miniature focus", meta = (ClampMin = "1.0"))
+	double MiniatureSharpDistance = 5000.0;
 
-	/** Focus distance, uu, from which the blur is at full strength. */
+	/**
+	 * Camera-to-focus zoom, uu, at and inside which the blur is at full strength (~23 deg
+	 * pitch, still looking across the field). See FMiniatureFocus.
+	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|View|Miniature focus", meta = (ClampMin = "0.0"))
-	double MiniatureFullBlurDistance = 8000.0;
+	double MiniatureFullBlurZoom = 1500.0;
+
+	/** Zoom, uu, from which there is no blur at all (~36 deg, looking down on the plan). */
+	UPROPERTY(EditAnywhere, Category = "Airside|View|Miniature focus", meta = (ClampMin = "0.0"))
+	double MiniatureNoBlurZoom = 4000.0;
 
 	// --- Watch camera -------------------------------------------------------------------
 	//

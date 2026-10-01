@@ -50,7 +50,12 @@ def linear_color(hexcode):
 #   lum = 0.2126*r + 0.7152*g + 0.0722*b  on the LINEAR values, never the hex.
 RUNWAY_ASPHALT = "#4E5459"
 TAXIWAY_ASPHALT = "#5A6165"
-APRON_CONCRETE = "#8E8D84"
+# APRON_CONCRETE moved #8E8D84 -> #ABA28C on 2026-10-01: warm pale beige, after Portscape's
+# yards (innercorestudios.com/games/portscape), judged live at the build camera. That moved
+# the ratios above to apron:runway 4.19 : 1 and apron:taxiway 3.11 : 1 - lighter than the
+# 0.25-0.35 real-concrete reflectance (this is ~0.36) on purpose; the look won over the
+# photometry. It is also shared by M_RunwayConcrete, which has NOT been rebuilt yet.
+APRON_CONCRETE = "#ABA28C"
 CONCRETE_HIGHLIGHT = "#A5A49A"
 
 # --- Plot paint (2026-09-27, zoomed-out readability) ------------------------------------

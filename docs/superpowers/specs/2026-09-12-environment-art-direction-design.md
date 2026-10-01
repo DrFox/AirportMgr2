@@ -341,6 +341,28 @@ move everything. Look at the image.
   between the two captures (18.94 in the sky band, 0.37 below the horizon). **Diff by band,
   not by frame**, whenever anything in shot animates.
 
+### 4.6a Portscape look pass - 2026-10-01
+
+The owner picked Portscape (innercorestudios.com/games/portscape) as the reference for
+LIGHTING AND PALETTE only. Its blocky low-poly shapes are not adopted (bevels stand), and
+our ground variation is kept; grass materials were not touched. Set live at the build
+camera and judged by eye; values live in `build_environment.py` and `airside_palette.py`:
+
+| Knob | Was | Now |
+|---|---|---|
+| White balance | 5600 (M_Test was saved at 5200) | 6000 K |
+| Exposure lock | EV100 1.75 | 1.0 |
+| Sky light intensity | 1.0 | 1.6 |
+| Cloud shadow strength | 0.8 | 0.35 |
+| Clouds drawn | yes | no (`bRenderInMainPass` off; shadows kept) |
+| Sky atmosphere Mie / luminance factor | 0.004 / white | 0.0015 / (0.9, 1.0, 1.15) |
+| Fog inscattering | (0.15, 0.2, 0.3) | (0.2, 0.28, 0.42) |
+| Apron concrete / wear | #8E8D84 / #939289 | #ABA28C / #B3AA95 |
+
+Unexplained, measured: the exposure lock barely moves the frame (1.75 -> 1.0 is ~10%
+brighter), while white balance 5700 -> 6000 is ~35%. And MI_Clouds' Cloud_GlobalDensity at
+0 left the visible clouds unchanged. Neither is understood; do not reason from either knob.
+
 ### 4.7 What is NOT changed, and why
 
 `DynamicShadowDistanceMovableLight` defaults to 40,000 uu = 400 m
