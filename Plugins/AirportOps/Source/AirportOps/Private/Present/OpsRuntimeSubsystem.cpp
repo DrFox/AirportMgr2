@@ -38,7 +38,7 @@ void UOpsRuntimeSubsystem::Deinitialize()
 	// lines up - so a game instance that shuts down with its airport still attached would let Runtime go with the facade still holding
 	// a raw IBuildPurse* to its ledger (RoadEditFacade::Purse) and the actor's delegates still bound to it. Detach is idempotent
 	// ("safe with nothing attached"), so the path that ran first - Left's - makes this one a no-op; it is the same call, not a second way.
-	// ENFORCED BY: AirportOps.Present.OpsRuntimeSubsystemDetachesOnDeinitialize
+	// ENFORCED BY: AirportOps.Present.OpsRuntimeSubsystemDetachesOnDeinitialize, AirportOps.Present.OpsRuntimeSubsystemDetachesTwiceQuietly (the second is a no-op that says nothing)
 	if (Runtime != nullptr)
 	{
 		Runtime->Detach();

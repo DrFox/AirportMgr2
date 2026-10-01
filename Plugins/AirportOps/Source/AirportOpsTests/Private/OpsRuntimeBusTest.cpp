@@ -61,7 +61,7 @@ namespace
 	 *  listener on - it had none that anything bound, and was cut - so a test of the bus's delivery reads the bus. */
 	int32 RuntimeBusTestPhaseCount(UOpsRuntime& Runtime)
 	{
-		return Runtime.GetBus().DispatchedCountOf<FAgentPhaseEvent>();
+		return Runtime.GetBus().DispatchedCountOfForTest<FAgentPhaseEvent>();
 	}
 }
 
@@ -131,38 +131,52 @@ bool FOpsRuntimeBusReattachTest::RunTest(const FString&)
 
 	UAirsideTraffic* Traffic = TestWorld.Actor->GetTraffic();
 	if (!TestNotNull(TEXT("the actor's traffic"), Traffic)) { return false; }
-	// EACH DELEGATE BROADCAST ONCE, and the bus dispatches exactly one event for it: the bridge is bound once, not once per attach.
-	int32 Phases = 0, Refusals = 0, Runways = 0, Stands = 0, Pushes = 0, Changes = 0, Builds = 0;
-	auto Sync = [&]()
-	{
-		Phases = Bus.DispatchedCountOf<FAgentPhaseEvent>();
-		Refusals = Bus.DispatchedCountOf<FArrivalRefusedEvent>();
-		Runways = Bus.DispatchedCountOf<FRunwayFreedEvent>();
-		Stands = Bus.DispatchedCountOf<FStandsFreedEvent>();
-		Pushes = Bus.DispatchedCountOf<FPushGroundFreedEvent>();
-		Changes = Bus.DispatchedCountOf<FNetworkChangedEvent>();
-		Builds = Bus.DispatchedCountOf<FBuildRefusedEvent>();
-	};
-	// A counter read AFTER the tick, so each lambda re-syncs around its own broadcast.
-	auto Check = [&](const TCHAR* What, int32& Counter, TFunctionRef<void()> Broadcast)
-	{
-		Sync();
-		const int32 Before = Counter;
-		Broadcast();
-		Runtime->Tick(0.0);
-		Sync();
-		TestEqual(FString::Printf(TEXT("%s: one broadcast, one event, after two attaches"), What), Counter - Before, 1);
-	};
-	Check(TEXT("the phase bridge"), Phases, [&]() { Traffic->OnAgentPhaseChanged.Broadcast(OpsTestTransition(7, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked)); });
-	Check(TEXT("the arrival-refused bridge"), Refusals, [&]() { Traffic->OnArrivalRefused.Broadcast(EArrivalRefusal::NoRunway); });
-	Check(TEXT("the runway-freed bridge"), Runways, [&]() { Traffic->OnRunwayFreed.Broadcast(FRoadSegmentId()); });
-	Check(TEXT("the stands-freed bridge"), Stands, [&]() { Traffic->OnStandsFreed.Broadcast(TArray<FGuidelineNodeId>{ FGuidelineNodeId() }); });
-	Check(TEXT("the push-ground-freed bridge"), Pushes, [&]() { Traffic->OnPushGroundFreed.Broadcast(3); });
-	Check(TEXT("the network-changed bridge"), Changes, [&]() { TestWorld.Actor->OnNetworkChanged.Broadcast(EChangeKind::Topology, *TestWorld.Actor->Network); });
 	URoadEditFacade* Facade = TestWorld.Actor->GetEditFacade();
-	if (TestNotNull(TEXT("the actor's facade"), Facade))
+	if (!TestNotNull(TEXT("the actor's facade"), Facade)) { return false; }
+
+	// EACH BRIDGE OF THE TABLE, BY ITS NAME: how to broadcast its Airside delegate once, and the count of bus events it must become. The names
+	// are compared with UOpsRuntime::AirsideBridgeNamesForTest() below, so this list cannot drift from the table - a bridge added with no
+	// line here, or a line left after its bridge was cut, is red naming it (#445 review: the doc said "every delegate", the test listed seven).
+	struct FBridgeProbe
 	{
-		Check(TEXT("the build-refused bridge"), Builds, [&]() { Facade->OnRefused.Broadcast(FBuildQuote(), EBuildRefusal::CannotAfford); });
+		FName Name;
+		TFunction<void()> Broadcast;
+		TFunction<int32()> Dispatched;
+	};
+	const TArray<FBridgeProbe> Probes = {
+		{ TEXT("AgentPhase"), [&]() { Traffic->OnAgentPhaseChanged.Broadcast(OpsTestTransition(7, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked)); },
+			[&]() { return Bus.DispatchedCountOfForTest<FAgentPhaseEvent>(); } },
+		{ TEXT("ArrivalRefused"), [&]() { Traffic->OnArrivalRefused.Broadcast(EArrivalRefusal::NoRunway); },
+			[&]() { return Bus.DispatchedCountOfForTest<FArrivalRefusedEvent>(); } },
+		{ TEXT("RunwayFreed"), [&]() { Traffic->OnRunwayFreed.Broadcast(FRoadSegmentId()); },
+			[&]() { return Bus.DispatchedCountOfForTest<FRunwayFreedEvent>(); } },
+		{ TEXT("StandsFreed"), [&]() { Traffic->OnStandsFreed.Broadcast(TArray<FGuidelineNodeId>{ FGuidelineNodeId() }); },
+			[&]() { return Bus.DispatchedCountOfForTest<FStandsFreedEvent>(); } },
+		{ TEXT("PushGroundFreed"), [&]() { Traffic->OnPushGroundFreed.Broadcast(3); },
+			[&]() { return Bus.DispatchedCountOfForTest<FPushGroundFreedEvent>(); } },
+		{ TEXT("NetworkChanged"), [&]() { TestWorld.Actor->OnNetworkChanged.Broadcast(EChangeKind::Topology, *TestWorld.Actor->Network); },
+			[&]() { return Bus.DispatchedCountOfForTest<FNetworkChangedEvent>(); } },
+		{ TEXT("BuildRefused"), [&]() { Facade->OnRefused.Broadcast(FBuildQuote(), EBuildRefusal::CannotAfford); },
+			[&]() { return Bus.DispatchedCountOfForTest<FBuildRefusedEvent>(); } },
+	};
+	TArray<FName> Probed;
+	for (const FBridgeProbe& Probe : Probes) { Probed.Add(Probe.Name); }
+	const TArray<FName> Bridged = UOpsRuntime::AirsideBridgeNamesForTest();
+	for (const FName Bridge : Bridged)
+	{
+		TestTrue(*FString::Printf(TEXT("the %s bridge of the table is probed by this test"), *Bridge.ToString()), Probed.Contains(Bridge));
+	}
+	for (const FName Probe : Probed)
+	{
+		TestTrue(*FString::Printf(TEXT("the %s probe names a bridge that is in the table"), *Probe.ToString()), Bridged.Contains(Probe));
+	}
+
+	for (const FBridgeProbe& Probe : Probes)
+	{
+		const int32 Before = Probe.Dispatched();
+		Probe.Broadcast();
+		Runtime->Tick(0.0);
+		TestEqual(*FString::Printf(TEXT("%s: one broadcast, one event, after two attaches"), *Probe.Name.ToString()), Probe.Dispatched() - Before, 1);
 	}
 	return true;
 }
@@ -1391,9 +1405,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeDeadlockLookTest, "AirportOps.Presen
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FOpsRuntimeDeadlockLookTest::RunTest(const FString&)
 {
-	// #446: a deadlock matures when agents have been stalled past FTrafficRules::StallSeconds - no phase change, no edit. With something on
-	// the ground the alerts pass looks again once per stall period, from a clock entry booked by the pass itself; with nothing on the ground
-	// there is no entry. (The offer minute that used to do this is gone: QuietMinutesRunNoAlertsPass.)
+	// #446: a deadlock matures when agents have been stalled past FTrafficRules::StallSeconds - no phase change, no edit. A STALLED agent (one refused
+	// by somebody) books the alerts pass a look at the moment its stall would cross that threshold, from a clock entry the pass itself books. The
+	// offer minute that used to do this is gone (QuietMinutesRunNoAlertsPass), and an aircraft that waits on nobody books nothing
+	// (DeadlockLookIgnoresAgentsThatAreNotStalled). ONE agent stalling gives exactly one look after StallSeconds.
 	FAirsideTestWorld TestWorld;
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
@@ -1413,24 +1428,194 @@ bool FOpsRuntimeDeadlockLookTest::RunTest(const FString&)
 	if (!TestTrue(TEXT("a route"), Plan.IsValid())) { return false; }
 	if (!TestTrue(TEXT("an aircraft is dispatched"), Actor->DispatchAgent(Plan, UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
 	const int32 Aircraft = Actor->GetTraffic()->GetNewestAgentId();
-	Runtime->Tick(0.0);   // its phase event dirties the pass, and the run books the look
-	const int32 OnGround = Runtime->GetAlerts()->RecomputeCountForTest();
 	UGroundTraffic* Model = Actor->GetTraffic()->GetModel();
-	const double Period = Runtime->GetClock()->GameSecondsOfMovement(Model->Rules.StallSeconds);
-	const double RealForAPeriod = Period / Runtime->GetClock()->TimeScale();
+	USimClock* Clock = Runtime->GetClock();
 
-	Runtime->Tick(RealForAPeriod * 0.5);
-	TestEqual(TEXT("half a stall period on: not yet"), Runtime->GetAlerts()->RecomputeCountForTest(), OnGround);
-	Runtime->Tick(RealForAPeriod * 0.75);
-	TestEqual(TEXT("a stall period on: the alerts pass looked once - a clock entry, not an offer minute"), Runtime->GetAlerts()->RecomputeCountForTest(), OnGround + 1);
-	Runtime->Tick(RealForAPeriod * 1.01);
-	TestEqual(TEXT("and the look re-books itself while the aircraft is there"), Runtime->GetAlerts()->RecomputeCountForTest(), OnGround + 2);
+	// STALLED ONE SECOND AGO in the traffic's own terms, refused by an agent that is not there: what one claim pass and that long a wait leave.
+	if (!TestTrue(TEXT("the aircraft is refused and has waited a second"),
+		FGroundTrafficTestAccess(*Model).ScriptWait(Aircraft, FTrafficResource::OfNode(A), 99999, 1.0))) { return false; }
+	Runtime->GetBus().MarkDirty(TEXT("Alerts"));   // the recompute an event would cause - which is what books the look
+	Runtime->Tick(0.0);
+	const int32 Booked = Runtime->GetAlerts()->RecomputeCountForTest();
+	const double Remaining = Clock->GameSecondsOfMovement(Model->Rules.StallSeconds - 1.0);   // game seconds to the threshold
+	const double RealForIt = Remaining / Clock->TimeScale();
+
+	Runtime->Tick(RealForIt * 0.5);
+	TestEqual(TEXT("half way to the threshold: no look yet"), Runtime->GetAlerts()->RecomputeCountForTest(), Booked);
+	Runtime->Tick(RealForIt * 0.75);
+	TestEqual(TEXT("past the threshold: exactly one look - a clock entry booked for the moment the stall crosses it"),
+		Runtime->GetAlerts()->RecomputeCountForTest(), Booked + 1);
 
 	Model->RetireAgent(Aircraft);
 	Runtime->Tick(0.0);
 	const int32 Gone = Runtime->GetAlerts()->RecomputeCountForTest();
-	Runtime->Tick(RealForAPeriod * 10.0);
-	TestEqual(TEXT("the aircraft gone, the look is not booked again"), Runtime->GetAlerts()->RecomputeCountForTest(), Gone);
+	Runtime->Tick(RealForIt * 10.0);
+	TestEqual(TEXT("the aircraft gone, no look is booked"), Runtime->GetAlerts()->RecomputeCountForTest(), Gone);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimePausedEditAlertTest, "AirportOps.Present.Alerts.UnlandableAlertSurvivesAPausedEdit",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimePausedEditAlertTest::RunTest(const FString&)
+{
+	// #445 REVIEW: a holding flight that can never land is alerted; the player PAUSES, draws an unrelated road, and resumes. The road moves the
+	// guideline graph, so the flight's cached clearance is older than it and UnlandableWhy reads None - the alert cleared - and with the clock
+	// paused the queue pass did not re-judge (TickQueue's pause exit comes first). On the resume only the queue pass ran, re-judged the flight as
+	// permanent, and marked nothing: with no aircraft on the ground nothing ever woke the alerts pass again, and the alert and its Cancel row
+	// stayed gone. The queue now re-dates its unarrived flights on a graph change before the pause exit (UFlightBoard::JudgeUnarrived), so the alert
+	// never clears - and the queue pass marks the alerts pass after every run it decides (the belt).
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	Actor->PlaceNode(FVector2D(0.0, 90000.0));
+	URoadNetwork* Net = Actor->Network;
+	if (!TestNotNull(TEXT("a network"), Net)) { return false; }
+	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	const FTestAirport Field = FTestAirport::Build(Airframe, FTestAirportOptions(), Net);
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
+	Runtime->GetEvents()->OnAlertRaised.AddDynamic(Listener, &UOpsEventsTestListener::OnAlertRaised);
+	Runtime->GetEvents()->OnAlertCleared.AddDynamic(Listener, &UOpsEventsTestListener::OnAlertCleared);
+	for (int32 Frame = 0; Frame < 3; ++Frame) { Runtime->Tick(0.0); }
+
+	UGroundTraffic* Model = Actor->GetTraffic()->GetModel();
+	UFlightBoard* Board = Runtime->GetFlightBoard();
+	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+	Flight->Id = Board->TakeNextId();
+	Flight->Airframe = Airframe;
+	Flight->Callsign = TEXT("CU 204");
+	Flight->OfferWindowSeconds = 60.0;
+	Flight->OfferSecondsLeft = 60.0;
+	Flight->LeadTimeSeconds = 1.0;
+	Flight->RunwayPreference = Field.Threshold;
+	Board->AddOffer(*Runtime->GetClock(), Flight);
+	if (!TestTrue(TEXT("a flight accepted while the airport could take it"), Board->Accept(*Model, *Net, *Runtime->GetClock(), *Flight))) { return false; }
+
+	// THE ONLY EXIT DELETED - the taxiway that leaves the runway - and the graph re-derived, announced as the actor's rebuild announces it.
+	for (int32 Index = Net->GetSegments().Num() - 1; Index >= 0; --Index)
+	{
+		const FRoadSegment& Segment = Net->GetSegments()[Index];
+		if (Segment.Profile != nullptr && !Segment.Profile->bContinuousThroughJunctions)
+		{
+			Net->RemoveSegment(Net->SegmentIdAt(Index));
+		}
+	}
+	TestGraph::Derive(*Net);
+	Actor->OnNetworkChanged.Broadcast(EChangeKind::Topology, *Net);
+	for (int32 Frame = 0; Frame < 3; ++Frame) { Runtime->Tick(0.0); }
+	Runtime->Tick(1.0);   // its ETA: it joins the queue and holds, having nowhere it can ever land
+	for (int32 Frame = 0; Frame < 3; ++Frame) { Runtime->Tick(0.0); }
+	if (!TestEqual(TEXT("PRECONDITION: the flight is holding"), Flight->GetPhase(), EFlightPhase::Inbound)) { return false; }
+	TestEqual(TEXT("and the aircraft on the ground are none - nothing else will ever dirty the alerts pass"), Model->GetAgentCount(), 0);
+	const FString Raised = TEXT("alert+:") + UEnum::GetValueAsString(EAlertKind::FlightCannotLand);
+	const FString Cleared = TEXT("alert-:") + UEnum::GetValueAsString(EAlertKind::FlightCannotLand);
+	auto Held = [Runtime]()
+	{
+		return Runtime->GetAlerts()->GetAlerts().ContainsByPredicate([](const FOpsAlert& A) { return A.Key.Kind == EAlertKind::FlightCannotLand; });
+	};
+	if (!TestTrue(TEXT("PRECONDITION: its alert is held"), Held())) { return false; }
+	TestEqual(TEXT("raised once"), Listener->CountOf(Raised), 1);
+
+	// PAUSED, THE UNRELATED ROAD.
+	Runtime->TogglePause();
+	if (!TestTrue(TEXT("PRECONDITION: the clock is paused"), Runtime->GetClock()->IsPaused())) { return false; }
+	const uint32 RevisionBefore = Net->GetGuidelineRevision();
+	const int32 C = Actor->PlaceNode(FVector2D(-60000.0, 60000.0));
+	const int32 D = Actor->PlaceNode(FVector2D(-30000.0, 60000.0));
+	Actor->ConnectNodes(C, D);
+	if (!TestTrue(TEXT("PRECONDITION: the road moved the guideline revision, so the flight's clearance is older than the graph"),
+		Net->GetGuidelineRevision() != RevisionBefore)) { return false; }
+	for (int32 Frame = 0; Frame < 2; ++Frame) { Runtime->Tick(0.0); }
+	TestTrue(TEXT("paused, after the edit: the alert is still held"), Held());
+	TestEqual(TEXT("and was never cleared"), Listener->CountOf(Cleared), 0);
+
+	// RESUMED.
+	Runtime->TogglePause();
+	for (int32 Frame = 0; Frame < 3; ++Frame) { Runtime->Tick(0.0); }
+	TestTrue(TEXT("resumed: still held - nothing had to re-raise it"), Held());
+	TestEqual(TEXT("and never cleared"), Listener->CountOf(Cleared), 0);
+	TestEqual(TEXT("one raise in total - one toast"), Listener->CountOf(Raised), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeDeadlockLookIgnoresIdleTest, "AirportOps.Present.Alerts.DeadlockLookIgnoresAgentsThatAreNotStalled",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeDeadlockLookIgnoresIdleTest::RunTest(const FString&)
+{
+	// #445 REVIEW: the look was booked because agents EXIST, so a parked aircraft kept the alerts pass firing at the old catch-all's rate. It is booked
+	// for a STALLED agent alone (one refused by somebody), at the moment its stall would cross the threshold. An aircraft on the ground that waits on
+	// nobody books nothing.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 60000.0));
+	if (!TestNotNull(TEXT("a network"), Actor->Network.Get())) { return false; }
+	URoadNetwork& Net = *Actor->Network;
+	FGuidelineNodeId A, B;
+	RuntimeE2ELayLine(Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0), A, B);
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	const FRoutePlan Plan = TestGraph::Probe(Net, A, B, ETraversalClass::Aircraft);
+	if (!TestTrue(TEXT("a route"), Plan.IsValid())) { return false; }
+	if (!TestTrue(TEXT("an aircraft is dispatched"), Actor->DispatchAgent(Plan, UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	for (int32 Frame = 0; Frame < 3; ++Frame) { Runtime->Tick(0.0); }
+	UGroundTraffic* Model = Actor->GetTraffic()->GetModel();
+	if (!TestEqual(TEXT("PRECONDITION: one aircraft on the ground"), Model->GetAgentCount(), 1)) { return false; }
+	TestEqual(TEXT("PRECONDITION: and it waits on nobody"), Model->GetAgents()[0].GetWaitingOn(), 0);
+
+	const int32 OnGround = Runtime->GetAlerts()->RecomputeCountForTest();
+	const double Period = Runtime->GetClock()->GameSecondsOfMovement(Model->Rules.StallSeconds);
+	Runtime->Tick(Period * 5.0 / Runtime->GetClock()->TimeScale());
+	TestEqual(TEXT("five stall periods with an aircraft on the ground and nothing stalled: the alerts pass looked not once"),
+		Runtime->GetAlerts()->RecomputeCountForTest(), OnGround);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeDeadlockLookBandTest, "AirportOps.Present.Alerts.DeadlockLookIsReBookedAtTheBandEdge",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeDeadlockLookBandTest::RunTest(const FString&)
+{
+	// #445 REVIEW: a look is booked in game seconds at the rate NOW. Across dawn a look booked on the night rate (75 game s per motion s) would fire up to
+	// 3.6x late against the day rate (21), which is the rate the stall actually runs at. It is capped at the band edge (USimClock::GameSecondsToBandEdge)
+	// and re-booked there at the new rate.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 60000.0));
+	if (!TestNotNull(TEXT("a network"), Actor->Network.Get())) { return false; }
+	URoadNetwork& Net = *Actor->Network;
+	FGuidelineNodeId A, B;
+	RuntimeE2ELayLine(Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0), A, B);
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	const FRoutePlan Plan = TestGraph::Probe(Net, A, B, ETraversalClass::Aircraft);
+	if (!TestTrue(TEXT("a route"), Plan.IsValid())) { return false; }
+	if (!TestTrue(TEXT("an aircraft is dispatched"), Actor->DispatchAgent(Plan, UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	const int32 Aircraft = Actor->GetTraffic()->GetNewestAgentId();
+	USimClock* Clock = Runtime->GetClock();
+	Runtime->Tick(0.0);
+
+	// THE CLOCK, 25 GAME SECONDS SHORT OF THE NEXT BAND EDGE - a long step across hours of offer minutes, before anything is staged.
+	const double Short = 25.0;
+	Runtime->Tick(FMath::Max(Clock->GameSecondsToBandEdge() - Short, 0.0) / Clock->TimeScale());
+	const double ToEdge = Clock->GameSecondsToBandEdge();
+	if (!TestTrue(TEXT("PRECONDITION: the edge is within a minute"), ToEdge > 5.0 && ToEdge < 60.0)) { return false; }
+
+	// A STALLED AGENT, and the recompute an event would cause, which books the look.
+	UGroundTraffic* Model = Actor->GetTraffic()->GetModel();
+	FGroundTrafficTestAccess(*Model).ScriptWait(Aircraft, FTrafficResource::OfNode(A), 99999, 1.0);
+	Runtime->GetBus().MarkDirty(TEXT("Alerts"));
+	Runtime->Tick(0.0);
+	const int32 Booked = Runtime->GetAlerts()->RecomputeCountForTest();
+	const double FullPeriod = Clock->GameSecondsOfMovement(Model->Rules.StallSeconds - 1.0);
+	if (!TestTrue(TEXT("PRECONDITION: the full look is further off than the edge - the case the cap is for"), FullPeriod > ToEdge + 1.0)) { return false; }
+
+	Runtime->Tick((ToEdge - 2.0) / Clock->TimeScale());
+	TestEqual(TEXT("two game seconds short of the edge: not yet"), Runtime->GetAlerts()->RecomputeCountForTest(), Booked);
+	Runtime->Tick(3.0 / Clock->TimeScale());
+	TestTrue(TEXT("one game second past the edge: the look has fired there, not at the full period booked on the old band's rate"),
+		Runtime->GetAlerts()->RecomputeCountForTest() > Booked);
 	return true;
 }
 

@@ -20,7 +20,9 @@ class USimClock;
  * net-watched pass is one Want() call and no field anywhere.
  *
  * ONE CLOCK ENTRY, NOT ONE PER PASS: the passes share the period and the places that must cancel them (a load, a detach),
- * and a second handle is a second thing to forget at each. A paused clock fires nothing.
+ * and a second handle is a second thing to forget at each. A paused clock fires nothing. Each pass says whether it wants the net after every
+ * run it makes (FQueueTick::Waiting for the arrival queue, UJobBoard::HasRefusedDeparture for the job board, 2026-09-30) and REMOVED ONCE QUIET IN
+ * PLAY: the entry is cancelled the moment no pass wants it, so a quiet airport books nothing.
  * ENFORCED BY: AirportOps.Model.Bus.ThirdNetWatchedPassNeedsNoRuntimeField, AirportOps.Present.ArrivalQueue.SafetyNetCatchesAMissedEvent,
  * AirportOps.Present.PushGroundFreed.SafetyNetDepartsAMissedOne
  *

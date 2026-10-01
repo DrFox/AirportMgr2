@@ -4412,40 +4412,53 @@ $ranRules.Add('safety-cause-minted-by-the-net')
 # #445: the list of objects holding `FOpsEventBus* Bus` was kept by hand in three places - Attach, Detach and the Detach test - and they
 # already disagreed (UFacilityPurchases was set in the constructor, never cleared, and in none of them). It is ONE list now, like
 # Persistents(): UOpsRuntime::Publishers(), which Attach and Detach loop over and the test walks. What a loop cannot see is a class that
-# declares the field and is left off the list, so this counts: every `FOpsEventBus* Bus = nullptr;` field in a header under AirportOps
-# Public/ is one entry in Publishers() (FOpsSafetyNet's own binding is not a publisher - it marks passes, it publishes nothing - and is
-# skipped by file). And the hand-kept shape does not come back: no `X->Bus = &Bus;` line in OpsRuntime.cpp.
+# declares the field and is left off the list, so this compares the two lists BY IDENTITY, not by count (CLAUDE.md: lists that must agree are
+# checked by names - a count passes when one class is swapped for another): every class declaring a `FOpsEventBus* Bus = nullptr;` field in a
+# header under AirportOps Public/ (FOpsSafetyNet's own binding is skipped by file: it marks passes, it publishes nothing) against the TYPES of
+# the members Publishers() lists - `Out.Add({ TEXT("X"), &Member->Bus })` names a member, and OpsRuntime.h declares its `TObjectPtr<Type>`.
+# Both differences are named. And the hand-kept shape does not come back: no `X->Bus = &Bus;` line in OpsRuntime.cpp.
 # WHAT NO REGEX SEES: a publisher that reaches the bus another way (a captured `Bus` reference, a getter) - there are none today, and the
-# header says to add a field and a list entry. The rule FAILS rather than checking nothing when Publishers() or a declaration is gone.
+# header says to add a field and a list entry. The rule FAILS rather than checking nothing when Publishers(), a declaration or a member's type
+# is gone.
 $publisherFile = Join-Path $ops 'Private\Present\OpsRuntime.cpp'
-$publisherDeclared = 0
-$publisherDeclaredIn = @()
+$publisherHeader = Join-Path $ops 'Public\Present\OpsRuntime.h'
+$publisherDeclared = @{}
 foreach ($file in Get-Sources (Join-Path $ops 'Public') @('.h')) {
     if ($file.Name -eq 'OpsSafetyNet.h') { continue }
     $lines = Get-Content -LiteralPath $file.FullName
     $inBlock = $false
+    $currentClass = ''
     for ($i = 0; $i -lt $lines.Count; $i++) {
         $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        if ($code -match '^\s*(?:class|struct)\s+(?:[A-Z_]+_API\s+)?(\w+)\s*(?::|\{|$)') { $currentClass = $Matches[1] }
         if ($code -match '\bFOpsEventBus\s*\*\s*Bus\s*=\s*nullptr\s*;') {
-            $publisherDeclared++
-            $publisherDeclaredIn += "$($file.Name):$($i + 1)"
+            $publisherDeclared[$currentClass] = "$($file.Name):$($i + 1)"
         }
     }
 }
-if (-not (Test-Path $publisherFile)) {
-    $failures.Add("every-bus-publisher-is-listed: $publisherFile is named by rule 71 but does not exist - update the rule")
+if (-not (Test-Path $publisherFile) -or -not (Test-Path $publisherHeader)) {
+    $failures.Add("every-bus-publisher-is-listed: $publisherFile or $publisherHeader is named by rule 71 but does not exist - update the rule")
 }
 else {
+    $headerText = Get-Content -Raw -LiteralPath $publisherHeader
     $lines = Get-Content -LiteralPath $publisherFile
     $inBlock = $false
     $inList = $false
     $listFound = $false
-    $publisherListed = 0
+    $publisherListed = @{}
     for ($i = 0; $i -lt $lines.Count; $i++) {
         $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
         if ($lines[$i] -match '^TArray<UOpsRuntime::FOpsBusPublisher>\s+UOpsRuntime::Publishers\s*\(') { $inList = $true; $listFound = $true }
         elseif ($inList -and $lines[$i] -match '^\}') { $inList = $false }
-        elseif ($inList -and $code -match '\bOut\.Add\(\s*\{') { $publisherListed++ }
+        elseif ($inList -and $lines[$i] -match '\bOut\.Add\(\s*\{[^&]*&\s*(\w+)\s*->\s*Bus\b') {
+            $member = $Matches[1]
+            if ($headerText -match "TObjectPtr<(\w+)>\s+$member\s*;") {
+                $publisherListed[$Matches[1]] = $member
+            }
+            else {
+                $failures.Add("every-bus-publisher-is-listed: Publishers() lists member '$member' but OpsRuntime.h declares no TObjectPtr<Type> $member - the rule cannot name its class; update rule 71, do not let it check nothing")
+            }
+        }
         if ($code -match '\b\w+\s*->\s*Bus\s*=\s*&\s*Bus\s*;') {
             $failures.Add("every-bus-publisher-is-listed: OpsRuntime.cpp:$($i + 1) points a publisher at the bus by hand - add it to UOpsRuntime::Publishers(), which Attach and Detach loop over (#445): $($code.Trim())")
         }
@@ -4453,11 +4466,20 @@ else {
     if (-not $listFound) {
         $failures.Add("every-bus-publisher-is-listed: UOpsRuntime::Publishers() not found in OpsRuntime.cpp - the list moved; update rule 71, do not let it check nothing")
     }
-    elseif ($publisherDeclared -eq 0) {
+    elseif ($publisherDeclared.Count -eq 0) {
         $failures.Add("every-bus-publisher-is-listed: found no 'FOpsEventBus* Bus = nullptr;' field under AirportOps Public/ - the declaration's shape changed; update rule 71, do not let it check nothing")
     }
-    elseif ($publisherDeclared -ne $publisherListed) {
-        $failures.Add("every-bus-publisher-is-listed: $publisherDeclared class(es) declare an FOpsEventBus* Bus ($($publisherDeclaredIn -join ', ')) but UOpsRuntime::Publishers() lists $publisherListed - a publisher left off the list is never pointed at the bus, or never taken back (#445)")
+    else {
+        foreach ($class in $publisherDeclared.Keys) {
+            if (-not $publisherListed.ContainsKey($class)) {
+                $failures.Add("every-bus-publisher-is-listed: $class declares an FOpsEventBus* Bus ($($publisherDeclared[$class])) but UOpsRuntime::Publishers() does not list it - it is never pointed at the bus, or never taken back (#445)")
+            }
+        }
+        foreach ($class in $publisherListed.Keys) {
+            if (-not $publisherDeclared.ContainsKey($class)) {
+                $failures.Add("every-bus-publisher-is-listed: UOpsRuntime::Publishers() lists $class (member $($publisherListed[$class])) but it declares no FOpsEventBus* Bus field - the entry points at nothing, or the field was renamed (#445)")
+            }
+        }
     }
 }
 $ranRules.Add('every-bus-publisher-is-listed')

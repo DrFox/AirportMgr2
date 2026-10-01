@@ -419,7 +419,17 @@ int32 FOpsEventBus::Discard()
 		UE_LOG(LogOpsBus, Log, TEXT("Bus: x %s {%s} (discarded)"), NameOf(Event), *Describe(Event));
 	}
 	Queue.Reset();
-	UE_LOG(LogOpsBus, Log, TEXT("Bus: discarded %d queued event(s)"), Dropped);
+	// QUIET WHEN IT DROPPED NOTHING (#445 review): Detach discards, and a second Detach - after the airport's Left announcement, from the subsystem's
+	// Deinitialize - is documented as a no-op; it wrote "discarded 0 queued event(s)" for the nothing it did, a line that reads like a load that lost
+	// something. Verbose then, so the count is still there for whoever turns the category up.
+	if (Dropped > 0)
+	{
+		UE_LOG(LogOpsBus, Log, TEXT("Bus: discarded %d queued event(s)"), Dropped);
+	}
+	else
+	{
+		UE_LOG(LogOpsBus, Verbose, TEXT("Bus: discarded 0 queued event(s)"));
+	}
 	return Dropped;
 }
 

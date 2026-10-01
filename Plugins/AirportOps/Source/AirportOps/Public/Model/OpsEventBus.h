@@ -617,7 +617,7 @@ public:
 	 * UOpsEvents has no per-event face for every type to hang a listener on (#445: OnAgentPhaseChanged was cut for having none).
 	 */
 	template <typename T>
-	int32 DispatchedCountOf() const { return DispatchedCounts[FOpsEvent::IndexOfType<T>()]; }
+	int32 DispatchedCountOfForTest() const { return DispatchedCounts[FOpsEvent::IndexOfType<T>()]; }
 
 	/** Whether Pass is marked to run in the next round - for a test pinning who marks it (an attach, a load). */
 	bool IsDirtyForTest(FName Pass) const

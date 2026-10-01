@@ -196,6 +196,9 @@ public:
 	 */
 	TArray<FOpsBusPublisher> Publishers();
 
+	/** The names of the Airside bridges Attach binds, in table order (see FAirsideBridge) - for the test that broadcasts every delegate. */
+	static TArray<FName> AirsideBridgeNamesForTest();
+
 	/** Advances the clock and pushes the speed multiplier into the actor. Real seconds in. */
 	void Tick(double RealDeltaSeconds);
 
@@ -402,11 +405,15 @@ private:
 	/**
 	 * THE DEADLOCK LOOK (#446): the one condition the alerts pass cannot learn from an event - a ring of agents each stalled past
 	 * FTrafficRules::StallSeconds, which matures with no phase change and no network edit. It was caught by the alerts pass being dirtied
-	 * every offer minute whatever was on the ground, which at x32 is about every frame. It is a clock entry of its own now, booked only
-	 * while something is on the ground to stall, for the game time one StallSeconds of motion takes (StallSeconds is in MOTION seconds,
-	 * which run at the speed multiplier alone, so the game seconds in it are the day's compression: about 90 at 30 game s per motion s
-	 * by day, 2026-09-30). Re-booked by every alerts run - which an agent's first phase event, a load and an attach all cause.
-	 * ENFORCED BY: AirportOps.Present.Alerts.DeadlockLookIsAClockEntryNotAnOfferMinuteTick
+	 * every offer minute whatever was on the ground, which at x32 is about every frame. It is a clock entry of its own now, booked only for a
+	 * STALLED agent (one somebody has refused), for the game time its stall still needs to cross the threshold - not because agents exist: a
+	 * parked aircraft books nothing. StallSeconds is in MOTION seconds, which run at the speed multiplier alone, so the game seconds in them
+	 * are the day's compression: 21 game s per motion s by day and 75 by night on the default scenario (2026-09-30), so the three-second
+	 * threshold is ~63 game s by day and ~225 at night. Capped at the band edge and re-booked there (USimClock::GameSecondsToBandEdge) so
+	 * it is not up to 3.6x late across dawn. Re-booked by every alerts run - which a phase change, an edit, a load and an attach all cause.
+	 * The ONSET of a stall is not announced by anything, so it is not seen until some other event causes a recompute - see ArmDeadlockLook.
+	 * ENFORCED BY: AirportOps.Present.Alerts.DeadlockLookIsAClockEntryNotAnOfferMinuteTick,
+	 * AirportOps.Present.Alerts.DeadlockLookIgnoresAgentsThatAreNotStalled, AirportOps.Present.Alerts.DeadlockLookIsReBookedAtTheBandEdge
 	 */
 	int32 DeadlockLookHandle = INDEX_NONE;
 	void ArmDeadlockLook();
@@ -415,8 +422,10 @@ private:
 	 * THE AIRSIDE BRIDGES, ONE TABLE (#445): every Airside delegate this runtime turns into a bus event, with how it is bound to the attached
 	 * actor and how it is taken back. Each used to cost a handle field, a forwarder declared here and defined in the .cpp, a bind line in Attach
 	 * and a remove line in Detach - four sites apiece, hand-paired, and only the phase bridge was tested for a second Attach doubling it. Attach
-	 * binds the table and Detach unbinds it, one loop each; the handle lives in the entry; AirportOps.Present.Bus.ReattachDoesNotDouble broadcasts
-	 * EVERY delegate of it once after two attaches and counts one event each. A bridge is one entry in AirsideBridges().
+	 * binds the table and Detach unbinds it, one loop each; the handle lives in the entry. A bridge is one entry in AirsideBridges().
+	 * WHAT THE TEST COVERS IS THE TABLE, BY NAME: AirportOps.Present.Bus.ReattachDoesNotDouble lists the delegates it broadcasts and compares
+	 * that list, by name, with AirsideBridgeNamesForTest() - so a bridge added to the table with no broadcast in the test, or left in the test
+	 * after it was cut, is red naming it - then broadcasts each once after two attaches and counts one event apiece.
 	 * ENFORCED BY: AirportOps.Present.Bus.ReattachDoesNotDouble, AirportOps.Present.Bus.FreedIsBridged, AirportOps.Present.Bus.PushGroundFreedIsBridged
 	 */
 	struct FAirsideBridge

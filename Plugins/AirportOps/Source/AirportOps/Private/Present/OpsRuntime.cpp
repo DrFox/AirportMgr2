@@ -712,16 +712,42 @@ void UOpsRuntime::ArmDeadlockLook()
 		DeadlockLookHandle = INDEX_NONE;
 	}
 	const UGroundTraffic* Model = LiveModel();
-	// NOTHING ON THE GROUND CAN STALL: no entry, so a quiet airport costs the alerts pass nothing. The first agent's phase event is what
-	// dirties the pass, and the run it causes books this.
-	if (Model == nullptr || Model->GetAgentCount() == 0)
+	if (Model == nullptr)
 	{
 		return;
 	}
-	// ONE StallSeconds OF MOTION, in game seconds - USimClock::GameSecondsOfMovement (#447), the clock's one conversion between the two time
-	// bases: motion runs at the speed multiplier and the game clock at the multiplier times the day's compression, so the ratio is the
-	// compression alone - whatever the speed, and a paused clock simply never reaches it.
-	const double Period = Clock->GameSecondsOfMovement(FMath::Max(Model->Rules.StallSeconds, 0.1));
+	// BOOKED FOR A STALLED AGENT ALONE (#445 review), at the moment its stall would cross the threshold. An agent is stalled when somebody has
+	// refused it (GetWaitingOn) - an aircraft parked on its stand, or taxiing freely, waits on nobody and books nothing, where "an agent exists" kept
+	// the pass firing at the old catch-all's rate for as long as any aircraft sat at a stand. The threshold is the traffic's own (CurrentDeadlocks
+	// reads a stall strictly past it); one already past it is still watched, a ring is made by the agents NOT yet stalled joining it, so it is
+	// looked at again a threshold on. The soonest of them books it.
+	// WHAT THIS DOES NOT SEE, and says: the ONSET of a stall. Nothing announces an agent becoming blocked, so a first stall is learnt of by the
+	// next recompute something else causes (any phase change, an edit, a payment, the job board's pass). A jam with no such event after it is
+	// not looked for until one comes; the old offer-minute catch-all found it within a game minute.
+	// ENFORCED BY: AirportOps.Present.Alerts.DeadlockLookIgnoresAgentsThatAreNotStalled,
+	// AirportOps.Present.Alerts.DeadlockLookIsAClockEntryNotAnOfferMinuteTick
+	const double Threshold = FMath::Max(Model->Rules.StallSeconds, 0.1);
+	double SoonestMotionSeconds = TNumericLimits<double>::Max();
+	for (const FRoadAgent& Agent : Model->GetAgents())
+	{
+		if (Agent.GetWaitingOn() == 0)
+		{
+			continue;
+		}
+		const double Stalled = Agent.GetStalledSeconds();
+		SoonestMotionSeconds = FMath::Min(SoonestMotionSeconds, Stalled < Threshold ? Threshold - Stalled : Threshold);
+	}
+	if (SoonestMotionSeconds == TNumericLimits<double>::Max())
+	{
+		return;
+	}
+	// IN GAME SECONDS - USimClock::GameSecondsOfMovement (#447), the clock's one conversion between the two time bases: motion runs at the speed
+	// multiplier and the game clock at the multiplier times the day's compression, so the ratio is the compression alone - whatever the speed, and a
+	// paused clock simply never reaches it. 0.1 OF A MOTION SECOND PAST, so the stall is strictly over the threshold when the look reads it.
+	// THE RATE IS THE BAND'S NOW, so the look is capped at the band's edge (USimClock::GameSecondsToBandEdge) and re-booked there at the new
+	// rate: booked on the night rate of 75 game s per motion s across dawn, it would fire up to 3.6x late against the day's 21 (the default
+	// scenario, 2026-09-30). Floored at half a game second, so a stall a hair short of the threshold cannot book a tight loop.
+	const double Period = FMath::Max(FMath::Min(Clock->GameSecondsOfMovement(SoonestMotionSeconds + 0.1), Clock->GameSecondsToBandEdge()), 0.5);
 	DeadlockLookHandle = Clock->At(Clock->Now() + Period, [this]()
 	{
 		DeadlockLookHandle = INDEX_NONE;
@@ -754,6 +780,12 @@ void UOpsRuntime::RunArrivalQueue(const FPassRun& Run)
 		Bus.MarkDirtyNextDrain(TEXT("ArrivalQueue"), Run.Cause);
 		return;
 	}
+	// THE ALERTS READ WHAT THIS RUN DECIDED (#445 review): FlightCannotLand is derived from the clearances the queue keeps (UFlightBoard::
+	// JudgeUnarrived, asked first in TickQueue), and the offer-minute catch-all that used to look again is gone - so a queue run that decided
+	// something marks the pass that reads it, itself, rather than relying on whatever else happened to. The alerts pass is declared After this
+	// one, so it runs in the same round. Not on a deferral: a deferred tick decided nothing.
+	// ENFORCED BY: AirportOps.Present.Alerts.UnlandableAlertSurvivesAPausedEdit
+	Bus.MarkDirty(TEXT("Alerts"));
 	if (Result.Cleared != nullptr && Run.IsSafetyOnly())
 	{
 		// THE DEFECT, NAMED: nothing published said this flight could land, yet it could. Whatever freed its
@@ -773,6 +805,13 @@ void UOpsRuntime::RunArrivalQueue(const FPassRun& Run)
 	// follows re-arms it if anyone is still holding.
 	// ENFORCED BY: AirportOps.Present.ArrivalQueue.ClosedAirportDispatchesNothing ("no safety net ticks")
 	SafetyNet.Want(TEXT("ArrivalQueue"), !Result.bClosed && Result.Waiting > (Result.Cleared != nullptr ? 1 : 0));
+}
+
+TArray<FName> UOpsRuntime::AirsideBridgeNamesForTest()
+{
+	TArray<FName> Out;
+	for (const FAirsideBridge& Bridge : AirsideBridges()) { Out.Add(Bridge.Name); }
+	return Out;
 }
 
 TArray<UOpsRuntime::FAirsideBridge> UOpsRuntime::AirsideBridges()

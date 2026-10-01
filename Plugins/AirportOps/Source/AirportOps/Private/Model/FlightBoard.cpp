@@ -522,8 +522,8 @@ EArrivalRefusal UFlightBoard::ClearanceFor(const UGroundTraffic& Traffic, const 
 
 EArrivalRefusal UFlightBoard::UnlandableWhy(const UFlight& Flight, const URoadNetwork& Network) const
 {
-	// HOLDING OR ACCEPTED: the clearance is computed for the queue (TickQueue), and an Accepted flight's judgement is JudgeAccepted's
-	// (#445) - also the queue pass's, never this alert pass's: a plan run here would be a route search per flight per alert recompute.
+	// HOLDING OR ACCEPTED: the clearance is computed for the queue (TickQueue), and a judgement of either is JudgeUnarrived's (#445) - also
+	// the queue pass's, never this alert pass's: a plan run here would be a route search per flight per alert recompute.
 	if (!Flight.IsUnarrived())
 	{
 		return EArrivalRefusal::None;
@@ -542,12 +542,16 @@ EArrivalRefusal UFlightBoard::UnlandableWhy(const UFlight& Flight, const URoadNe
 	return Clearance->Why;
 }
 
-void UFlightBoard::JudgeAccepted(const URoadNetwork& Network)
+void UFlightBoard::JudgeUnarrived(const URoadNetwork& Network)
 {
 	const uint32 GuidelineNow = Network.GetGuidelineRevision();
 	for (const TObjectPtr<UFlight>& Each : Flights)
 	{
-		if (Each == nullptr || Each->GetPhase() != EFlightPhase::Accepted)
+		// EVERY FLIGHT STILL TO ARRIVE - accepted or holding (#445 review). A holding flight used to be judged only by ClearanceFor, which TickQueue asks
+		// only once the runway is found free and the clock is running: behind a busy runway, or while paused, a graph change left its verdict older than
+		// the graph and the FlightCannotLand alert read None - cleared - until the queue happened to ask again (and with nothing on the ground, nothing
+		// woke the alerts pass after that). Re-dated here on every graph change, before either exit.
+		if (Each == nullptr || !Each->IsUnarrived())
 		{
 			continue;
 		}
@@ -567,13 +571,23 @@ void UFlightBoard::JudgeAccepted(const URoadNetwork& Network)
 		}
 		if (Why != EArrivalRefusal::None && ArrivalPlanner::IsPermanentRefusal(Why) && (!Clearance.bValid || Why != Clearance.Why))
 		{
-			UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) accepted: it can no longer land - %s"),
-				Each->Id, *Each->Callsign, *ArrivalPlanner::DescribeRefusal(Why, Each->Airframe.Wingspan));
+			// SAID ONCE PER REASON, in the words each phase has always used: ClearanceFor's line for a holding flight (which it no longer
+			// writes when this got there first), and the accepted flight's own.
+			if (Each->GetPhase() == EFlightPhase::Accepted)
+			{
+				UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) accepted: it can no longer land - %s"),
+					Each->Id, *Each->Callsign, *ArrivalPlanner::DescribeRefusal(Why, Each->Airframe.Wingspan));
+			}
+			else
+			{
+				UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s) holding: cannot land yet - %s"),
+					Each->Id, *Each->Callsign, *ArrivalPlanner::DescribeRefusal(Why, Each->Airframe.Wingspan));
+			}
 		}
 		Clearance.Why = Why;
 		Clearance.GuidelineAt = GuidelineNow;
 		// NO OCCUPANCY WAS ASKED, so no occupancy revision dates it: ClearanceFor's own test then plans afresh with one when the flight
-		// joins the queue, and does not trust this verdict for the runway's busy-ness it never asked.
+		// is next asked (the runway free, the clock running), and does not trust this verdict for the runway's busy-ness it never asked.
 		Clearance.OccupancyAt = TNumericLimits<uint32>::Max();
 		Clearance.bValid = true;
 	}
@@ -591,11 +605,13 @@ FQueueTick UFlightBoard::TickQueue(UGroundTraffic& Traffic, const URoadNetwork& 
 		return Result;
 	}
 	++TickQueueCalls;
-	// THE ACCEPTED, JUDGED AGAINST TODAY'S GRAPH (#445), before the closed and paused exits below: it reads no clock and no runway, and
-	// the FlightCannotLand alert that follows this pass in the round reads what it leaves. A closed airport cancels its accepted
+	// EVERY FLIGHT STILL TO ARRIVE, JUDGED AGAINST TODAY'S GRAPH (#445), before the closed and paused exits below: it reads no clock and no runway,
+	// and the FlightCannotLand alert that follows this pass in the round reads what it leaves - so a graph change made while paused, or with the
+	// runway busy, cannot leave a verdict older than the graph for the alert to read as "fixed". A closed airport cancels its accepted
 	// flights by its own event, so a verdict made for one is not read for long.
-	// ENFORCED BY: AirportOps.Present.Airport.CloseCancelsThroughTheBus
-	JudgeAccepted(Network);
+	// ENFORCED BY: AirportOps.Present.Alerts.UnlandableAlertSurvivesAPausedEdit,
+	// AirportOps.Model.Alerts.HoldingFlightAlertSurvivesAnUnrelatedEditBehindABusyRunway, AirportOps.Present.Airport.CloseCancelsThroughTheBus
+	JudgeUnarrived(Network);
 	// COUNTED BEFORE THE PAUSE TEST: a paused queue is still a queue, and the pass arms its safety net from this.
 	const TArray<UFlight*> Waiting = Queue();
 	Result.Waiting = Waiting.Num();

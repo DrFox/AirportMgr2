@@ -122,8 +122,8 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 		}
 
 		// THE BUS'S OWN DISPATCH COUNT, now that UOpsEvents has no phase or speed face to hang a listener on (#445).
-		const int32 PhasesBefore = Runtime->GetBus().DispatchedCountOf<FAgentPhaseEvent>();
-		const int32 SpeedsBefore = Runtime->GetBus().DispatchedCountOf<FSpeedChangedEvent>();
+		const int32 PhasesBefore = Runtime->GetBus().DispatchedCountOfForTest<FAgentPhaseEvent>();
+		const int32 SpeedsBefore = Runtime->GetBus().DispatchedCountOfForTest<FSpeedChangedEvent>();
 
 		Actor->DispatchAgent(Outbound, UAirsideSettings::ResolveDefaultAirframe());
 		// THE BUS DELIVERS ON THE NEXT OPS STEP, not inside Airside's broadcast (spec 2026-09-29
@@ -131,11 +131,11 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 		Runtime->Tick(0.0);
 
 		TestTrue(TEXT("a spawn on the Airside traffic reaches the ops bus as an agent-phase event (Gone -> Taxiing)"),
-			Runtime->GetBus().DispatchedCountOf<FAgentPhaseEvent>() > PhasesBefore);
+			Runtime->GetBus().DispatchedCountOfForTest<FAgentPhaseEvent>() > PhasesBefore);
 
 		Runtime->StepSpeed(+1);
 		Runtime->Tick(0.0);   // the bus delivers on the next ops step - see the spawn above
-		TestEqual(TEXT("stepping speed announces it, once"), Runtime->GetBus().DispatchedCountOf<FSpeedChangedEvent>(), SpeedsBefore + 1);
+		TestEqual(TEXT("stepping speed announces it, once"), Runtime->GetBus().DispatchedCountOfForTest<FSpeedChangedEvent>(), SpeedsBefore + 1);
 		TestEqual(TEXT("and the clock holds the new rung"), Runtime->GetClock()->GetSpeed(), ESimSpeed::X2);
 		TestEqual(TEXT("and pushes the multiplier into the actor"), Actor->GetSimTimeScale(), 2.0, 1e-12);
 
