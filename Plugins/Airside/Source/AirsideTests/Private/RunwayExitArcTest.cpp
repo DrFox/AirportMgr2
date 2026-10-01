@@ -249,8 +249,11 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 			const double Back = FVector2D::Distance(Net->GetGuidelineNode(ZEnd)->Position, EAt);
 			// max(slab clearance, node length): the end is never on the runway strip however
 			// the clamp comes out - the first clamp put a 55 m stub's end (and its holding
-			// position) inside the slab.
-			const double Floor = ExitGeometry::TaxiwayEndFloor(900.0, 1150.0, PI / 4.0);
+			// position) inside the slab. E is the runway's END and Z leaves away from it, so the
+			// clearance is the end rule's (1150, past the end line), not the side rule's 2899 -
+			// see ExitGeometry::TaxiwayEndFloorAtRunwayEnd (2026-10-01).
+			const double Floor = ExitGeometry::TaxiwayEndFloorAtRunwayEnd(900.0, 1150.0,
+				FVector2D(-1.0, 0.0), FVector2D(1.0, -1.0).GetSafeNormal());
 			const double Cut = Net->GetSegment(EZ)->TrimA;
 			const double Expected = FMath::Max(FMath::Max(Floor, NodeLength), Cut);
 			const FVector2D EndAt = Net->GetGuidelineNode(ZEnd)->Position;

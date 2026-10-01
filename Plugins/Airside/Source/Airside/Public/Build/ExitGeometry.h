@@ -62,4 +62,39 @@ namespace ExitGeometry
 	 * ten, because a taxiway that shallow never clears the strip by this measure at all.
 	 */
 	AIRSIDE_API double TaxiwayEndFloor(double RunwayHalfWidth, double TaxiwayHalfWidth, double AxisAngle);
+
+	/**
+	 * TaxiwayEndFloor where the runway ENDS at the node rather than passing through it. Both
+	 * tangents point away from the node, RunwayTangent into the runway. A taxiway leaving
+	 * AWAY from the runway's body has the slab behind it, so it is clear once its far edge is
+	 * past the runway's end line - T * tan(off the axis) - or past its side, whichever comes
+	 * first. One running back alongside the body is the side case, TaxiwayEndFloor.
+	 *
+	 * The side formula alone read an in-line taxiway as one that never clears the strip and
+	 * floored it at 10 degrees: (H + T) / sin 10 = 81 m down a 30 m taxiway, so the holding
+	 * position stood in the grass and aircraft crabbed off the pavement to it
+	 * (samples/colours.png, 2026-10-01).
+	 */
+	AIRSIDE_API double TaxiwayEndFloorAtRunwayEnd(double RunwayHalfWidth, double TaxiwayHalfWidth,
+		const FVector2D& RunwayTangent, const FVector2D& TaxiwayTangent);
+
+	/**
+	 * How far off the runway's extended centreline a taxiway leaving its end may run and still
+	 * be solved as straight through (IsInLineAtRunwayEnd). 10 degrees, set 2026-10-01: the
+	 * reported layout was 1.95 degrees off, grid and direction snaps leave a few, and at 10 the
+	 * runway's end edge, squared to the taxiway, moves under 1.8 m on a 20 m runway.
+	 */
+	constexpr double InLineEndDegrees = 10.0;
+
+	/**
+	 * A runway ending at a node whose one other arm is a taxiway carrying on within
+	 * InLineEndDegrees of its line. Such a node is SOLVED AS STRAIGHT THROUGH (the runway's
+	 * end edge squared to the taxiway) because as a corner it has no answer: the two edges are
+	 * the runway's and the taxiway's, offset by the difference of their half widths and
+	 * nearly parallel, so they meet kilometres away - 17 km at the reported 1.95 degrees - and
+	 * the flare, following an arc that barely turns, asks for a radius larger still. The node
+	 * failed and paved nothing, or paved a one-sided wedge (samples/colours.png).
+	 * Tangents point away from the node.
+	 */
+	AIRSIDE_API bool IsInLineAtRunwayEnd(const FVector2D& RunwayTangent, const FVector2D& TaxiwayTangent);
 }
