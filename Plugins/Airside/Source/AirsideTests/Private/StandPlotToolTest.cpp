@@ -994,7 +994,10 @@ bool FStandPlotDesignAircraftIsNotTheStandTest::RunTest(const FString& Parameter
 	TestTrue(TEXT("the aircraft carries the plan footprint"), Design->Footprint.IsSet());
 	TestTrue(TEXT("and its service points are all named and distinct"),
 		UAircraftType::HasUsableServiceIds(Design));
-	TestTrue(TEXT("the stand provides fuel"), Stand->Provides(EServiceRole::Fuel));
+	// A third assertion stood here, that the stand Provides(Fuel) from AvailableServices. Provides had no
+	// reader beyond this test and went in #462; a stand's fuel is read from its anchors
+	// (FirstAnchorIdForRole). HasUsableServiceIds stays: Tools/Python/build_stand_asset.py calls it
+	// (as has_usable_service_ids, which a search for the C++ name cannot see), and this is its only test.
 
 	// The stand's own anchors are GROUND fixtures. None of them may be a place on an
 	// airframe, so none should sit where a door does.
@@ -1887,46 +1890,6 @@ bool FStandPlotGestureBoundariesDropTheRefusalMemoTest::RunTest(const FString& P
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FStandPlotEntranceBehindStripTest,
-	"Airside.Tool.StandPlot.EntranceBehindStrip",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FStandPlotEntranceBehindStripTest::RunTest(const FString& Parameters)
-{
-	using namespace StandPlotToolFixture;
-
-	FAirsideTestWorld TestWorld;
-	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
-	ARoadNetworkActor* Actor = TestWorld.Actor;
-	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
-	TaxiwayWorld(Actor);
-
-	const FRoadSegmentId Taxi = Actor->Network->SegmentIdAt(0);
-	const FRoadSegment* Segment = Actor->Network->GetSegment(Taxi);
-	if (!TestNotNull(TEXT("the taxiway"), Segment)) { return false; }
-	const double Strip = TaxiwayStrip::StripWidthOf(*Actor->Network, Taxi);
-	TestTrue(TEXT("the fixture's taxiway has a strip at all"), Strip > 0.0);
-
-	// THE ENTRANCE SITS A STRIP BEYOND THE KERB, so the box the player draws - and the
-	// outline committed - is the parking box alone, and a taxiing wing clears the tail.
-	FStandPlotTool Tool;
-	Tool.OnClick(At(Actor, AnchorCursor));
-	const FVector2D Anchor = PinnedAnchor(Tool, Actor);
-	TestEqual(TEXT("entrance at pavement edge + strip"),
-		Anchor.Y, Segment->Profile->GetHalfWidthLeft() + Strip, 1.0);
-
-	// AND THE DRAWN BOX IS CLEAR OF IT - the query that refuses agrees with the tool that
-	// places, measured, not restated.
-	Tool.OnClick(At(Actor, Anchor + FVector2D(ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(EIcaoCode::C)), 0.0)));
-	TArray<FVector2D> Shown;
-	Tool.Rect(At(Actor, Anchor + FVector2D(0.0, IcaoCode::StandDepthForLetter(EIcaoCode::C))), Shown);
-	TestTrue(TEXT("a whole box was drawn"), Shown.Num() == 4);
-	TestFalse(TEXT("the drawn box intrudes on no strip"),
-		TaxiwayStrip::WorstIntrusion(*Actor->Network, Shown).IsSet());
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandPlotStartsAtTheKerbTest,
 	"Airside.Tool.StandPlot.StartsAtTheKerb",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -1948,6 +1911,9 @@ bool FStandPlotStartsAtTheKerbTest::RunTest(const FString& Parameters)
 	const URoadProfile* Profile = Actor->Network->GetSegment(Taxi)->Profile;
 	const double Kerb = Profile->GetHalfWidthLeft();
 	const double Strip = TaxiwayStrip::StripWidthOf(*Actor->Network, Taxi);
+	// THE PREMISE of every "a strip beyond the kerb" below: with no strip they would hold at zero for the
+	// wrong reason (carried over from the entrance-behind-the-strip test folded into this one, #462 M21).
+	if (!TestTrue(TEXT("the fixture's taxiway has a strip at all"), Strip > 0.0)) { return false; }
 
 	struct FMarkerSink : IToolPreviewSink
 	{
@@ -1992,6 +1958,19 @@ bool FStandPlotStartsAtTheKerbTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and the readout states it"), FactOf(Readout, TEXT("Strip")),
 		FString::Printf(TEXT("%.1f m (Code %s taxiway)"), Strip / 100.0,
 			IcaoCode::ToLetter(IcaoCode::TaxiwayLetterForWidth(Profile->GetTotalWidth()))));
+
+	// THE ENTRANCE SITS A STRIP BEYOND THE KERB, so the box the player draws - and the outline committed - is
+	// the parking box alone, and a taxiing wing clears the tail. THE DRAWN BOX IS CLEAR OF IT: the query that
+	// refuses agrees with the tool that places, measured, not restated. (Folded in from StandPlot.
+	// EntranceBehindStrip, #462 M21: its entrance-at-edge-plus-strip assertion is the Shown[0] check above on
+	// another cursor, and this is the half that was only there.)
+	const FVector2D Anchor = PinnedAnchor(Tool, Actor);
+	Tool.OnClick(At(Actor, Anchor + FVector2D(ReachableWidthAtLeast(IcaoCode::StandWidthForLetter(EIcaoCode::C)), 0.0)));
+	TArray<FVector2D> Whole;
+	Tool.Rect(At(Actor, Anchor + FVector2D(0.0, IcaoCode::StandDepthForLetter(EIcaoCode::C))), Whole);
+	if (!TestEqual(TEXT("a whole box was drawn"), Whole.Num(), 4)) { return false; }
+	TestFalse(TEXT("the drawn box intrudes on no strip"),
+		TaxiwayStrip::WorstIntrusion(*Actor->Network, Whole).IsSet());
 	return true;
 }
 

@@ -326,7 +326,7 @@ public:
 	 * slot, a runway or a kind change, no such width, an unoffered surface, the price, and the
 	 * widened PAVEMENT inside another taxiway's strip. What the grown STRIP swallows is NOT a
 	 * refusal - that restricts the taxiway or closes a stand (TaxiwayRestriction, stage 6).
-	 * ENFORCED BY: Airside.Present.UpgradeSegment, Airside.Present.UpgradeSegmentRefusesIntoNeighbourStrip
+	 * ENFORCED BY: Airside.Present.UpgradeSegment, Airside.Present.UpgradeRefusalIsTheTwoHalves
 	 */
 	virtual FString WhyUpgradeRefused(int32 SegmentIndex, ERoadKind Kind, int32 WidthIndex, EPavement Surface) const = 0;
 

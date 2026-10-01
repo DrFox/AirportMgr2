@@ -2,10 +2,9 @@
 #include "AirsideTestFixtures.h"
 #include "Materials/Material.h"
 #include "Misc/AutomationTest.h"
-#include "Misc/ScopeExit.h"
 #include "Present/RoadNetworkActor.h"
 #include "Present/TyreSmoke.h"
-#include "UObject/UObjectGlobals.h"
+#include "UObject/UnrealType.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -83,9 +82,12 @@ bool FTyreSmokePoolTest::RunTest(const FString& Parameters)
  * defect this codebase has already paid for once". FTyreSmokePuff is a USTRUCT with
  * UPROPERTY pointers now, so Puffs alone should root them.
  *
- * PROVEN BY A FORCED COLLECTION after every puff has spawned and expired: if Mesh/Instance
- * were reachable only through the two deleted arrays, this is exactly where a puff's mesh
- * would come back null, and the pool would no longer be the fixed size it promises.
+ * PROVEN BY REFLECTION, NOT BY A COLLECTION (#463). This test used to spawn past the pool, let every puff
+ * expire, call CollectGarbage and read each Mesh back non-null - but a puff's mesh is a component the ACTOR
+ * owns (the actor's own component list keeps it alive), so the collection left it standing whether or not
+ * FTyreSmokePuff::Mesh was a UPROPERTY: it passed with the UPROPERTY deleted, at 0.23 s a run. What can
+ * actually regress is the declaration, so that is what is asserted: both pointers on the puff struct and the
+ * pool array on the component are reflected, which is what makes the collector see them.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FTyreSmokePoolStaysRootedTest,
@@ -100,13 +102,6 @@ bool FTyreSmokePoolStaysRootedTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("actor spawned"), Actor)) { return false; }
 
 	UTyreSmoke* Smoke = NewObject<UTyreSmoke>(Actor);
-
-	// ROOTED DIRECTLY, not via Actor->Smoke: this test's whole point is whether Puffs ALONE
-	// - now a reflected TArray<FTyreSmokePuff> - is what keeps the pool's components alive
-	// once something keeps Smoke itself alive. Adding a second path through the actor would
-	// leave the question "did Puffs do this, or did some other reference" unanswered.
-	Smoke->AddToRoot();
-	ON_SCOPE_EXIT { Smoke->RemoveFromRoot(); };
 
 	Smoke->PoolSize = 4;
 	Smoke->PuffSeconds = 1.0;
@@ -124,12 +119,24 @@ bool FTyreSmokePoolStaysRootedTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	CollectGarbage(RF_NoFlags);
-
-	TestEqual(TEXT("the pool is still exactly PoolSize long"),
+	TestEqual(TEXT("the pool is exactly PoolSize long however many puffs were asked for"),
 		Smoke->PoolCountForTest(), Smoke->PoolSize);
-	TestTrue(TEXT("every pooled puff still owns its mesh component after a collection"),
-		Smoke->EveryPuffHasAMeshForTest());
+	TestTrue(TEXT("and every pooled puff owns its mesh component"), Smoke->EveryPuffHasAMeshForTest());
+
+	// THE DECLARATIONS THE COLLECTOR READS. Each is a UPROPERTY, or the property is absent from the
+	// reflection data and the lookup below is null.
+	const UScriptStruct* PuffStruct = FTyreSmokePuff::StaticStruct();
+	TestNotNull(TEXT("FTyreSmokePuff::Mesh is a reflected object pointer"),
+		CastField<FObjectPropertyBase>(PuffStruct->FindPropertyByName(TEXT("Mesh"))));
+	TestNotNull(TEXT("FTyreSmokePuff::Instance is a reflected object pointer"),
+		CastField<FObjectPropertyBase>(PuffStruct->FindPropertyByName(TEXT("Instance"))));
+	const FArrayProperty* Pool = CastField<FArrayProperty>(UTyreSmoke::StaticClass()->FindPropertyByName(TEXT("Puffs")));
+	if (TestNotNull(TEXT("UTyreSmoke::Puffs is a reflected array"), Pool))
+	{
+		const FStructProperty* Inner = CastField<FStructProperty>(Pool->Inner);
+		TestTrue(TEXT("of FTyreSmokePuff, so the pointers inside it are walked"),
+			Inner != nullptr && Inner->Struct == PuffStruct);
+	}
 
 	return true;
 }

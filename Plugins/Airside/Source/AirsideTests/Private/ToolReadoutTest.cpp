@@ -73,9 +73,10 @@ bool FToolsAreSilentByDefaultTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("and leaves the Build button dark"), Collector.Readout.bCommittable);
 
 	// And OnCommit on a tool that does not implement it must be harmless rather than a
-	// crash: the Build button exists whatever tool is selected.
+	// crash: the Build button exists whatever tool is selected. The CALL is the check - a crash or an
+	// ensure fails the run. An assertion of `true` stood here (#463), which could never fail and made the
+	// test read as though it measured something.
 	Silent.OnCommit(Context);
-	TestTrue(TEXT("committing a tool that cannot commit is harmless"), true);
 
 	return true;
 }

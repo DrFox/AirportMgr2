@@ -373,25 +373,10 @@ bool FStandIsEnteredWhereItDeclaresTest::RunTest(const FString& Parameters)
 		}
 	}
 
-	// BEHIND THE TAIL, on the taxiway side, at the same gap, WHERE A ROAD CANNOT SERVE IT.
-	// This is the case the old test would have called a pass: the road is near the stand, just
-	// not near anything the stand declared. A player who draws one there gets a refusal naming
-	// the entry rather than a stand that half works. It was ACROSS THE NOSE until 2026-09-26,
-	// when the entries moved to the far edge and the nose side became the served one.
-	{
-		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		FGuidelineNodeId Far;
-		const double TailSideX = StandGroundOf(*Stand).Min.X;
-		Lay(*Net, FVector2D(TailSideX - GapNear, -20000.0), FVector2D(TailSideX - GapNear, 20000.0),
-			ETraversalClass::GroundVehicle, Far);
-
-		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
-		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
-
-		TestFalse(TEXT("a road behind the tail enters nothing - the entries are all on the far edge"),
-			Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, TEXT("HydrantPit"))));
-	}
-
+	// A ROAD BEHIND THE TAIL is not asserted here: it sat Depth plus 4500 uu from the entries, past
+	// ServiceLinkRadius on distance alone, so its refusal could never be the half-plane's. That case is
+	// Airside.Build.StandEntry.TaxiwaySideRoadDoesNotJoin, at 400 uu, where only the half-plane can refuse.
+	//
 	// AND BEYOND THE FAR EDGE, BUT TOO FAR. The short radius is what keeps the rejected case rejected: at
 	// 200 m the nearest vehicle line is regularly the service road on the far side of a
 	// terminal, and the link would run straight through the building with nothing to report it.
@@ -424,10 +409,10 @@ bool FTaxiwaySideRoadDoesNotJoinTest::RunTest(const FString& Parameters)
 	// stand - the OLD strip every entry opened onto before the 2026-09-26 ruling moved them to the
 	// far edge - must join nothing, however close it is drawn.
 	//
-	// 400 uu, NOT StandIsEnteredWhereItDeclares' 4500: that test's "behind the tail" case sits
+	// 400 uu, NOT StandIsEnteredWhereItDeclares' 4500: that test's "behind the tail" case sat
 	// Depth (6500 for Code C) plus 4500 uu from the entries - past ServiceLinkRadius (6500) on
-	// distance alone, so it never exercised the half-plane at all, only the reach. This one is
-	// well inside the reach, so a refusal here can only be the HALF-PLANE, not the radius.
+	// distance alone, so it never exercised the half-plane at all, only the reach, and was removed as
+	// hollow. This one is well inside the reach, so a refusal here can only be the HALF-PLANE, not the radius.
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
@@ -491,44 +476,6 @@ bool FFarEdgeRoadJoinsTest::RunTest(const FString& Parameters)
 	{
 		TestTrue(
 			*FString::Printf(TEXT("'%s' joins the far-edge road"), *Bay.AnchorId.ToString()),
-			Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, *Bay.AnchorId.ToString())));
-	}
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FDeepStandFarRoadJoinsTest,
-	"Airside.Build.StandEntry.DeepStandFarRoadJoins",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FDeepStandFarRoadJoinsTest::RunTest(const FString& Parameters)
-{
-	using namespace ServiceLinkFixture;
-
-	// A WIDER GAP BETWEEN A FLOOR STAND'S FAR EDGE AND ITS ROAD - 3000 uu of apron the player
-	// left unpaved, then the road 400 uu beyond it. WEAKER THAN ITS NAME since 2026-09-27: it
-	// was written to stand in for a stand DRAWN deeper than its floor, when no fixture drew one,
-	// and it never could - the far edge here is the floor's, so the half-plane and the reach see
-	// an ordinary stand and a long gap. 3000 + 400 uu plus the entries' own inset from the far
-	// edge is inside ServiceLinkRadius (6500) on distance alone. The DRAWN-deep case, where the
-	// entries sit a whole extra depth inside the drawn far edge, is
-	// Airside.Build.StandEntry.DrawnDeepStandJoinsItsFarEdge below.
-	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-
-	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	FGuidelineNodeId Far;
-	constexpr double ExtraApron = 3000.0;
-	const double FarSideX = StandGroundOf(*Stand).Max.X + ExtraApron + 400.0;
-	Lay(*Net, FVector2D(FarSideX, -20000.0), FVector2D(FarSideX, 20000.0),
-		ETraversalClass::GroundVehicle, Far);
-
-	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
-	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
-
-	for (const FServiceBay& Bay : Stand->ServiceBays)
-	{
-		TestTrue(
-			*FString::Printf(TEXT("'%s' joins a road beyond the extra apron"), *Bay.AnchorId.ToString()),
 			Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, *Bay.AnchorId.ToString())));
 	}
 	return true;
@@ -756,58 +703,6 @@ namespace ServiceLinkFixture
 		const TArray<FGuidelineNodeId>* Found = Built.Entries.Find(Entity);
 		return Found != nullptr ? *Found : TArray<FGuidelineNodeId>();
 	}
-
-	/**
-	 * Where each declared entry that a road actually joined is.
-	 *
-	 * THREE EDGES ON A NODE THE LANE GAVE TWO. Every entry node sits mid-cycle with a lane edge
-	 * either side of it, so counting edges is the whole test - and counting them on the ENTRY
-	 * rather than looking for unowned edges near the lane is what makes this measure the claim
-	 * "a road joined THIS declared entry" instead of "something unowned is lying about".
-	 */
-	TArray<FVector2D> LinkedEntries(const URoadNetwork& Net, const TArray<FGuidelineNodeId>& Entries)
-	{
-		TArray<FVector2D> At;
-		for (const FGuidelineNodeId& Id : Entries)
-		{
-			const FGuidelineNode* Node = Net.GetGuidelineNode(Id);
-			if (Node != nullptr && Node->Incident.Num() > 2)
-			{
-				At.Add(Node->Position);
-			}
-		}
-		return At;
-	}
-
-	/** The linked entries as a string, so a failure names WHICH ones rather than how many. */
-	FString Where(const TArray<FVector2D>& Points)
-	{
-		FString Out;
-		for (const FVector2D& Point : Points)
-		{
-			Out += FString::Printf(TEXT("(%.0f,%.0f) "), Point.X, Point.Y);
-		}
-		return Out;
-	}
-
-	/** A stand at the origin facing +X with one straight service road laid beside it. */
-	struct FStandBesideARoad
-	{
-		URoadNetwork* Net = nullptr;
-		FEntityInstanceId Placed;
-		FGuidelineNodeId RoadNear, RoadFar;
-	};
-
-	FStandBesideARoad StandBesideARoad(UEntityDefinition& Stand,
-		const FVector2D& RoadFrom, const FVector2D& RoadTo)
-	{
-		FStandBesideARoad Built;
-		Built.Net = NewObject<URoadNetwork>(GetTransientPackage());
-		Built.RoadNear = Lay(*Built.Net, RoadFrom, RoadTo, ETraversalClass::GroundVehicle, Built.RoadFar);
-		Built.Placed = PlaceStand(*Built.Net, Stand, FVector2D::ZeroVector, 0.0);
-		FAnchorLink::Build(*Built.Net, UAirsideSettings::ResolveLargestServiceVehicle());
-		return Built;
-	}
 }
 
 namespace ServiceLinkFixture
@@ -897,19 +792,6 @@ namespace ServiceLinkFixture
 		});
 		Found.Append(Sweeps);
 		return Found;
-	}
-
-	/**
-	 * A delivered radius as a reader can take it in.
-	 *
-	 * A STRAIGHT EDGE HAS NO RADIUS AT ALL and TightestRadius says so with a numeric maximum, so
-	 * a diagnostic that printed the number would be three hundred digits of nothing. Infinity is
-	 * also the RIGHT answer for a lead-in on the crossing branch, which leaves the lane along
-	 * the lane, so this case is common rather than exotic.
-	 */
-	FString Curvature(double Radius)
-	{
-		return Radius > 1.0e6 ? TEXT("straight") : FString::Printf(TEXT("%.0f"), Radius);
 	}
 
 	/** The radius the edge AS LAID delivers, which is the one a truck has to follow. */
@@ -1362,7 +1244,7 @@ bool FTruckReachesHydrantWithoutCrossingTheAircraftTest::RunTest(const FString& 
 {
 	using namespace ServiceLinkFixture;
 
-	// THE INVARIANT, MEASURED ON A ROUTE. Airside.Entities.StandLaneClearsTheAircraft
+	// THE INVARIANT, MEASURED ON A ROUTE. Airside.Entities.NoTemplateLegPassesUnderTheWing
 	// measures the definition; this measures what the SEARCH will actually hand a driver,
 	// which is the thing the player watches. A lane that cleared the aeroplane and a link
 	// that did not would pass the first test and fail here.
@@ -1445,11 +1327,13 @@ bool FTruckReachesHydrantWithoutCrossingTheAircraftTest::RunTest(const FString& 
 //
 //   "an anchor has line on it"        -> Airside.Build.StandLaneReachesTheGraph, which now
 //                                        demands TWO edges rather than at least one
-//   "the junction needs no turning"   -> Airside.Build.PlacedStandLaneIsOneDrivableCycle,
-//                                        which measures the delivered radius of every lane
-//                                        curve against the vehicle's own lock
-//   "nothing crosses the aeroplane"   -> the same test, on the sampled curve and against the
-//                                        fuselage RECTANGLE rather than a zero-width axis
+//   "the junction needs no turning"   -> Airside.Entities.EveryTemplateLegIsDrivableByEveryVehicle,
+//                                        which asks FSpeedProfile / FReverseRun about every leg
+//                                        against the vehicle's own lock (it replaced the
+//                                        delivered-radius cycle test this note first named)
+//   "nothing crosses the aeroplane"   -> Airside.Entities.NoTemplateLegPassesUnderTheWing, on the
+//                                        sampled curve and against the fuselage RECTANGLE rather
+//                                        than a zero-width axis
 //
 // What it can no longer say is anything at all: with the anchors on the lane its spur search
 // finds nothing, and every loop in it would run zero times while the test reported success.
@@ -1471,8 +1355,8 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 	//
 	// THE CORNER IS REPLACED BY A QUADRATIC whose control sits ON it, so both sides leave
 	// tangentially and the bend carries the turn. See
-	// Airside.Build.PlacedStandLaneIsOneDrivableCycle for the other half of the same claim,
-	// measured as a delivered radius per edge rather than as a turn per junction.
+	// Airside.Entities.EveryTemplateLegIsDrivableByEveryVehicle for the other half of the same claim,
+	// measured as a delivered radius per leg rather than as a turn per junction.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
@@ -1511,9 +1395,9 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 	// 2026-09-16. FStandLayoutBuild rounds these very corners to
 	// ResolveLargestServiceVehicle().TightestFollowableRadius(), so measuring them against
 	// ResolveDefaultVehicle() (471 uu, against 699.4) left a 228 uu band in which the lane could
-	// shrink with this test still green. Airside.Build.PlacedStandLaneIsOneDrivableCycle already
-	// held the same edges to the right bar, so two tests were using two vehicles as the bar for
-	// one property - a pair that drifts, and the rule is that ground geometry is sized for the
+	// shrink with this test still green. A sibling cycle test (since replaced by
+	// Airside.Entities.EveryTemplateLegIsDrivableByEveryVehicle) already held the same edges to the
+	// right bar, so two tests were using two vehicles as the bar for one property - a pair that drifts, and the rule is that ground geometry is sized for the
 	// largest vehicle ADMITTED, never the one driving now.
 	const FChassis Truck = UAirsideSettings::ResolveLargestServiceVehicle();
 	const double Lock = FMath::Sin(FMath::DegreesToRadians(
@@ -1772,8 +1656,8 @@ bool FTruckLeavesTheServicePointBackwardsTest::RunTest(const FString& Parameters
 	// existed before today and none referred to any other, so the follower drove the reverse
 	// leg forwards and the body swung round to face along it.
 	//
-	// AT THE LEVEL OF THE COMPOSITION, not the struct. Airside.Model.ReverseRun already drives
-	// FReverseRun to its limits on a hand-made arc and passed throughout; what was untested was
+	// AT THE LEVEL OF THE COMPOSITION, not the struct. ReverseRunTest.cpp (Airside.Model.Reverse*)
+	// already drives FReverseRun to its limits on a hand-made arc and passed throughout; what was untested was
 	// whether anything ever HANDS it one. That is the seam, so that is where the test goes.
 	// THE LARGEST VEHICLE'S CHASSIS IN THE DEFAULT VEHICLE'S BUNDLE: StartDrive takes a whole
 	// FVehicle, and ResolveLargestServiceVehicle returns only the chassis (2026-09-23).

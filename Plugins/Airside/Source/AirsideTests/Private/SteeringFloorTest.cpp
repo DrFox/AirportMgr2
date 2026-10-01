@@ -77,19 +77,29 @@ bool FSteeringFloorSharpVertexStillCreepsTest::RunTest(const FString& Parameters
 	// AND AN AIRCRAFT IS UNAFFECTED, which is what says the epsilon was added beside the
 	// physical floor rather than in place of it. A Piper's own steering minimum is far above
 	// the epsilon, so the epsilon must not be what governs it.
+	//
+	// THE PREMISE IS ASSERTED, NOT A CONDITION TO SKIP ON: this half used to sit behind an `if` on the Piper's
+	// steering minimum being above the epsilon, with no else, so a content change that put it at or below the
+	// epsilon turned the whole aircraft half into a green test that asserted nothing. It is a failure now.
 	const FAirframe Piper = UAirsideSettings::ResolveDefaultAirframe();
-	if (Piper.Chassis.Ground.MinSteeringSpeed > FRouteFollower::ProgressEpsilon)
+	if (!TestTrue(
+		FString::Printf(TEXT("the premise: a Piper's steering minimum (%.1f) is above the solver epsilon (%.1f), "
+			"or this half could not tell the two floors apart"),
+			Piper.Chassis.Ground.MinSteeringSpeed, FRouteFollower::ProgressEpsilon),
+		Piper.Chassis.Ground.MinSteeringSpeed > FRouteFollower::ProgressEpsilon))
 	{
-		FSpeedProfile Aircraft;
-		Aircraft.Build(Corner, Piper.Chassis);
-
-		TestTrue(
-			FString::Printf(
-				TEXT("an aircraft still crawls its sharp vertex at its own steering minimum ")
-				TEXT("%.0f, not at the solver epsilon"),
-				Piper.Chassis.Ground.MinSteeringSpeed),
-			Aircraft.LimitAt(1000.0) >= Piper.Chassis.Ground.MinSteeringSpeed - KINDA_SMALL_NUMBER);
+		return false;
 	}
+
+	FSpeedProfile Aircraft;
+	Aircraft.Build(Corner, Piper.Chassis);
+
+	TestTrue(
+		FString::Printf(
+			TEXT("an aircraft still crawls its sharp vertex at its own steering minimum ")
+			TEXT("%.0f, not at the solver epsilon"),
+			Piper.Chassis.Ground.MinSteeringSpeed),
+		Aircraft.LimitAt(1000.0) >= Piper.Chassis.Ground.MinSteeringSpeed - KINDA_SMALL_NUMBER);
 
 	return true;
 }

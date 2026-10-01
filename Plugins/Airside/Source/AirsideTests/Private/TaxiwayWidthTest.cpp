@@ -17,60 +17,6 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-namespace
-{
-	// Prefixed against the UNITY build - these test files share one translation unit.
-
-	/**
-	 * A target that records the width index the tool hands it, and nothing else.
-	 *
-	 * THE SAME SHAPE AS FFakeRunwayTarget and for the same stated reason: the tool must be
-	 * testable without UAirsideContent, because the whole point of the seam (#78) is that a
-	 * tool does not know the content set. Grep this file for UAirsideContent and find
-	 * nothing - if that ever stops being true, the tool has grown a content dependency.
-	 * Every virtual this does not override is FNullEditTarget's inert default (#189),
-	 * including GetRunwayProfileCount/ResolveRunwayProfile - this fake is the TAXIWAY tool's -
-	 * and ResolveProfileFor, since a fake resolves nothing composite (the real rule lives on
-	 * ARoadNetworkActor, pinned by Airside.Present.ProfileResolutionIsOneRule).
-	 */
-	struct FFakeWidthTarget : FNullEditTarget
-	{
-		TArray<URoadProfile*> TaxiwayProfiles;
-
-		/** What the tool asked for, last time it asked. INDEX_NONE means "the default". */
-		mutable int32 LastConnectWidth = -2;
-		mutable int32 LastGhostWidth = -2;
-		int32 Connects = 0;
-
-		virtual int32 PlaceNode(FVector2D) override { return Connects; }
-		virtual bool ConnectNodes(int32, int32, ERoadKind, int32 WidthIndex, EPavement) override
-		{
-			LastConnectWidth = WidthIndex;
-			++Connects;
-			return true;
-		}
-		using IRoadEditTarget::ConnectNodes;
-		virtual void UpdateGhost(int32, const FRoadSnapResult&, bool, ERoadKind, int32 WidthIndex) override
-		{
-			LastGhostWidth = WidthIndex;
-		}
-		using IRoadEditTarget::UpdateGhost;
-
-		virtual int32 GetWidthCount(ERoadKind Kind) const override { return Kind == ERoadKind::Taxiway ? TaxiwayProfiles.Num() : 0; }
-		virtual URoadProfile* ResolveWidthProfile(ERoadKind Kind, int32 Index) const override
-		{
-			if (Kind != ERoadKind::Taxiway || TaxiwayProfiles.Num() == 0)
-			{
-				return nullptr;
-			}
-			// Clamped, mirroring ARoadNetworkActor's own contract - a fake that did not
-			// clamp would let a test pass against behaviour a real target refuses.
-			return TaxiwayProfiles[FMath::Clamp(Index, 0, TaxiwayProfiles.Num() - 1)];
-		}
-	};
-
-}
-
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FTaxiwayWidthTest,
 	"Airside.Tool.TaxiwayWidth",
@@ -190,15 +136,27 @@ bool FTaxiwayWidthTest::RunTest(const FString& Parameters)
 
 	// 5. AN EMPTY LIST REFUSES rather than choosing nothing quietly - a project that has
 	//    not run build_road_profiles.py is a real state, and the one FRunwayTool's own
-	//    empty-list branch exists for. A fake target is the only way to have no content.
+	//    empty-list branch exists for. A fake target is the only way to have no content: the
+	//    inert FNullEditTarget answers zero widths for every kind, which is all this needs. The tool
+	//    must be testable WITHOUT the content set - the point of the seam (#78) is that a tool does not
+	//    know it - so a target with no content at all is the right fixture, not a shortcut. (A
+	//    FFakeWidthTarget stood here that RECORDED the width index the tool handed it - fields nothing
+	//    ever read - and a separate service-road test, Airside.Tool.ServiceRoadWidthEmpty, whose only
+	//    difference was the kind it asked; both went in #462, and the service road is asked here.)
+	//    BOTH KINDS: the empty-list branch of FRoadDrawTool::OnReselect serves them with one body, and a
+	//    test of one would not see a change that touched only the other.
 	{
-		FFakeWidthTarget Empty;
-		FRoadDrawTool Tool(ERoadKind::Taxiway);
+		FNullEditTarget Empty;
 		FToolContext Context;
 		Context.Target = &Empty;
-		Tool.OnReselect(Context);
-		TestEqual(TEXT("with nothing to cycle, the tool stays where it started"),
-			Tool.GetWidthIndex(), 0);
+		for (const ERoadKind Kind : { ERoadKind::Taxiway, ERoadKind::ServiceRoad })
+		{
+			FRoadDrawTool Tool(Kind);
+			Tool.OnReselect(Context);
+			TestEqual(*FString::Printf(TEXT("with nothing to cycle, the %s tool stays where it started"),
+				Kind == ERoadKind::Taxiway ? TEXT("taxiway") : TEXT("service road")),
+				Tool.GetWidthIndex(), 0);
+		}
 	}
 
 	return true;
@@ -434,48 +392,18 @@ bool FUpgradeSecondWriteRefusedEditorWorldTest::RunTest(const FString& Parameter
 	return RunUpgradeSecondWriteRefused(*this, EWorldType::Editor);
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FUpgradeSegmentRefusesIntoNeighbourTest,
-	"Airside.Present.UpgradeSegmentRefusesIntoNeighbourStrip",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FUpgradeSegmentRefusesIntoNeighbourTest::RunTest(const FString& Parameters)
-{
-	// WIDENING INTO A NEIGHBOUR IS LAYING PAVEMENT: the widened edge must stay out of another
-	// taxiway's strip (stage 3's JudgeSegment, asked with the NEW shape). What the grown STRIP
-	// swallows is not refused - that restricts (Task 3).
-	FAirsideTestWorld World;
-	if (!TestNotNull(TEXT("a world"), World.Actor)) { return false; }
-	ARoadNetworkActor* Actor = World.Actor;
-	const int32 C = UpgradeWidthIndexFor(*Actor, EIcaoCode::C);
-	const int32 F = UpgradeWidthIndexFor(*Actor, EIcaoCode::F);
-	if (!TestTrue(TEXT("C and F widths"), C != INDEX_NONE && F != INDEX_NONE)) { return false; }
-	const double HalfC = Actor->ResolveWidthProfile(ERoadKind::Taxiway, C)->GetMaxHalfWidth();
-	const double HalfF = Actor->ResolveWidthProfile(ERoadKind::Taxiway, F)->GetMaxHalfWidth();
-	const double NeighbourReach = HalfC + IcaoCode::TaxiwayStripForWidth(2.0 * HalfC);
-	// C's edge clear of the neighbour's strip, F's edge inside it.
-	const double Gap = NeighbourReach + 0.5 * (HalfC + HalfF);
-
-	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
-	const int32 B = Actor->PlaceNode(FVector2D(20000.0, 0.0));
-	TestTrue(TEXT("the taxiway to widen"), Actor->ConnectNodes(A, B, ERoadKind::Taxiway, C, EPavement::Tarmac));
-	const int32 Seg = Actor->Network->GetSegments().Num() - 1;
-	const int32 P = Actor->PlaceNode(FVector2D(0.0, Gap));
-	const int32 Q = Actor->PlaceNode(FVector2D(20000.0, Gap));
-	TestTrue(TEXT("a parallel C taxiway, clear of it at C"), Actor->ConnectNodes(P, Q, ERoadKind::Taxiway, C, EPavement::Tarmac));
-
-	TestFalse(TEXT("widening to F puts pavement in the neighbour's strip: refused"),
-		Actor->UpgradeSegment(Seg, ERoadKind::Taxiway, F, EPavement::Tarmac));
-	TestTrue(TEXT("and the refusal names the strip"),
-		Actor->WhyUpgradeRefused(Seg, ERoadKind::Taxiway, F, EPavement::Tarmac).Contains(TEXT("clearance strip")));
-	return true;
-}
-
 /**
  * WhyUpgradeRefused IS ITS TWO HALVES, SITE FIRST (issue #439). The Upgrade hover remembers the
  * site half and asks the money half fresh, while UpgradeSegment asks the composition - so the pair
  * and the whole must be the same function. Also pins the one behaviour the split changed: the
  * price gate used to come BEFORE the neighbour-strip gate, and now follows it.
+ *
+ * WIDENING INTO A NEIGHBOUR IS LAYING PAVEMENT: the widened edge must stay out of another taxiway's strip
+ * (stage 3's JudgeSegment, asked with the NEW shape). What the grown STRIP swallows is not refused - that
+ * restricts (Task 3). That was a test of its own, Airside.Present.UpgradeSegmentRefusesIntoNeighbourStrip, on
+ * this same neighbour pair and the same refusal; it is the strip case below, and its one claim this test did
+ * not make - UpgradeSegment ITSELF refuses on the strip with no money in the way - is the final click, run
+ * on a funded purse.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FUpgradeRefusalIsTheTwoHalvesTest,
@@ -495,8 +423,9 @@ bool FUpgradeRefusalIsTheTwoHalvesTest::RunTest(const FString& Parameters)
 	const double HalfF = Actor->ResolveWidthProfile(ERoadKind::Taxiway, F)->GetMaxHalfWidth();
 	const double Gap = HalfC + IcaoCode::TaxiwayStripForWidth(2.0 * HalfC) + 0.5 * (HalfC + HalfF);
 
-	// A SOLO TAXIWAY far from everything, for the money-only cases; and the neighbour pair from
-	// the test above, for the case where the strip and the money both refuse. Laid free, then priced.
+	// A SOLO TAXIWAY far from everything, for the money-only cases; and a neighbour pair (a parallel C
+	// taxiway at Gap, clear of the first at C and inside its strip at F), for the case where the strip and
+	// the money both refuse. Laid free, then priced.
 	TestTrue(TEXT("a solo C taxiway"), Actor->ConnectNodes(Actor->PlaceNode(FVector2D(0.0, -90000.0)),
 		Actor->PlaceNode(FVector2D(20000.0, -90000.0)), ERoadKind::Taxiway, C, EPavement::Tarmac));
 	const int32 Solo = Actor->Network->GetSegments().Num() - 1;
@@ -542,7 +471,10 @@ bool FUpgradeRefusalIsTheTwoHalvesTest::RunTest(const FString& Parameters)
 		Actor->WhyUpgradeUnaffordable(Boxed, Taxiway, F, EPavement::Tarmac).Contains(TEXT("afford")));
 	TestEqual(TEXT("but the whole names the strip"), Actor->WhyUpgradeRefused(Boxed, Taxiway, F, EPavement::Tarmac), Strip);
 
-	// AND UpgradeSegment ASKS THE SAME COMPOSITION: refused, nothing charged.
+	// AND UpgradeSegment ASKS THE SAME COMPOSITION: refused, nothing charged. FUNDED, so the refusal here can
+	// only be the strip's: with the purse still empty from above, the money half would refuse the click on its
+	// own and the strip gate could be gone.
+	Purse.Funds = 1.0e9;
 	TestFalse(TEXT("the click is refused"), Actor->UpgradeSegment(Boxed, Taxiway, F, EPavement::Tarmac));
 	TestEqual(TEXT("and charges nothing"), Purse.Charges.Num(), 0);
 	return true;

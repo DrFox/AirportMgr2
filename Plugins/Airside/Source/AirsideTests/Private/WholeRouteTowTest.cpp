@@ -71,8 +71,6 @@ namespace WholeRouteTowFixture
 		FGuidelineNodeId Goal;
 		/** The quarters, in driving order. */
 		TArray<FGuidelineEdgeId> Curves;
-		/** The straight laid before quarter GapBefore, when there is one. */
-		FGuidelineEdgeId Gap;
 	};
 
 	/**
@@ -113,7 +111,7 @@ namespace WholeRouteTowFixture
 			{
 				At += Heading * Gap;
 				const FGuidelineNodeId To = Node(Net, At.X, At.Y);
-				Out.Gap = Edge(Net, From, To);
+				Edge(Net, From, To);
 				From = To;
 			}
 			From = Quarter(Net, From, At, Heading, Hand, Out.Curves.AddDefaulted_GetRef());

@@ -142,7 +142,7 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 	// Stand number and stop position <- the entity's own POSE (no Aircraft anchor since stand and
 	// aircraft were split). That row has a real source and is asserted in Airside.Model.Entity - the
 	// pose, every anchor's node and an unknown id's miss - not repeated here: this table's stand block
-	// restated those, and asserted Provides(Aircraft) of a service list nothing in production reads.
+	// restated those.
 	// (Its note that the stand lead-in line "has no source" went with the block: FAnchorLink lays that
 	// line now, and Airside.Build.AnchorLink measures it.)
 
@@ -235,7 +235,12 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 	//
 	// MEASURED ON A WALKWAY THAT REALLY MEETS A ROAD (RoadC, above). The count below was taken when
 	// the walkway stood clear of every road, where it is zero by construction and the assertion could
-	// not tell a derivation that makes zebra sources from one that does not.
+	// not tell a derivation that makes zebra sources from one that does not. A SHARED junction still
+	// derives no mixed-class node, because turn paths are per class: a turn's mask is the INTERSECTION of
+	// its two arms' masks (RoadGuidelineBuilder.cpp, `FromMask.Bits & ToMask.Bits`), so a Pedestrian arm
+	// and a GroundVehicle arm meeting at one node yield no turn between them at all.
+	// ENFORCED BY: the MixedClassNodes == 0 assertion below, run on exactly that junction (the premise
+	// check ahead of it refuses to run it on one that is not).
 	{
 		bool bWalkArm = false;
 		bool bDriveArm = false;

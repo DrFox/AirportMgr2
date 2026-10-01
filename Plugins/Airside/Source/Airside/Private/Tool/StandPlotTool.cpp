@@ -74,7 +74,7 @@ void FStandPlotTool::Shape(const FToolContext& Context, TArray<FVector2D>& OutSh
 	// out by FrontGap, the taxiway's clearance strip (strip spec 2026-09-28). EVERY CORNER BELOW
 	// IS THE BOX'S, not the kerb's: the base pins Shown[N] straight into Corners[N], so a shape
 	// in two frames would be carried out twice. The strip is the ground between kerb and box.
-	// ENFORCED BY: Airside.Tool.StandPlot.StartsAtTheKerb, Airside.Tool.StandPlot.EntranceBehindStrip
+	// ENFORCED BY: Airside.Tool.StandPlot.StartsAtTheKerb
 	const FVector2D Kerb = Corners[0];
 	const FVector2D Anchor = Kerb + Inward * FrontGap;
 
@@ -497,6 +497,6 @@ double FStandPlotTool::FrontSetback(const URoadNetwork& Network, FRoadSegmentId 
 	// THE TAXIWAY'S STRIP, BY ITS OWN LETTER - not the stand's. The wing that overhangs the
 	// stand edge belongs to what taxis past, so a Code B stand off a Code F taxiway pays F's
 	// 34.5 m (strip spec 2026-09-28; the cost nudges the player to a B spur, as real aprons do).
-	// ENFORCED BY: Airside.Tool.StandPlot.EntranceBehindStrip
+	// ENFORCED BY: Airside.Tool.StandPlot.StartsAtTheKerb (its entrance is Kerb + the taxiway's StripWidthOf)
 	return TaxiwayStrip::StripWidthOf(Network, Id);
 }

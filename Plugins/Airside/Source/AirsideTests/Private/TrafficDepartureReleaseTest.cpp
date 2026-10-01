@@ -63,6 +63,12 @@ bool FTrafficDepartureReleasesWhenAirborneTest::RunTest(const FString& Parameter
 	double RollStart = -1.0, AirborneAt = -1.0, ReleasedAt = -1.0, GoneAt = -1.0;
 	bool bHeldWhileOnWheels = true;
 	bool bStillDepartingAtRelease = false;
+	// THE PLANNER'S ANSWER WHILE THE AIRCRAFT IS STILL IN THE CLIMB, asked on the first tick after lift-off.
+	// Asked once the agent is gone, as this test used to, the answer cannot depend on the airborne release at
+	// all: an agent's removal releases everything it held (UGroundTraffic::AdvanceOnce's Gone branch), so a
+	// revert of that release still read "not RunwayOccupied" at the end.
+	bool bAskedAfterLiftOff = false;
+	EArrivalRefusal WhyAfterLiftOff = EArrivalRefusal::None;
 	double Clock = 0.0;
 	for (; Clock < 300.0; Clock += 0.05)
 	{
@@ -82,6 +88,11 @@ bool FTrafficDepartureReleasesWhenAirborneTest::RunTest(const FString& Parameter
 		else
 		{
 			if (AirborneAt < 0.0) { AirborneAt = Clock; }
+			else if (!bAskedAfterLiftOff)
+			{
+				bAskedAfterLiftOff = true;
+				WhyAfterLiftOff = ArrivalPlanner::Plan(*Net, FVector2D(-60000.0, 0.0), Airframe, &Traffic->GetOccupancy()).Why;
+			}
 			if (ReleasedAt < 0.0 && !StripHeld())
 			{
 				ReleasedAt = Clock;
@@ -105,9 +116,14 @@ bool FTrafficDepartureReleasesWhenAirborneTest::RunTest(const FString& Parameter
 
 	// What the player pressed 7 for: an arrival asked after lift-off is not refused for the
 	// runway. (The planner may refuse for a LATER reason - this bare graph has no exit that
-	// reaches a stand - which is exactly the point: the refusal is not RunwayOccupied.)
+	// reaches a stand - which is exactly the point: the refusal is not RunwayOccupied.) ASKED ON THE TICK
+	// AFTER LIFT-OFF, with the aircraft still Departing and holding its strip unless the airborne release
+	// ran - which is where the claim can be seen to be released, not after removal has released it anyway.
+	TestTrue(TEXT("the planner was asked while the aircraft was in the climb"), bAskedAfterLiftOff);
+	TestNotEqual(TEXT("one tick after lift-off, with the aircraft still in the climb, the runway is not 'in use'"),
+		WhyAfterLiftOff, EArrivalRefusal::RunwayOccupied);
 	const FArrivalPlan After = ArrivalPlanner::Plan(*Net, FVector2D(-60000.0, 0.0), Airframe, &Traffic->GetOccupancy());
-	TestNotEqual(TEXT("after the departure the runway is not 'in use'"), After.Why, EArrivalRefusal::RunwayOccupied);
+	TestNotEqual(TEXT("and after the departure is gone it still is not"), After.Why, EArrivalRefusal::RunwayOccupied);
 	return true;
 }
 

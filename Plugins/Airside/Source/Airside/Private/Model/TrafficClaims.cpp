@@ -851,7 +851,7 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 	// refusal of anything in it, before the agent has entered, holds it at the entry - a
 	// vehicle's nose on its stop line, an aircraft's centre a gap short of the chain, the box
 	// rule's own point. A vehicle already committed is not held: it cannot stop at the line.
-	// ENFORCED BY: Airside.Model.Traffic.AircraftQueueWaitsClearOfRoad, .VanQueueBetweenTwoTaxiways
+	// ENFORCED BY: Airside.Model.Traffic.VanCrossesPastAircraftQueue, .VanQueueBetweenTwoTaxiways
 	int32 ChainFirst = INDEX_NONE;
 	double ChainHoldAt = -1.0;
 	for (int32 Index = Current; Index < Plan.Steps.Num() && UGroundTraffic::StepStart(Plan, Index) < Head; ++Index)

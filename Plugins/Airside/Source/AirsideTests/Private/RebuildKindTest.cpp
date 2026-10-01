@@ -223,7 +223,9 @@ bool FDragNotifiesGeometryOnlyInEditorWorldTest::RunTest(const FString& Paramete
 	// gives a drag cut short its one derived-graph catch-up. A real FEditTool holds the drag here and the
 	// session's own OnNetworkReplaced (Adopted: the phase an undo sends) cuts it short; DeactivateOnUndo's
 	// own hop to the session is Airside.Editor.UndoDeactivatesTheActiveBuildTool, which AirsideTests, with
-	// no dependency on the editor module, cannot call.
+	// no dependency on the editor module, cannot call. KEEP, NOT ABANDON: OnDeactivate's call is
+	// bKeep=true because an editor Ctrl+Z does not reach into a live drag to abandon it - it ends the
+	// interaction the same way releasing the mouse would.
 	{
 		FBuildSession Session;
 		Session.SelectTool(1);                       // Taxiway: lights AirsideNode handles

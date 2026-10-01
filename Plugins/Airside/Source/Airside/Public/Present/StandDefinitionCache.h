@@ -67,7 +67,7 @@ public:
 	 * regression rather than being removed with the bug it once caught. A caller refuses on
 	 * null; WhyStandRefused is what turns that into "Code X stands cannot be built yet" for the
 	 * player.
-	 * ENFORCED BY: Airside.Present.StandPlot.EveryLetterBuilds
+	 * ENFORCED BY: Airside.Present.StandPlot.PlacesOtherLetters (B, D, E, F), Airside.Present.StandPlot.OldPoseRederivedOnLoad (C, B)
 	 */
 	UEntityDefinition* ResolveStandDefinitionFor(EIcaoCode Letter);
 
