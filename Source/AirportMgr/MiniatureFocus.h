@@ -40,12 +40,13 @@ struct FMiniatureFocus
 {
 	/**
 	 * Blur diameter of a point at infinity, as a fraction of the frame width, at full
-	 * strength. 0.004 is 7.7 px at 1920 wide; a point at twice SharpDistanceUu gets half that.
+	 * strength. 0.002 is 3.8 px at 1920 wide; a point at twice SharpDistanceUu gets half that.
 	 * 0.01 (2026-09-30) was "too much blur, just want a little bit" once the effect moved to
-	 * the close view (2026-10-01). 0.003 had been judged invisible, but from the steep far
-	 * camera with a look-at focus - a different geometry, so not a floor here.
+	 * the close view (2026-10-01); 0.004 was still too much on M_Test_Small, so 0.002.
+	 * 0.003 had been judged invisible, but from the steep far camera with a look-at focus -
+	 * a different geometry, so not a floor here.
 	 */
-	double BlurAtInfinity = 0.004;
+	double BlurAtInfinity = 0.002;
 
 	/** Aperture. Shapes the bokeh only; the blur amount comes from BlurAtInfinity. */
 	double FStop = 4.0;
