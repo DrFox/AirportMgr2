@@ -89,44 +89,8 @@ bool FFlightSurvivesASaveTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FFlightDueWhileClosedTest,
-	"AirportOps.Model.FlightSave.AFlightDueWhileTheGameWasShutIsNotLost",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FFlightDueWhileClosedTest::RunTest(const FString& Parameters)
-{
-	// Its slot passed while the game was closed. Dropping it silently is the failure this
-	// guards: the player accepted a flight and it simply never came.
-	//
-	// The flight is put in the Accepted state DIRECTLY, because that is what a restore does -
-	// it deserialises phases and ETAs, and arms nothing. Accepting it through the board here
-	// would arm the clock, the clock would fire on its own, and the test would prove that
-	// the ordinary path works rather than that the load path does.
-	URoadNetwork* Net = SaveTestNetwork();
-	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
-	USimClock* Clock = NewObject<USimClock>();
-	UFlightBoard* Board = SaveTestBoard();
-
-	int32 Calls = 0;
-	Board->Dispatcher = [&Calls](const FVector2D&, const FAirframe&) { ++Calls; return true; };
-
-	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
-	Flight->Airframe.Wingspan = 3400.0;
-	Flight->ArrivesAt = 10.0;
-	Flight->SetPhaseForTest(EFlightPhase::Accepted);
-	Board->AddOffer(*Clock, Flight);
-
-	Clock->Advance(1.0);   // 72 game seconds: the ETA is already behind us
-	TestEqual(TEXT("nothing has been dispatched, because nothing was armed"), Calls, 0);
-
-	Board->RearmSchedules(*Traffic, *Net, *Clock);
-	TestEqual(TEXT("a flight already due joins the queue at once, not dropped"), Flight->GetPhase(), EFlightPhase::Inbound);
-	Board->TickQueue(*Traffic, *Net, *Clock);
-	TestEqual(TEXT("and the queue clears it - nothing holds the runway"), Calls, 1);
-	TestEqual(TEXT("so it is landing, not still waiting"), Flight->GetPhase(), EFlightPhase::Landing);
-	return true;
-}
+// (AirportOps.Model.FlightSave.AFlightDueWhileTheGameWasShutIsNotLost is merged into AirportOps.Model.ArrivalQueue.OverdueOnLoadJoinsQueue, #462
+// M15: both planted an overdue Accepted flight and called RearmSchedules; the merged test holds the runway, then frees it.)
 
 /**
  * The countdown survives a save as a plain number (snapshot v5): the offer comes back with

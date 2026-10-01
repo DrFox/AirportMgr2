@@ -19,6 +19,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
+#include "OpsSaveTestHelpers.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -422,7 +423,7 @@ bool FFleetLoadDoesNotReseedTest::RunTest(const FString& Parameters)
 	const int32 Seeded = Runtime->GetJobBoard()->GetVehicles().Num();
 	if (!TestTrue(TEXT("setup: the depot was seeded"), Seeded > 0)) { return false; }
 
-	const FString Slot = TEXT("AirportOpsTest_FleetLoadDoesNotReseed");
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_FleetLoadDoesNotReseed"));
 	if (!TestTrue(TEXT("setup: the airport saves"), Runtime->SaveToSlot(Slot))) { return false; }
 	if (!TestTrue(TEXT("and loads"), Runtime->LoadFromSlot(Slot))) { return false; }
 	Runtime->Tick(1.0 / 30.0);

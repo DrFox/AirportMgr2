@@ -17,6 +17,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestWorld.h"
 #include "OpsTransitionTestHelpers.h"
+#include "OpsSaveTestHelpers.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -224,9 +225,8 @@ bool FSimTimeScaleOnChangeTest::RunTest(const FString&)
 	Runtime->StepSpeed(+1);
 	AtSpeed(TEXT("a speed step"));
 	const double Saved = Actor->GetSimTimeScale();
-	const FString Slot = TEXT("AirportOpsTest_SimTimeScale");
 	// THE SLOT GOES WITH THE TEST, however it ends - a save left on disk is state the next run did not make.
-	ON_SCOPE_EXIT { UGameplayStatics::DeleteGameInSlot(Slot, 0); };
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_SimTimeScale"));
 	if (!TestTrue(TEXT("saved"), Runtime->SaveToSlot(Slot))) { return false; }
 	Runtime->StepSpeed(+1);
 	AtSpeed(TEXT("another step"));

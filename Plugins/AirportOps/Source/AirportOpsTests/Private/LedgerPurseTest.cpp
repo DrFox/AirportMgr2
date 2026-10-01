@@ -49,25 +49,8 @@ bool FLedgerChargesAndReversesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FLedgerCreditsScrapTest,
-	"AirportOps.Model.LedgerCreditsScrap",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FLedgerCreditsScrapTest::RunTest(const FString& Parameters)
-{
-	UPricing* Pricing = nullptr;
-	ULedger* Ledger = PurseWith(0.0, Pricing);
-	Pricing->RefundFraction = 0.5;
-
-	Ledger->Credit(QuoteOf(30000.0));
-
-	TestEqual(TEXT("demolition gives back the refund fraction of today's price, not all of it - "
-		"tearing out a taxiway is a decision with a cost, not a mistake being corrected"),
-		Ledger->Balance(), 15000.0, 1e-6);
-	TestEqual(TEXT("booked as a refund"), Ledger->Entries()[0].Category, ELedgerCategory::Refund);
-	return true;
-}
+// (AirportOps.Model.LedgerCreditsScrap was merged into LedgerPricesPerLine below, #462 M19: its balance check was the same
+// refund-fraction arithmetic over one line instead of two, and its "booked as a refund" assertion and its reason moved there.)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FLedgerNegativeBalanceLocksPlacementTest,
@@ -172,6 +155,12 @@ bool FLedgerPricesPerLineTest::RunTest(const FString& Parameters)
 	Ledger->Credit(Quote);
 	TestEqual(TEXT("scrap is the refund fraction of the same sum"), Ledger->Balance() - AfterCharge,
 		1400.0 * Pricing->RefundFraction);
+	// FROM LedgerCreditsScrap (#462 M19), whose reasons these are: demolition gives back the refund fraction of today's price, not all
+	// of it - tearing out a taxiway is a decision with a cost, not a mistake being corrected - so the fraction has to be a fraction for
+	// the line above to tell a scrap from a full reversal; and the entry is a Refund, which the finance screen shows apart from a charge.
+	TestTrue(TEXT("the refund fraction is less than the whole - or the balance check cannot tell scrap from a reversal"),
+		Pricing->RefundFraction > 0.0 && Pricing->RefundFraction < 1.0);
+	TestEqual(TEXT("booked as a refund"), Ledger->Entries().Last().Category, ELedgerCategory::Refund);
 	return true;
 }
 

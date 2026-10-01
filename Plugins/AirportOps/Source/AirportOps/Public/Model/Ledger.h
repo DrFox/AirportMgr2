@@ -208,29 +208,27 @@ public:
 	void RollUp(double Now);
 
 	/**
-	 * One day's upkeep for everything standing, as a single entry, plus this ledger's own
-	 * RollUp on the same beat.
+	 * One day's upkeep for everything standing, as DESCRIBED lines - the airport's base upkeep,
+	 * "Facility upkeep", "Fleet upkeep" (facility-upgrades spec §3) - one Upkeep entry per
+	 * positive line, plus this ledger's own RollUp on the same beat.
 	 *
 	 * MOVED FROM UOpsRuntime (issue #191): computing the figure needs BuildCost::DailyUpkeep,
 	 * which lives in Build/ and which Model/ may not include (Check-Architecture rule 1), so
-	 * the runtime still resolves Base itself - this is just where POSTING it belongs, the same
-	 * split UOpsRuntime::AirlineOffersFromCatalog draws for Entities/.
+	 * the runtime still resolves each line's amount itself - this is just where POSTING it
+	 * belongs, the same split UOpsRuntime::AirlineOffersFromCatalog draws for Entities/.
 	 *
-	 * Base <= 0 skips the CHARGE - an airport with nothing standing on it costs nothing to
+	 * A line <= 0 skips its CHARGE - an airport with nothing standing on it costs nothing to
 	 * own, and a zero entry every day would be noise in the one place the player goes to find
 	 * out where the money went - but RollUp always runs. The previous shape (still in
-	 * UOpsRuntime before this move) skipped RollUp too whenever Base was zero, which PR #213's
+	 * UOpsRuntime before this move) skipped RollUp too whenever the base was zero, which PR #213's
 	 * own "Not done" flagged and nobody then decided on: a quiet day has nothing to do with
 	 * whether entries older than MaxDays are due to be folded, and skipping it only meant the
 	 * ledger stayed unbounded for exactly the games with the least happening in them.
-	 */
-	void PostDailyUpkeep(double Base, double Now);
-
-	/**
-	 * The same beat with DESCRIBED lines - the airport's base upkeep, "Facility upkeep", "Fleet upkeep"
-	 * (facility-upgrades spec §3) - one Upkeep entry per positive line, then the RollUp, unconditional for
-	 * the reason above. The Base overload forwards here with one line, so the skip-if-zero rule is written
-	 * once. ENFORCED BY: AirportOps.Model.LedgerUpkeepLines, AirportOps.Model.LedgerPostDailyUpkeep
+	 *
+	 * ONE OVERLOAD, since #462 (M18): a scalar (Base, Now) one forwarded here with a single line, and no
+	 * production code called it - UOpsRuntime::PostDailyUpkeep hands the lines - so it was a second door
+	 * only its own test used.
+	 * ENFORCED BY: AirportOps.Model.LedgerUpkeepLines (the skip-if-zero rule and the unconditional RollUp)
 	 */
 	void PostDailyUpkeep(TConstArrayView<FUpkeepLine> Lines, double Now);
 

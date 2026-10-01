@@ -4434,6 +4434,44 @@ if (-not (Test-Path $runwayRowsCpp)) {
 }
 $ranRules.Add('foldable-panels-gate')
 
+# --- 102. AN OPS TEST'S SAVE SLOT IS A SCOPED ONE (#462) -------------------------------------------------------------------------
+# A SaveToSlot in a test writes a real file under Saved/SaveGames. By 2026-10-01 22 of them had piled up there, written by tests that never deleted
+# them (ArrivalQueuePassTest, AirportTest, OpsRuntimeTest, OpsRuntimeBusTest and others) - state the NEXT run did not make, which is how a "load a
+# missing slot is refused" or a save-then-load test passes or fails on the previous run's file. OpsSaveTest::FScopedSlot (OpsSaveTestHelpers.h) deletes
+# the slot when it is made AND when it goes out of scope, so a killed run leaves nothing for the next to find. In AirportOpsTests\*.cpp, comments stripped:
+# (a) every line that names an "AirportOpsTest_..." slot constructs an FScopedSlot on that same line - the literal is the helper's argument, never a bare
+#     string handed to SaveToSlot/LoadFromSlot/WriteSlot; the one exception is a slot named NoSuch..., which is only ever READ (nothing writes it);
+# (b) the helper still deletes on both ends: OpsSaveTestHelpers.h's FScopedSlot constructor and destructor each call DeleteGameInSlot;
+# (c) the half that stops it checking nothing: at least 10 FScopedSlot constructions exist (25 on 2026-10-01 - a rename of the helper fails (a) first,
+#     an emptied folder fails here).
+# DOES NOT SEE: a slot named without the AirportOpsTest_ prefix or built from a variable at run time (a test that does that is on its own), and the game
+# module's AirportMgrTest_ slots (BarBalanceLoad, LoadRetires) - those are the game tests' to scope.
+$opsSlotHelper = Join-Path $opsTests 'Private\OpsSaveTestHelpers.h'
+if (-not (Test-Path $opsSlotHelper)) {
+    $failures.Add("ops-test-slots-scoped: $opsSlotHelper is named by rule 102 but does not exist - update the rule, do not let it check nothing")
+} else {
+    $helperText = (Get-Content -LiteralPath $opsSlotHelper) -join "`n"
+    if ($helperText -notmatch 'FScopedSlot\s*\([^)]*\)\s*:[^{]*\{\s*UGameplayStatics::DeleteGameInSlot' -or $helperText -notmatch '~FScopedSlot\s*\(\s*\)\s*\{\s*UGameplayStatics::DeleteGameInSlot') {
+        $failures.Add("ops-test-slots-scoped: OpsSaveTest::FScopedSlot no longer calls UGameplayStatics::DeleteGameInSlot from BOTH its constructor and its destructor - a killed run would leave its slot for the next one to find, and a finished one would leave it on disk")
+    }
+}
+$scopedSlots = 0
+foreach ($file in (Get-Sources $opsTests @('.cpp'))) {
+    $inBlock = $false
+    $lines = Get-Content -LiteralPath $file.FullName
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchComments $lines[$i] ([ref]$inBlock)
+        if ($code -match 'FScopedSlot') { $scopedSlots += ([regex]::Matches($code, 'FScopedSlot\s*[\w]*\s*[\(\{]')).Count }
+        if ($code -notmatch '"AirportOpsTest_\w+"') { continue }
+        if ($code -match 'FScopedSlot' -or $code -match 'NoSuch') { continue }
+        $failures.Add("ops-test-slots-scoped: $($file.Name):$($i + 1) names an AirportOpsTest_ slot without OpsSaveTest::FScopedSlot on the same line - a test's save slot is deleted when the test ends, however it ends (#462): $($code.Trim())")
+    }
+}
+if ($scopedSlots -lt 10) {
+    $failures.Add("ops-test-slots-scoped: rule 102 found only $scopedSlots FScopedSlot construction(s) under AirportOpsTests (25 on 2026-10-01) - the helper was renamed or the tests moved; update the rule, do not let it check nothing")
+}
+$ranRules.Add('ops-test-slots-scoped')
+
 # --- 94. THE EDITOR DESCRIBES A FRAME'S PREVIEW IN ONE PLACE, AND ONLY RENDER AND ITS SEAM ASK FOR IT (#462, #463) ------------
 # Render's tail and CachePreviewLabelsForTest were two hand-kept copies of "describe the preview, cache the labels", so a Render that cached nothing
 # left Airside.Editor.DrawHUDShowsRefusalLabels green (it never called Render), and the call-counting test Airside.Editor.RenderCachesLabelsOnce

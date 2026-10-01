@@ -171,15 +171,11 @@ bool FFuelServiceEarnsItsFeeTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("booked as a service fee, so a finance screen can tell it from a landing"),
 		Ledger->Entries()[0].Category, ELedgerCategory::ServiceFee);
 
-	// THE FORFEIT IS AN ENTRY THAT DOES NOT HAPPEN, never a negative one (spec D7). An
-	// Unserviceable demand never reaches PostServiceFee at all, so the shape of the rule is
-	// that nothing is called - and this is what that looks like from the ledger's side.
-	const double AfterOneFuelling = Ledger->Balance();
-	const int32 Rows = Ledger->Entries().Num();
-	TestEqual(TEXT("an aircraft nothing could serve leaves the balance exactly as it was"),
-		Ledger->Balance(), AfterOneFuelling, 1e-9);
-	TestEqual(TEXT("and writes no row: a forfeit is not a fine, and there is nothing in this "
-		"build a flight can be late against"), Ledger->Entries().Num(), Rows);
+	// THE FORFEIT IS NOT HERE (#463): it was two assertions comparing the balance and the row count with values captured one line
+	// earlier, which cannot fail. "An Unserviceable demand never reaches PostServiceFee, so the ledger of an aircraft nothing could
+	// serve is exactly as it opened" is measured where it can go red - AirportOps.Model.UnserviceableStillDeparts runs a real
+	// turnaround with no depot against a real ledger and asserts no ServiceFee row and no balance change (spec D7: a forfeit is an
+	// entry that does not happen, never a negative one).
 	return true;
 }
 

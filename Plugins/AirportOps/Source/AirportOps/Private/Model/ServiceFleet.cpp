@@ -290,7 +290,10 @@ void FServiceFleet::Restored()
 	for (const FServiceVehicle& Vehicle : Board.Vehicles)
 	{
 		// ITS DEPOT HAS BEEN SEEN: the placeholder must not add a second fleet beside a restored one.
-		// ENFORCED BY: AirportOps.Fuel.RestoredFleetIsNotReseeded
+		// A BELT OVER THE SAVED SET, NOT THE GUARD (#462 #11, 2026-10-01): SeededDepots is saved, so a load hands every seen depot back whole
+		// and nothing pins this loop - deleting it turns no test red (checked against Model.Fleet.SoldStarterFleetIsNotReseededAfterLoad and
+		// Present.Fleet.LoadDoesNotReseedADepotThatHasVehicles, which the saved set satisfies alone). It only matters for a snapshot written
+		// before the set was saved (2026-09-29) - a save-compat shim, which the owner's no-saves ruling of 2026-09-23 says nobody needs yet.
 		if (Vehicle.Home.IsSet())
 		{
 			Board.SeededDepots.Add(Vehicle.Home);

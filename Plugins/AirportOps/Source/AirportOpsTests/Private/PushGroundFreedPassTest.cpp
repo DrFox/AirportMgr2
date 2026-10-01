@@ -23,6 +23,7 @@
 #include "Profiles/RoadProfile.h"
 #include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
+#include "OpsSaveTestHelpers.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -363,8 +364,7 @@ bool FPushGroundFreedNetTest::RunTest(const FString&)
 		if (!TestTrue(TEXT("parked"), Rig.ParkAndOpen())) { return false; }
 		if (!TestTrue(TEXT("a hold on the push arm"), Rig.Model->HoldStand(-7, Rig.PushArmNode()))) { return false; }
 		if (!TestTrue(TEXT("refused PushbackBlocked"), Rig.TickUntilRefused(EDepartureRefusal::PushbackBlocked))) { return false; }
-		const FString Slot = TEXT("AirportOpsTest_PushNetCancel");
-		ON_SCOPE_EXIT { UGameplayStatics::DeleteGameInSlot(Slot, 0); };
+		const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_PushNetCancel"));
 		if (!TestTrue(TEXT("saved"), Rig.Runtime->SaveToSlot(Slot))) { return false; }
 		if (!TestTrue(TEXT("loaded"), Rig.Runtime->LoadFromSlot(Slot))) { return false; }
 		TestFalse(TEXT("a load cancels the net"), Rig.Runtime->IsSafetyNetArmedForTest());

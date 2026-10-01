@@ -233,23 +233,9 @@ bool FOfferCountdownSortedTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferAirborneAtTest, "AirportOps.Model.Offers.Countdown.AirborneAtIsRecorded",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-bool FOfferAirborneAtTest::RunTest(const FString& Parameters)
-{
-	// C scores AirborneAt against AirborneBy - recorded now so C needs no migration.
-	FCountdownRig Rig;
-	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
-	Flight->Airframe = CountdownAirframe();
-	Flight->AgentId = 7;
-	Flight->SetPhaseForTest(EFlightPhase::TaxiOut);
-	Rig.Board->AddOffer(*Rig.Clock, Flight);
-	Rig.Clock->Advance(3.0);
-	const double At = Rig.Clock->Now();
-	Rig.Board->OnAgentPhase(*Rig.Net, *Rig.Clock, OpsTestTransition(7, EAgentPhase::Taxiing, EAgentPhase::Departing, EAgentEvent::LinedUp));
-	TestEqual(TEXT("the moment it departs is written down"), Flight->AirborneAt, At, 1e-9);
-	return true;
-}
+// (AirportOps.Model.Offers.Countdown.AirborneAtIsRecorded is gone, #462 #15: it was written "so C needs no migration" - C has landed, and
+// AirborneAt's reader scores it as lateness. AirportOps.Model.FlightBoard.Events.AirborneLateness asserts AirborneAt - AirborneBy() on the
+// published event, so a stamp that was not taken, or was taken at the wrong moment, turns it red.)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferVerdictFuelTest, "AirportOps.Model.Offers.Countdown.VerdictReportsFuel",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

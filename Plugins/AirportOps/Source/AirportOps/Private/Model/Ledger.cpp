@@ -139,12 +139,6 @@ void ULedger::RollUp(double Now)
 		Count, Folded, CachedBalance);
 }
 
-void ULedger::PostDailyUpkeep(double Base, double Now)
-{
-	const FUpkeepLine Line{ Base, NSLOCTEXT("Ledger", "DailyUpkeep", "Upkeep") };
-	PostDailyUpkeep(MakeArrayView(&Line, 1), Now);
-}
-
 void ULedger::PostDailyUpkeep(TConstArrayView<FUpkeepLine> Lines, double Now)
 {
 	for (const FUpkeepLine& Line : Lines)

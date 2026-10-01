@@ -152,7 +152,7 @@ bool FOpsSaveSlotTest::RunTest(const FString& Parameters)
 	FOpsSnapshot Out;
 	Out.Blobs.Add(TEXT("Clock"), FOpsBlob{ TArray<uint8>{ 1, 2, 3 } });
 	Out.Blobs.Add(TEXT("Network"), FOpsBlob{ TArray<uint8>{ 9, 8 } });
-	const FString Slot = TEXT("AirportOpsTest_Slot");
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_Slot"));
 	if (!TestTrue(TEXT("a snapshot writes to a slot"), OpsSave::WriteSlot(Slot, Out))) { return false; }
 
 	FOpsSnapshot In;
@@ -238,36 +238,11 @@ bool FOpsSaveFuelResetOnRestoreTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("OnBeforeRestore cleared it even with no blob for this object"),
 		Fuel->TrucksGoingHomeForTest(), 0);
 
-	// PR #137 REVIEW: THE LEAK CAME BACK a different way once Demands/GoingHome actually got
-	// a real Fuel blob to be written into. Non-Transient, Capture serialised the truck
-	// straight into it, and RestoreBlob's OnBeforeRestore (which clears both) ran BEFORE the
-	// deserialise that then overwrote them right back FROM the blob - so a full Capture/
-	// Restore round trip is the one path that actually proves the fix, not RestoreBlob alone
-	// against a snapshot built by hand. Both fields are UPROPERTY(Transient) now for exactly
-	// this reason.
-	Fuel->AddVehicleForTest(TEXT("FUEL"), FEntityInstanceId(), EServiceVehicleState::ToFacility, 0.0);
-	if (!TestEqual(TEXT("set up again with one truck going home, for the round trip"),
-		Fuel->TrucksGoingHomeForTest(), 1))
-	{
-		return false;
-	}
-	USimClock* Clock = NewObject<USimClock>();
-	URoadNetwork* Net = NewObject<URoadNetwork>();
-	UFlightBoard* Board = NewObject<UFlightBoard>();
-	FOpsSnapshot RoundTrip;
-	OpsSave::Capture(OpsSaveTest::Persistents(*Clock, *Board, *Fuel), *Net, RoundTrip);
-
-	USimClock* RestoredClock = NewObject<USimClock>();
-	URoadNetwork* RestoredNet = NewObject<URoadNetwork>();
-	UFlightBoard* RestoredBoard = NewObject<UFlightBoard>();
-	UJobBoard* RestoredFuel = NewObject<UJobBoard>();
-	if (!TestTrue(TEXT("round-trip restore succeeds"),
-		OpsSave::Restore(RoundTrip, OpsSaveTest::Persistents(*RestoredClock, *RestoredBoard, *RestoredFuel), *RestoredNet)))
-	{
-		return false;
-	}
-	TestEqual(TEXT("a full Capture/Restore round trip does not resurrect the stale truck"),
-		RestoredFuel->TrucksGoingHomeForTest(), 0);
+	// NO FULL ROUND TRIP HERE (#462 M30). PR #137's review found the leak came back a different way once the fuel state was written into a real
+	// blob - OnBeforeRestore cleared it, then the deserialise overwrote it right back FROM the blob - so a full Capture/Restore, not RestoreBlob
+	// alone against a hand-built snapshot, is the path that proves the fix. That round trip is AirportOps.Model.Save.FleetSurvivesALoad's: a
+	// vehicle out on a job at save time comes back Idle, and "going home" is a vehicle state now (ToFacility) that the one reset
+	// (FServiceVehicleLifecycle::ResetForRestore) clears for every state alike, so a truck saved going home is not a case of its own.
 	return true;
 }
 

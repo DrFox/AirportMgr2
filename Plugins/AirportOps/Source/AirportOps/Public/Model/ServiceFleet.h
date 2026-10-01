@@ -157,7 +157,7 @@ private:
 	 * Returns how many vehicles it added. WAS the first half of SyncFleet's own loop, which built its vehicles by hand, and
 	 * ran in every job board Step: it is the "FleetSeed" pass's now (UJobBoard::SeedStarterFleets), woken by the network
 	 * change that announces a placed depot (#443).
-	 * ENFORCED BY: AirportOps.Model.Fleet.SoldStarterFleetIsNotReseededAfterLoad, AirportOps.Fuel.RestoredFleetIsNotReseeded
+	 * ENFORCED BY: AirportOps.Model.Fleet.SoldStarterFleetIsNotReseededAfterLoad, AirportOps.Present.Fleet.LoadDoesNotReseedADepotThatHasVehicles
 	 */
 	int32 SeedStarterFleets(const URoadNetwork& Network, double Now);
 

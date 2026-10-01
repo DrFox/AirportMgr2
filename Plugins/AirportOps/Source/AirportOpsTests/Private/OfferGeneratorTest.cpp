@@ -370,17 +370,8 @@ bool FOfferFloorAtMaxFeeTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferClubQuietTest, "AirportOps.Model.Offers.Generate.ClubQuietAtNight",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-bool FOfferClubQuietTest::RunTest(const FString& Parameters)
-{
-	URoadNetwork* Field = FieldWith(4500.0, Needing(0.0, 3000.0));
-	UOfferGenerator* Generator = SeededGenerator();
-	const TArray<FAirlineOffers> Airlines = { Offering(MakeAirline(0.0, 1.0, true), { Candidate(3000.0) }) };
-	TestEqual(TEXT("nobody flies for fun at night"),
-		RunMinutes(*Generator, *Field, Airlines, *ClockAt(21.0), 180).Num(), 0);
-	return true;
-}
+// (AirportOps.Model.Offers.Generate.ClubQuietAtNight is AirportOps.Model.Offers.Generate.ZeroRateSkipsAdmission's second assertion now,
+// #462 M16: the same airline, the same 21:00 clock and the same 180 minutes.)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferNoBankedBurstTest, "AirportOps.Model.Offers.Generate.NoBankedBurst",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -414,9 +405,15 @@ bool FOfferFullInboxTest::RunTest(const FString& Parameters)
 		RunMinutes(*Generator, *Field, Airlines, *ClockAt(9.0), 10, Generator->MaxPendingOffers).Num(), 0);
 	TestTrue(TEXT("and counts what it turned away, for C to read as unmet demand"), Generator->DroppedOffers > 0);
 
+	// 600 AN HOUR, NOT 60 (#463): at 60 an hour (one a minute) a single minute can never draw two offers - the draw needs the rate to cover two
+	// thresholds, and the thresholds run 0.6-1.4 - so "at most one" held with the cap deleted, or with the check ignoring the offers already
+	// made THIS minute (`PendingNow >= Max` for `PendingNow + Made.Num() >= Max`). At ten a minute the cap is the only thing between the
+	// minute and ten offers, and EXACTLY one fits.
 	UOfferGenerator* Partial = SeededGenerator();
-	TestTrue(TEXT("one slot short of full takes at most one in a minute"),
-		RunMinutes(*Partial, *Field, Airlines, *ClockAt(9.0), 1, Partial->MaxPendingOffers - 1).Num() <= 1);
+	const TArray<FAirlineOffers> Busy = { Offering(MakeAirline(600.0), { Candidate(3000.0) }) };
+	TestEqual(TEXT("one slot short of full takes exactly one in a minute that would have made ten"),
+		RunMinutes(*Partial, *Field, Busy, *ClockAt(9.0), 1, Partial->MaxPendingOffers - 1).Num(), 1);
+	TestTrue(TEXT("and turned the other nine away"), Partial->DroppedOffers > 0);
 	return true;
 }
 
@@ -511,21 +508,10 @@ bool FOfferCallsignTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferNothingFitsTest, "AirportOps.Model.Offers.Generate.AnAirportThatFitsNothingGetsNoOffers",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-bool FOfferNothingFitsTest::RunTest(const FString& Parameters)
-{
-	// An empty inbox is the RIGHT answer for a field nothing can use - the log line (on the
-	// transition, see TickMinute) is what tells it from a generator that is not running.
-	URoadNetwork* Tiny = FieldWith(1800.0, Needing(0.0, 1200.0));
-	UOfferGenerator* Generator = SeededGenerator();
-	FOfferCandidate TooBig;
-	TooBig.Airframe = Needing(200000.0, 6500.0);
-	const TArray<FAirlineOffers> Airlines = { Offering(MakeAirline(60.0), { TooBig }) };
-	TestEqual(TEXT("nothing is offered rather than something unlandable"),
-		RunMinutes(*Generator, *Tiny, Airlines, *ClockAt(9.0), 30).Num(), 0);
-	return true;
-}
+// (AirportOps.Model.Offers.Generate.AnAirportThatFitsNothingGetsNoOffers is gone, #462 #35: the same empty-Admissible branch as
+// Generate.NoBankedBurst's "nothing is offered while the strip is too narrow", reached by an aeroplane too big for a tiny field instead
+// of a narrow strip - and it never asserted the log line its comment said tells an empty inbox from a generator that is not running.
+// That the verdict IS announced when it moves is Offers.AdmissionChangeIsAnnounced's.)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferAdmissionAnnouncedTest, "AirportOps.Model.Offers.AdmissionChangeIsAnnounced",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -663,7 +649,9 @@ bool FOfferZeroRateSkipsTest::RunTest(const FString& Parameters)
 	URoadNetwork* Field = FieldWith(4500.0, Needing(0.0, 3000.0));
 	UOfferGenerator* Generator = SeededGenerator();
 	const TArray<FAirlineOffers> Airlines = { Offering(MakeAirline(0.0, 1.0, true), { Candidate(3000.0) }) };
-	RunMinutes(*Generator, *Field, Airlines, *ClockAt(21.0), 180);
+	// A CLUB: no demand, a daylight floor - and at 21:00 the floor lets go (ClubQuietAtNight's sentence, merged here, #462 M16).
+	TestEqual(TEXT("nobody flies for fun at night"),
+		RunMinutes(*Generator, *Field, Airlines, *ClockAt(21.0), 180).Num(), 0);
 	TestEqual(TEXT("an airline with nothing to offer this minute costs no route search"),
 		Generator->AdmissionChecksForTest(), 0);
 	return true;

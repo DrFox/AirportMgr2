@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Kismet/GameplayStatics.h"
 #include "Model/FlightBoard.h"
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
@@ -25,6 +26,32 @@
  */
 namespace OpsSaveTest
 {
+	/**
+	 * A SAVE SLOT THAT DIES WITH THE TEST, however the test ends (RAII). A SaveToSlot in a test writes a real file under
+	 * Saved/SaveGames, and a test that does not take it back leaves state its NEXT run did not make: 22 slots had piled up
+	 * there by 2026-10-01, written by tests that never deleted them (#462's review), and a stale slot is exactly what lets a
+	 * "load a missing slot is refused" or a "save then load" test pass or fail on the previous run's file.
+	 *
+	 * DELETED AT CONSTRUCTION TOO, not only at the end: a crashed or killed run (the dedicated test editor is a hard-kill
+	 * target) never reaches a destructor, so the first thing the next run must see is no slot at all.
+	 *
+	 * CONVERTS TO FString so it drops in where the bare `const FString Slot` was: SaveToSlot, LoadFromSlot, ReadSlot and
+	 * WriteSlot all take const FString&.
+	 * ENFORCED BY: Check-Architecture rule 102 (ops-test-slots-scoped) - an "AirportOpsTest_..." slot literal that is not
+	 * the argument of an FScopedSlot (or a slot read that nothing wrote) fails the lint.
+	 */
+	struct FScopedSlot
+	{
+		FString Name;
+
+		explicit FScopedSlot(const TCHAR* InName) : Name(InName) { UGameplayStatics::DeleteGameInSlot(Name, 0); }
+		~FScopedSlot() { UGameplayStatics::DeleteGameInSlot(Name, 0); }
+		FScopedSlot(const FScopedSlot&) = delete;
+		FScopedSlot& operator=(const FScopedSlot&) = delete;
+
+		operator const FString&() const { return Name; }
+	};
+
 	inline TArray<IOpsPersistent*> Persistents(USimClock& Clock, UFlightBoard& Board,
 		UJobBoard& Fuel)
 	{

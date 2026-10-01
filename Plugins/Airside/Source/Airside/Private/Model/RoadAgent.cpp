@@ -1516,9 +1516,9 @@ bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMot
 		// which is the line this span begins on, run the other way. Arming at
 		// zero claims the fixed axle sits ON the service point and steps the
 		// whole body forward by a wheelbase to suit. Measured at 494.3 uu on a
-		// 494 uu wheelbase by AirportOps.Ops.TruckNeverTeleportsOnItsRoundTrip,
-		// which is the test that reproduces the REDIRECT the player watched -
-		// a truck parked at a service point being handed its route home.
+		// 494 uu wheelbase by the fuel fixture's teleport watch, which reproduces
+		// the REDIRECT the player watched - a truck parked at a service point being
+		// handed its route home. ENFORCED BY: AirportOps.Fuel.ShortTankGoesViaTheDepot
 		Reverse.Travelled = FMath::Min(Chassis().Wheelbase(), Span.Length);
 
 		// POSED ON THE ARMING FRAME, not on the next one, and this is the same
