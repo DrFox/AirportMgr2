@@ -305,9 +305,10 @@ namespace ArrivalPlanner
 
 	/**
 	 * Is EVERY runway that takes arrivals held - when Plan, refusing on a busy strip, would find
-	 * none free; and the one test UArrivalSequencer asks before clearing a queued flight. False
-	 * with no runway or no occupancy to ask. ONE FUNCTION, so the queue and the dispatch cannot
-	 * disagree about whether a strip is free.
+	 * none free. False with no runway or no occupancy to ask. NOT the arrival queue's gate since
+	 * 2026-10-01: a free strip the flight cannot use passed it and the dispatch refused every frame
+	 * (samples/refused.png); the queue asks RunwayQuery::AreRunwaysHeld over FArrivalPlan::UsableRunways,
+	 * the same loop this runs over every arrival runway.
 	 * ENFORCED BY: Airside.Model.ArrivalQueue.IsRunwayBusyAgreesWithPlan
 	 */
 	AIRSIDE_API bool IsRunwayBusy(const URoadNetwork& Network, const FVector2D& Near,
