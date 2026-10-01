@@ -74,18 +74,22 @@ Rejected:
 The instance unit is a **tuft of 1-3 blades**, not the spike's 5-8 blade clump. Scattered
 single blades are what made the liked version look natural.
 
-Three layers. Each layer is a separate set of points per cell, so a nearer layer only ever
-ADDS tufts; nothing pops out as the camera approaches. The falloff is deliberately steep, to
-match the Nanite-thinned tile the user preferred (section 2):
+**Low density is the look** (user, 2026-10-01: they prefer "the nanite very low density amount
+more than higher density"). Layer 0 carries it and matches the left half of
+`sparseCmp3m.jpg`: scattered single blades with ground showing between them.
+
+The nearer layers are small top-ups so the ground right under the camera is not bare. They are
+not a lush carpet. Each layer is a separate set of points per cell, so a nearer layer only ever
+ADDS tufts; nothing pops out as the camera approaches.
 
 | Layer | Tufts/m² | Shown within | Reads as |
 |---|---|---|---|
-| 0 | ~8 | 40 m | scattered singles - the far field |
-| 1 | ~30 | 5 m | filling in |
-| 2 | ~60 | 2 m | lush, right at the camera |
+| 0 | ~8 | 40 m | scattered singles: the look |
+| 1 | ~6 | 4 m | a little fuller at the feet |
+| 2 | 0 by default | 2 m | spare; kept so a top-up exists if the foreground reads bare |
 
 All densities and distances are starting guesses, tuned live against the Nanite reference
-shot (section 8). Each lives in `ResolveGroundCover()` only.
+shot (section 8), erring sparse. Each lives in `ResolveGroundCover()` only.
 
 Each layer of each cell is one `UInstancedStaticMeshComponent`, with that layer's cull distance
 set as the component's end cull distance. The GPU culls per instance, so the camera moving
@@ -121,8 +125,8 @@ The mask is built from:
 **Tuft centres are tested, not blade tips.** A tuft on the boundary leans up to about 13 cm
 over the shoulder. That overhang is what hides the lip, and it is wanted.
 
-**Grass runways** (`EPavement::Grass`): excluded by default. Their surface already reads as
-grass. See open question 1.
+**Grass runways** (`EPavement::Grass`): excluded, like every other surface. Ruled by the user
+2026-10-01.
 
 **Rebuild trigger.** `ARoadNetworkActor::OnNetworkChanged`, bound the same way as
 `AAirsideBuildingsActor` (`AirsideBuildingsActor.cpp:255-311`), with an exhaustive switch over
@@ -207,10 +211,10 @@ and drive the camera through the presenter's camera input:
 
 - **Estimate at the lowest zoom (the rig's 6 m `MinDistance`):**
   - Layer 0: a 40 m radius is about 5,000 m², at ~8 tufts/m² about 40k instances.
-  - Layers 1 and 2 add about 2.4k and 750.
-  - Frustum culling leaves roughly a third, at ~6 triangles per tuft. That is about 90k
+  - Layer 1 adds about 300; layer 2 adds nothing by default.
+  - Frustum culling leaves roughly a third, at ~6 triangles per tuft. That is about 80k
     triangles: opaque, unshadowed, with a trivial material.
-  - The steep falloff the user chose is about 10x cheaper than the uniform layers it replaced.
+  - The low density the user chose is about 10x cheaper than the uniform layers it replaced.
 - **Budget:** grass adds at most **1.5 ms GPU** at 1080p Epic on the dev machine, at the lowest
   zoom over the M_Test field.
 - **Measured, not asserted:** a temporary `airside.GroundCover 0|1` console variable, with the
@@ -242,11 +246,20 @@ two unverified risks: clump normals, and the colour ring at the cull distance. T
 that step. It confirmed both risks, fixed both, and found a third (Nanite). The old spec gets
 a one-line pointer to this one; its other slices are unchanged.
 
-## 10. Open questions
+## 10. Rulings and follow-ups
 
-1. **Grass runways:** exclude them (the default here), or let tufts grow on them so they read
-   as grass strips at close zoom?
-2. **Quality mapping:** is the Graphics dropdown the right control, or do you want a separate
-   Grass setting in the Settings panel?
-3. **Tall rough grass:** the landscape's `GrassRough` layer (past the fence) could take taller,
-   sparser tufts. Later, or never?
+Ruled by the user on 2026-10-01:
+
+- **Grass runways:** no tufts.
+- **Quality:** the existing Graphics dropdown, as in 4.6. There is no separate setting.
+- **Density:** very low, as in the Nanite reference, rather than the denser versions.
+
+Follow-up, not in this spec:
+
+- **Rough grass on the `GrassRough` landscape layer.** Wanted, but only if it costs nothing
+  measurable, and there is no fence border to put it past yet.
+- **The likely shape:** taller, sparser tufts that REPLACE layer 0 where the rough layer is
+  painted, so the instance count does not rise.
+- **The open technical question:** the scatterer must read the paint-layer weight at runtime
+  without a GPU readback. Landscape weightmaps are GPU textures in a cooked build. Settle that
+  first, with a measurement, before the slice is planned.
