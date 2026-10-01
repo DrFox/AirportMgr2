@@ -1019,7 +1019,7 @@ FDepartureAsk UGroundTraffic::AskDeparture(const FRoadAgent& Agent, const FAirfr
 	// takes up, and inventing a second answer is how the two drift.
 	Ask.Push = PushbackPlanner::Plan(Network, Agent.GoalNode, Ask.Plan,
 		Aircraft, Agent.Class,
-		Rules.FootprintFor(Agent.Class) + Rules.GapFor(Agent.Class));
+		Rules.PushClearBy(Agent.Class));
 	if (!Ask.Push.IsValid())
 	{
 		Ask.Why = EDepartureRefusal::NoPushbackRoute;

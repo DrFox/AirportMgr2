@@ -476,6 +476,19 @@ bool FHeldTaxiOutMidPushRunwayLossTest::RunTest(const FString&)
 		EndsFromPushEnd, Rebuilt->TaxiOutPlan.Length, TaxiOutWas),
 		EndsFromPushEnd > 1000.0 && Rebuilt->TaxiOutPlan.Length <= TaxiOutWas + 1.0);
 
+	// AND A SECOND REBUILD, NOWHERE NEAR IT, STILL MID-PUSH (#502 review). With its taxi out waiting to be planned again,
+	// the push's own re-resolve is the only one this rebuild makes for it, and the agent's goal is not the push's to move:
+	// it is the departure's (DepartAgent). #501's push arm pointed it at the push's end by hand, and a push that wrote the
+	// goal (ReResolvePlan's bOwnsGoal true for it) did the same - a held departure's card then named a node, not its runway.
+	const FGuidelineNodeId GoalBefore = Rebuilt->GoalNode;
+	TestGraph::Node(*Net, -90000.0, -90000.0);
+	Traffic->OnGraphRebuilt(*Net);
+	const FRoadAgent* Again = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("still mid-push after a second, unrelated rebuild"), Again != nullptr
+		&& Again->Phase == EAgentPhase::Manoeuvring && !Again->Pushback.HasArrived())) { return false; }
+	TestTrue(FString::Printf(TEXT("and the push's re-resolve leaves the departure's goal where it was (node %d, was %d)"),
+		Again->GoalNode.Index, GoalBefore.Index), Again->GoalNode == GoalBefore);
+
 	// PHASE 2, THE PUSH RUNS OUT: it holds there for a way to the runway, and never taxis - there is nowhere to taxi to.
 	bool bEverTaxied = false;
 	const int32 AskedBefore = Traffic->TaxiOutReplanAttemptsForTest();

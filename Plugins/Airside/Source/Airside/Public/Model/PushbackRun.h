@@ -49,6 +49,15 @@ struct AIRSIDE_API FPushbackRun
 	/** The steered axle's distance along Plan.Polyline, uu. */
 	UPROPERTY() double Travelled = 0.0;
 
+	/**
+	 * How far along Plan the clearance DepartAgent granted reaches, uu (#502 review): Plan.Length at Start, carried into a
+	 * rejoin's frame by what was left of it, and NEVER grown by a re-route. The rebuild bounds a re-routed push by it plus
+	 * one FTrafficRules::PushClearBy; bounded by the plan each re-route replaced instead, every accepted re-route raised the
+	 * next one's bound, and edits in a row extended a push past anything it was granted.
+	 * ENFORCED BY: Airside.Model.PushbackReRoutesCannotRatchet
+	 */
+	UPROPERTY() double ClearedTo = 0.0;
+
 	/** uu/s right now. Trapezoidal, and down to EXACTLY ZERO at the end - see Advance for why
 	 *  a push may not hand over with speed on it. */
 	UPROPERTY() double Speed = 0.0;
@@ -74,7 +83,8 @@ struct AIRSIDE_API FPushbackRun
 	 * contract FLandingRun::Advance uses, so FRoadAgent::Advance's arm for this phase reads
 	 * exactly like the arm for an arrival.
 	 *
-	 * StopWithin is arbitration's one input, as it is for the follower. bHasThrust gates a
+	 * StopWithin is arbitration's one input, as it is for the follower - and RELATIVE, as the follower reads it: how much
+	 * further it may go from where it is (#502 review; it was read as a distance along the plan). bHasThrust gates a
 	 * powerback only; the agent answers it, because the RPM is the agent's and this struct
 	 * holds no engine.
 	 */

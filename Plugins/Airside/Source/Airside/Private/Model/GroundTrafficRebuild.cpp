@@ -903,8 +903,8 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	};
 
 	// AND UNDER A PUSH (#501 review) - RejoinInPlace's question asked of the pavement under a pushing aeroplane: a live
-	// edge within PushRejoinRadius, running the way it is PUSHED, with a route to the push's own end (the goal the
-	// Manoeuvring arm pointed it at, or the node nearest where that end was). A junction dragged a few metres behind a push
+	// edge within PushRejoinRadius, running the way it is PUSHED, with a route to the push's own end (the push's last step's
+	// node while live, else the node nearest where it ended - #502). A junction dragged a few metres behind a push
 	// fails the step match with the arm intact, and stranding it stopped the aeroplane mid-arm for good - no node within the
 	// held taxi out's 30 m - where on main it had played its old line out over the pavement and departed. FPushbackRun's
 	// Rejoin joins it from where it stands, or refuses a join with no room ahead (and the push strands, below).
@@ -1283,14 +1283,17 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		FRoutePlan Spliced = Plan;
 		const bool bSpliced = SearchGoal.IsSet() && SpliceReplan(Network, Query, Failed, Spliced);
 
-		// AND NO LONGER THAN THE PUSH IT WAS, BY MORE THAN ONE CLEARANCE (#502). DepartAgent granted the push whole for the
-		// ground it would cover - the grant that makes a push no deadlock candidate - and a re-route round a long detour is a
-		// manoeuvre nobody cleared: backing for hundreds of metres. The slack is one FootprintFor + GapFor, the figure
+		// AND NO LONGER THAN THE PUSH WAS CLEARED FOR, BY MORE THAN ONE CLEARANCE (#502). DepartAgent granted the push whole
+		// for the ground it would cover - the grant that makes a push no deadlock candidate - and a re-route round a long
+		// detour is a manoeuvre nobody cleared: backing for hundreds of metres. The slack is PushClearBy, the figure
 		// DepartAgent's push is planned to clear its junction by (a body and its gap): it takes a re-laid arm (25 uu longer on
 		// PushbackReRouteShortWayCompletes) and refuses a detour (43 246 uu longer on PushbackReRouteLongDetourHolds).
 		// Refused, the push is cut back to its last live node below, ends there and holds for a way out.
-		// ENFORCED BY: Airside.Model.PushbackReRouteLongDetourHolds, Airside.Model.PushbackReRouteShortWayCompletes
-		const double PushBound = Plan.Length + Rules.FootprintFor(Agent.Class) + Rules.GapFor(Agent.Class);
+		// AGAINST THE CLEARANCE, NOT THE PLAN BEING REPLACED (#502 review): each accepted re-route raised the next one's bound,
+		// and two edits of 0.6 slack each took a push 1.2 slacks past its grant. FPushbackRun::ClearedTo never grows.
+		// ENFORCED BY: Airside.Model.PushbackReRouteLongDetourHolds, Airside.Model.PushbackReRouteShortWayCompletes,
+		// Airside.Model.PushbackReRoutesCannotRatchet
+		const double PushBound = Agent.Pushback.ClearedTo + Rules.PushClearBy(Agent.Class);
 		if (bSpliced && bPush && Spliced.Length > PushBound)
 		{
 			UE_LOG(LogAirsideTraffic, Log,

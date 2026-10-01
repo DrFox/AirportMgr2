@@ -13,6 +13,7 @@
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Model/TrafficOccupancy.h"
+#include "Model/TrafficRules.h"
 #include "Solve/GuidelineGeom.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -1584,7 +1585,8 @@ namespace
 	 * follower slews the heading at its own rate (0.87 degrees a frame, 26 a second) while it creeps along the line at
 	 * 80 uu/s, the half turn taking about ten seconds, then pulls away. A route that starts the way it faces does not exist
 	 * here (south is the lead-in back to the stand), so the bound is the behaviour pinned: the taxi out starts with the
-	 * heading the push ended with, never turns further than the push's join bound in a frame, and never leaves the line.
+	 * heading the push ended with, never turns more than 2 degrees in a frame (the measured slew, with room; the push join's
+	 * 14.04 would let a snap through), and never leaves the line.
 	 */
 	bool PushbackHeldTaxiOutTurnsAtTheBound(FAutomationTestBase& Test, const TCHAR* Name, double PushTo,
 		TFunctionRef<void(URoadNetwork&, const FPushbackGraph&)> Edit)
@@ -1633,7 +1635,7 @@ namespace
 		Test.TestTrue(FString::Printf(TEXT("%s: the taxi out starts with the heading the push ended with (%.1f deg, faced %.1f)"), Name,
 			FMath::RadiansToDegrees(FirstTaxiHeading), FMath::RadiansToDegrees(Faced)),
 			TaxiFrames > 0 && FMath::Abs(FMath::RadiansToDegrees(FMath::UnwindRadians(FirstTaxiHeading - Faced))) < 1.0);
-		Test.TestTrue(FString::Printf(TEXT("%s: and turns round at the bound, never in a frame: worst %.2f deg"), Name, WorstTurn), WorstTurn <= 14.1);
+		Test.TestTrue(FString::Printf(TEXT("%s: and turns round at the bound, never in a frame: worst %.2f deg"), Name, WorstTurn), WorstTurn <= 2.0);
 		Test.TestTrue(FString::Printf(TEXT("%s: on the line, not round a loop off it (%.1f uu off at most)"), Name, WorstOffLine), WorstOffLine < 1.0);
 		Test.TestTrue(FString::Printf(TEXT("%s: and departs"), Name), bDeparted);
 		return true;
@@ -1741,8 +1743,15 @@ bool FPushbackRejoinedBehindAVanTest::RunTest(const FString& Parameters)
 	double LastHeading = Traffic->FindAgent(Id)->LastMotion.Heading;
 	double WorstJump = 0.0;
 	double WorstTurn = 0.0;
-	double Nearest = TNumericLimits<double>::Max();
+	// BODIES, NOT AXLES (#502 review): each agent's plan centre on its own axis - FClaimPass::CentreOf's offset, in the plane.
+	auto BodyCentre = [](const FRoadAgent& Agent)
+	{
+		return Agent.LastMotion.Position + FVector2D(FMath::Cos(Agent.LastMotion.Heading), FMath::Sin(Agent.LastMotion.Heading))
+			* (Agent.Chassis().BodyCentreX - Agent.Chassis().SteerAxleX);
+	};
+	double NearestBodies = TNumericLimits<double>::Max();
 	FVector2D SecondAgo = Last;
+	double FastestLastSecond = 0.0;
 	for (int32 Tick = 0; Tick < 30 * 240; ++Tick)
 	{
 		Traffic->Advance(1.0 / 30.0, Net);
@@ -1750,21 +1759,29 @@ bool FPushbackRejoinedBehindAVanTest::RunTest(const FString& Parameters)
 		const FRoadAgent* V = Traffic->FindAgent(Van);
 		if (A == nullptr || V == nullptr) { break; }
 		SecondAgo = Tick == 30 * 239 ? A->LastMotion.Position : SecondAgo;
+		FastestLastSecond = Tick >= 30 * 239 ? FMath::Max(FastestLastSecond, FMath::Abs(A->Pushback.Speed)) : 0.0;
 		WorstJump = FMath::Max(WorstJump, FVector2D::Distance(Last, A->LastMotion.Position));
 		WorstTurn = FMath::Max(WorstTurn, FMath::RadiansToDegrees(FMath::Abs(FMath::UnwindRadians(A->LastMotion.Heading - LastHeading))));
-		Nearest = FMath::Min(Nearest, FVector2D::Distance(A->LastMotion.Position, V->LastMotion.Position));
+		NearestBodies = FMath::Min(NearestBodies, FVector2D::Distance(BodyCentre(*A), BodyCentre(*V)));
 		Last = A->LastMotion.Position;
 		LastHeading = A->LastMotion.Heading;
 	}
 	const FRoadAgent* Waiting = Traffic->FindAgent(Id);
 	if (!TestNotNull(TEXT("the aeroplane is still there"), Waiting)) { return false; }
-	// AT REST BY WHERE IT IS, not by Pushback.Speed: held at an arbitration stop the push's ramp reads one frame's PushAccel
-	// (2 uu/s) on alternate frames while the clamp holds it on the line - measured here 2026-10-01, and #502 leaves it.
 	TestTrue(FString::Printf(TEXT("the push waits short of the van on its rejoined line: still pushing, %.0f uu from it, %.2f uu in its last second"),
 		FVector2D::Distance(Waiting->LastMotion.Position, VanAt), FVector2D::Distance(Waiting->LastMotion.Position, SecondAgo)),
 		Waiting->Phase == EAgentPhase::Manoeuvring && !Waiting->Pushback.HasArrived() && Waiting->LastMotion.Position.X < VanAt.X
 		&& FVector2D::Distance(Waiting->LastMotion.Position, SecondAgo) < 1.0);
-	TestTrue(FString::Printf(TEXT("never into the van: nearest %.0f uu"), Nearest), Nearest > 100.0);
+	// AND AT REST BY ITS OWN READING (#502 review): held at an arbitration stop, the push's ramp read one frame's PushAccel
+	// (2 uu/s) on alternate frames while the clamp held it still - ground speed on an aeroplane at rest, its wheels creeping.
+	TestEqual(FString::Printf(TEXT("its push reads no speed standing at the stop (fastest in its last second: %.3f uu/s)"), FastestLastSecond),
+		FastestLastSecond, 0.0);
+	const FTrafficRules Rules;
+	const double Clear = Rules.FootprintFor(ETraversalClass::Aircraft) * 0.5 + Rules.FootprintFor(ETraversalClass::GroundVehicle) * 0.5;
+	AddInfo(FString::Printf(TEXT("measured: held %.0f uu (nose gear) from the van, body centres %.0f uu apart at nearest, half footprints %.0f"),
+		FVector2D::Distance(Waiting->LastMotion.Position, VanAt), NearestBodies, Clear));
+	TestTrue(FString::Printf(TEXT("never into the van, body to body: nearest centres %.0f uu apart, the two half footprints %.0f"),
+		NearestBodies, Clear), NearestBodies > Clear);
 	TestTrue(FString::Printf(TEXT("nor by a jump or a swing: worst move %.0f uu, worst turn %.2f deg"), WorstJump, WorstTurn),
 		WorstJump < 200.0 && WorstTurn <= 14.1);
 
@@ -1781,6 +1798,87 @@ bool FPushbackRejoinedBehindAVanTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("then completes its push at E (%.0f uu from it)"), FVector2D::Distance(PushEndedAt, EndAt)),
 		FVector2D::Distance(PushEndedAt, EndAt) < 10.0);
 	TestTrue(TEXT("and departs"), RunUntil(*Traffic, *Net, 300.0, [&]()
+		{
+			const FRoadAgent* A = Traffic->FindAgent(Id);
+			return A != nullptr && A->Phase == EAgentPhase::Departing;
+		}, 1.0 / 30.0));
+	return true;
+}
+
+/**
+ * TWO RE-ROUTES IN A ROW CANNOT TAKE A PUSH PAST ITS CLEARANCE (#502 review). The re-route bound was the plan it replaced plus
+ * one PushClearBy, so every accepted re-route raised the next one's: two edits each adding 0.6 of the slack were both taken,
+ * and the push ran 1.2 slacks past the length DepartAgent granted. The bound is the clearance itself (FPushbackRun::ClearedTo)
+ * plus one slack: the first edit is taken, the second refused - the push is cut back to J, ends there, holds and departs.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPushbackReRoutesCannotRatchetTest,
+	"Airside.Model.PushbackReRoutesCannotRatchet",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPushbackReRoutesCannotRatchetTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FPushbackGraph G = PushbackBuildGraph(*Net);
+	const int32 Id = PushbackParkFacing(*Traffic, *Net, G.B, G.A);
+	if (!TestTrue(TEXT("parked"), Id > 0)) { return false; }
+	if (!TestEqual(TEXT("departs by pushing back"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::None)) { return false; }
+	for (int32 Tick = 0; Tick < 30; ++Tick) { Traffic->Advance(1.0 / 30.0, Net); }
+	const double Granted = Traffic->FindAgent(Id)->Pushback.Plan.Length;
+	if (!TestTrue(FString::Printf(TEXT("mid-push on the lead-in, granted %.0f uu"), Granted), Traffic->FindAgent(Id)->Phase == EAgentPhase::Manoeuvring
+		&& Traffic->FindAgent(Id)->Pushback.Travelled < 10000.0)) { return false; }
+
+	// THE ARM RE-LAID THROUGH A NODE OFF ITS LINE, each time far enough off to add Extra to the 200 m arm J -> E.
+	const FTrafficRules Rules;
+	const double Slack = Rules.PushClearBy(ETraversalClass::Aircraft);
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	auto ReLayArm = [&](FGuidelineNodeId Was, double Extra)
+	{
+		if (Was.IsSet())
+		{
+			Net->RemoveGuidelineNode(Was);
+		}
+		else
+		{
+			Net->RemoveGuidelineEdge(PushbackEdgeBetween(*Net, G.J, G.E));
+		}
+		const double Off = FMath::Sqrt(FMath::Square(10000.0 + Extra * 0.5) - FMath::Square(10000.0));
+		const FGuidelineNodeId Via = TestGraph::Node(*Net, 10000.0, -10000.0 - Off);
+		TestGraph::Join(*Net, G.J, Via, Options);
+		TestGraph::Join(*Net, Via, G.E, Options);
+		Traffic->OnGraphRebuilt(*Net);
+		return Via;
+	};
+	const FVector2D Junction = Net->GetGuidelineNode(G.J)->Position;
+	const FVector2D End = Net->GetGuidelineNode(G.E)->Position;
+
+	// FIRST EDIT: 0.6 of a slack longer - taken, the push still ends at E.
+	const FGuidelineNodeId Via = ReLayArm(FGuidelineNodeId(), 0.6 * Slack);
+	const FRoutePlan& Once = Traffic->FindAgent(Id)->Pushback.Plan;
+	TestTrue(FString::Printf(TEXT("a re-route within one slack (%.0f uu) is taken: %.0f uu, ending at E"), Slack, Once.Length),
+		Once.IsValid() && FVector2D::Distance(Once.Polyline.Last(), End) < 1.0 && Once.Length > Granted + 0.5 * Slack);
+
+	// SECOND EDIT: 1.2 slacks longer than granted - within one slack of the FIRST re-route, past one of the clearance.
+	ReLayArm(Via, 1.2 * Slack);
+	const FRoutePlan& Twice = Traffic->FindAgent(Id)->Pushback.Plan;
+	const FVector2D Ends = Twice.Polyline.Num() > 0 ? Twice.Polyline.Last() : FVector2D::ZeroVector;
+	TestTrue(FString::Printf(TEXT("a second, 1.2 slacks past the grant, is refused: the push is cut back to J (ends %.0f uu from it, %.0f uu long, granted %.0f)"),
+		FVector2D::Distance(Ends, Junction), Twice.Length, Granted),
+		Twice.IsValid() && FVector2D::Distance(Ends, Junction) < 1.0 && Twice.Length <= Granted + Slack);
+
+	FVector2D PushEndedAt = Traffic->FindAgent(Id)->LastMotion.Position;
+	RunUntil(*Traffic, *Net, 600.0, [&]()
+		{
+			const FRoadAgent* A = Traffic->FindAgent(Id);
+			if (A == nullptr || A->Phase != EAgentPhase::Manoeuvring || A->IsHoldingForTaxiOut()) { return true; }
+			PushEndedAt = A->LastMotion.Position;
+			return false;
+		}, 1.0 / 30.0);
+	TestTrue(FString::Printf(TEXT("it ends its push at J (%.0f uu from it)"), FVector2D::Distance(PushEndedAt, Junction)),
+		FVector2D::Distance(PushEndedAt, Junction) < 10.0);
+	TestTrue(TEXT("and departs"), RunUntil(*Traffic, *Net, 600.0, [&]()
 		{
 			const FRoadAgent* A = Traffic->FindAgent(Id);
 			return A != nullptr && A->Phase == EAgentPhase::Departing;

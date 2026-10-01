@@ -710,7 +710,7 @@ public:
 	 * taxi out is waiting to be planned again (EAgentWait::ForTaxiOutRoute), when there is none to draw. THE PUSH
 	 * IS TRIMMED, unlike the follower's route: only what is left of it, from where the aeroplane is - and nothing for
 	 * a push that is over, stranded or cut short, which drew its whole dead line across deleted ground (#502;
-	 * FPushbackRun::RemainingLine). While a
+	 * FPushbackRun::AppendRemainingRun). While a
 	 * TOW is backing, the run it is backing along is the path its solved trailer axle actually takes
 	 * (FTowReverseRun's samples), not the raw leg: what is drawn is what is driven. Empty for no such agent or
 	 * one on no route.
