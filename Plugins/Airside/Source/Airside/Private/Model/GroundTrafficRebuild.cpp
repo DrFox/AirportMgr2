@@ -488,15 +488,19 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		// push ends, and it was never re-resolved - so an aeroplane pushed back while the
 		// player redrew its way out taxied along lines that no longer existed
 		// (Airside.Model.PushbackRebuildReResolvesTaxiOut). FROM 0, as TaxiInPlan is: not a
-		// metre of it has been driven. AFTER the push, because re-resolving the push points
-		// the goal at the push's end, and the taxi out's own re-resolve points it back at the
-		// runway entry, which is the goal DepartAgent gave it.
+		// metre of it has been driven. AFTER the push, whose re-resolve points the goal at the push's
+		// end - so it is pointed back at the taxi out's own end first, the entry DepartAgent gave it
+		// (#498): ReResolvePlan replans a plan whose end is gone to the AGENT's goal, and from the
+		// push's end that made a deleted entry a drive out and back to it, disarmed. To the dead entry
+		// the search fails, the taxi out truncates, and the push ends in the hold below.
+		// ENFORCED BY: Airside.Model.Traffic.HeldTaxiOut.MidPushRunwayLossHolds
 		//
 		// NOT IN THE SUMMARY'S COUNTS, which are one per AGENT (Considered, above): counting a
 		// second route per pushing aeroplane made "re-resolved" go negative (2026-09-27). Said
 		// on its own line instead, when it did not survive.
 		if (Agent.Phase == EAgentPhase::Manoeuvring && Agent.TaxiOutPlan.IsValid() && !Agent.IsWaitingFor(EAgentWait::ForTaxiOutRoute))
 		{
+			Agent.SetGoalFrom(Agent.TaxiOutPlan);
 			const FPlanReResolver::EReResolve TaxiOut =
 				PlanReResolver.ReResolvePlan(Agent, Agent.TaxiOutPlan, 0, Context, NodeIndex);
 			if (TaxiOut == FPlanReResolver::EReResolve::Stranded || TaxiOut == FPlanReResolver::EReResolve::Truncated)
