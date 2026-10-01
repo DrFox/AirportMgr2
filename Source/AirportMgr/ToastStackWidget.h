@@ -165,7 +165,9 @@ private:
 	 *  BuildOnce (see CachedIcon*) rather than LoadSynchronous()'d off the style every call. */
 	UTexture2D* IconFor(ENotificationSeverity Severity) const;
 
-	UFUNCTION() void OnArrivalRefused(EArrivalRefusal Why);
+	/** A refusal, said in Sentence when it has one - the plan's or the gate's - else in the reason's own words. ONE
+	 *  HANDLER for a dispatch refused (UOpsEvents::OnArrivalRefused) and key 7 refused (OnLandRefused forwards here). */
+	UFUNCTION() void OnArrivalRefused(EArrivalRefusal Why, const FString& Sentence);
 
 	/**
 	 * A save or a load, WORDED HERE (#445 item 7) - it used to arrive as the runtime's own sentence on OnNotification, so a

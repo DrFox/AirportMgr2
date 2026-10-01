@@ -154,7 +154,7 @@ bool FOpsRuntimeBusReattachTest::RunTest(const FString&)
 	const TArray<FBridgeProbe> Probes = {
 		{ TEXT("AgentPhase"), [&]() { Traffic->OnAgentPhaseChanged.Broadcast(OpsTestTransition(7, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked)); },
 			[&]() { return Bus.DispatchedCountOfForTest<FAgentPhaseEvent>(); } },
-		{ TEXT("ArrivalRefused"), [&]() { Model->OnArrivalRefused.Broadcast(EArrivalRefusal::NoRunway); },
+		{ TEXT("ArrivalRefused"), [&]() { Model->OnArrivalRefused.Broadcast(EArrivalRefusal::NoRunway, FString()); },
 			[&]() { return Bus.DispatchedCountOfForTest<FArrivalRefusedEvent>(); } },
 		{ TEXT("RunwayFreed"), [&]() { Model->OnRunwayFreed.Broadcast(FRoadSegmentId()); },
 			[&]() { return Bus.DispatchedCountOfForTest<FRunwayFreedEvent>(); } },

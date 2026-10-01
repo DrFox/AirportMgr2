@@ -10,6 +10,7 @@
 #include "Model/LandingRun.h"
 #include "Model/OpsEventBus.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RouteSearch.h"
 #include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
 #include "Model/TrafficOccupancy.h"
@@ -18,6 +19,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
+#include "OpsEventsTestListener.h"
 #include "OpsTransitionTestHelpers.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -431,6 +433,93 @@ bool FArrivalQueueEditKeepsHoldTest::RunTest(const FString&)
 
 	TestEqual(TEXT("after the edit the stand is still held, by the same flight"), Rig.Model->HolderOfNode(Pose), First->HolderId());
 	TestNull(TEXT("so a second offer is refused, not handed the promised stand"), Rig.Accept(Field.Threshold, 3600.0));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalQueueEditRefusedReholdTest, "AirportOps.Present.RuntimeEdit.RefusedReholdAgreesWithTheTable",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalQueueEditRefusedReholdTest::RunTest(const FString&)
+{
+	// #442 ITEM 3's PIN. An edit's rebuild re-makes every stand hold inside Airside, after the agents' goals; one it CANNOT
+	// re-make - another holder has the stand - was only warned, and UFlight::Stand went on naming a stand the flight no
+	// longer held: no HeldStandLost (the stand lives), no re-hold (the flight "has" one), and the next accept was free to
+	// take the last stand it was owed. FORCED HERE in the state the rebuild's own comment names: an agent's goal and a
+	// flight's hold on one stand going into the rebuild. An aircraft is sent to the stand the accepted flight holds (its
+	// goal claim outranks the hold and takes it at dispatch), and the hold is put back over it by hand - so the rebuild
+	// snapshots the flight's hold, re-claims the agent's goal first, and refuses the flight. NO RUNTIME TICK between: the
+	// reconcile would settle the dispatch's own preemption first, which is a different door. PAUSED, as the player edits,
+	// and the flight only ACCEPTED: neither may wait for the queue.
+	FRig Rig;
+	FTestAirport Field;
+	FTestAirportOptions Options;
+	Options.StandCount = 2;
+	if (!TestTrue(TEXT("an attached runtime"), Rig.Attach([&](URoadNetwork& Net) { Field = FTestAirport::Build(Rig.Airframe, Options, &Net); }))) { return false; }
+	UFlight* Flight = Rig.Accept(Field.Threshold, 3600.0);
+	if (!TestNotNull(TEXT("a flight accepted"), Flight)) { return false; }
+	const FEntityInstanceId Promised = Flight->Stand;
+	if (!TestTrue(TEXT("onto one of the two stands"), Promised == Field.Stands[0] || Promised == Field.Stands[1])) { return false; }
+	const FEntityInstanceId Other = Promised == Field.Stands[0] ? Field.Stands[1] : Field.Stands[0];
+
+	const FGuidelineNodeId Exit = RouteSearch::FindNearestNode(*Rig.Net, Field.ExitAt, ETraversalClass::Aircraft, 200.0);
+	const FRoutePlan ToPromised = TestGraph::Probe(*Rig.Net, Exit, Field.Pose(Promised), ETraversalClass::Aircraft);
+	if (!TestTrue(TEXT("a route to the promised stand"), ToPromised.IsValid())) { return false; }
+	Rig.Runtime->TogglePause();
+	Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
+	if (!TestTrue(TEXT("PRECONDITION: paused"), Rig.Runtime->GetClock()->IsPaused())) { return false; }
+	if (!TestTrue(TEXT("an aircraft sent to it"), Rig.Model->DispatchAgent(Rig.Net, ToPromised, Rig.Airframe, ETraversalClass::Aircraft, 1.0) > 0)) { return false; }
+	Rig.Model->OccupancyForTest().Assert(FTrafficClaim::Make(Flight->HolderId(), FTrafficResource::OfNode(Field.Pose(Promised)), /*bOccupied*/ false, 99));
+	if (!TestEqual(TEXT("PRECONDITION: going into the edit, the table holds the stand for the flight"),
+		Rig.Model->HolderOfNode(Field.Pose(Promised)), Flight->HolderId())) { return false; }
+
+	// A TOPOLOGY EDIT THROUGH THE ACTOR - a road well away from the field, as KeepsAcceptedStandHold draws - and the rebuild it runs.
+	AddExpectedMessagePlain(TEXT("could not be re-made after the rebuild"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 0);
+	ARoadNetworkActor* Actor = Rig.World.Actor;
+	const int32 A = Actor->PlaceNode(FVector2D(-60000.0, 60000.0));
+	const int32 B = Actor->PlaceNode(FVector2D(-30000.0, 60000.0));
+	TestTrue(TEXT("a road drawn"), Actor->ConnectNodes(A, B));
+	Actor->RebuildMesh();
+	if (!TestNotEqual(TEXT("PRECONDITION: the rebuild refused the flight its stand - the agent's goal has it"),
+		Rig.Model->HolderOfNode(Field.Pose(Promised)), Flight->HolderId())) { return false; }
+
+	// THE EDIT'S ANNOUNCEMENT, DRAINED: the queue pass runs, paused or not.
+	Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
+	TestTrue(TEXT("the flight no longer names the stand it lost"), Flight->Stand != Promised);
+	TestEqual(TEXT("it is re-held at once, on the free stand"), Flight->Stand, Other);
+	TestEqual(TEXT("which the table holds for it - the copy agrees with the record"), Rig.Model->HolderOfNode(Field.Pose(Other)), Flight->HolderId());
+	TestFalse(TEXT("so the board's own test finds nothing lost"), UStandAllocator::HoldIsLost(*Flight, *Rig.Model, *Rig.Net));
+	int32 HeldByFlight = 0;
+	for (const FTrafficClaim& Claim : Rig.Model->GetOccupancy().GetClaims())
+	{
+		HeldByFlight += Claim.AgentId == Flight->HolderId() ? 1 : 0;
+	}
+	TestEqual(TEXT("and it holds that one stand and no other"), HeldByFlight, 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalQueueDispatchRefusalSentenceTest, "AirportOps.Present.Bus.DispatchRefusalCarriesThePlanSentence",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalQueueDispatchRefusalSentenceTest::RunTest(const FString&)
+{
+	// #471: AIRSIDE'S DISPATCH REFUSAL REACHES THE UI WITH THE PLAN'S SENTENCE, not the reason alone - through all three
+	// layers (UGroundTraffic, UAirsideTraffic's relay, the runtime's bridge onto the bus) to UOpsEvents. A wingspan the
+	// strip does not admit is NotAdmitted, whose reason-only wording ("not admitted to that runway") cannot carry the figures.
+	FRig Rig;
+	FTestAirport Field;
+	if (!TestTrue(TEXT("an attached runtime"), Rig.Attach([&](URoadNetwork& Net) { Field = FTestAirport::Build(Rig.Airframe, FTestAirportOptions(), &Net); }))) { return false; }
+	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
+	Rig.Runtime->GetEvents()->OnArrivalRefused.AddDynamic(Listener, &UOpsEventsTestListener::OnRefused);
+	FAirframe Wide = Rig.Airframe;
+	Wide.Wingspan = 9000.0;
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Rig.Net, Field.Threshold, Wide, &Rig.Model->GetOccupancy());
+	if (!TestEqual(TEXT("PRECONDITION: the plan refuses it as not admitted"), Plan.Why, EArrivalRefusal::NotAdmitted)) { return false; }
+
+	// NO EXPECTED-MESSAGE FILTER for Airside's Warning (a Warning fails nothing): any pattern that matches the plan's sentence
+	// also matches this test's own assertion text, which quotes it - and suppressed that failure when the relay was cut.
+	TestEqual(TEXT("Airside refuses the dispatch"), Rig.Model->DispatchArrival(*Rig.Net, Field.Threshold, Wide, 1.0), 0);
+	Rig.Runtime->Tick(ArrivalQueuePassTest::Frame);
+	TestEqual(TEXT("the refusal reaches the UI's face of the bus"), Listener->CountOf(TEXT("refused:")), 1);
+	TestEqual(TEXT("with the plan's own sentence"), Listener->LastRefusedSentence, ArrivalPlanner::DescribeRefusal(Plan));
+	TestNotEqual(TEXT("which is not the reason-only wording"), Listener->LastRefusedSentence, ArrivalPlanner::DescribeRefusal(Plan.Why, Wide.Wingspan));
 	return true;
 }
 

@@ -154,9 +154,23 @@ namespace RunwayAdmission
 		return Longest;
 	}
 
+	double HaveMetres(double Uu)
+	{
+		return FMath::FloorToDouble(Uu / 100.0);
+	}
+
+	double NeedMetres(double Uu)
+	{
+		return FMath::CeilToDouble(Uu / 100.0);
+	}
+
 	FString Describe(const FRunwayAdmission& Admission)
 	{
-		// SAID AS THE DEPARTURE when it is one: "the runway is 40366 uu" alone would read as a
+		// IN METRES (#471), 100 uu to the metre: since #470 the Land panel's rows and every toast show this sentence, and
+		// "the runway is 60000 uu" is a sentence for the log, not for a player choosing an aeroplane - the rule the old
+		// panel kept for itself (LandChoiceRefusal), deleted with it. HERE, so every reader says metres at once rather than
+		// each converting a figure it was handed in uu.
+		// SAID AS THE DEPARTURE when it is one: "the runway is 404 m" alone would read as a
 		// landing refusal, and the landing fitted.
 		if (Admission.bForDeparture && !Admission.IsAdmitted())
 		{
@@ -176,12 +190,14 @@ namespace RunwayAdmission
 				RunwayApproachName(Admission.Required.ApproachNeeded));
 
 		case ERunwayRefusal::TooShort:
-			return FString::Printf(TEXT("the runway is %.0f uu; this aircraft's field length is %.0f"),
-				Admission.RunwayLength, Admission.FieldLength);
+			// HAVE DOWN, NEED UP - see HaveMetres: a refusal must never print as a tie.
+			return FString::Printf(TEXT("the runway is %.0f m; this aircraft's field length is %.0f m"),
+				HaveMetres(Admission.RunwayLength), NeedMetres(Admission.FieldLength));
 
 		case ERunwayRefusal::TooNarrow:
-			return FString::Printf(TEXT("the runway admits a %.0f uu wingspan; this aircraft's is %.0f"),
-				Admission.MaxWingspan, Admission.Wingspan);
+			// The same rule at a tenth of a metre: the strip's limit down, the aircraft's span up.
+			return FString::Printf(TEXT("the runway admits a %.1f m wingspan; this aircraft's is %.1f m"),
+				HaveMetres(Admission.MaxWingspan * 10.0) / 10.0, NeedMetres(Admission.Wingspan * 10.0) / 10.0);
 
 		case ERunwayRefusal::NoDepartureRunway:
 			return TEXT("every runway is set to arrivals only - set one to departures or mixed");

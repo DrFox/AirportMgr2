@@ -87,10 +87,13 @@ struct AIRPORTOPS_API FAgentPhaseEvent : FAgentTransition
 	FString Describe() const;
 };
 
-/** Airside refused an arrival. */
+/** Airside refused an arrival - a dispatch the planner turned down. */
 struct AIRPORTOPS_API FArrivalRefusedEvent
 {
 	EArrivalRefusal Why = EArrivalRefusal::None;
+	/** The plan's own sentence (UGroundTraffic::OnArrivalRefused carries it), which the toast shows - FLandRefusedEvent's
+	 *  reason for carrying one too (#471). */
+	FString Sentence;
 	static const TCHAR* EventName() { return TEXT("ArrivalRefused"); }
 	FString Describe() const;
 };

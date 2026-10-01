@@ -611,7 +611,7 @@ bool FTrafficArrivalRefusedRunwayOccupiedTest::RunTest(const FString& Parameters
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	TArray<EArrivalRefusal> Refusals;
-	Traffic->OnArrivalRefused.AddLambda([&Refusals](EArrivalRefusal Why) { Refusals.Add(Why); });
+	Traffic->OnArrivalRefused.AddLambda([&Refusals](EArrivalRefusal Why, const FString&) { Refusals.Add(Why); });
 	{
 		FTrafficClaim Hold; Hold.AgentId = 99; Hold.Resource = FTrafficResource::OfSurface(RunwaySeg); Hold.bOccupied = true;
 		FTrafficClaim Blocker;
@@ -635,7 +635,7 @@ bool FTrafficArrivalRefusedRunwayOccupiedTest::RunTest(const FString& Parameters
 		const FVector2D Threshold = Fixture.Threshold;
 		UGroundTraffic* Two = NewObject<UGroundTraffic>(GetTransientPackage());
 		TArray<EArrivalRefusal> Refused;
-		Two->OnArrivalRefused.AddLambda([&Refused](EArrivalRefusal Why) { Refused.Add(Why); });
+		Two->OnArrivalRefused.AddLambda([&Refused](EArrivalRefusal Why, const FString&) { Refused.Add(Why); });
 
 		const FVector2D Approach = Threshold - FVector2D(1000.0, 0.0);
 		const int32 First = Two->DispatchArrival(*Airport, Approach, Piper, 1.0);

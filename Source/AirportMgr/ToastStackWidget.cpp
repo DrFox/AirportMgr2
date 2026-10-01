@@ -138,18 +138,9 @@ void UToastStackWidget::OnBuildRefused(const FString& What, const FString& Price
 
 void UToastStackWidget::OnLandRefused(EArrivalRefusal Why, const FString& Sentence)
 {
-	// THE REFUSAL'S OWN SENTENCE when it has one (#456 review) - the plan's, with its figures and admission, or the
-	// airport's gate. The reason-only wording below reads "not admitted to that runway" for an arrivals-only field.
-	if (!Sentence.IsEmpty())
-	{
-		if (Notifications != nullptr)
-		{
-			Notifications->PostFeed(FText::FromString(Sentence), ENotificationSeverity::Warning);
-		}
-		return;
-	}
-	// THE SAME SENTENCE as a dispatch refusal (OnArrivalRefused) - one account of why an aeroplane cannot land.
-	OnArrivalRefused(Why);
+	// THE SAME HANDLER as a dispatch refusal (OnArrivalRefused) - one account of why an aeroplane cannot land, which since
+	// #471 carries the sentence on both doors.
+	OnArrivalRefused(Why, Sentence);
 }
 
 // EVERY CASE BY NAME, NO default, in both functions below: an outcome or a purchase kind added to its enum is a BUILD ERROR
@@ -227,17 +218,20 @@ void UToastStackWidget::OnPurchase(const FOpsPurchase& Purchase)
 }
 AIRSIDE_EXHAUSTIVE_SWITCH_END
 
-void UToastStackWidget::OnArrivalRefused(EArrivalRefusal Why)
+void UToastStackWidget::OnArrivalRefused(EArrivalRefusal Why, const FString& Sentence)
 {
-	// The wording is Airside's, from the reason-only overload of DescribeRefusal: the toast
-	// and the log line the model already writes say the SAME sentence rather than two
+	// THE REFUSAL'S OWN SENTENCE when it has one (#456 review; a dispatch refusal's too since #471) - the plan's, with its
+	// figures and admission, or the airport's gate. The reason-only wording reads "not admitted to that runway" for an
+	// arrivals-only field, whose real reason is that nothing can take the departure.
+	// The wording is Airside's either way - the plan's sentence, or the reason-only overload of DescribeRefusal for a
+	// caller that had none: the toast and the log line the model already writes say the SAME sentence rather than two
 	// opinions about the same refusal.
-	const FString Sentence = ArrivalPlanner::DescribeRefusal(Why);
-	if (Notifications != nullptr && !Sentence.IsEmpty())
+	const FString Said = !Sentence.IsEmpty() ? Sentence : ArrivalPlanner::DescribeRefusal(Why);
+	if (Notifications != nullptr && !Said.IsEmpty())
 	{
 		// WARNING, not Info: a refusal is the game declining to do what the player asked, and
 		// it usually names something they must build. Save and load confirmations stay Info.
-		Notifications->PostFeed(FText::FromString(Sentence), ENotificationSeverity::Warning);
+		Notifications->PostFeed(FText::FromString(Said), ENotificationSeverity::Warning);
 	}
 }
 

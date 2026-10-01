@@ -38,30 +38,19 @@ namespace
 		Flight->Airframe.Wingspan = Wingspan;
 		return Flight;
 	}
+
+	/** The Index-th entity NetworkWithStands placed. */
+	FEntityInstanceId StandAt(const URoadNetwork& Network, int32 Index)
+	{
+		return Network.EntityIdAt(Index);
+	}
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FStandAllocatorSmallestFitTest,
-	"AirportOps.Model.StandAllocator.TakesTheSmallestThatFits",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FStandAllocatorSmallestFitTest::RunTest(const FString& Parameters)
-{
-	// The 3600 stand is placed SECOND, so first-fit-by-order would take the 6000 one. The
-	// rule is smallest that admits, because the big stand is the scarce thing.
-	URoadNetwork* Network = NetworkWithStands({6000.0, 3600.0, 5200.0});
-	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
-	UStandAllocator* Allocator = NewObject<UStandAllocator>();
-	UFlight* Flight = FlightNeeding(3400.0, 1);
-
-	TestTrue(TEXT("a fitting stand is reserved"), Allocator->Reserve(*Traffic, *Network, *Flight));
-
-	const FEntityInstance* Chosen = Network->GetEntity(Flight->Stand);
-	TestNotNull(TEXT("the reservation names a live stand"), Chosen);
-	TestEqual(TEXT("the SMALLEST stand that admits it, not the first"),
-		Chosen != nullptr ? Chosen->DesignWingspan : 0.0, 3600.0);
-	return true;
-}
+// NO "TakesTheSmallestThatFits" ANY MORE (#471): it pinned UStandAllocator::Reserve's own smallest-fit walk, which went
+// with its last caller - every re-hold is a plan's stand now (UFlightBoard::Rehold). Smallest-fit is ArrivalPlanner::
+// ChooseStand's rule, pinned there (Airside.Model.StandChoice.SmallestLetterBeatsNearer, .FallsThroughToBigger). The
+// tests below were Reserve's too, and pin what Hold asks of the ONE stand it is handed - the checks Reserve asked of
+// every stand it walked, which Hold kept.
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandAllocatorTooWideTest,
@@ -75,8 +64,8 @@ bool FStandAllocatorTooWideTest::RunTest(const FString& Parameters)
 	UStandAllocator* Allocator = NewObject<UStandAllocator>();
 	UFlight* Wide = FlightNeeding(6500.0, 1);
 
-	TestFalse(TEXT("a wingspan no stand admits is refused"),
-		Allocator->Reserve(*Traffic, *Network, *Wide));
+	TestFalse(TEXT("a stand that does not admit the wingspan is refused"),
+		Allocator->Hold(*Traffic, *Network, *Wide, StandAt(*Network, 0)));
 	TestFalse(TEXT("and nothing was written to the flight"), Wide->Stand.IsSet());
 	return true;
 }
@@ -104,7 +93,7 @@ bool FStandAllocatorAgreesWithChooseStandOnLegacySpansTest::RunTest(const FStrin
 	UFlight* Flight = FlightNeeding(B738->Airframe().Wingspan, 1); // 3580, also Code C
 
 	TestTrue(TEXT("a legacy-span stand still admits by letter, agreeing with ChooseStand - not by raw span"),
-		Allocator->Reserve(*Traffic, *Network, *Flight));
+		Allocator->Hold(*Traffic, *Network, *Flight, StandAt(*Network, 0)));
 	return true;
 }
 
@@ -121,14 +110,15 @@ bool FStandAllocatorNeverDoubleBooksTest::RunTest(const FString& Parameters)
 	UFlight* First = FlightNeeding(3400.0, 1);
 	UFlight* Second = FlightNeeding(3400.0, 2);
 
+	const FEntityInstanceId Only = StandAt(*Network, 0);
 	TestTrue(TEXT("the first flight gets the only stand"),
-		Allocator->Reserve(*Traffic, *Network, *First));
+		Allocator->Hold(*Traffic, *Network, *First, Only));
 	TestFalse(TEXT("the second is refused rather than given the same stand"),
-		Allocator->Reserve(*Traffic, *Network, *Second));
+		Allocator->Hold(*Traffic, *Network, *Second, Only));
 
 	Allocator->Release(*Traffic, *First);
 	TestTrue(TEXT("and gets it once the first lets go"),
-		Allocator->Reserve(*Traffic, *Network, *Second));
+		Allocator->Hold(*Traffic, *Network, *Second, Only));
 	return true;
 }
 
@@ -143,7 +133,7 @@ bool FStandAllocatorSurvivesRebuildTest::RunTest(const FString& Parameters)
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
 	UStandAllocator* Allocator = NewObject<UStandAllocator>();
 	UFlight* Flight = FlightNeeding(3400.0, 1);
-	TestTrue(TEXT("reserved before the edit"), Allocator->Reserve(*Traffic, *Network, *Flight));
+	TestTrue(TEXT("held before the edit"), Allocator->Hold(*Traffic, *Network, *Flight, StandAt(*Network, 0)));
 
 	// GroundTrafficRebuild drops EVERY node claim - "a set of resources ceasing to exist" - and
 	// until PR D's review (I1) only a LOAD re-held the flights' stands through Reapply, so the
@@ -160,7 +150,11 @@ bool FStandAllocatorSurvivesRebuildTest::RunTest(const FString& Parameters)
 
 	UFlight* Rival = FlightNeeding(3400.0, 2);
 	TestFalse(TEXT("the reservation keeps a rival off the stand after a rebuild"),
-		Allocator->Reserve(*Traffic, *Network, *Rival));
+		Allocator->Hold(*Traffic, *Network, *Rival, Flight->Stand));
+	// #442: AND THE TABLE AGREES WITH THE COPY - HoldIsLost, the board's test, says nothing was lost.
+	TestFalse(TEXT("the flight's Stand is one the table holds for it - not lost"), UStandAllocator::HoldIsLost(*Flight, *Traffic, *Network));
+	TestTrue(TEXT("CONTROL: the rival, pointed at the same stand without a hold, reads as lost"),
+		[&]() { Rival->Stand = Flight->Stand; return UStandAllocator::HoldIsLost(*Rival, *Traffic, *Network); }());
 	return true;
 }
 
@@ -206,12 +200,14 @@ bool FStandAllocatorNeverReservesADepotTest::RunTest(const FString& Parameters)
 		UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
 		UStandAllocator* Allocator = NewObject<UStandAllocator>();
 		UFlight* A380 = FlightNeeding(7980.0, 1);   // 79.8 m, the A380-800's published span
-		if (!TestTrue(TEXT("an A380 flight is reserved a stand"), Allocator->Reserve(*Traffic, *Network, *A380)))
+		TestFalse(TEXT("an A380 flight is never held a fuel depot, whose span 0 'admits anything'"),
+			Allocator->Hold(*Traffic, *Network, *A380, StandAt(*Network, 0)));
+		if (!TestTrue(TEXT("CONTROL: the F stand beside it is held"), Allocator->Hold(*Traffic, *Network, *A380, StandAt(*Network, 1))))
 		{
 			return false;
 		}
 		const FEntityInstance* Chosen = Network->GetEntity(A380->Stand);
-		TestTrue(TEXT("and it is the F stand - a fuel depot is never a stand to reserve"),
+		TestTrue(TEXT("and it is the F stand - a fuel depot is never a stand to hold"),
 			Chosen != nullptr && Chosen->IsStand());
 	}
 
@@ -225,12 +221,12 @@ bool FStandAllocatorNeverReservesADepotTest::RunTest(const FString& Parameters)
 		UStandAllocator* Allocator = NewObject<UStandAllocator>();
 		UFlight* First = FlightNeeding(3580.0, 1);
 		UFlight* Second = FlightNeeding(3580.0, 2);
-		if (!TestTrue(TEXT("the first C flight takes the only C stand"), Allocator->Reserve(*Traffic, *Network, *First)))
+		if (!TestTrue(TEXT("the first C flight takes the only C stand"), Allocator->Hold(*Traffic, *Network, *First, StandAt(*Network, 0))))
 		{
 			return false;
 		}
 		TestFalse(TEXT("the second C flight is refused rather than handed the depot"),
-			Allocator->Reserve(*Traffic, *Network, *Second));
+			Allocator->Hold(*Traffic, *Network, *Second, StandAt(*Network, 1)));
 		TestFalse(TEXT("and nothing was written to it"), Second->Stand.IsSet());
 	}
 	return true;
@@ -265,8 +261,10 @@ bool FStandAllocatorSkipsAGrassStandForATarmacFlightTest::RunTest(const FString&
 	UFlight* Flight = FlightNeeding(3400.0, 1);
 	Flight->Airframe.MinimumPavement = EPavement::Tarmac;
 
-	if (!TestTrue(TEXT("a flight needing tarmac is still reserved a stand"),
-		Allocator->Reserve(*Traffic, *Network, *Flight))) { return false; }
+	TestFalse(TEXT("a flight needing tarmac is never held the grass stand of its own size"),
+		Allocator->Hold(*Traffic, *Network, *Flight, GrassId));
+	if (!TestTrue(TEXT("and is held the tarmac one"),
+		Allocator->Hold(*Traffic, *Network, *Flight, TarmacId))) { return false; }
 	const FEntityInstance* Chosen = Network->GetEntity(Flight->Stand);
 	TestTrue(TEXT("the tarmac stand, not the grass one of its own size"),
 		Chosen != nullptr && Chosen->Pavement == EPavement::Tarmac);

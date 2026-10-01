@@ -204,12 +204,16 @@ namespace DeparturePlanner
 
 	FString Describe(const FDeparturePlan& Plan)
 	{
+		// IN METRES (#497 review), as RunwayAdmission::Describe - the NotAdmitted branch below already hands it its figures, and a
+		// departure's sentence reached the inspector and the log in uu beside it. What the strip HAS rounds down, what the
+		// aircraft NEEDS rounds up (RunwayAdmission::HaveMetres), so "available" can never print at or above "needed" when short.
 		switch (Plan.Why)
 		{
 		case EDepartureRefusal::NoRunway:      return TEXT("Departure refused: not on a runway.");
 		case EDepartureRefusal::NoPerformance: return TEXT("Departure refused: the airframe has no take-off or climb performance.");
 		case EDepartureRefusal::NoRoute:
-			return FString::Printf(TEXT("Departure refused: no taxi route reaches the runway with %.0f uu left to roll."), Plan.Needed);
+			return FString::Printf(TEXT("Departure refused: no taxi route reaches the runway with %.0f m left to roll."),
+				RunwayAdmission::NeedMetres(Plan.Needed));
 		case EDepartureRefusal::NotAdmitted:
 			return FString::Printf(TEXT("Departure refused: %s."), *RunwayAdmission::Describe(Plan.Admission));
 		case EDepartureRefusal::NotParked:  return TEXT("Departure refused: the aircraft is not parked.");
@@ -217,9 +221,10 @@ namespace DeparturePlanner
 		case EDepartureRefusal::NoDepartureRunway:
 			return TEXT("Departure refused: every runway is set to arrivals only - set one to departures or mixed.");
 		case EDepartureRefusal::None:
-			return FString::Printf(TEXT("Departure: %s entry %.0f uu past the threshold, %.0f uu available of %.0f, %.0f needed, taxiing %.0f uu."),
+			return FString::Printf(TEXT("Departure: %s entry %.0f m past the threshold, %.0f m available of %.0f, %.0f needed, taxiing %.0f m."),
 				Plan.bBacktrack ? TEXT("backtrack to the") : TEXT("intersection"),
-				Plan.EntryOffset, Plan.Available, Plan.End.Length, Plan.Needed, Plan.Route.Length);
+				FMath::RoundToDouble(Plan.EntryOffset / 100.0), RunwayAdmission::HaveMetres(Plan.Available),
+				RunwayAdmission::HaveMetres(Plan.End.Length), RunwayAdmission::NeedMetres(Plan.Needed), FMath::RoundToDouble(Plan.Route.Length / 100.0));
 		}
 		return TEXT("Departure: unknown");
 	}

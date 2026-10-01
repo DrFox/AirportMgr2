@@ -13,6 +13,7 @@
 #include "Model/StandAllocator.h"
 #include "Model/TrafficOccupancy.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/IcaoCode.h"
 #include "Testing/AirsideTestGraph.h"
 #include "OpsTransitionTestHelpers.h"
 
@@ -121,13 +122,16 @@ bool FFlightBoardAcceptHoldsTheReachableStandTest::RunTest(const FString& Parame
 		1400.0, Def->PoseRole, Def->Trucks);
 	if (!TestTrue(TEXT("the unconnected stand is placed"), Unconnected.IsSet())) { return false; }
 
-	// CONTROL: THE OLD EVALUATOR PICKS THE UNCONNECTED ONE - so this field tells the two apart.
+	// CONTROL: THE OLD EVALUATOR WOULD PICK THE UNCONNECTED ONE - so this field tells the two apart. Reserve (removed by #471)
+	// took the smallest letter that admits: the unconnected stand is holdable and ranks below the connected one.
 	{
 		UGroundTraffic* Probe = NewObject<UGroundTraffic>();
 		UFlight* ProbeFlight = BoardFlightNeeding(Small.Wingspan);
 		ProbeFlight->Id = 99;
-		if (!TestTrue(TEXT("CONTROL: Reserve holds something"), NewObject<UStandAllocator>()->Reserve(*Probe, *Field.Net, *ProbeFlight))) { return false; }
-		TestEqual(TEXT("CONTROL: and it is the smaller, unconnected stand"), ProbeFlight->Stand, Unconnected);
+		if (!TestTrue(TEXT("CONTROL: the unconnected stand admits the flight and is free"),
+			NewObject<UStandAllocator>()->Hold(*Probe, *Field.Net, *ProbeFlight, Unconnected))) { return false; }
+		TestTrue(TEXT("CONTROL: and it is the smaller letter - a size-only rule's first choice"),
+			IcaoCode::StandRank(Field.Net->GetEntity(Unconnected)->DesignWingspan) < IcaoCode::StandRank(Field.Net->GetEntity(Connected)->DesignWingspan));
 	}
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
@@ -1058,7 +1062,7 @@ bool FFlightBoardLoadCancelPositionTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("an accepted flight"), Accepted)) { return false; }
 
 	// THE WRONG ORDER ON PURPOSE: holds re-made (OnGraphRebuilt), arrivals re-armed (RearmSchedules), THEN the cancel.
-	R.Board->OnGraphRebuilt(*R.Traffic, *R.Airport.Net);
+	R.Board->RestoreStandHolds(*R.Traffic, *R.Airport.Net);
 	R.Board->RearmSchedules(*R.Traffic, *R.Airport.Net, *R.Clock);
 	if (!TestTrue(TEXT("PRECONDITION: its stand is held, as the load's third step leaves it"), R.StandHeldFor(*Accepted))) { return false; }
 	if (!TestEqual(TEXT("PRECONDITION: and its arrival is re-armed, as the load's fourth step leaves it"), R.Clock->PendingForTest(), 1)) { return false; }
@@ -1077,5 +1081,302 @@ bool FFlightBoardLoadCancelPositionTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+
+// #471's FIELD FOR EVERY RE-HOLD: FTestAirport built for a Code A airframe - ONE stand, connected - plus a Code A stand far
+// from every taxiway, admitted by size and reached by nothing. UStandAllocator::Reserve, every re-hold's door until #471,
+// took the smallest letter that admits: the unconnected one. Each test below re-holds by one door and asks for the
+// connected stand. NAMED, NOT ANONYMOUS: the tests module is a unity build.
+namespace FlightBoardReholdTest
+{
+	struct FField
+	{
+		FAirframe Small;
+		FTestAirport Airport;
+		FEntityInstanceId Connected;
+		FEntityInstanceId Unconnected;
+
+		bool Build()
+		{
+			Small.Wingspan = 1100.0;   // 11 m: Code A
+			Airport = FTestAirport::Build(Small);
+			if (Airport.Stands.Num() != 1)
+			{
+				return false;
+			}
+			Connected = Airport.Stands[0];
+			UEntityDefinition* Def = UEntityDefinition::MakeStandTransient();
+			Unconnected = Airport.Net->PlaceEntity(Def, Def->Anchors, FVector2D(-300000.0, -300000.0), 0.0,
+				1400.0, Def->PoseRole, Def->Trucks);
+			return Unconnected.IsSet()
+				// THE CASE UNDER TEST: a size-only rule's first choice is the unconnected stand.
+				&& IcaoCode::StandRank(Airport.Net->GetEntity(Unconnected)->DesignWingspan)
+					< IcaoCode::StandRank(Airport.Net->GetEntity(Connected)->DesignWingspan);
+		}
+
+		/** A flight for this field, aimed at its runway. */
+		UFlight* Flight() const
+		{
+			UFlight* Out = BoardFlightNeeding(Small.Wingspan);
+			Out->RunwayPreference = Airport.Threshold;
+			return Out;
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardReholdLoadTest,
+	"AirportOps.Model.FlightBoard.Rehold.LoadTakesTheReachableStand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardReholdLoadTest::RunTest(const FString& Parameters)
+{
+	// #471's PIN, THE LOAD'S REBUILD RE-HOLD: a flight saved mid-landing goes round again (#404) holding nothing, and the
+	// load re-holds it (RestoreStandHolds) - on the stand it can taxi to, not the smaller one nothing reaches.
+	FlightBoardReholdTest::FField F;
+	if (!TestTrue(TEXT("the field: a connected stand, and a smaller unconnected one"), F.Build())) { return false; }
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = MakeBoard();
+	UFlight* Flight = F.Flight();
+	Flight->AgentId = 41;   // dead: agents are never saved
+	Flight->SetPhaseForTest(EFlightPhase::Landing);
+	Board->AddOffer(*Clock, Flight);
+
+	const TArray<UFlight*> Requeued = Board->DemoteRestoredMidFlight(Clock->Now());
+	Board->RestoreStandHolds(*Traffic, *F.Airport.Net, Requeued);
+	TestEqual(TEXT("re-queued"), Flight->GetPhase(), EFlightPhase::Inbound);
+	TestEqual(TEXT("and re-held on the stand it can reach"), Flight->Stand, F.Connected);
+	const FEntityInstance* Far = F.Airport.Net->GetEntity(F.Unconnected);
+	TestTrue(TEXT("the unreachable one is left free"), Far != nullptr && !Traffic->IsStandHeld(Far->PoseNode, 0));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardReholdQueueTest,
+	"AirportOps.Model.FlightBoard.Rehold.QueueTakesTheReachableStand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardReholdQueueTest::RunTest(const FString& Parameters)
+{
+	// #471, THE QUEUE'S RE-HOLD: a holding flight with no stand takes one back on the queue pass (review I1) - the one it
+	// can taxi to. It then lands, so the dispatcher is asked; the stand it held is the evidence.
+	FlightBoardReholdTest::FField F;
+	if (!TestTrue(TEXT("the field: a connected stand, and a smaller unconnected one"), F.Build())) { return false; }
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = MakeBoard();
+	Board->Dispatcher = [&](const FVector2D&, const FAirframe&) { return true; };
+	UFlight* Flight = F.Flight();
+	Flight->SetPhaseForTest(EFlightPhase::Inbound);
+	Board->AddOffer(*Clock, Flight);
+
+	Board->TickQueue(*Traffic, *F.Airport.Net, *Clock);
+	TestEqual(TEXT("held on the stand it can reach before it was cleared"), Flight->Stand, F.Connected);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardReholdDispatchTest,
+	"AirportOps.Model.FlightBoard.Rehold.FailedDispatchTakesTheReachableStand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardReholdDispatchTest::RunTest(const FString& Parameters)
+{
+	// #471, THE FAILED DISPATCH'S RE-HOLD: DispatchNow gives the hold back before it asks, and a refusal re-holds - the plan's
+	// stand, which the accept had held, not the smallest one by size.
+	FlightBoardReholdTest::FField F;
+	if (!TestTrue(TEXT("the field: a connected stand, and a smaller unconnected one"), F.Build())) { return false; }
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = MakeBoard();
+	int32 Asked = 0;
+	Board->Dispatcher = [&](const FVector2D&, const FAirframe&) { ++Asked; return false; };
+	UFlight* Flight = F.Flight();
+	Flight->LeadTimeSeconds = 0.0;
+	Board->AddOffer(*Clock, Flight);
+	if (!TestTrue(TEXT("accepted onto the stand it can reach"), Board->Accept(*Traffic, *F.Airport.Net, *Clock, *Flight) && Flight->Stand == F.Connected)) { return false; }
+
+	AddExpectedMessagePlain(TEXT("could not be cleared to land"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 0);
+	Clock->Advance(1.0);
+	Board->TickQueue(*Traffic, *F.Airport.Net, *Clock);
+	if (!TestTrue(TEXT("PRECONDITION: the dispatch was asked, and refused"), Asked > 0 && Flight->GetPhase() == EFlightPhase::Inbound)) { return false; }
+	TestEqual(TEXT("re-held on the stand it can reach"), Flight->Stand, F.Connected);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardReholdAcceptedTest,
+	"AirportOps.Model.FlightBoard.Rehold.AcceptedWithNoStandIsRetried",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardReholdAcceptedTest::RunTest(const FString& Parameters)
+{
+	// #497 REVIEW: AN ACCEPTED FLIGHT WITH NO STAND - one whose re-hold found none - was not asked again until its ETA made it
+	// Inbound, so the next accept was free to take the stand it was owed. It is re-held on the queue pass now. NOT one whose
+	// stand is GONE: that Stand is the HeldStandLost alert's evidence, and stays until the flight is in the queue.
+	FlightBoardReholdTest::FField F;
+	if (!TestTrue(TEXT("the field: a connected stand, and a smaller unconnected one"), F.Build())) { return false; }
+	UEntityDefinition* Def = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Gone = F.Airport.Net->PlaceEntity(Def, Def->Anchors, FVector2D(-400000.0, -400000.0), 0.0,
+		1400.0, Def->PoseRole, Def->Trucks);
+	F.Airport.Net->RemoveEntity(Gone);
+	TestGraph::Rebuild(*F.Airport.Net);
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = MakeBoard();
+	auto Accepted = [&](FEntityInstanceId Stand)
+	{
+		UFlight* Flight = F.Flight();
+		Flight->SetPhaseForTest(EFlightPhase::Accepted);
+		Flight->ArrivesAt = 1.0e7;   // its ETA is nowhere near: only the reconcile can give it a stand
+		Flight->Stand = Stand;
+		Board->AddOffer(*Clock, Flight);
+		return Flight;
+	};
+	UFlight* NoStand = Accepted(FEntityInstanceId());
+	UFlight* OnGone = Accepted(Gone);
+
+	Board->TickQueue(*Traffic, *F.Airport.Net, *Clock);
+	TestEqual(TEXT("the accepted flight with no stand is held one - the one it can reach"), NoStand->Stand, F.Connected);
+	TestEqual(TEXT("the accepted flight whose stand is gone keeps it - the alert's evidence"), OnGone->Stand, Gone);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardReholdDispatchClearsTest,
+	"AirportOps.Model.FlightBoard.Rehold.FailedDispatchWithNoStandClearsTheCopy",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardReholdDispatchClearsTest::RunTest(const FString& Parameters)
+{
+	// #497 REVIEW: DispatchNow gives the hold back before it asks, and when the re-hold after a refusal found nothing, the copy
+	// still named the stand - which the next reconcile then reported as lost to "another holder" nobody was. Forced here: the
+	// dispatcher refuses, and in the same breath another holder takes the only stand.
+	FlightBoardReholdTest::FField F;
+	if (!TestTrue(TEXT("the field"), F.Build())) { return false; }
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = MakeBoard();
+	const FGuidelineNodeId Pose = F.Airport.Pose(F.Connected);
+	const FGuidelineNodeId FarPose = F.Airport.Net->GetEntity(F.Unconnected)->PoseNode;
+	Board->Dispatcher = [&](const FVector2D&, const FAirframe&)
+	{
+		Traffic->HoldStand(-77, Pose);
+		Traffic->HoldStand(-78, FarPose);
+		return false;
+	};
+	UFlight* Flight = F.Flight();
+	Flight->LeadTimeSeconds = 0.0;
+	Board->AddOffer(*Clock, Flight);
+	if (!TestTrue(TEXT("accepted onto the stand it can reach"), Board->Accept(*Traffic, *F.Airport.Net, *Clock, *Flight))) { return false; }
+
+	AddExpectedMessagePlain(TEXT("could not be cleared to land"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 0);
+	Clock->Advance(1.0);
+	Board->TickQueue(*Traffic, *F.Airport.Net, *Clock);
+	if (!TestEqual(TEXT("PRECONDITION: refused, still holding"), Flight->GetPhase(), EFlightPhase::Inbound)) { return false; }
+	TestFalse(TEXT("the copy names no stand - the table holds none for it"), Flight->Stand.IsSet());
+	TestFalse(TEXT("so nothing reads as lost"), UStandAllocator::HoldIsLost(*Flight, *Traffic, *F.Airport.Net));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardReholdDatedTest,
+	"AirportOps.Model.FlightBoard.Rehold.FailedReholdIsDated",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardReholdDatedTest::RunTest(const FString& Parameters)
+{
+	// #497 REVIEW: a stand-less holding flight is offered a re-hold every queue pass, and each was a whole plan - with nothing
+	// free, the same refusal, planned again and again. A miss is dated now (FReholdMiss): no plan until something it reads
+	// moves; a stand freed is such a thing, and the flight takes it.
+	FlightBoardReholdTest::FField F;
+	if (!TestTrue(TEXT("the field"), F.Build())) { return false; }
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	Clock->SetSpeed(ESimSpeed::Paused);   // the pass re-holds before its paused exit, and dispatches nothing after it
+	UFlightBoard* Board = MakeBoard();
+	Traffic->HoldStand(-77, F.Airport.Pose(F.Connected));
+	Traffic->HoldStand(-78, F.Airport.Net->GetEntity(F.Unconnected)->PoseNode);
+	UFlight* Flight = F.Flight();
+	Flight->SetPhaseForTest(EFlightPhase::Inbound);
+	Board->AddOffer(*Clock, Flight);
+
+	const int32 Before = Board->GetWhyNotAcceptableCallsForTest();
+	Board->TickQueue(*Traffic, *F.Airport.Net, *Clock);
+	if (!TestEqual(TEXT("PRECONDITION: every stand held, the first pass plans once and holds nothing"),
+		Board->GetWhyNotAcceptableCallsForTest() - Before, 1) || !TestFalse(TEXT("(nothing held)"), Flight->Stand.IsSet())) { return false; }
+	Board->TickQueue(*Traffic, *F.Airport.Net, *Clock);
+	Board->TickQueue(*Traffic, *F.Airport.Net, *Clock);
+	TestEqual(TEXT("two more passes with nothing moved plan nothing"), Board->GetWhyNotAcceptableCallsForTest() - Before, 1);
+
+	Traffic->ReleaseHold(-77);
+	Board->TickQueue(*Traffic, *F.Airport.Net, *Clock);
+	TestEqual(TEXT("a stand freed: planned again"), Board->GetWhyNotAcceptableCallsForTest() - Before, 2);
+	TestEqual(TEXT("and held"), Flight->Stand, F.Connected);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardVerdictDatedByEditTest,
+	"AirportOps.Model.FlightBoard.VerdictIsDatedByTheEdit",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardVerdictDatedByEditTest::RunTest(const FString& Parameters)
+{
+	// #471: THE VERDICT'S STAND IS HELD BY AN ACCEPT (#431), so a pre-drag yes served mid-drag is a hold made on a graph the
+	// planner itself refuses (GraphBeingEdited). A drag moves the road's EditRevision and NOT the guideline revision - which
+	// is all the verdict was dated by.
+	URoadNetwork* Net = BoardField(3400.0);
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = MakeBoard();
+	UFlight* Flight = BoardFlightNeeding(3400.0);
+	Flight->LeadTimeSeconds = 100.0;
+	Board->AddOffer(*Clock, Flight);
+	if (!TestEqual(TEXT("CONTROL: on the settled graph the offer can be accepted"), Board->VerdictFor(*Traffic, *Net, *Flight).Why, EArrivalRefusal::None)) { return false; }
+
+	// THE PLAYER PICKS A NODE UP.
+	const uint32 GuidelineBefore = Net->GetGuidelineRevision();
+	Net->AddNode(FVector2D(-150000.0, 150000.0));
+	if (!TestTrue(TEXT("PRECONDITION: the graph is behind the road"), Net->AreGuidelinesBehindRoad())) { return false; }
+	if (!TestEqual(TEXT("PRECONDITION: and the guideline revision has not moved - the case under test"), Net->GetGuidelineRevision(), GuidelineBefore)) { return false; }
+	const int32 PlansBefore = Board->GetWhyNotAcceptableCallsForTest();
+	TestEqual(TEXT("mid-drag the verdict is the planner's GraphBeingEdited, not the pre-drag yes"),
+		Board->VerdictFor(*Traffic, *Net, *Flight).Why, EArrivalRefusal::GraphBeingEdited);
+	TestEqual(TEXT("planned again to say so"), Board->GetWhyNotAcceptableCallsForTest(), PlansBefore + 1);
+	TestFalse(TEXT("so an accept mid-drag holds nothing"), Board->Accept(*Traffic, *Net, *Clock, *Flight));
+	TestFalse(TEXT("and the flight names no stand"), Flight->Stand.IsSet());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardVerdictNamesNetworkTest,
+	"AirportOps.Model.FlightBoard.VerdictNamesTheNetwork",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardVerdictNamesNetworkTest::RunTest(const FString& Parameters)
+{
+	// #471: TWO NETWORKS, EVERY REVISION EQUAL - FLandChoicesKeyNamesTheNetwork's case. A clear or a load is a new network
+	// counting from zero, and two deterministic builds of one field count identically; only identity tells them apart, and
+	// a verdict judged on one must not be served for the other.
+	URoadNetwork* First = BoardField(3400.0);
+	URoadNetwork* Second = BoardField(3400.0);
+	if (!TestTrue(TEXT("PRECONDITION: the same revisions - the case under test"),
+		First->GetEditRevision() == Second->GetEditRevision() && First->GetGuidelineRevision() == Second->GetGuidelineRevision())) { return false; }
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = MakeBoard();
+	UFlight* Flight = BoardFlightNeeding(3400.0);
+	Board->AddOffer(*Clock, Flight);
+
+	Board->VerdictFor(*Traffic, *First, *Flight);
+	const int32 PlansBefore = Board->GetWhyNotAcceptableCallsForTest();
+	Board->VerdictFor(*Traffic, *First, *Flight);
+	TestEqual(TEXT("CONTROL: the same network again is served from the cache"), Board->GetWhyNotAcceptableCallsForTest(), PlansBefore);
+	const FOfferVerdict& OnSecond = Board->VerdictFor(*Traffic, *Second, *Flight);
+	TestEqual(TEXT("another network with equal numbers is planned afresh"), Board->GetWhyNotAcceptableCallsForTest(), PlansBefore + 1);
+	TestTrue(TEXT("and the verdict now names it"), OnSecond.Network.Get() == Second);
+	return true;
+}
 
 #endif

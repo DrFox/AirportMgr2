@@ -30,7 +30,8 @@ FString FAgentPhaseEvent::Describe() const
 
 FString FArrivalRefusedEvent::Describe() const
 {
-	return UEnum::GetValueAsString(Why);
+	// FLandRefusedEvent's shape, for the same reason: the sentence is what the event now carries that the enum cannot say.
+	return Sentence.IsEmpty() ? UEnum::GetValueAsString(Why) : FString::Printf(TEXT("%s: %s"), *UEnum::GetValueAsString(Why), *Sentence);
 }
 
 FString FSpeedChangedEvent::Describe() const

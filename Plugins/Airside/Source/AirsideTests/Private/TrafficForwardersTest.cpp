@@ -135,7 +135,7 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("removal was relayed as Taxiing -> Gone"), Relayed.Num(), 2);
 
 	TArray<EArrivalRefusal> Refusals;
-	Model->OnArrivalRefused.AddLambda([&Refusals](EArrivalRefusal Why) { Refusals.Add(Why); });
+	Model->OnArrivalRefused.AddLambda([&Refusals](EArrivalRefusal Why, const FString&) { Refusals.Add(Why); });
 	TestFalse(TEXT("no runway: arrival refused"), Actor->DispatchArrival(FVector2D::ZeroVector, UAirsideSettings::ResolveDefaultAirframe()));
 	TestEqual(TEXT("the refusal announced on the model, through the actor's dispatch"), Refusals.Num(), 1);
 

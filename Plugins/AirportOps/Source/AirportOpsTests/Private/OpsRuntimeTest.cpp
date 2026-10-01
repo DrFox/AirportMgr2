@@ -397,15 +397,15 @@ bool FOpsRuntimeLandWithNoRouteTest::RunTest(const FString& Parameters)
 	UGroundTraffic* Traffic = Actor->GetGroundTraffic();
 	if (!TestNotNull(TEXT("traffic"), Traffic)) { return false; }
 
-	// CONTROL: THE OLD EVALUATOR WOULD HAVE TAKEN IT - the stand admits this airframe and is free, so Reserve holds it.
-	// Without this the pin below could pass on a field where nothing fits at all.
+	// CONTROL: THE OLD EVALUATOR WOULD HAVE TAKEN IT - the stand admits this airframe and is free, so a hold by size alone
+	// (Reserve, removed by #471) took it. Without this the pin below could pass on a field where nothing fits at all.
 	{
 		UGroundTraffic* Probe = NewObject<UGroundTraffic>();
 		UFlight* ProbeFlight = NewObject<UFlight>();
 		ProbeFlight->Id = 99;
 		ProbeFlight->Airframe = Airframe;
-		TestTrue(TEXT("CONTROL: Reserve alone finds the stand - size is all it asks"),
-			NewObject<UStandAllocator>()->Reserve(*Probe, Net, *ProbeFlight));
+		TestTrue(TEXT("CONTROL: the stand alone can be held - size is all a hold asks"),
+			NewObject<UStandAllocator>()->Hold(*Probe, Net, *ProbeFlight, Stand));
 	}
 
 	const EArrivalRefusal Why = Runtime->LandNear(FVector2D(0.0, -50000.0), nullptr);

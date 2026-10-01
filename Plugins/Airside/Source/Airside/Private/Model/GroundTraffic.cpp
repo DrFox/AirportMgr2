@@ -62,8 +62,9 @@ int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 
 	if (!Plan.IsValid())
 	{
-		UE_LOG(LogAirsideTraffic, Warning, TEXT("%s"), *ArrivalPlanner::DescribeRefusal(Plan));
-		OnArrivalRefused.Broadcast(Plan.Why);
+		const FString Sentence = ArrivalPlanner::DescribeRefusal(Plan);   // worded once, for the log and the listeners (#471)
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("%s"), *Sentence);
+		OnArrivalRefused.Broadcast(Plan.Why, Sentence);
 		return 0;
 	}
 

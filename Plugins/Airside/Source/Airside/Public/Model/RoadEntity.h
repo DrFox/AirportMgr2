@@ -397,8 +397,9 @@ struct AIRSIDE_API FEntityInstance
 	 * May an aircraft be sent here at all: alive, a stand, and with a stop mark to route to.
 	 * Size is NOT asked here - that is IcaoCode::StandAdmits, once this has said yes.
 	 *
-	 * ONE PREDICATE, TWO CALLERS: ArrivalPlanner::ChooseStand (live dispatch) and
-	 * UStandAllocator::Reserve (holding a stand for an accepted flight). They used to spell
+	 * ONE PREDICATE FOR EVERY "IS THIS A STAND" WALK - ArrivalPlanner::ChooseStand (live dispatch), UStandAllocator::Hold
+	 * (holding a stand for an accepted flight), and the job board's, the rebuild's and the held-stand diff's own walks (seven
+	 * calls by grep on 2026-10-01). The first two used to spell
 	 * the filter each their own way, and the allocator's spelling had no IsStand() - harmless
 	 * while it compared raw spans, and a fuel depot handed to an airliner the day it switched
 	 * to StandAdmits, under which a depot's 0 span means "unknown, admits anything" (final

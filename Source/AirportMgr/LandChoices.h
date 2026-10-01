@@ -45,6 +45,14 @@ struct FLandChoicesKey
 			&& bQuotes == Other.bQuotes;
 	}
 	bool operator!=(const FLandChoicesKey& Other) const { return !(*this == Other); }
+
+	/** Equal in everything but OccupancyRevision - the one change LandChoices::RequoteForOccupancy answers (#471). */
+	bool SameButOccupancy(const FLandChoicesKey& Other) const
+	{
+		FLandChoicesKey Aligned = Other;
+		Aligned.OccupancyRevision = OccupancyRevision;
+		return *this == Aligned;
+	}
 };
 
 /** One row of the Land panel: an aircraft type, and whether the game would land it now. */
@@ -61,6 +69,9 @@ struct FLandChoice
 
 	/** Why not - the quote's own sentence (ArrivalPlanner::DescribeRefusal's, or the airport's gate) - or empty. */
 	FString Refusal;
+
+	/** The quote's reason, None when admitted - kept so RequoteForOccupancy can tell a row occupancy could change. */
+	EArrivalRefusal Why = EArrivalRefusal::None;
 };
 
 /**
@@ -83,6 +94,27 @@ namespace LandChoices
 	 */
 	AIRPORTMGR_API TArray<FLandChoice> Build(const TArray<UAircraftType*>& Types,
 		TFunctionRef<FArrivalQuote(const FAirframe&)> Quote);
+
+	/**
+	 * THE OCCUPANCY-ONLY RE-QUOTE (#471 item 5): re-quote, in place, only the rows a change of occupancy CAN change - the
+	 * admitted, and those refused for a reason that clears on its own (ArrivalPlanner::IsPermanentRefusal false: a held
+	 * stand, a busy runway). A PERMANENT refusal - no exit, no route, a stand in a strip, a strip too short - is the
+	 * player's to fix by an edit, and every edit moves another field of FLandChoicesKey, which re-builds every row. So
+	 * this is EXACT, not a throttle: a row it skips cannot have changed. Returns how many rows it quoted.
+	 *
+	 * WHY IT EXISTS - MEASURED 2026-10-01 (AirportMgr.UI.LandPanelCostOnAScaleField, Development editor): on #256's scale
+	 * field (2 runways, 8x20 taxiway grid, 30 stands) a whole re-quote of the 18 meshed types cost 130 ms (field sized for
+	 * the smallest type) to 357 ms (for the largest) - ~13-21 ms for each type whose search fails, against a 16.7 ms
+	 * frame - and the open panel paid it on EVERY occupancy move. The failing searches are the permanent refusals; an
+	 * admitted type planned in ~0.1 ms on a 30-stand line. What this does not bound: rows refused NoFreeStand on a full
+	 * field are failing searches too, and are re-quoted - the planner's reachable-stand search is the cost to cut there.
+	 * AFTER THE #497 REVIEW the planner asks for an admitted stand before searching from any exit, and a whole re-quote there
+	 * measured 78-125 ms - still above a frame, so the panel keeps its rows per runway (ULandAircraftPanelWidget::
+	 * JudgedByRunway) and a camera pan back onto a judged runway quotes nothing. A first open and an edit still pay it.
+	 * ENFORCED BY: AirportMgr.UI.LandPanelRequotesOnlyWhatOccupancyCanChange, AirportMgr.UI.LandPanelCostOnAScaleField;
+	 * AirportMgr.UI.LandPanelBuildsOnlyOnChange for "every edit moves another field" (one step per field)
+	 */
+	AIRPORTMGR_API int32 RequoteForOccupancy(TArray<FLandChoice>& Rows, TFunctionRef<FArrivalQuote(const FAirframe&)> Quote);
 
 	/** What the quotes would read, now - see FLandChoicesKey. Traffic may be null (no occupancy to date). */
 	AIRPORTMGR_API FLandChoicesKey KeyFor(const URoadNetwork* Network, const UGroundTraffic* Traffic,

@@ -108,22 +108,41 @@ void ULandAircraftPanelWidget::RefreshFor(const ARoadBuildController* C, const U
 	{
 		return;
 	}
+	// A NEW NETWORK OR A NEW SET OF TYPES makes every runway's rows somebody else's: forget them all.
+	if (!bJudged || Types.Num() != JudgedTypeCount || Key.Network != JudgedKey.Network)
+	{
+		JudgedByRunway.Reset();
+	}
 	JudgedKey = Key;
 	JudgedTypeCount = Types.Num();
 	bJudged = true;
 
-	TArray<UAircraftType*> Raw;
-	Raw.Reserve(Types.Num());
-	for (const TObjectPtr<UAircraftType>& Type : Types)
+	// THE ROWS FOR THE RUNWAY THE PLANNER ASKS FIRST FROM HERE (#497 review) - kept per runway, so a pan back onto one judged on
+	// this very graph and traffic quotes NOTHING. Measured on #256's scale field (AirportMgr.UI.LandPanelCostOnAScaleField):
+	// a whole re-quote is still 78-125 ms after the planner stopped searching from every exit when no stand was admitted, and
+	// a pan between two runways paid it every time the first runway changed.
+	FJudgedRows& Judged = JudgedByRunway.FindOrAdd(Key.FirstRunway);
+	if (Judged.bValid && Judged.Key == Key)
 	{
-		Raw.Add(Type.Get());
+		// JUDGED ON EXACTLY THIS - nothing to quote, and no judgement counted.
+		PaintIfChanged(Judged.Rows);
+		return;
 	}
+	// ONLY THE OCCUPANCY MOVED since this runway was judged (#471): re-quote just the rows it can change - see
+	// LandChoices::RequoteForOccupancy for the measurement that made this a gate. Anything else in the key judges every
+	// row afresh.
+	const bool bOccupancyOnly = Judged.bValid && Key.SameButOccupancy(Judged.Key);
+	Judged.Key = Key;
+	Judged.bValid = true;
+
 	++BuildCalls;
 	// THE GAME'S VERDICT PER TYPE (#432): UOpsRuntime::QuoteLanding - the plan and the airport's gate TryAccept asks - at
 	// the view focus, the point the click lands at. NO RUNTIME, NOTHING LANDS: the land path is the flight board's, and
 	// without a board there is no landing to offer (the board-less fallback that used to take it went with #431).
-	const TArray<FLandChoice> Choices = LandChoices::Build(Raw, [Runtime, &Focus](const FAirframe& Airframe)
+	// ONE QUOTE for both judgements below, so a re-quoted row and a built one are the same answer.
+	const auto Quote = [this, Runtime, &Focus](const FAirframe& Airframe)
 	{
+		++RowQuotes;
 		if (Runtime != nullptr)
 		{
 			return Runtime->QuoteLanding(Airframe, Focus);
@@ -132,8 +151,26 @@ void ULandAircraftPanelWidget::RefreshFor(const ARoadBuildController* C, const U
 		NoGame.Why = EArrivalRefusal::NoRunway;
 		NoGame.Sentence = TEXT("No game running - landing needs the flight board.");
 		return NoGame;
-	});
+	};
+	if (bOccupancyOnly)
+	{
+		LandChoices::RequoteForOccupancy(Judged.Rows, Quote);
+	}
+	else
+	{
+		TArray<UAircraftType*> Raw;
+		Raw.Reserve(Types.Num());
+		for (const TObjectPtr<UAircraftType>& Type : Types)
+		{
+			Raw.Add(Type.Get());
+		}
+		Judged.Rows = LandChoices::Build(Raw, Quote);
+	}
+	PaintIfChanged(Judged.Rows);
+}
 
+void ULandAircraftPanelWidget::PaintIfChanged(const TArray<FLandChoice>& Choices)
+{
 	// THE GATE - see PaintedRefusals.
 	TArray<FString> Refusals;
 	Refusals.Reserve(Choices.Num());

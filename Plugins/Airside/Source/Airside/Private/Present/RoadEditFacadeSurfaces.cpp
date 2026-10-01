@@ -1001,7 +1001,7 @@ int32 URoadEditFacade::PlaceStandInPlot(const TArray<FVector2D>& Outline,
 	// IcaoCode::DesignSpanForLetter's own header for why MaxWingspanForLetter's ceiling
 	// itself cannot be used here: a drawn stand's captured DesignWingspan feeds
 	// IcaoCode::StandAdmits/StandRank the same way a legacy stand's does
-	// (ArrivalPlanner::ChooseStand, UStandAllocator::Reserve), so the letter it reads back as
+	// (ArrivalPlanner::ChooseStand, UStandAllocator::Hold - both through StandAdmission::Judge), so the letter it reads back as
 	// must be the letter it was actually drawn to.
 	Placement.DesignWingspan = IcaoCode::DesignSpanForLetter(*Letter);
 

@@ -462,6 +462,16 @@ bool FToastsWordSavesAndPurchasesTest::RunTest(const FString& Parameters)
 		TestEqual(*FString::Printf(TEXT("%s says '%s'"), *Name, Case.Says), Last().Text.ToString(), FString(Case.Says));
 		TestEqual(*FString::Printf(TEXT("%s at its severity"), *Name), Last().Severity, Case.Severity);
 	}
+
+	// #471: A DISPATCH REFUSAL SAYS THE PLAN'S SENTENCE TOO - Airside's OnArrivalRefused used to reach the toast with the
+	// reason alone, so the toast said "not admitted to that runway" where the log said why.
+	const FString Dispatched = TEXT("Arrival refused: the runway admits a 24.0 m wingspan; this aircraft's is 36.0 m.");
+	const int32 BeforeRefusal = Stack->Centre()->Entries().Num();
+	Events->NotifyArrivalRefused(EArrivalRefusal::NotAdmitted, Dispatched);
+	if (TestEqual(TEXT("a refused dispatch is a toast"), Stack->Centre()->Entries().Num(), BeforeRefusal + 1))
+	{
+		TestEqual(TEXT("in the plan's words, not the reason's"), Last().Text.ToString(), Dispatched);
+	}
 	return true;
 }
 

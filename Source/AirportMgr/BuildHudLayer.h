@@ -86,7 +86,9 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")
 	TSubclassOf<ULedgerPanelWidget> LedgerPanelClass;
 
-	/** The inbox on screen. Play-mode only: the editor mode has no runtime to read. */
+	/** The inbox on screen. This layer is ARoadBuildController's subobject, so it exists in PIE only (the editor mode
+	 *  never builds it), where the runtime is a game-instance subsystem that always exists; the inbox's own no-runtime
+	 *  guard is for a headless test that resolved none (OpsRuntimeResolver). */
 	UPROPERTY(Transient)
 	TObjectPtr<UOfferInboxWidget> OfferInbox;
 
@@ -146,7 +148,7 @@ public:
 	/**
 	 * Opens Window, or closes it if open, and logs it ("Ledger panel opened", "Alerts window closed (3 alert(s))") - the one toggle
 	 * every window's bar button and key runs. Does nothing, and says nothing, for a window this layer has no panel for: a
-	 * headless test builds only what it needs, and the editor mode builds none.
+	 * headless test builds only what it needs.
 	 */
 	void ToggleWindow(EHudWindow Window);
 
@@ -160,7 +162,7 @@ public:
 	 * Opens the inspector's Unstick popup - the selection.unstick row's Execute, through the layer that owns the inspector (#446). It was a
 	 * COUNTER on the controller that the inspector compared with the last it had seen, every tick, beside two panels the same controller
 	 * already called directly. An agent card only: a request made with no inspector, no popup or nothing shown is spent, not kept for the
-	 * next card. No inspector (a headless test, the editor mode): nothing.
+	 * next card. No inspector (a headless test that built none): nothing.
 	 * ENFORCED BY: AirportMgr.Inspector.UnstickRowOpensTheMenuWithoutATick, Check-Architecture rule 74 (the counter's name is gone)
 	 */
 	void OpenUnstickMenu();

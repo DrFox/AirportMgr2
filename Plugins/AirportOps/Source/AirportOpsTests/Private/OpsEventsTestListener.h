@@ -19,7 +19,13 @@ class UOpsEventsTestListener : public UObject
 public:
 	TArray<FString> Seen;
 
-	UFUNCTION() void OnRefused(EArrivalRefusal Why) { Seen.Add(FString::Printf(TEXT("refused:%d"), static_cast<int32>(Why))); }
+	UFUNCTION() void OnRefused(EArrivalRefusal Why, const FString& Sentence)
+	{
+		Seen.Add(FString::Printf(TEXT("refused:%d"), static_cast<int32>(Why)));
+		LastRefusedSentence = Sentence;
+	}
+	/** The words the last dispatch refusal carried - the toast shows these (#471). */
+	FString LastRefusedSentence;
 	/** "save:<outcome>:<slot>" - the case by its enumerator's name, so an assertion reads like the toast it stands for. */
 	UFUNCTION() void OnSaveSlot(EOpsSaveOutcome Outcome, const FString& Slot)
 	{

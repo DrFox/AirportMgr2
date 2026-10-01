@@ -43,8 +43,15 @@ struct FTransitionCause;
  * (dispatched, arrived, serving, refilled - #428 made each one bump it), so a truck arriving or finishing a refill
  * re-planned every pending offer's full arrival plan, which reads no fleet. A few integer compares replace the
  * search on every frame where none of them moved.
+ * AND THE NETWORK ITSELF, AND ITS EDIT REVISION (#471), the way FLandChoicesKey is keyed: since #431 the verdict's stand
+ * is the one an accept HOLDS, so a stale yes is no longer a wrong row but a wrong hold. A drag moves the road (EditRevision)
+ * a whole gesture before the guideline graph catches up at the drop, and a pre-drag yes served from the cache let the inbox
+ * accept onto a graph the planner itself refuses mid-edit (GraphBeingEdited). A clear or a load is a NEW network counting
+ * its revisions from zero, so equal numbers on another object are not the same graph - weak, so a recycled address is not
+ * mistaken for the old network either.
  * ENFORCED BY: AirportOps.Model.FlightBoard.VehicleTransitionsDoNotReplanOffers,
- * AirportOps.Fuel.CouldServe.StrandingMovesTheCompositionAndTheVerdict (the stranded clause)
+ * AirportOps.Fuel.CouldServe.StrandingMovesTheCompositionAndTheVerdict (the stranded clause),
+ * AirportOps.Model.FlightBoard.VerdictIsDatedByTheEdit, AirportOps.Model.FlightBoard.VerdictNamesTheNetwork
  */
 struct FOfferVerdict
 {
@@ -61,10 +68,15 @@ struct FOfferVerdict
 	 *  accept (spec ruling 5) - the row says so and C scores it. */
 	bool bFuelServable = true;
 
-	/** What Why was judged at. The guideline stamp dates bFuelServable too: an edit re-judges both. */
+	/** What Why was judged at. The guideline stamp and the network date bFuelServable too: an edit re-judges both. */
 	uint32 BoardAt = 0;
 	uint32 GuidelineAt = 0;
 	uint32 OccupancyAt = 0;
+	/** URoadNetwork::GetEditRevision when Why was judged - the plan's alone: CouldServe reads only the derived graph, which
+	 *  a drag does not move until the drop's guideline revision, and its answer holds nothing. */
+	uint32 EditAt = 0;
+	/** The network both answers were judged on - compared, never dereferenced; weak, so a new network at a recycled address is not this one. */
+	FWeakObjectPtr Network;
 	/** UJobBoard::GetFleetCompositionRevision when bFuelServable was judged - a vehicle bought, sold, seeded (by the
 	 *  "FleetSeed" pass) or withdrawn changes it (facility-upgrades spec), and so does a vehicle's agent stranding or moving
 	 *  again (#443: a stranded vehicle does not count), but a vehicle changing any other STATE does not (#443: this was the
@@ -214,7 +226,7 @@ public:
 	 * declined or expired, a phase change, a graph rebuild's re-apply.
 	 *
 	 * REPLACES A DELEGATE THIS CLASS USED TO CARRY (issue #169): OnChanged fired from nearly
-	 * every method here - AddOffer, Accept, Decline, DispatchNow, OnAgentPhase, OnGraphRebuilt
+	 * every method here - AddOffer, Accept, Decline, DispatchNow, OnAgentPhase, OnGraphRebuilt (RestoreStandHolds since #442)
 	 * - documented as "a coarse go-re-read-everything signal a C++ viewmodel polls off of",
 	 * but nothing ever bound to it: UOfferInboxViewModel::Refresh polled on TICK instead, and
 	 * asked WhyNotAcceptable - a full ArrivalPlanner::Plan, a route search per stand per exit -
@@ -539,11 +551,16 @@ public:
 	void OnAgentPhase(const URoadNetwork& Network, const USimClock& Clock, const FAgentTransition& Transition);
 
 	/**
-	 * Re-make every Accepted and Inbound flight's stand hold (UStandAllocator::Reapply), HoldLast's after all the
-	 * others; then an Inbound flight left with no stand reserves one. HoldLast is the load's re-queued flights
-	 * (DemoteRestoredMidFlight) - empty for an ordinary rebuild.
+	 * A LOAD'S STAND HOLDS, step 3 of RestoreAfterLoad: re-make every Accepted and Inbound flight's hold from its saved
+	 * UFlight::Stand (UStandAllocator::Reapply), HoldLast's after all the others, then ReconcileStandHolds over them in
+	 * that order - a refused one given up and re-held, an Inbound flight with no stand (or a gone one) re-held. HoldLast
+	 * is the load's re-queued flights (DemoteRestoredMidFlight).
+	 *
+	 * IT WAS OnGraphRebuilt, named for a rebuild it stopped serving when PR D's review (I1) kept an edit's holds inside
+	 * Airside; it is the load's step now (#442). NOT AN EDIT'S REACTION: an edit's refusal
+	 * reaches ReconcileStandHolds through the queue pass the edit's FNetworkChangedEvent runs.
 	 */
-	void OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& Network, const TArray<UFlight*>& HoldLast = TArray<UFlight*>());
+	void RestoreStandHolds(UGroundTraffic& Traffic, const URoadNetwork& Network, const TArray<UFlight*>& HoldLast = TArray<UFlight*>());
 
 	/**
 	 * THE FLIGHT HALF OF A LOAD, IN ITS ONE ORDER (issue #426). Four steps, each correct only in its position, which
@@ -556,7 +573,7 @@ public:
 	 *      arrival armed for a flight that can never land. It goes through the same Cancelled row a closure does (#442), which
 	 *      releases and disarms when given the traffic and the clock - here there is nothing yet to release, but it no longer
 	 *      depends on that. Unscored and unpublished (rulings I2/I1): see its own comment.
-	 *   3. OnGraphRebuilt(re-queued last) - the genuine holds first, then the re-queued flights' (review I1). AFTER the
+	 *   3. RestoreStandHolds(re-queued last) - the genuine holds first, then the re-queued flights' (review I1). AFTER the
 	 *      network's rebuild, which took every claim with it - so this is called once the load's AdoptNetwork has run.
 	 *   4. RearmSchedules - the clock's queue was never saved.
 	 *   (0. Before all of them, every arrival the REPLACED session armed is cancelled on the clock and forgotten - the map
@@ -751,6 +768,28 @@ private:
 		bool bValid = false;
 	};
 	TMap<int32, FClearance> Clearances;
+
+	/**
+	 * A RE-HOLD THAT FOUND NO STAND, DATED (#497 review), by flight id - so the queue pass does not plan again, every pass, for
+	 * a flight that has none until something a plan reads has moved: ClearanceFor's two stamps; UGroundTraffic::
+	 * StandHoldChangeCount, because a body rolling off a stand's pose moves no OccupancyRevision (the blind spot
+	 * AirportOps.Model.ArrivalQueue.StandFreedByChurnIsNotStale pins); and the network itself, VerdictFor's reason. Session
+	 * state, never saved: a load starts it empty, one plan away from right.
+	 * ENFORCED BY: AirportOps.Model.FlightBoard.Rehold.FailedReholdIsDated
+	 */
+	struct FReholdMiss
+	{
+		FWeakObjectPtr Network;
+		uint32 GuidelineAt = 0;
+		uint32 OccupancyAt = 0;
+		uint32 StandChurnAt = 0;
+		bool operator==(const FReholdMiss& Other) const
+		{
+			return Network == Other.Network && GuidelineAt == Other.GuidelineAt && OccupancyAt == Other.OccupancyAt
+				&& StandChurnAt == Other.StandChurnAt;
+		}
+	};
+	TMap<int32, FReholdMiss> ReholdMisses;
 	int32 TickQueueCalls = 0;
 
 	/** Set by a clearance, cleared by BeginQueueFrame - see there. bQueueFramed: a frame has ever begun. Session state, never saved. */
@@ -838,8 +877,34 @@ private:
 	void DisarmEveryArrival(USimClock& Clock);
 
 	/** Release the hold and put it on final, Now being the game time the change is dated. False, flight still Inbound and
-	 *  stand re-held, if refused. */
+	 *  stand re-held (Rehold), if refused. */
 	bool DispatchNow(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight, double Now);
+
+	/**
+	 * THE ONE RE-HOLD (#471): hold Flight the stand a fresh plan taxis it to - PlanQuote, a busy runway queued, its own
+	 * hold not counting - through UStandAllocator::Hold, exactly as TryAccept holds its plan's stand. False, Flight
+	 * unchanged, when the plan names no stand (none free and reachable, or the plan refuses outright: a hold on a stand
+	 * the flight cannot reach guarantees nothing).
+	 *
+	 * EVERY RE-HOLD IS THIS - the queue's (ReconcileStandHolds, from TickQueue), a load's (the same, from
+	 * RestoreStandHolds), a failed dispatch's (DispatchNow).
+	 * ENFORCED BY: Check-Architecture rule 84 (stand-hold-is-a-plans-stand), AirportOps.Model.FlightBoard.Rehold.
+	 * LoadTakesTheReachableStand, .QueueTakesTheReachableStand, .FailedDispatchTakesTheReachableStand (each red with the
+	 * smallest-fit choice back). Each used to call UStandAllocator::Reserve, the smallest admitted unheld stand with no
+	 * reach check: an unconnected small stand beat a connected bigger one, and the queue's "every queued flight has
+	 * somewhere to go" held by size only. A full plan per re-hold is the cost - paid by a flight that has no hold, and not
+	 * again after a miss until something the plan reads has moved (FReholdMiss).
+	 */
+	bool Rehold(UGroundTraffic& Traffic, const URoadNetwork& Network, UFlight& Flight);
+
+	/**
+	 * THE BOARD'S DOOR ONTO THE ONE CONFLICT RULE (#442) - UStandAllocator::Reconcile, which states the rule and the pattern
+	 * (the occupancy table is the record of a flight's hold, UFlight::Stand the saved copy brought back to it) - with
+	 * Rehold as its re-hold and a revision bump when a copy changed. From TickQueue (after its closed exit, before its
+	 * paused one: a paused edit is reconciled too) and RestoreStandHolds; InOrder is who wins a contested stand.
+	 * ENFORCED BY: AirportOps.Present.RuntimeEdit.RefusedReholdAgreesWithTheTable, AirportOps.Model.FlightSave.RequeueDoesNotTakeAnAcceptedStand
+	 */
+	void ReconcileStandHolds(UGroundTraffic& Traffic, const URoadNetwork& Network, TConstArrayView<UFlight*> InOrder);
 
 	/** Into the queue: phase Inbound, HoldingSince = Since, stand kept. From the ETA callback and a load. */
 	void Enqueue(UFlight& Flight, double Since);

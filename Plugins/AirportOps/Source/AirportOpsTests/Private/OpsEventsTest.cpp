@@ -18,7 +18,7 @@ bool FOpsEventsTest::RunTest(const FString& Parameters)
 	Events->OnSaveSlot.AddDynamic(L, &UOpsEventsTestListener::OnSaveSlot);
 	Events->OnPurchase.AddDynamic(L, &UOpsEventsTestListener::OnPurchase);
 
-	Events->NotifyArrivalRefused(EArrivalRefusal::NoRunway);
+	Events->NotifyArrivalRefused(EArrivalRefusal::NoRunway, TEXT("the plan's own words"));
 	Events->NotifySaveSlot(EOpsSaveOutcome::SaveFailed, TEXT("hello"));
 	FOpsPurchase Purchase;
 	Purchase.Kind = EOpsPurchaseKind::ModulesRefunded;
@@ -37,6 +37,7 @@ bool FOpsEventsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("its count intact"), L->Purchases[0].Count, 2);
 		TestEqual(TEXT("its noun intact"), L->Purchases[0].Name.ToString(), FString(TEXT("Sheds")));
 	}
+	TestEqual(TEXT("the refusal's sentence among them (#471)"), L->LastRefusedSentence, FString(TEXT("the plan's own words")));
 	return true;
 }
 
