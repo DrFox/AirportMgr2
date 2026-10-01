@@ -745,3 +745,24 @@ FFitVerdict VehicleFit::JudgePlan(const FRoutePlan& InPlan, const FVehicle& Vehi
 	Verdict.Radians = WorstRadians;
 	return Verdict;
 }
+
+bool VehicleFit::MayDriveUngated(const FRoutePlan& Plan, const FVehicle& Vehicle, const URoadNetwork& Network,
+	FString* OutWhy, const FTowSeed* Seed)
+{
+	if (!Vehicle.HasTrailer())
+	{
+		return true;
+	}
+	// A REVERSE IT CANNOT BACK is refused with the fold (2026-09-27): the tow would stall at the
+	// service point holding the node, which is the jack-knife's cost under another name.
+	const FFitVerdict Whole = JudgePlan(Plan, Vehicle, Network, Seed);
+	if (Whole.Refusal != EFitRefusal::TrailerFolds && Whole.Refusal != EFitRefusal::ReverseUnsolvable)
+	{
+		return true;
+	}
+	if (OutWhy != nullptr)
+	{
+		*OutWhy = Whole.Describe();
+	}
+	return false;
+}

@@ -123,6 +123,18 @@ namespace
 
 namespace ArrivalPlanner
 {
+	FRouteQuery TaxiInQuery(FGuidelineNodeId From, const FAirframe& Airframe, double EdgeSpan)
+	{
+		// FRouteQuery::For WITH NO GOAL, which the factory takes as happily as any unset field: ChooseStand has no ONE
+		// goal - FindToGoals takes the whole candidate set - and it used to build this query by hand for that reason,
+		// the one bare query rule 22 allowed. The policy came from the table either way; what the factory adds is that
+		// a second builder of the same query (ReofferStand's, #429 review) is now impossible to write differently.
+		FRouteQuery Query = FRouteQuery::For(ERouteErrand::ArrivalTaxiIn, From, FGuidelineNodeId(), EdgeSpan,
+			ETraversalClass::Aircraft);
+		Query.NeedsPavement(Airframe.MinimumPavement);
+		return Query;
+	}
+
 	/**
 	 * ChooseStand, with the span the ROUTE is limited by apart from the airframe the STANDS are
 	 * judged for (review fix 2). EdgeSpan 0 is NarrowTaxiwayOnRoute's probe: "which stand this
@@ -170,24 +182,18 @@ namespace ArrivalPlanner
 		// one rule that also asks pavement and service - see its own comment for why surface
 		// beats size.
 
-		// Built by hand rather than FRouteQuery::For: that factory also takes a Goal, and
-		// there isn't ONE here - FindToGoals takes the whole Candidates set instead of a
-		// single Query.Goal. See RouteSearch::FindToGoals (#190, deferred from #171/#201):
-		// ONE multi-goal search from From replaces the old one-Find()-per-stand loop, which
+		// NO SINGLE GOAL - FindToGoals takes the whole Candidates set instead of a single
+		// Query.Goal. See RouteSearch::FindToGoals (#190, deferred from #171/#201): ONE
+		// multi-goal search from From replaces the old one-Find()-per-stand loop, which
 		// stayed O(exits x stands) searches per dispatch, per re-offer, per plan re-resolve
 		// even after #201 made each individual search cheap.
 		//
-		// THE POLICY STILL COMES FROM THE TABLE, hand-built or not: the errand is set and
-		// FRoutePolicy::For resolves it, so this site cannot drift from the one list even
-		// though it cannot use the factory.
-		FRouteQuery Query;
-		Query.Start = From;
-		Query.Class = ETraversalClass::Aircraft;
-		Query.Wingspan = EdgeSpan;
-		Query.NeedsPavement(Airframe.MinimumPavement);
-		Query.Errand = ERouteErrand::ArrivalTaxiIn;
-		Query.Policy = FRoutePolicy::For(Query.Errand);
-		Query.AvoidRunways = Query.Policy.Avoidance;
+		// THE TAXI-IN QUERY (TaxiInQuery), NOT A HAND-BUILT ONE (#429 review): this was built
+		// field by field here because the factory "also takes a Goal" - it takes an unset one as
+		// readily - and the stand re-offer then built the same query a second way to drive to the
+		// stand chosen here. Two builders drift; a stand chosen by one search and unreachable by
+		// the other is a waiter offered a stand and refused the route, every pass.
+		const FRouteQuery Query = TaxiInQuery(From, Airframe, EdgeSpan);
 
 		// The wingspan retry Find() pays for on TooWide (RouteSearch::Find's own unconstrained
 		// re-run) is NOT reproduced here - see FindToGoals' own comment. This loop never read

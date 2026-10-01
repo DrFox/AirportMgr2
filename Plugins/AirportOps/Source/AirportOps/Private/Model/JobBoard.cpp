@@ -1016,7 +1016,8 @@ void UJobBoard::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Networ
 	// A VEHICLE STRANDED - the road under it went (#399's follow-up). It will never arrive, so its jobs
 	// would sit assigned to it for the session and no other vehicle would bid. They go back to the board
 	// now. THE VEHICLE STAYS WHERE IT IS, for the player's Unstick: nothing automatic moves a stranded
-	// agent (UGroundTraffic::RescueStranded's contract), and retiring it here would make every truck on a
+	// agent (UGroundTraffic::RescueStranded's contract - except an aircraft waiting for a stand when one
+	// frees, which a vehicle never is), and retiring it here would make every truck on a
 	// deleted road vanish. ToFacility, so whatever the player does next - a Replan to its old goal, Send
 	// home - ends at home: OnVehicleArrived turns a ToFacility vehicle for home wherever it parks.
 	// ENFORCED BY: AirportOps.Model.AgentRescue.StrandedVehicleReleasesJobs

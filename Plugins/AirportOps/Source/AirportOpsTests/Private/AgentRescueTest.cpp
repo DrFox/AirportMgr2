@@ -206,6 +206,99 @@ bool FAgentRescueReplanTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+namespace AgentRescueHeld
+{
+	/**
+	 * A fork, the route-change tests' own: A (0,0) east to B (3000,0), on to C (6000,0) and E (9000,0), and B north to
+	 * D (3000,3000) and D on to C - so an agent refused BC has a way round by D, and one that is not refused has no
+	 * better route than the one it is on. Authored edges; a van (a zero-size body fits every edge and turn here).
+	 */
+	struct FFork
+	{
+		URoadNetwork* Net = nullptr;
+		UGroundTraffic* Traffic = nullptr;
+		USimClock* Clock = nullptr;
+		UAgentRescue* Rescue = nullptr;
+		FGuidelineNodeId A, B, C, D, E;
+		FGuidelineEdgeId BC;
+
+		void Build()
+		{
+			Net = NewObject<URoadNetwork>(GetTransientPackage());
+			A = TestGraph::Node(*Net, 0.0, 0.0);
+			B = TestGraph::Node(*Net, 3000.0, 0.0);
+			C = TestGraph::Node(*Net, 6000.0, 0.0);
+			D = TestGraph::Node(*Net, 3000.0, 3000.0);
+			E = TestGraph::Node(*Net, 9000.0, 0.0);
+			TestGraph::FJoinOptions Authored;
+			Authored.bDerived = false;
+			TestGraph::Join(*Net, A, B, Authored);
+			BC = TestGraph::Join(*Net, B, C, Authored);
+			TestGraph::Join(*Net, B, D, Authored);
+			TestGraph::Join(*Net, D, C, Authored);
+			TestGraph::Join(*Net, C, E, Authored);
+			Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+			Clock = NewObject<USimClock>(GetTransientPackage());
+			Rescue = NewObject<UAgentRescue>(GetTransientPackage());
+		}
+
+		/** A van dispatched From -> E the short way (by BC), standing at From - dispatched, never advanced, so stopped. */
+		int32 Van(FGuidelineNodeId From)
+		{
+			FVehicle Van;
+			Van.Chassis.Ground.MaxTurnRateDegPerSec = 90.0;
+			return Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, From, E, ETraversalClass::GroundVehicle), Van,
+				ETraversalClass::GroundVehicle, 0.0);
+		}
+
+		/** Whether AgentId's route still takes BC. */
+		bool TakesBC(int32 AgentId) const
+		{
+			const FRoadAgent* Agent = Traffic->FindAgent(AgentId);
+			return Agent != nullptr && Agent->Follower.Plan.Steps.ContainsByPredicate(
+				[this](const FRouteStep& Step) { return Step.Edge == BC; });
+		}
+	};
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAgentRescueReplanHonoursTheResolverBoundTest,
+	"AirportOps.Model.AgentRescue.ReplanHonoursTheResolverBound",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAgentRescueReplanHonoursTheResolverBoundTest::RunTest(const FString& Parameters)
+{
+	// ONE BAN (#429): the Unstick's Replan turns a held agent round what holds it exactly when the deadlock resolver
+	// would - UGroundTraffic::ReplanAroundBlocker, the resolver's own per-agent step. It used to copy the resolver's ban
+	// and drop its UPPER BOUND: an agent stopped a whole edge short of the step it was refused was turned "round" it
+	// from a node it was nowhere near - which the resolver refuses precisely because the alternative is another edge
+	// out of THAT node. Both vans are refused edge BC (a phantom holder); one stands at B, one 3000 uu back at A.
+	using namespace AgentRescueHeld;
+	FFork F;
+	F.Build();
+	constexpr int32 Phantom = 4242;
+
+	// AT ITS BLOCK: standing at B, refused BC (its step 0) - 0 uu to the node, inside gap + half a footprint. Turned.
+	const int32 AtB = F.Van(F.B);
+	if (!TestTrue(TEXT("a van at B, going by BC"), AtB > 0 && F.TakesBC(AtB))) { return false; }
+	FGroundTrafficTestAccess(*F.Traffic).ScriptWait(AtB, FTrafficResource::OfEdge(F.BC), Phantom, 30.0, 0);
+	const FUnstickVerdict Turned = F.Rescue->Unstick(*F.Traffic, *F.Net, *F.Clock, AtB, EUnstickAction::Replan);
+	TestTrue(FString::Printf(TEXT("held AT its block: the Unstick turns it round (%s)"), *Turned.Why.ToString()), Turned.bAllowed);
+	TestFalse(TEXT("and its route no longer takes the edge that refused it - it goes by D"), F.TakesBC(AtB));
+
+	// FAR FROM ITS BLOCK: standing at A, refused BC (its step 1), 3000 uu ahead - past gap + half a footprint + the
+	// node's reach. The resolver would not turn it; neither does the Unstick. Before #429 part 2 it banned BC and
+	// sent the van by D from a node 3000 uu away.
+	const int32 AtA = F.Van(F.A);
+	if (!TestTrue(TEXT("a van at A, going by BC"), AtA > 0 && F.TakesBC(AtA))) { return false; }
+	FGroundTrafficTestAccess(*F.Traffic).ScriptWait(AtA, FTrafficResource::OfEdge(F.BC), Phantom, 30.0, 1);
+	const FUnstickVerdict Far = F.Rescue->Unstick(*F.Traffic, *F.Net, *F.Clock, AtA, EUnstickAction::Replan);
+	TestFalse(TEXT("held a whole edge short of its block: not turned round it - a fresh search finds the route it has"), Far.bAllowed);
+	TestTrue(TEXT("so its route still takes BC (red when the rescue had no upper bound: it went by D)"), F.TakesBC(AtA));
+	return true;
+}
+
 // ---------------------------------------------------------------------------------------
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FAgentRescueRefusalsTest,

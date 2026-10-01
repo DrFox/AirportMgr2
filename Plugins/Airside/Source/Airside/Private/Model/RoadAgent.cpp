@@ -712,8 +712,8 @@ TOptional<FTowSeed> FRoadAgent::LiveTowSeed() const
 	FTowSeed Seed;
 	Seed.Axles = TowAxles;
 	// THE CAB'S HEADING AS SHOWN (LastMotion), not the follower's - the pair Origin below
-	// is read from, and what UJobBoard::DriveVehicleTo and ARigYard seed with (aligned
-	// 2026-09-27). The two agree while a tow drives forward; after a tow reverse the
+	// is read from, and what UGroundTraffic::SendAgentTo (UJobBoard::DriveVehicleTo's, until
+	// #429) and ARigYard seed with (aligned 2026-09-27). The two agree while a tow drives forward; after a tow reverse the
 	// follower, which did not run during it, still holds the pose it had at the reverse's
 	// start (see RedirectAgent's own note), so only LastMotion describes the cab there.
 	Seed.Heading = LastMotion.Heading;

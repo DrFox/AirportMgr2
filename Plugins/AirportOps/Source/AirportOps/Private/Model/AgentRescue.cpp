@@ -1,26 +1,19 @@
 #include "Model/AgentRescue.h"
 
 #include "AirportOpsLog.h"
-#include "Model/ArrivalPlanner.h"
+#include "Model/ExhaustiveSwitch.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
 #include "Model/JobBoard.h"
 #include "Model/RoadNetwork.h"
-#include "Model/RouteSearch.h"
 #include "Model/SimClock.h"
-#include "Model/TrafficOccupancy.h"
 
 #define LOCTEXT_NAMESPACE "AgentRescue"
 
 namespace
 {
-	/**
-	 * How far from a stranded aircraft the node its stand search starts from may be, uu. The search
-	 * only CHOOSES the stand; the route driven is RescueStranded's, from the pavement it hops onto -
-	 * so this is generous (50 m) rather than tight: too tight and a stranded aircraft finds no stand
-	 * at all, too loose and the choice favours a stand near some other node. Neither moves anything.
-	 */
-	constexpr double StandSearchRadius = 5000.0;
+	// THE STAND SEARCH'S RADIUS (StandSearchRadius) went to Airside with the search itself (#429): it is
+	// UGroundTraffic::ReofferStand's figure now (its stranded row), beside the reason it is 50 m.
 
 	FText PhaseRefusal(EAgentPhase Phase)
 	{
@@ -34,11 +27,6 @@ namespace
 		default:                       return LOCTEXT("NotNow", "Not in a state to do that");
 		}
 	}
-}
-
-bool UAgentRescue::LooksStuck(const FRoadAgent& Agent, double Seconds)
-{
-	return Agent.Phase == EAgentPhase::Stranded || Agent.GetStalledSeconds() >= Seconds;
 }
 
 FUnstickVerdict UAgentRescue::CanUnstick(const UGroundTraffic& Traffic, int32 AgentId, EUnstickAction Action) const
@@ -151,6 +139,9 @@ FUnstickVerdict UAgentRescue::Unstick(UGroundTraffic& Traffic, const URoadNetwor
 	return Verdict;
 }
 
+// ENFORCED BY: AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (C4062 as an error over this function: a replan outcome added in Airside
+// is a build error here until the player has a sentence for it)
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
 FUnstickVerdict UAgentRescue::Replan(UGroundTraffic& Traffic, const URoadNetwork& Network, const FRoadAgent& Agent)
 {
 	if (Agent.Phase == EAgentPhase::Stranded)
@@ -159,40 +150,36 @@ FUnstickVerdict UAgentRescue::Replan(UGroundTraffic& Traffic, const URoadNetwork
 			: FUnstickVerdict::No(LOCTEXT("NoPavement", "No pavement close enough to rejoin - despawn it"));
 	}
 
-	const FRoutePlan& Plan = Agent.Follower.Plan;
-	const int32 OnStep = UGroundTraffic::CurrentStep(Plan, Agent.Follower.Travelled);
-	const int32 Blocked = Agent.GetBlockedStep();
-
-	// HELD AT A STEP IT HAS NOT ENTERED: splice there and ban what refused it - the deadlock resolver's
-	// own ban (FDeadlockResolver::Resolve), a whole node when a node refused it, else the step's edge. Not
-	// when it is already INSIDE the refused step: ReplanAt keeps Travelled, and another edge out of a node
-	// behind it would re-map its distance onto other geometry - the teleport ReplanAt's precondition names.
-	if (Blocked >= 0 && Blocked < Plan.Steps.Num()
-		&& UGroundTraffic::StepStart(Plan, Blocked) - Agent.Follower.Travelled >= -KINDA_SMALL_NUMBER)
+	// HELD WHERE THE DEADLOCK RESOLVER WOULD TURN IT: the resolver's own step - its bound and its ban, a whole node when
+	// a node refused it, else the step's edge (UGroundTraffic::ReplanAroundBlocker, #429). This used to be a copy of
+	// that ban with no upper bound, and turned an agent a whole edge short of its block round it from a node it was
+	// nowhere near.
+	// ENFORCED BY: AirportOps.Model.AgentRescue.ReplanHonoursTheResolverBound
+	switch (Traffic.ReplanAroundBlocker(Agent.Id, Network))
 	{
-		const FGuidelineEdgeId BannedEdge = Plan.Steps[Blocked].Edge;
-		const FGuidelineNodeId BannedNode = Agent.GetBlockedResource().Kind == ETrafficResourceKind::Node
-			? Agent.GetBlockedResource().Node : FGuidelineNodeId();
-		if (Traffic.ReplanAt(Agent.Id, Network, Blocked, BannedEdge, BannedNode))
-		{
-			return FUnstickVerdict::Yes();
-		}
-		return FUnstickVerdict::No(LOCTEXT("NoWayRound", "No other way round what is holding it"));
-	}
-
-	// NOT HELD, OR HELD INSIDE ITS STEP: the next node ahead, no ban - a fresh search under today's
-	// congestion. ReplanAt refuses a "replan" that finds the route it already has, which is the answer.
-	const int32 Splice = OnStep + 1;
-	if (Splice >= Plan.Steps.Num())
-	{
-		return FUnstickVerdict::No(LOCTEXT("LastStep", "On its last stretch - nothing left to replan"));
-	}
-	if (Traffic.ReplanAt(Agent.Id, Network, Splice, FGuidelineEdgeId()))
-	{
+	case EBlockerReplan::Turned:
 		return FUnstickVerdict::Yes();
+	case EBlockerReplan::NoWayRound:
+		return FUnstickVerdict::No(LOCTEXT("NoWayRound", "No other way round what is holding it"));
+	case EBlockerReplan::NotAtItsBlock:
+		break;
+	}
+
+	// NOT HELD, OR NOT WHERE THE RESOLVER WOULD TURN IT: the next node ahead, no ban - a fresh search under today's
+	// congestion (UGroundTraffic::ReplanFromNextNode). A "replan" that finds the route it already has is refused,
+	// which is the answer.
+	switch (Traffic.ReplanFromNextNode(Agent.Id, Network))
+	{
+	case ENextNodeReplan::Replanned:
+		return FUnstickVerdict::Yes();
+	case ENextNodeReplan::LastStep:
+		return FUnstickVerdict::No(LOCTEXT("LastStep", "On its last stretch - nothing left to replan"));
+	case ENextNodeReplan::NoBetterRoute:
+		return FUnstickVerdict::No(LOCTEXT("BestRoute", "Already on its best route"));
 	}
 	return FUnstickVerdict::No(LOCTEXT("BestRoute", "Already on its best route"));
 }
+AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 FUnstickVerdict UAgentRescue::SendVehicleHome(UGroundTraffic& Traffic, const URoadNetwork& Network,
 	const USimClock& Clock, int32 AgentId)
@@ -203,63 +190,36 @@ FUnstickVerdict UAgentRescue::SendVehicleHome(UGroundTraffic& Traffic, const URo
 		? FUnstickVerdict::Yes() : FUnstickVerdict::No(LOCTEXT("NoDepot", "Not a depot's vehicle - it has no home"));
 }
 
+// ENFORCED BY: AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN (C4062 as an error over this function: a stand-offer outcome added in
+// Airside is a build error here until the player has a sentence for it)
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
 FUnstickVerdict UAgentRescue::FindStand(UGroundTraffic& Traffic, const URoadNetwork& Network, const FRoadAgent& Agent)
 {
-	const FAirframe* Airframe = Agent.AsAircraft();
-	if (Airframe == nullptr)
+	if (Agent.AsAircraft() == nullptr)
 	{
 		return FUnstickVerdict::No(LOCTEXT("NoAirframe", "Not an aircraft"));
 	}
 
-	// PARKED WAITING FOR A STAND: exactly UGroundTraffic::ReofferStands' move, asked now instead of when
-	// a stand next frees - from the node it waits on, and a redirect from rest where it stands.
-	if (Agent.Phase == EAgentPhase::Parked)
+	// EXACTLY UGroundTraffic::ReofferStands' MOVE, asked now instead of when a stand next frees - ReofferStand, the one
+	// waiter's move (#429), whose phase decides how: PARKED waiting for a stand, from the node it waits on and a redirect
+	// from rest where it stands; STRANDED, a stand chosen from the node ahead on its dead route (else the nearest) and a
+	// rescue from wherever it hops onto - never a restart at its goal node, which it need not be at. RESCUED, the
+	// player's own reason (#436): the flight board keeps the taxi in it was in.
+	const FStandOffer Offer = Traffic.ReofferStand(Agent.Id, Network, EAgentEvent::Rescued);
+	switch (Offer.Outcome)
 	{
-		FRoutePlan Route;
-		const FGuidelineNodeId Stand = ArrivalPlanner::ChooseStand(Network, Agent.GoalNode, *Airframe,
-			&Traffic.GetOccupancy(), Agent.Id, &Route);
-		if (!Stand.IsSet() || !Route.IsValid())
-		{
-			return FUnstickVerdict::No(LOCTEXT("NoFreeStand", "No free stand fits it"));
-		}
-		// RESCUED, the player's own reason (#436): the flight board keeps the taxi in it was in.
-		return Traffic.RedirectAgent(Agent.Id, &Network, Route, EAgentEvent::Rescued) ? FUnstickVerdict::Yes()
-			: FUnstickVerdict::No(LOCTEXT("RedirectRefused", "Could not send it to the stand"));
-	}
-
-	// STRANDED: the stand is CHOSEN from a node near it, and DRIVEN to by the rescue from wherever it
-	// hops onto. THE NODE AHEAD ON ITS OWN ROUTE when that still exists - the way it was facing, off any
-	// runway it was leaving - and only else the nearest node: measured 2026-09-29, an aeroplane stranded
-	// just off a runway exit found the runway's own node nearest (198 uu), and a taxi-in search avoids
-	// runway edges, so no stand was reachable from there at all. See StandSearchRadius.
-	const FRoutePlan& Plan = Agent.Follower.Plan;
-	const int32 OnStep = UGroundTraffic::CurrentStep(Plan, Agent.Follower.Travelled);
-	FGuidelineNodeId Near = Plan.Steps.IsValidIndex(OnStep) && Network.GetGuidelineNode(Plan.Steps[OnStep].To) != nullptr
-		? Plan.Steps[OnStep].To : FGuidelineNodeId();
-	if (!Near.IsSet())
-	{
-		Near = RouteSearch::FindNearestNode(Network, Agent.LastMotion.Position, Agent.Class, StandSearchRadius);
-	}
-	if (!Near.IsSet())
-	{
-		return FUnstickVerdict::No(LOCTEXT("NoPavement", "No pavement close enough to rejoin - despawn it"));
-	}
-	bool bSawHeld = false;
-	const FGuidelineNodeId Stand = ArrivalPlanner::ChooseStand(Network, Near, *Airframe,
-		&Traffic.GetOccupancy(), Agent.Id, nullptr, &bSawHeld);
-	if (!Stand.IsSet())
-	{
-		// WHICH NODE IT SEARCHED FROM, said: "no stand" from a stranded aeroplane is either the airport
-		// (every stand held or too small) or the search origin, and only the log can tell them apart.
-		const FGuidelineNode* From = Network.GetGuidelineNode(Near);
-		UE_LOG(LogAirportOps, Log, TEXT("Unstick: agent %d found no stand searching from node %d, %.0f uu away (a held stand %s)"),
-			Agent.Id, Near.Index, From != nullptr ? FVector2D::Distance(From->Position, Agent.LastMotion.Position) : -1.0,
-			bSawHeld ? TEXT("was seen") : TEXT("was not seen"));
+	case EStandOffer::Sent:
+		return FUnstickVerdict::Yes();
+	case EStandOffer::NoFreeStand:
 		return FUnstickVerdict::No(LOCTEXT("NoFreeStand", "No free stand fits it"));
+	case EStandOffer::NoPavement:
+		return FUnstickVerdict::No(LOCTEXT("NoPavement", "No pavement close enough to rejoin - despawn it"));
+	case EStandOffer::NotSent:
+		return FUnstickVerdict::No(LOCTEXT("RedirectRefused", "Could not send it to the stand"));
 	}
-	return Traffic.RescueStranded(Agent.Id, Network, Stand) ? FUnstickVerdict::Yes()
-		: FUnstickVerdict::No(LOCTEXT("NoPavement", "No pavement close enough to rejoin - despawn it"));
+	return FUnstickVerdict::No(LOCTEXT("RedirectRefused", "Could not send it to the stand"));
 }
+AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 FUnstickVerdict UAgentRescue::Despawn(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock,
 	const FRoadAgent& Agent)

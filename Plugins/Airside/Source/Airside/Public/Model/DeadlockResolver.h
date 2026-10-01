@@ -130,6 +130,31 @@ struct AIRSIDE_API FDeadlockResolver
 		const TMap<int32, int32>& AgentIndex, double SimSeconds);
 
 	/**
+	 * THE RESOLVER'S PER-AGENT STEP, part one (#429): may Agent be turned round what holds it, where it stands?
+	 * CanReplanAtBlockedStep - turnable, stopped, and AT the node its refused step leaves from (within gap + half a
+	 * footprint + that node's reach) - and not refused the runway it is GOING TO, which no ban routes round.
+	 *
+	 * PUBLIC BECAUSE IT HAS TWO ASKERS: Resolve, of every cycle member, for its candidate list; and
+	 * UGroundTraffic::ReplanAroundBlocker, of the one agent the player's Unstick names. The Unstick used to copy the ban
+	 * and not this bound, and the copies had drifted - it turned an agent a whole edge short of its block round it from
+	 * a node it was nowhere near. One answer now, so the button cannot turn an agent the resolver would leave.
+	 * ENFORCED BY: AirportOps.Model.AgentRescue.ReplanHonoursTheResolverBound
+	 */
+	bool IsTurnableAtItsBlock(const FRoadAgent& Agent, const URoadNetwork& Network, const FTrafficRules& Rules,
+		FNodeReachCache& Reach) const;
+
+	/**
+	 * Part two, THE BAN: splice at the refused step and forbid what refused it - the whole node when a node refused it
+	 * (an aircraft standing there is a wall from every side), else the step's edge - through FPlanReResolver::ReplanAt,
+	 * which keeps Travelled, speed and heading and refuses a "replan" that finds the route the agent already has. True
+	 * when the agent took a new route. Ask IsTurnableAtItsBlock first: this reads the refused step off the plan it is
+	 * about to replace, and trusts it names a step.
+	 * ENFORCED BY: Airside.Model.Traffic.ReplanAroundBlocker.MatchesTheResolver (the Unstick's and the resolver's replans
+	 * of one held agent are the same route)
+	 */
+	static bool TurnAtItsBlock(FRoadAgent& Agent, FPlanReResolver& PlanReResolver, const FTrafficContext& Context);
+
+	/**
 	 * Every cycle key (the lowest member id) this session has LOGGED. Its only reader is
 	 * UGroundTraffic::GetCyclesDetectedForTest.
 	 *

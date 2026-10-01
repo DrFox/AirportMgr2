@@ -124,12 +124,12 @@
           caller that fills a query by hand and skips For() gets the permissive
           ERunwayAvoidance::None for every errand, silently: six test helpers and 48 call
           sites did this before #312. Test modules are explicitly IN SCOPE, unlike rules 5/6 -
-          a test's query reaches the same RunSearch a production one does. Five sites are
+          a test's query reaches the same RunSearch a production one does. Four sites are
           allow-listed by (File, Var), each checked by hand (FuelService.cpp's two went to
-          FRouteQuery::For in the JobBoard move, 2026-09-28):
-          ArrivalPlanner.cpp/RoadEditFacadeSurfaces.cpp already set AvoidRunways correctly
-          by hand (the last two because FindToGoals takes a Goals ARRAY, so neither For() nor
-          Probe() fits); RoutePolicyTest.cpp deliberately builds a no-errand query to test its
+          FRouteQuery::For in the JobBoard move, 2026-09-28; ArrivalPlanner.cpp's went to
+          ArrivalPlanner::TaxiInQuery, For() with no goal, in #429's review):
+          RoadEditFacadeSurfaces.cpp already sets AvoidRunways correctly
+          by hand (FindToGoals takes a Goals ARRAY); RoutePolicyTest.cpp deliberately builds a no-errand query to test its
           own refusal; RouteSearchTest.cpp has the same FindToGoals shape as ArrivalPlanner.cpp;
           RouteStepDistanceTest.cpp's FRouteRunwayAvoidanceTest sweeps AvoidRunways BY HAND,
           decoupled from Policy, to test ERunwayAvoidance itself. The allow-list also fails if
@@ -984,6 +984,31 @@ $AllowedCallers = @(
         ProdAllowed = @()
         TestExempt  = $true
         ProdReason  = 'ask IsShown() and let the host own the state (UUiWindowHost::Toggle, FUiWindowSpec::bToggled, OnShownChanged) - a panel keeping its own flag is the copy that parts from the window (#447)'
+    },
+    @{
+        # ONE DEFINITION OF STUCK (#429): FRoadAgent::IsStoppedAndWaiting feeds the stall clock, HasStalledFor is a
+        # stalled waiter past a bound, IsStuck adds Stranded - all three in RoadAgent.h. "Stuck" was spelled three ways
+        # in two modules (the accrual rule, the resolver's waiter test, the Unstick button's `stall >= Seconds`), and the
+        # copies disagreed on the bound and on whether a blocker had to be named. The stall clock COMPARED to a bound
+        # anywhere else is a fourth spelling, and so is InspectFacts' copy of it (Hold.StalledSeconds) compared: reading
+        # either as a value, to show it, is not. Either operand order, and any root - `Agents[I].` included (#429 review).
+        Name        = 'stall clock compared'
+        Pattern     = 'GetStalledSeconds\s*\(\s*\)\s*[<>]|(?<![-<>])[<>]=?\s*[\w.\[\]>-]*GetStalledSeconds\s*\(|\bHold\.StalledSeconds\s*[<>]|(?<![-<>])[<>]=?\s*[\w.\[\]>-]*Hold\.StalledSeconds\b'
+        ProdAllowed = @('Public\Model\RoadAgent.h')
+        TestExempt  = $true
+        ProdReason  = 'ask FRoadAgent::IsStuck (or HasStalledFor for a wait-for edge) - the one definition of stuck, whose bound and blocker test the copies had drifted from (#429)'
+    },
+    @{
+        # ONE TAXI-IN QUERY (#429 review): ArrivalPlanner::ChooseStand chooses a stand by it and UGroundTraffic::
+        # ReofferStand drives the waiter there by a route SendAgentTo searches with it. They were built twice, by hand
+        # and by For(); if the two drift, a stand is chosen that the drive's search cannot reach, and the waiter is
+        # offered it and refused every pass. ArrivalPlanner::TaxiInQuery is the one builder - the errand named anywhere
+        # else in production is a second one. The policy table (RoutePolicy.cpp) names it to say what it means.
+        Name        = 'taxi-in query built'
+        Pattern     = '\bERouteErrand::ArrivalTaxiIn\b'
+        ProdAllowed = @('Private\Model\ArrivalPlanner.cpp', 'Private\Model\RoutePolicy.cpp')
+        TestExempt  = $true
+        ProdReason  = 'take the taxi-in query from ArrivalPlanner::TaxiInQuery, the one the stand choice searches with (#429 review)'
     }
 )
 foreach ($row in $AllowedCallers) {
@@ -1694,8 +1719,9 @@ $ranRules.Add('no-vehiclecode-compare')
 #
 # THE ALLOW-LIST, one entry per (File, VarName), matching rule 6's "file AND field name" shape
 # rather than exempting a whole file: each remaining site was checked by hand (issue #312's PR)
-# and either already sets AvoidRunways correctly (ArrivalPlanner.cpp - FuelService.cpp's two moved
-# to FRouteQuery::For when it became JobBoard*.cpp, 2026-09-28 -
+# and either already sets AvoidRunways correctly (FuelService.cpp's two moved to FRouteQuery::For
+# when it became JobBoard*.cpp, 2026-09-28, and ArrivalPlanner.cpp's to ArrivalPlanner::TaxiInQuery
+# in #429's review - For() takes an unset goal as readily as a set one -
 # RoadEditFacadeSurfaces.cpp, RouteSearchTest.cpp - the last two because FindToGoals takes a
 # GOALS ARRAY, not the one Goal either For() or Probe() needs) or deliberately builds an
 # incomplete or hand-swept query to test the refusal/sweep itself (RoutePolicyTest.cpp's
@@ -1705,7 +1731,6 @@ $ranRules.Add('no-vehiclecode-compare')
 # `FRouteQuery Var;` in one of these files, or a second one of an already-listed (File, Var),
 # still fails - the allow-list is not a whole-file exemption.
 $routeQueryAllowList = @(
-    @{ File = 'Plugins\Airside\Source\Airside\Private\Model\ArrivalPlanner.cpp'; Var = 'Query'; Count = 1 }
     @{ File = 'Plugins\Airside\Source\Airside\Private\Present\RoadEditFacadeSurfaces.cpp'; Var = 'Query'; Count = 1 }
     @{ File = 'Plugins\Airside\Source\AirsideTests\Private\RoutePolicyTest.cpp'; Var = 'Q'; Count = 2 }
     @{ File = 'Plugins\Airside\Source\AirsideTests\Private\RouteSearchTest.cpp'; Var = 'Query'; Count = 1 }
@@ -3248,13 +3273,16 @@ $ranRules.Add('one-airport-lookup')
 # and in ops the deadlock resolver's replan called directly (ReplanAt - the Unstick copying the resolver's ban).
 # Comments and string literals are stripped first (rule 34's stripper), so a WHY comment may name them.
 #
+# PART 2 (#429) EMPTIED OPS: UGroundTraffic::SendAgentTo chooses how a vehicle turns, finishes or is rescued;
+# ReplanAroundBlocker / ReplanFromNextNode are the Unstick's replans (the resolver's own step and bound);
+# ReofferStand its stand (a stranded one's from where it stands); RemainingDriveSeconds the bid's ETA. So in AirportOps it also bans what
+# computing a splice point or a ban needs - the plan-geometry statics (UGroundTraffic::CurrentStep / StepFromNode /
+# StepStart) and the refusal an agent is held by (GetBlockedStep / GetBlockedResource): with those, the Unstick
+# could copy the resolver's ban again, which is how its copy lost the resolver's upper bound.
+#
 # THE ALLOW-LIST IS PER FILE AND PER TOKEN, and every entry is a debt with its payer named:
 # - RigTestCourseTest.cpp reads Follower.Travelled for its speed-limit probe until #301 moves the course's checks
 #   onto Airside's own accessors.
-# - JobBoardDrive.cpp, JobBoard.h (MayDriveUngated's seed parameter), JobBoardBid.cpp (the bid's ETA) and
-#   AgentRescue.cpp (the Unstick's replan) are #429 PART 2: SendAgentTo, RemainingDriveSeconds and
-#   ReplanAroundBlocker take them over, and part 2 deletes these rows. A token NOT listed for a file fails there
-#   already - JobBoardDrive.cpp may not build a seed (TowSeed.Emplace) again, which part 1 removed.
 # A LISTED TOKEN THAT NO LONGER APPEARS FAILS TOO: an allow-list entry that allows nothing is a pin loosened for
 # free, and the next writer in that file would be waved through by it. Delete the entry with the code.
 $routeInternals = @(
@@ -3263,14 +3291,15 @@ $routeInternals = @(
     @{ Token = 'RerouteAgent(';      Pattern = '\bRerouteAgent\s*\(';     OpsOnly = $false },
     @{ Token = 'Follower.Travelled'; Pattern = '\bFollower\.Travelled\b'; OpsOnly = $false },
     @{ Token = 'Follower.Plan';      Pattern = '\bFollower\.Plan\b';      OpsOnly = $false },
-    @{ Token = 'ReplanAt(';          Pattern = '\bReplanAt\s*\(';         OpsOnly = $true }
+    @{ Token = 'ReplanAt(';          Pattern = '\bReplanAt\s*\(';         OpsOnly = $true },
+    @{ Token = 'CurrentStep(';       Pattern = '\bCurrentStep\s*\(';      OpsOnly = $true },
+    @{ Token = 'StepFromNode(';      Pattern = '\bStepFromNode\s*\(';     OpsOnly = $true },
+    @{ Token = 'StepStart(';         Pattern = '\bStepStart\s*\(';        OpsOnly = $true },
+    @{ Token = 'GetBlockedStep(';    Pattern = '\bGetBlockedStep\s*\(';   OpsOnly = $true },
+    @{ Token = 'GetBlockedResource('; Pattern = '\bGetBlockedResource\s*\('; OpsOnly = $true }
 )
 $routeInternalsAllowed = @{
     'Source\AirportMgr\RigTestCourseTest.cpp'                         = @('Follower.Travelled')
-    'AirportOps\Private\Model\JobBoardDrive.cpp'                      = @('FTowSeed', 'RerouteAgent(', 'Follower.Plan', 'Follower.Travelled')
-    'AirportOps\Public\Model\JobBoard.h'                              = @('FTowSeed')
-    'AirportOps\Private\Model\JobBoardBid.cpp'                        = @('Follower.Plan', 'Follower.Travelled')
-    'AirportOps\Private\Model\AgentRescue.cpp'                        = @('Follower.Plan', 'Follower.Travelled', 'ReplanAt(')
 }
 $routeInternalsSeen = @{}
 $gameModule = Join-Path $Root 'Source\AirportMgr'

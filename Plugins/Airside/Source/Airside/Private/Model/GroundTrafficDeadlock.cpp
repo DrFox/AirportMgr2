@@ -101,7 +101,8 @@ bool UGroundTraffic::ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 
 	FGuidelineEdgeId BannedEdge, FGuidelineNodeId BannedNode)
 {
 	// THE WHOLE MECHANISM IS FPlanReResolver::ReplanAt NOW (issue #84) - this stays only
-	// because it is public API ReofferStands, tests and AirportOps call by AgentId; the full
+	// because it is public API tests call by AgentId (AirportOps' Unstick did too, until #429 gave
+	// it ReplanAroundBlocker and ReplanFromNextNode below, and rule 53 bans the call there); the full
 	// contract (guards, PRECONDITION, the two rejected alternatives) is documented on this
 	// declaration in GroundTraffic.h, unchanged, because that is what a caller reads.
 	const int32 Index = FindIndex(AgentId);
@@ -168,6 +169,94 @@ bool FDeadlockResolver::CanReplanAtBlockedStep(const FRoadAgent& Agent, const UR
 		&& ToNode <= Rules.GapFor(Agent.Class) + Rules.FootprintFor(Agent.Class) * 0.5 + Excess;
 }
 
+bool FDeadlockResolver::IsTurnableAtItsBlock(const FRoadAgent& Agent, const URoadNetwork& Network,
+	const FTrafficRules& Rules, FNodeReachCache& Reach) const
+{
+	if (!CanReplanAtBlockedStep(Agent, &Network, Rules, Reach))
+	{
+		return false;
+	}
+
+	// AN AGENT REFUSED THE RUNWAY IT IS GOING TO cannot go round it. A departure at
+	// a bar was the first candidate the replay tried (higher id, the tie-break), and
+	// its "replan" was a detour through the junction's other arm to enter the same
+	// strip from the other side - a different route, so ReplanAt accepted it, and the
+	// cycle was logged resolved twice before the arrival, which had a whole taxiway
+	// system to turn into, was asked. What it was refused is the destination; no ban
+	// makes a route to it that avoids it.
+	return !(Agent.GetBlockedResource().Kind == ETrafficResourceKind::Surface
+		&& Network.IsGuidelineNodeOnRunway(Agent.GoalNode, Agent.GetBlockedResource().Surface));
+}
+
+bool FDeadlockResolver::TurnAtItsBlock(FRoadAgent& Agent, FPlanReResolver& PlanReResolver, const FTrafficContext& Context)
+{
+	// READ BEFORE THE REPLAN, because ReplanAt rewrites the plan and clears
+	// BlockedStep - the ban would be read off the new plan otherwise, banning an edge
+	// of the route that was just chosen.
+	const int32 Step = Agent.GetBlockedStep();
+	if (!Agent.Follower.Plan.Steps.IsValidIndex(Step))
+	{
+		// IsTurnableAtItsBlock refuses exactly this (CanReplanAtBlockedStep's "BlockedStep that outran its plan"); a
+		// caller that skipped it gets a refusal here, not an out-of-range read.
+		return false;
+	}
+	const FGuidelineEdgeId BannedEdge = Agent.Follower.Plan.Steps[Step].Edge;
+
+	// BAN WHAT REFUSED IT. A node with an aircraft standing on it is a wall from every
+	// direction, so the whole node goes; an edge or a runway surface bans the step's
+	// edge (and every replan already refuses runway-derived edges - see ReplanAt).
+	const FGuidelineNodeId BannedNode =
+		Agent.GetBlockedResource().Kind == ETrafficResourceKind::Node
+			? Agent.GetBlockedResource().Node : FGuidelineNodeId();
+
+	return PlanReResolver.ReplanAt(Agent, Step, BannedEdge, BannedNode, Context);
+}
+
+EBlockerReplan UGroundTraffic::ReplanAroundBlocker(int32 AgentId, const URoadNetwork& Network)
+{
+	const int32 Index = FindIndex(AgentId);
+	if (Index == INDEX_NONE)
+	{
+		return EBlockerReplan::NotAtItsBlock;
+	}
+	FRoadAgent& Agent = Agents[Index];
+
+	// THE RESOLVER'S OWN TWO CALLS, in its order - the candidate test, then the ban and the splice - on the resolver's
+	// own reach cache and context, so a player's Replan of a held agent is the move the resolver would make of it in a
+	// cycle. No stamp and no retry window: those schedule the resolver's NEXT attempt at a jam, and the player asked now.
+	if (!DeadlockResolver.IsTurnableAtItsBlock(Agent, Network, Rules, NodeReach))
+	{
+		return EBlockerReplan::NotAtItsBlock;
+	}
+	const bool bTurned = FDeadlockResolver::TurnAtItsBlock(Agent, PlanReResolver,
+		FTrafficContext{Network, Rules, Occupancy, NodeReach, RunwayChains, SimSeconds});
+	return bTurned ? EBlockerReplan::Turned : EBlockerReplan::NoWayRound;
+}
+
+ENextNodeReplan UGroundTraffic::ReplanFromNextNode(int32 AgentId, const URoadNetwork& Network)
+{
+	const int32 Index = FindIndex(AgentId);
+	if (Index == INDEX_NONE)
+	{
+		return ENextNodeReplan::NoBetterRoute;
+	}
+	FRoadAgent& Agent = Agents[Index];
+
+	// THE NEXT NODE AHEAD, NO BAN - a fresh search under today's congestion. Not the step it is on: ReplanAt keeps
+	// Travelled, and another edge out of a node behind it would re-map its distance onto other geometry - the teleport
+	// ReplanAt's precondition names. ReplanAt refuses a "replan" that finds the route it already has, which is the
+	// answer that there is nothing better.
+	const FRoutePlan& Plan = Agent.Follower.Plan;
+	const int32 Splice = CurrentStep(Plan, Agent.Follower.Travelled) + 1;
+	if (Splice >= Plan.Steps.Num())
+	{
+		return ENextNodeReplan::LastStep;
+	}
+	return PlanReResolver.ReplanAt(Agent, Splice, FGuidelineEdgeId(), FGuidelineNodeId(),
+			FTrafficContext{Network, Rules, Occupancy, NodeReach, RunwayChains, SimSeconds})
+		? ENextNodeReplan::Replanned : ENextNodeReplan::NoBetterRoute;
+}
+
 void FDeadlockResolver::FindCycles(TConstArrayView<FRoadAgent> Agents, const FTrafficRules& Rules,
 	FCycleScratch& Scratch, TArray<TArray<int32>>& OutCycles)
 {
@@ -194,7 +283,9 @@ void FDeadlockResolver::FindCycles(TConstArrayView<FRoadAgent> Agents, const FTr
 	Scratch.Waiting.Reset();
 	for (const FRoadAgent& Agent : Agents)
 	{
-		if (Agent.GetStalledSeconds() > Rules.StallSeconds && Agent.GetWaitingOn() != 0)
+		// HasStalledFor, the ONE spelling of "a stalled waiter" (#429): this comparison was one of three definitions of
+		// stuck across two modules, and the Unstick button's copy had drifted from it (>= and no blocker asked).
+		if (Agent.HasStalledFor(Rules.StallSeconds))
 		{
 			Scratch.Waiting.Add(Agent.Id, Agent.GetWaitingOn());
 		}
@@ -464,20 +555,10 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const TMap<int32, in
 			}
 			bAllAircraft = bAllAircraft && Member->Class == ETraversalClass::Aircraft;
 
-			if (!CanReplanAtBlockedStep(*Member, &Network, Rules, Reach))
-			{
-				continue;
-			}
-
-			// AN AGENT REFUSED THE RUNWAY IT IS GOING TO cannot go round it. A departure at
-			// a bar was the first candidate the replay tried (higher id, the tie-break), and
-			// its "replan" was a detour through the junction's other arm to enter the same
-			// strip from the other side - a different route, so ReplanAt accepted it, and the
-			// cycle was logged resolved twice before the arrival, which had a whole taxiway
-			// system to turn into, was asked. What it was refused is the destination; no ban
-			// makes a route to it that avoids it.
-			if (Member->GetBlockedResource().Kind == ETrafficResourceKind::Surface
-				&& Network.IsGuidelineNodeOnRunway(Member->GoalNode, Member->GetBlockedResource().Surface))
+			// THE PER-AGENT STEP'S FIRST HALF (#429) - CanReplanAtBlockedStep and the runway-it-is-going-to test, one
+			// function now because UGroundTraffic::ReplanAroundBlocker (the player's Unstick) asks it too, and its old
+			// copy in AirportOps had dropped the bound.
+			if (!IsTurnableAtItsBlock(*Member, Network, Rules, Reach))
 			{
 				continue;
 			}
@@ -507,21 +588,10 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const TMap<int32, in
 		int32 Candidate = 0;
 		for (const int32 Id : Candidates)
 		{
-			// READ BEFORE THE REPLAN, because ReplanAt rewrites the plan and clears
-			// BlockedStep - the ban would be read off the new plan otherwise, banning an edge
-			// of the route that was just chosen.
+			// THE PER-AGENT STEP'S SECOND HALF (#429): the ban, read off the refusal before the replan rewrites it,
+			// and the splice - TurnAtItsBlock, which the player's Unstick makes of one held agent too.
 			FRoadAgent* Turner = FindAgentIn(Agents, AgentIndex, Id);
-			const int32 Step = Turner->GetBlockedStep();
-			const FGuidelineEdgeId BannedEdge = Turner->Follower.Plan.Steps[Step].Edge;
-
-			// BAN WHAT REFUSED IT. A node with an aircraft standing on it is a wall from every
-			// direction, so the whole node goes; an edge or a runway surface bans the step's
-			// edge (and every replan already refuses runway-derived edges - see ReplanAt).
-			const FGuidelineNodeId BannedNode =
-				Turner->GetBlockedResource().Kind == ETrafficResourceKind::Node
-					? Turner->GetBlockedResource().Node : FGuidelineNodeId();
-
-			if (PlanReResolver.ReplanAt(*Turner, Step, BannedEdge, BannedNode, Context))
+			if (TurnAtItsBlock(*Turner, PlanReResolver, Context))
 			{
 				bResolved = true;
 				Candidate = Id;

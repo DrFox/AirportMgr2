@@ -38,8 +38,14 @@ struct FUnstickVerdict
  *
  * IN AirportOps, NOT Airside, because two of the three actions are about what an agent is FOR: a
  * vehicle's jobs (UJobBoard) and an aircraft's flight (UFlightBoard). The movement underneath is all
- * UGroundTraffic's - ReplanAt, RescueStranded, RedirectAgent, RetireAgent - and nothing here moves an
- * agent itself. A subobject of UOpsRuntime, which grows by forwarding: a pointer and a line.
+ * UGroundTraffic's - ReplanAroundBlocker, ReplanFromNextNode, RescueStranded, ReofferStand, RetireAgent -
+ * and nothing here moves an agent itself, or reads its route to decide how (#429): each of
+ * those answers with an outcome, and what is left here is the SENTENCE the player reads for each.
+ * ENFORCED BY: Check-Architecture rule 53 (route-internals: no Follower.Plan, ReplanAt, GetBlockedStep in
+ * AirportOps). A subobject of UOpsRuntime, which grows by forwarding: a pointer and a line.
+ *
+ * WHETHER AN AGENT LOOKS STUCK is not here either since #429: it is FRoadAgent::IsStuck, the one
+ * definition, which the inspector asks at its own highlight threshold.
  *
  * TWO BODIES, THREE ACTIONS, ONE TABLE (the spec's) - so two private functions switch on the action,
  * not a policy class per body: IServiceRolePolicy earns its hierarchy by carrying per-role data, and
@@ -67,13 +73,6 @@ public:
 	 */
 	FUnstickVerdict Unstick(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock,
 		int32 AgentId, EUnstickAction Action);
-
-	/**
-	 * Whether the inspector should draw attention to the button: Stranded, or stopped behind something
-	 * for longer than Seconds. Not the deadlock resolver's own StallSeconds (3 s), which a queue at any
-	 * hold bar passes every time.
-	 */
-	static bool LooksStuck(const FRoadAgent& Agent, double Seconds);
 
 private:
 	/** The shared decision, by phase and body alone - see the class comment. Changes nothing. */

@@ -246,6 +246,21 @@ namespace ArrivalPlanner
 		FRoutePlan* OutRoute = nullptr, bool* bOutSawHeld = nullptr);
 
 	/**
+	 * THE TAXI-IN QUERY - the one statement of what route an arrival taxis to a stand by: the ArrivalTaxiIn errand
+	 * (its policy and runway avoidance, through FRouteQuery::For), the aircraft class, EdgeSpan as the wingspan the
+	 * edges must take, and Airframe's pavement need. No goal: ChooseStand hands the query every candidate stand at once
+	 * (RouteSearch::FindToGoals), and a caller that has chosen one sets it.
+	 *
+	 * ONE FACTORY BECAUSE TWO SEARCHES MUST AGREE (#429 review): ChooseStand chooses a stand by this query, and
+	 * UGroundTraffic::ReofferStand then drives the waiter there by a route SendAgentTo searches with it. Built twice,
+	 * the two drift - and a stand chosen by one search and unreachable by the other leaves the waiter offered a stand,
+	 * refused the route, every pass: an aircraft stuck for good with a free stand in sight.
+	 * ENFORCED BY: Check-Architecture rule 4 ('taxi-in query built': ERouteErrand::ArrivalTaxiIn is named in
+	 * ArrivalPlanner.cpp and the policy table only)
+	 */
+	AIRSIDE_API FRouteQuery TaxiInQuery(FGuidelineNodeId From, const FAirframe& Airframe, double EdgeSpan);
+
+	/**
 	 * Plans an arrival at the runway nearest Near, for an airframe with Airframe's
 	 * performance and wingspan.
 	 *
