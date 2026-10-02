@@ -92,6 +92,15 @@ struct FFacilityQuote
 	TArray<FFleetRowQuote> Fleet;
 
 	bool IsFacility() const { return Refusal == EPurchaseRefusal::None; }
+
+	/**
+	 * A module's row BY KIND, or null. Modules is one row per offer in TMap order, which is not stable - "the first row" was
+	 * the shed only while the shed was the only offer (the tank joined 2026-10-02). A consumer naming a kind asks for it here.
+	 */
+	const FModuleOfferQuote* FindModule(EDepotModule Module) const
+	{
+		return Modules.FindByPredicate([Module](const FModuleOfferQuote& Row) { return Row.Module == Module; });
+	}
 };
 
 /** What a command did. Amount is what was charged (buy) or credited (sell); 0 when refused. */

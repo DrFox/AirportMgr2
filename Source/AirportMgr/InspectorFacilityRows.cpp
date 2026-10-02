@@ -128,13 +128,15 @@ void UInspectorFacilityRows::Show(const FFacilityQuote& Quote)
 	// THE WIDGET'S OWN ROOT: self-hit-test-invisible, as a UserWidget defaults to, so its gaps let a click through to the window;
 	// the buttons inside are Visible and take theirs.
 	Visible(this, bCard, ESlateVisibility::SelfHitTestInvisible);
-	ShowRow(ShedsRow, bCard && Quote.Modules.Num() > 0);
+	// THE SHED'S ROW BY KIND (the tank is a second offer since 2026-10-02; Modules[0] was whichever the map listed first).
+	const FModuleOfferQuote* ShedOffer = Quote.FindModule(EDepotModule::Shed);
+	ShowRow(ShedsRow, bCard && ShedOffer != nullptr);
 	ShowRow(VehiclesRow, bCard);
 	ShowRow(FleetList, bCard && Quote.Fleet.Num() > 0);
 
-	if (bCard && Quote.Modules.Num() > 0)
+	if (bCard && ShedOffer != nullptr)
 	{
-		const FModuleOfferQuote& Module = Quote.Modules[0];
+		const FModuleOfferQuote& Module = *ShedOffer;
 		SetIfChanged(ShedsText, FString::Printf(TEXT("%s %d / %d space"), *Module.PluralName.ToString(), Module.Owned, Module.Reserved));
 		if (BuyModuleButton != nullptr)
 		{

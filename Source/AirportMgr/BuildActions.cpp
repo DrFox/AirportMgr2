@@ -200,25 +200,27 @@ namespace
 			return Ctx.Runtime != nullptr && Id.IsSet() ? Ctx.Runtime->QuoteFacility(Id) : FFacilityQuote();
 		}
 
-		/** The quote's FIRST module offer - the only one this slice (the shed). A second becomes a menu. */
+		/** The quote's SHED row, by kind - the Buy Shed button. The tank is a second offer (2026-10-02), so "the first row" is
+		 *  no longer the shed; a per-module menu replaces this when the tank gets its own button. */
 		bool CanBuyModule(const FBuildActionContext& Ctx)
 		{
 			const FFacilityQuote Quote = QuoteSelectedFacility(Ctx);
-			return Quote.Modules.Num() > 0 && Quote.Modules[0].Refusal == EPurchaseRefusal::None;
+			const FModuleOfferQuote* Shed = Quote.FindModule(EDepotModule::Shed);
+			return Shed != nullptr && Shed->Refusal == EPurchaseRefusal::None;
 		}
 
 		void BuyModule(const FBuildActionContext& Ctx)
 		{
 			const FFacilityQuote Quote = QuoteSelectedFacility(Ctx);
-			if (Ctx.Runtime == nullptr || Quote.Modules.Num() == 0)
+			if (Ctx.Runtime == nullptr || Quote.FindModule(EDepotModule::Shed) == nullptr)
 			{
 				UE_LOG(LogRoadBuild, Warning, TEXT("Buy module: no depot selected, or no ops runtime."));
 				return;
 			}
 			// UFacilityPurchases logs the "Purchase: ..." line; this one says the click arrived.
 			const FEntityInstanceId Depot = ARoadBuildController::DepotForSelection(Ctx.Target, Ctx.Selection);
-			UE_LOG(LogRoadBuild, Log, TEXT("Buy module %s: depot %d"), *UEnum::GetValueAsString(Quote.Modules[0].Module), Depot.Index);
-			Ctx.Runtime->BuyModule(Depot, Quote.Modules[0].Module);
+			UE_LOG(LogRoadBuild, Log, TEXT("Buy module %s: depot %d"), *UEnum::GetValueAsString(EDepotModule::Shed), Depot.Index);
+			Ctx.Runtime->BuyModule(Depot, EDepotModule::Shed);
 		}
 
 		/** The kind the run's argument names is on offer at the selected depot and not refused. NO ARGUMENT, NO BUY: a run that names no kind

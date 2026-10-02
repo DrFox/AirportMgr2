@@ -1061,7 +1061,7 @@ bool FInspectorDepotCardBuysTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("setup: an empty depot with a free bay and an affordable vehicle"),
 		Before.Vehicles == 0 && Before.VehicleOffers.Num() > 0 && Before.VehicleOffers[0].Refusal == EPurchaseRefusal::None)) { return false; }
 	if (!TestTrue(TEXT("setup: a second shed is reserved and affordable"),
-		Before.Modules.Num() == 1 && Before.Modules[0].Refusal == EPurchaseRefusal::None)) { return false; }
+		Before.FindModule(EDepotModule::Shed) != nullptr && Before.FindModule(EDepotModule::Shed)->Refusal == EPurchaseRefusal::None)) { return false; }
 	TestEqual(TEXT("the card's menu offers what the quote offers"), Rig.Panel->FacilityRows->BuyVehicleItemsForTest().Num(), Before.VehicleOffers.Num());
 
 	const double Balance = Ledger->Balance();
@@ -1072,7 +1072,7 @@ bool FInspectorDepotCardBuysTest::RunTest(const FString& Parameters)
 	Rig.Refresh();
 	Rig.Panel->FacilityRows->ClickBuyModuleForTest();
 	const FFacilityQuote After = Rig.Runtime->QuoteFacility(Rig.Depot);
-	TestEqual(TEXT("Buy Shed bought the second shed through the controller"), After.Modules.Num() > 0 ? After.Modules[0].Owned : 0, 2);
+	TestEqual(TEXT("Buy Shed bought the second shed through the controller"), After.FindModule(EDepotModule::Shed) != nullptr ? After.FindModule(EDepotModule::Shed)->Owned : 0, 2);
 	TestEqual(TEXT("and the depot has a second bay"), After.Bays, 2);
 	return true;
 }

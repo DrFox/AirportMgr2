@@ -279,8 +279,8 @@ public:
 
 	/**
 	 * The depot modules the player can buy, and what each grants. Into UFacilityPurchases, applied at attach
-	 * and after every load by UOpsRuntime::ApplyScenarioFigures (#449). THE SHED ONLY this slice (spec 2026-09-29-facility-upgrades §1: pumps and tanks are out of
-	 * scope) - THE SHED AND THE TANK (2026-10-02, spec 2026-10-02-progression-and-fuel-supply §7); pumps are still not for sale.
+	 * and after every load by UOpsRuntime::ApplyScenarioFigures (#449).
+	 * THE SHED AND THE TANK (2026-10-02, spec 2026-10-02-progression-and-fuel-supply §7); pumps are still not for sale.
 	 * A module with no row here is not for sale, and its buy is refused UnknownType.
 	 * ENFORCED BY: AirportOps.Present.Facility.AttachCopiesTheOffers (the copy),
 	 * AirportOps.Model.Facility.RefusalsChargeAndPublishNothing ("UnknownType module (no offer)")
