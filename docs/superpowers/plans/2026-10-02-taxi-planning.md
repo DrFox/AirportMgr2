@@ -342,3 +342,13 @@ public:
 
 ### Task 13: existing tests, full suite, PR
 - Fix by understanding; list every changed test and why. Full suite once. PR against `feature/taxi-plan`.
+
+## Execution notes (PR 2, 2026-10-02) - each found by the headline test on M_ScaleGatwick, not by reasoning
+
+- **Order checked per MOVE needs every window of the move booked from the move's start.** Booked from entering each, two moves through one junction interleaved (A-then-B on one node, B-then-A on another) and each waited for the other to finish (40/h, agents 2/11). Edges and passed nodes now start with the move; a junction move (>1 edge) books and asks its end node with the rest; a lane's end node is asked separately as the window reaches it. Every wait then points at a move booked to start earlier.
+- **Departures queue.** A departure's entry is held for ever until it lines up (spec §2), so each departure waited on its stand for the whole taxi of the one before: 40/h depWait mean 1200 s, 80/h 2364 s. Now a departure that cannot reach the entry is planned to the latest holding node on its way (`TaxiPlanQueueCandidates` = 6) - itself a place it can stay - held there, and its rest booked and spliced on (`ExtendQueuedDepartures`, `ExtendRoute`) when the table moves.
+- **A push goes only on its turn**, not just at its planned time: an arrival late through the push's end node met an aircraft pushed onto its line (80/h, 11/26).
+- **Release once per pass** (`ReleaseFirstOn`): routes loop at dead ends and pass one resource twice; releasing all of a holder's windows on the first pass let it back on unordered. The push's own windows (`FTaxiPlan::PushWindows`) are released one each at the hand-over, since the taxi may cross the same ground later.
+- **Hold rule includes node reach** (`CanHoldAt`): a waiter on a lane that was no box still claimed the node behind it where the lines part slowly, which its plan had released - lane length > G + F/2 + both nodes' reach excess.
+- **Retire and ClearAgents drop plans at once** (the arrival queue asks between ticks).
+- Not done here (PR 3): re-time, layout edits re-planning (a rebuild drops every plan), unplanned fallback alert. The deadlock resolver can still replan a planned aircraft, which drops its plan.
