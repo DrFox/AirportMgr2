@@ -273,8 +273,14 @@ bool FServiceTextBoardForwardsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and the late count"), Forwarded.LateJobs, Direct.LateJobs);
 
 	// EVERY REFUSAL'S WORDS.
-	for (int32 Why = 0; Why <= static_cast<int32>(EServiceRefusal::NoFuelStock); ++Why)
+	// FROM THE REFLECTED ENUM, not a hand-named last enumerator, so the next appended refusal is walked without an edit here.
+	// NumEnums() - 1: UHT appends the _MAX entry.
+	const UEnum* Refusals = StaticEnum<EServiceRefusal>();
+	if (!TestTrue(TEXT("the refusal enum is reflected and walks as far as NoFuelStock"),
+		Refusals != nullptr && Refusals->GetValueByIndex(Refusals->NumEnums() - 2) >= static_cast<int64>(EServiceRefusal::NoFuelStock))) { return false; }
+	for (int32 Index = 0; Index < Refusals->NumEnums() - 1; ++Index)
 	{
+		const int32 Why = static_cast<int32>(Refusals->GetValueByIndex(Index));
 		const EServiceRefusal Refusal = static_cast<EServiceRefusal>(Why);
 		TestEqual(*FString::Printf(TEXT("RefusalText forwards refusal %d"), Why),
 			FString(UJobBoard::RefusalText(Refusal)), FString(ServiceText::RefusalText(Refusal)));

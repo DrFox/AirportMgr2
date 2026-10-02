@@ -211,6 +211,16 @@ EServiceRefusal UJobBoard::RefusalOf(const FJudgement& Out)
 	{
 		return EServiceRefusal::StandUnjoined;
 	}
+	if (Out.bNoStock)
+	{
+		// A VEHICLE REACHED THE BID AND RAN DRY (spec 2026-10-02 §7) - so there IS a depot, a road, a fleet and a joined
+		// stand, which is why the four above still come first ("a dry airport with no road is a road problem first"). BEFORE
+		// the per-candidate flags below: those are about OTHER vehicles (a second depot's too-large truck, a pumpless shed),
+		// and naming them here sent the player to fix a depot that was never the blocker - and, worse, left a reason
+		// ReopenStockRefusals does not re-open, so the aircraft left unfuelled after fuel arrived (Task 4 review).
+		// ENFORCED BY: AirportOps.Fuel.DryBesideATooLargeDepotSaysNoFuelStock
+		return EServiceRefusal::NoFuelStock;
+	}
 	if (Out.bAnyPumpless)
 	{
 		// BEFORE NoRoute, because this is a thing the player can go and fix. Falling through to
@@ -235,13 +245,6 @@ EServiceRefusal UJobBoard::RefusalOf(const FJudgement& Out)
 	if (Out.bAnyTooNarrow)
 	{
 		return EServiceRefusal::TooNarrow;
-	}
-	if (Out.bNoStock)
-	{
-		// LAST BUT NoRoute (spec 2026-10-02 §7): every vehicle that could reach the stand would arrive with nothing. After
-		// every road and vehicle refusal - a dry airport with no road is a road problem first, and stock is the one fix
-		// that comes by the market rather than by building.
-		return EServiceRefusal::NoFuelStock;
 	}
 	return EServiceRefusal::NoRoute;
 }
@@ -395,7 +398,7 @@ ServiceBid::FResult UJobBoard::BidFor(const FServiceVehicle& Vehicle, const FSer
 	if (Policy == nullptr || Home == nullptr)
 	{
 		ServiceBid::FResult Unreachable;
-		Unreachable.bReachable = false;
+		Unreachable.Outcome = ServiceBid::EOutcome::NoWay;
 		return Unreachable;
 	}
 
@@ -572,7 +575,7 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 		const FServiceVehicle* Next = nullptr;
 		double NextFinish = TNumericLimits<double>::Max();
 		int32 Bidders = 0;
-		int32 DryBidders = 0;   // NoFuelStock only when EVERY bid failed for the stock alone - see FJudgement::bNoStock
+		int32 DryBidders = 0;   // ANY dry bidder, when none finishes, makes it NoFuelStock - see FJudgement::bNoStock
 		for (const FCandidate& Candidate : Eligible)
 		{
 			FServiceVehicle* Vehicle = FindVehicleMutable(Candidate.VehicleId);
@@ -582,8 +585,8 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 			}
 			const ServiceBid::FResult Bid = BidFor(*Vehicle, Job, Traffic, Network, Clock);
 			++Bidders;
-			DryBidders += Bid.bNoStock ? 1 : 0;
-			if (!Bid.bReachable)
+			DryBidders += Bid.Outcome == ServiceBid::EOutcome::NoStock ? 1 : 0;
+			if (!Bid.Finishes())
 			{
 				continue;
 			}
@@ -607,7 +610,7 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 			// arrives - ReopenStockRefusals) - and there is no "busy" to fall back on here, because a busy vehicle bids
 			// with its queue.
 			++RevisionCount;   // See Revision: the job's state and reason changed, and the fuel line says why.
-			Judged.bNoStock = Bidders > 0 && DryBidders == Bidders;
+			Judged.bNoStock = DryBidders > 0;
 			Job.State = EServiceJobState::Unserviceable;
 			Job.Why = RefusalOf(Judged);
 			Job.RefusedAtRevision = Revision;
@@ -625,8 +628,8 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 			}
 			else if (Job.Why == EServiceRefusal::NoFuelStock)
 			{
-				UE_LOG(LogAirportOps, Warning, TEXT("Fuel: %d vehicle(s) could reach aircraft %d but none carries fuel, and the airport holds %.1f L"),
-					Bidders, Job.AircraftId, FuelAvailable());
+				UE_LOG(LogAirportOps, Warning, TEXT("Fuel: %d of %d vehicle(s) bidding for aircraft %d carry no fuel, and the airport holds %.1f L"),
+					DryBidders, Bidders, Job.AircraftId, FuelAvailable());
 			}
 
 			// THE COUNTS THAT DECIDED IT, in the line itself. A bare reason sent the player to look at
@@ -719,14 +722,14 @@ void UJobBoard::RebidQueued(UGroundTraffic& Traffic, const URoadNetwork& Network
 				continue;
 			}
 			const ServiceBid::FResult Bid = BidFor(*Vehicle, *Job, Traffic, Network, Clock);
-			if (Bid.bReachable && Bid.Finish < BestFinish)
+			if (Bid.Finishes() && Bid.Finish < BestFinish)
 			{
 				Best = Vehicle;
 				BestFinish = Bid.Finish;
 			}
 		}
 
-		const double CurrentFinish = Current.bReachable ? Current.Finish : TNumericLimits<double>::Max();
+		const double CurrentFinish = Current.Finishes() ? Current.Finish : TNumericLimits<double>::Max();
 		if (Best == nullptr || BestFinish >= CurrentFinish - RebidMarginSeconds)
 		{
 			// STAYS - but with the promise brought up to date, so the card and the next re-bid read what

@@ -7,7 +7,7 @@ ServiceBid::FResult ServiceBid::Finish(const FInput& In, int32 MaxTrips)
 	FResult Result;
 	if (In.Type == nullptr || In.Policy == nullptr || !In.DriveSeconds)
 	{
-		Result.bReachable = false;
+		Result.Outcome = EOutcome::NoWay;
 		return Result;
 	}
 	const IServiceRolePolicy& Policy = *In.Policy;
@@ -19,7 +19,7 @@ ServiceBid::FResult ServiceBid::Finish(const FInput& In, int32 MaxTrips)
 	// same litres twice. ENFORCED BY: AirportOps.Service.Bid.StockIsSpentOnceAcrossTrips
 	double Available = In.FacilityAvailable;
 	int32 Node = In.NodeWhenFree;
-	// SET BY OneTrip when the facility it needed had nothing to give - see FResult::bNoStock and the two loops below.
+	// SET BY OneTrip when the facility it needed had nothing to give - see EOutcome::NoStock and the two loops below.
 	bool bDry = false;
 
 	/** Drive to To, or report the way missing. The one place a leg's time is added. */
@@ -28,7 +28,7 @@ ServiceBid::FResult ServiceBid::Finish(const FInput& In, int32 MaxTrips)
 		const double Seconds = In.DriveSeconds(Node, To);
 		if (Seconds < 0.0)
 		{
-			Result.bReachable = false;
+			Result.Outcome = EOutcome::NoWay;
 			return false;
 		}
 		Time += Seconds;
@@ -84,8 +84,10 @@ ServiceBid::FResult ServiceBid::Finish(const FInput& In, int32 MaxTrips)
 		{
 			// DRY ON THE QUEUE AHEAD is dry for this job too: the stock only falls through a simulation, and the cargo that
 			// could not be topped up for the queued trip is no larger for this one.
-			Result.bReachable = Result.bReachable && !bDry;
-			Result.bNoStock = bDry;
+			if (bDry)
+			{
+				Result.Outcome = EOutcome::NoStock;
+			}
 			Result.Finish = Time;
 			return Result;
 		}
@@ -102,8 +104,7 @@ ServiceBid::FResult ServiceBid::Finish(const FInput& In, int32 MaxTrips)
 		if (Delivered < 0.0 && bDry && Trip == 0)
 		{
 			// IT WOULD DELIVER NOTHING: no finish time, and the reason - NoFuelStock, not a road.
-			Result.bReachable = false;
-			Result.bNoStock = true;
+			Result.Outcome = EOutcome::NoStock;
 			Result.Finish = Time;
 			return Result;
 		}

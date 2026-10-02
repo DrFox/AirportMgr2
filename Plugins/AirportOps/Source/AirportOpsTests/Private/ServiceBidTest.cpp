@@ -315,7 +315,7 @@ bool FServiceBidUnreachableTest::RunTest(const FString& Parameters)
 	ServiceBid::FInput In = Input(TowType, Policy);
 	In.DriveSeconds = [](int32 From, int32 To) { return From == To ? 0.0 : -1.0; };
 	In.Appended = { StandA, 300.0 };
-	TestFalse(TEXT("no way to the stand is not a finish time"), ServiceBid::Finish(In).bReachable);
+	TestFalse(TEXT("no way to the stand is not a finish time"), ServiceBid::Finish(In).Finishes());
 	return true;
 }
 
@@ -326,7 +326,7 @@ bool FServiceBidDryEmptyFailsTest::RunTest(const FString& Parameters)
 {
 	using namespace ServiceBidTest;
 	// AN EMPTY TOW AT A DRY AIRPORT (spec 2026-10-02 §7): it needs the depot before its first trip and the depot has
-	// nothing to give, so it would deliver NOTHING - the one dry case that is a failed bid, and it says why (bNoStock), so
+	// nothing to give, so it would deliver NOTHING - the one dry case that is a failed bid, and it says why (EOutcome::NoStock), so
 	// the board can refuse NoFuelStock rather than NoRoute. CONTROL: the same tow with fuel in the airport bids.
 	FFuelRolePolicy Policy;
 	const FServiceVehicleType TowType = Tow();
@@ -335,13 +335,13 @@ bool FServiceBidDryEmptyFailsTest::RunTest(const FString& Parameters)
 	In.FacilityAvailable = 0.0;
 	In.Appended = { StandA, 300.0 };
 	const ServiceBid::FResult Dry = ServiceBid::Finish(In);
-	TestFalse(TEXT("dry and empty: no finish time"), Dry.bReachable);
-	TestTrue(TEXT("and the reason is the stock, not the road"), Dry.bNoStock);
+	TestEqual(TEXT("dry and empty: no finish time, and the reason is the stock, not the road"),
+		static_cast<int32>(Dry.Outcome), static_cast<int32>(ServiceBid::EOutcome::NoStock));
 	TestEqual(TEXT("not one trip priced"), Dry.Trips, 0);
 
 	In.FacilityAvailable = Unbounded;
 	const ServiceBid::FResult Stocked = ServiceBid::Finish(In);
-	TestTrue(TEXT("CONTROL: with fuel it bids"), Stocked.bReachable && !Stocked.bNoStock);
+	TestTrue(TEXT("CONTROL: with fuel it bids"), Stocked.Finishes());
 	return true;
 }
 
@@ -361,7 +361,7 @@ bool FServiceBidDryPartialTest::RunTest(const FString& Parameters)
 	In.Appended = { StandA, 1500.0 };
 	const ServiceBid::FResult Dry = ServiceBid::Finish(In);
 	AddInfo(FString::Printf(TEXT("dry: %d trips, %d refills, finish %.0f s"), Dry.Trips, Dry.FacilityVisits, Dry.Finish));
-	TestTrue(TEXT("it bids - it delivers what it carries"), Dry.bReachable && !Dry.bNoStock);
+	TestTrue(TEXT("it bids - it delivers what it carries"), Dry.Finishes());
 	TestEqual(TEXT("one trip"), Dry.Trips, 1);
 	TestEqual(TEXT("no depot visit priced"), Dry.FacilityVisits, 0);
 	TestEqual(TEXT("finished when that trip's pumping ends: the drive plus 1,000 L at 75 L/min"),

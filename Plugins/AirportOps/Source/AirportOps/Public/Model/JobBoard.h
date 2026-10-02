@@ -830,7 +830,8 @@ private:
 		bool bAnyPumpless = false;
 		bool bAnyTooLarge = false;
 		bool bAnyTooNarrow = false;
-		/** Every vehicle that may bid failed its bid for want of stock alone (ServiceBid::FResult::bNoStock) - NoFuelStock.
+		/** No bid finished and at least one failed for want of stock (ServiceBid::EOutcome::NoStock) - NoFuelStock. ANY, not
+		 *  every: the stock is one airport pool, so a dry bidder means fuel is a real blocker whatever the others failed on.
 		 *  Written by the bid pass, after Judge: eligibility is the airport's shape, and stock is not part of it. */
 		bool bNoStock = false;
 		FGuidelineEdgeId NarrowAt;

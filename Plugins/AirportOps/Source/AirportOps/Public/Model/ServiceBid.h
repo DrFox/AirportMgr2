@@ -62,26 +62,41 @@ namespace ServiceBid
 		TFunction<double(int32 From, int32 To)> DriveSeconds;
 	};
 
+	/**
+	 * How a bid ended. AN ENUM, not bReachable + bNoStock (2026-10-03): the stock is a REASON a bid has no finish time, and
+	 * two bools allowed "reachable and out of stock", a state that means nothing.
+	 */
+	enum class EOutcome : uint8
+	{
+		/** A finish time - the whole job, or as much of it as the vehicle can deliver before a dry facility. */
+		Finishes,
+
+		/** No way: a leg the drive function refused, or no type/policy to simulate with. */
+		NoWay,
+
+		/**
+		 * The vehicle needs its facility before it delivers anything to this job and the facility has less than
+		 * DoneWithin to give (spec 2026-10-02 §7), so it would deliver NOTHING. Only then - a vehicle that runs dry AFTER
+		 * delivering something Finishes there (partial service beats none). The board's NoFuelStock reads this.
+		 * ENFORCED BY: AirportOps.Service.Bid.DryAndEmptyDeliversNothing, AirportOps.Service.Bid.DryAfterATripFinishesPartial
+		 */
+		NoStock
+	};
+
 	struct FResult
 	{
 		double Finish = 0.0;
 		int32 FacilityVisits = 0;
 		int32 Trips = 0;
-		bool bReachable = true;
+		EOutcome Outcome = EOutcome::Finishes;
 
-		/**
-		 * WHY bReachable IS FALSE, when it is the stock (spec 2026-10-02 §7): the vehicle needs its facility before its first
-		 * trip for this job and the facility has less than DoneWithin to give, so it would deliver NOTHING. Only then - a
-		 * vehicle that runs dry AFTER delivering something finishes there instead (partial service beats none). Never true
-		 * with bReachable true. Read by the board's refusal (UJobBoard::FJudgement::bNoStock -> NoFuelStock).
-		 * ENFORCED BY: AirportOps.Service.Bid.DryAndEmptyDeliversNothing, AirportOps.Service.Bid.DryAfterATripFinishesPartial
-		 */
-		bool bNoStock = false;
+		/** Whether Finish is a finish time - the one question every ranking asks. */
+		bool Finishes() const { return Outcome == EOutcome::Finishes; }
 	};
 
 	/**
 	 * The simulation. MaxTrips bounds a degenerate type (a tank the policy floors to nothing) - a bid
-	 * that cannot finish reports the time it reached, with bReachable true, rather than spinning.
+	 * that cannot finish reports the time it reached, with Outcome Finishes, rather than spinning.
 	 */
 	AIRPORTOPS_API FResult Finish(const FInput& In, int32 MaxTrips = 64);
 }
