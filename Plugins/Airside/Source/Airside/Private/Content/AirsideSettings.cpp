@@ -754,6 +754,18 @@ FFenceKit UAirsideSettings::ResolveFenceKit()
 	return Kit;
 }
 
+FOwnedLandKit UAirsideSettings::ResolveOwnedLandKit()
+{
+	FOwnedLandKit Kit;
+	if (const UAirsideContent* Content = GetContent())
+	{
+		Kit.Collection = Content->OwnedLandCollection.LoadSynchronous();
+		Kit.WallMesh = Content->PlinthWallMesh.LoadSynchronous();
+		Kit.WallMaterial = Content->PlinthWallMaterial.LoadSynchronous();
+	}
+	return Kit;
+}
+
 TArray<FDepotModuleLook> UAirsideSettings::ResolveDepotLooks()
 {
 	TArray<FDepotModuleLook> Looks;

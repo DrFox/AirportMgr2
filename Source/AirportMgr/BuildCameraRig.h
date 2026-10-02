@@ -159,6 +159,20 @@ struct FBuildCameraRig
 	double CloseZoomDistance = 3000.0;
 	double CloseZoomStepScale = 2.5;
 
+	/**
+	 * Where Focus may go, on the road plane - the owned land (AAirsideOwnedLandActor). INVALID
+	 * MEANS UNBOUNDED, which is the default, so a map with no owned land and the watch rig (whose
+	 * Focus is an offset from an aircraft, not a road-plane point) are never clamped.
+	 *
+	 * The FOCUS, not the camera: the camera stands back from it and may hang over the void, which
+	 * is how the player sees the diorama's cut edge at all (2026-10-02). Not in FCameraRigLimits
+	 * because it is a fact about the level, not a tunable of the mode; ApplyLimits leaves it alone.
+	 */
+	FBox2D FocusBounds = FBox2D(ForceInit);
+
+	/** Pull Focus inside FocusBounds; nothing when they are invalid. */
+	void ClampFocus();
+
 	/** Copy Min/MaxDistance, Min/MaxPitch and the close-zoom pair from Limits onto this rig, so a details-panel
 	 *  edit takes effect on the live view - the one function ApplyViewLimits and
 	 *  ApplyWatchLimits used to be separately (issue #94). */

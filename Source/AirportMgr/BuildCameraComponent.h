@@ -286,6 +286,18 @@ public:
 	{
 		bWatchingAgent = false;
 		TargetView.Focus = At;
+		TargetView.ClampFocus();
+	}
+
+	/**
+	 * Keep the build view's focus inside Bounds - the owned land. Invalid unbounds. The WATCH rig
+	 * is never bounded: an aircraft on approach is over the void, and the camera rides it there.
+	 * Clamps at once, so a view already outside comes back on the next frame's ease.
+	 */
+	void SetFocusBounds(const FBox2D& Bounds)
+	{
+		TargetView.FocusBounds = Bounds;
+		TargetView.ClampFocus();
 	}
 
 private:

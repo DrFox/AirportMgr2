@@ -9,6 +9,7 @@
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 #include "Present/AirsideGroundCoverActor.h"
+#include "Present/AirsideOwnedLandActor.h"
 #include "Present/GroundCoverPresenter.h"
 #include "Present/GroundCoverSubsystem.h"
 #include "Present/RoadNetworkActor.h"
@@ -236,6 +237,24 @@ bool FGroundCoverMaskEdgeIsCovered::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGroundCoverMaskOutsideLandIsCovered, "Airside.Build.GroundCoverMask.OutsideLandIsCovered",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FGroundCoverMaskOutsideLandIsCovered::RunTest(const FString&)
+{
+	// THE DIORAMA EDGE (2026-10-02): a tuft past the cut stands on nothing and gives the edge away.
+	FGroundCoverMask Mask;
+	TestFalse(TEXT("with no land set, open ground far out is bare - every older map owns everything"),
+		Mask.IsCovered(FVector2D(1.0e6, -1.0e6)));
+	Mask.SetLand(FBox2D(FVector2D(-1000.0, -2000.0), FVector2D(3000.0, 4000.0)));
+	TestFalse(TEXT("inside the land, open ground is bare"), Mask.IsCovered(FVector2D(0.0, 0.0)));
+	TestTrue(TEXT("past the east edge is covered"), Mask.IsCovered(FVector2D(3001.0, 0.0)));
+	TestTrue(TEXT("past the south edge is covered"), Mask.IsCovered(FVector2D(0.0, -2001.0)));
+	TestTrue(TEXT("ON the edge is covered - a tuft centred there leans over the cut"), Mask.IsCovered(FVector2D(3000.0, 0.0)));
+	Mask.SetLand(FBox2D(ForceInit));
+	TestFalse(TEXT("an invalid land owns everything again"), Mask.IsCovered(FVector2D(3001.0, 0.0)));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGroundCoverMaskBucketBoundary, "Airside.Build.GroundCoverMask.BucketBoundary",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FGroundCoverMaskBucketBoundary::RunTest(const FString&)
@@ -395,6 +414,38 @@ bool FGroundCoverMaxLayersZeroDrawsNothing::RunTest(const FString&)
 	TestEqual(TEXT("quality Low releases every cell"), Grass->GetPresenter()->NumLiveCells(), 0);
 	GcStreamFully(*Grass, FVector(0.0, 0.0, 300.0));
 	TestEqual(TEXT("and streams none back"), Grass->GetPresenter()->NumLiveCells(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGroundCoverNoTuftPastTheOwnedLand, "Airside.Present.GroundCover.NoTuftPastTheOwnedLand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FGroundCoverNoTuftPastTheOwnedLand::RunTest(const FString&)
+{
+	// THE SEAM, through the composition: the grass actor must FIND the level's owned land and hand
+	// it to the mask. Unwired, the mask test above still passes and tufts float past the cut edge -
+	// the report that started this (2026-10-02). The edge runs through the streamed area, so tufts
+	// exist on both sides of it to be kept or refused.
+	FAirsideTestWorld Fixture;
+	AAirsideOwnedLandActor* Land = Fixture.World->SpawnActor<AAirsideOwnedLandActor>();
+	if (!TestNotNull(TEXT("owned land spawned"), Land))
+	{
+		return false;
+	}
+	const FVector2D Min(-100000.0, -100000.0), Max(1000.0, 100000.0);
+	Land->SetOwnedLand(Min, Max);
+
+	AAirsideGroundCoverActor* Grass = Fixture.World->SpawnActor<AAirsideGroundCoverActor>();
+	Grass->SetKit(GcCubeKit());
+	Grass->BindTo(Fixture.Actor);
+	GcStreamFully(*Grass, FVector(0.0, 0.0, 300.0));
+
+	int32 Inside = 0, Outside = 0;
+	Grass->GetPresenter()->ForEachInstanceLocation([&](int32, const FVector& Location)
+	{
+		(Location.X < Max.X ? Inside : Outside) += 1;
+	});
+	TestTrue(FString::Printf(TEXT("%d tufts grow on the owned side"), Inside), Inside > 100);
+	TestEqual(TEXT("NO tuft grows past the owned land's edge"), Outside, 0);
 	return true;
 }
 

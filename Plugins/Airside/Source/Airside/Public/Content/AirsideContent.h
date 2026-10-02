@@ -329,6 +329,22 @@ public:
 	TSoftObjectPtr<UMaterialParameterCollection> FenceFadeCollection;
 
 	/**
+	 * MPC_OwnedLand: the owned rectangle M_Ground's clip reads (OwnedMinX/MinY/MaxX/MaxY, uu).
+	 * AAirsideOwnedLandActor writes it; only a ground instance overridden to Masked honours it,
+	 * so a map with no owned-land actor renders all its ground. Authored by build_ground_material.py.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|OwnedLand")
+	TSoftObjectPtr<UMaterialParameterCollection> OwnedLandCollection;
+
+	/** The plinth's wall: a unit box (the engine cube is 100 uu, centred), scaled per side. */
+	UPROPERTY(EditAnywhere, Category = "Airside|OwnedLand")
+	TSoftObjectPtr<UStaticMesh> PlinthWallMesh;
+
+	/** The wall's earth strata, banded by world Z (MI_DioramaStrata, build_diorama_prototype.py). */
+	UPROPERTY(EditAnywhere, Category = "Airside|OwnedLand")
+	TSoftObjectPtr<UMaterialInterface> PlinthWallMaterial;
+
+	/**
 	 * A RIGGED ground vehicle. Preferred over VehicleMesh; null falls back to it.
 	 *
 	 * "A truck's wheels turn and nothing else does, and there is no rig yet" is what stood

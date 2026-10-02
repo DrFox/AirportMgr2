@@ -4,6 +4,7 @@
 #include "Content/DepotModuleLook.h"
 #include "Content/FenceKit.h"
 #include "Content/GroundCoverKit.h"
+#include "Content/OwnedLandKit.h"
 #include "Engine/DeveloperSettings.h"
 #include "Model/RoadEntity.h"
 #include "Model/Vehicle.h"
@@ -438,6 +439,9 @@ public:
 
 	/** The chainlink fence's meshes and material - the content defaults, each null if unset. */
 	static FFenceKit ResolveFenceKit();
+
+	/** The owned land's collection and plinth wall - the content defaults, each null if unset. */
+	static FOwnedLandKit ResolveOwnedLandKit();
 
 	/**
 	 * The ground-cover grass: its tuft meshes (any that fail to load are skipped), its density

@@ -283,4 +283,45 @@ bool FBuildCameraRigCloseZoomTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * THE FOCUS STAYS ON THE OWNED LAND (2026-10-02): past the diorama's cut edge there is only sky,
+ * and a view that wandered out there was the other half of what broke the effect. Per axis, so a
+ * pan held into a wall slides along it rather than stopping dead; invalid bounds - every map with
+ * no owned land, and the watch rig - clamp nothing.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildCameraRigFocusBoundsTest,
+	"Airside.View.BuildCameraRig.FocusStaysOnTheLand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildCameraRigFocusBoundsTest::RunTest(const FString& Parameters)
+{
+	FCameraRigLimits Limits;
+	FBuildCameraRig Free;
+	Free.Reset(Limits);
+	Free.Yaw = 0.0;
+	Free.Pan(0.0, 1.0, 1.0, 100.0);
+	TestTrue(TEXT("with no bounds a long pan goes as far as it likes"), Free.Focus.X > 100000.0);
+
+	FBuildCameraRig Rig;
+	Rig.FocusBounds = FBox2D(FVector2D(-5000.0, -2000.0), FVector2D(5000.0, 2000.0));
+	Limits.StartFocus = FVector2D(9000.0, 0.0);
+	Rig.Reset(Limits);
+	TestEqual(TEXT("a StartFocus off the land starts on its edge"), Rig.Focus.X, 5000.0, 1e-9);
+
+	Rig.Yaw = 45.0; // a diagonal pan, into the east edge and along it
+	Rig.Focus = FVector2D(4000.0, 0.0);
+	Rig.Pan(0.0, 1.0, 1.0, 0.25);
+	TestEqual(TEXT("the pan stops at the east edge"), Rig.Focus.X, 5000.0, 1e-9);
+	TestTrue(TEXT("but slides along it rather than stopping dead"), Rig.Focus.Y > 0.0);
+	Rig.Pan(0.0, 1.0, 1.0, 10.0);
+	TestEqual(TEXT("and stops in the corner"), Rig.Focus, FVector2D(5000.0, 2000.0));
+
+	FBuildCameraRig Copy = Rig;
+	Copy.ApplyLimits(Limits);
+	TestTrue(TEXT("ApplyLimits leaves the bounds alone - they are the level's, not the mode's"),
+		Copy.FocusBounds.bIsValid);
+	return true;
+}
+
 #endif
