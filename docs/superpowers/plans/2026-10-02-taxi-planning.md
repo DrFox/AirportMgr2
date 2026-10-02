@@ -287,3 +287,58 @@ public:
 - `FTrafficRules::IsBox` and `TaxiPlanMargin` landed in the red commit (the tests read them).
 - Lint rule for table writers deferred to PR 2 (Task 5). Mutator names chosen for it: `BookWindow`, `BookPasses`, `ReleaseHolder`, `ReleaseHolderOn`.
 - **Review of #527 (2026-10-02), fixed on PR 1:** one SIPP successor per reachable free interval of the move's end (was: earliest only - `LaterIntervalSuccessor`); no reversing onto the arriving edge (`NoUTurnOnArrivingEdge`, red with the check removed); one arithmetic for window bounds in search and booking, `WindowLo/WindowHi` (`TouchingBoundaryFractionalReach`: 194/200 booked before); the goal's arriving edge held for ever with the goal; `TaxiPlanMaxChainEdges` a rules knob, caps warned once per session (`LogAirsideTaxiPlan`, added here for it); chains memoised per (node, arriving edge). Noted, not fixed: dominance ignores momentum (a later rolling arrival pruned by an earlier one) - a pessimism, never a conflict; see `FSippState`.
+
+---
+
+## PR 2 - order enforcement and clearances (detailed 2026-10-02, against b1dfd281 + review fixes 4542f5e4)
+
+**Goal:** the plans are flown. Every aircraft that is cleared - an arrival dispatched, a departure pushed - holds a booked plan, and the claim pass lets it into the next stretch only when everyone planned ahead of it there has gone. THE behaviour change; the headline no-deadlock test on `M_ScaleGatwick` pins it.
+
+**Facts located (live code, 2026-10-02):**
+- Arrivals: `UGroundTraffic::DispatchArrival` (GroundTraffic.cpp:27) plans with `ArrivalPlanner::Plan` (exit, stand, `TaxiIn` from `Exit` under `ERouteErrand::ArrivalTaxiIn`), `FRoadAgent::StartArrival`, `Admit` (id = `NextAgentId++`). Ops reaches it through `FArrivalQueue::Tick` (AirportOps ArrivalQueue.cpp): `ClearanceFor` (cached on guideline/occupancy/stand-churn stamps), then a live runway check, then `DispatchNow` -> `Board.Dispatcher`. AirportOps -> Airside only; Airside never names ops (rule 1b). Airside's freed events (`OnRunwayFreed`, `OnStandsFreed`, `OnPushGroundFreed`) are bridged in `UOpsRuntime`'s bridge list (OpsRuntime.cpp ~905) to bus events that dirty passes.
+- Departures: `DepartAgent` (GroundTraffic.cpp:1041) -> `AskDeparture` (`PlanAny`, straight-out test, `PushbackPlanner::Plan` - push route + taxi out from the push end under `PushbackTaxiOut`, `IsPushGroundFree`) -> `StartPushback` + `ReleaseGoal/TakeGoal` + `Announce(DepartOrdered)`. A `PushbackBlocked` refusal goes on the push watch, which `DiffFreedom` re-asks once per Advance and wakes with `OnPushGroundFreed`; ops' turnaround retries on that event (Turnarounds.cpp:338).
+- Phases/events: `EAgentEvent::Vacated` (arrival -> Taxiing on `TaxiInPlan`), `PushedBack` (Manoeuvring -> Taxiing on `TaxiOutPlan`), `Parked`, `LinedUp`, `Airborne`, `Gone` (AdvanceOnce, GroundTraffic.cpp:1556).
+- Claim pass: `FClaimPass::Run` -> `BuildPending` (route-ordered wants) -> `ApplyClaims` (first refusal decides: `Agent.Refuse(Step, Resource, StopWithin, Blocker)`); box-entry stop = `StepStart - T - G`; one `FClaimPass` per `Arbitrate` from `FTrafficContext`. The runway exit chain (TrafficClaims.cpp ~953-1060) stays the runway's authority.
+- Landing timing: `FLandingRun::Advance` from `Begin`; `RequiredLandingDistance` already flies a probe (LandingRun.cpp:6). Push timing: `FPushbackRun::Advance(dt, StopWithin, bHasThrust, ...)`.
+- Budgets (rule 77): GroundTraffic.cpp 1954/1955, TrafficClaims.cpp 1963/1963, GroundTrafficRebuild.cpp 1490/1490 - every hook there raises its row with a dated reason; the logic goes to new files.
+
+**Design decisions:**
+- **Clock = `UGroundTraffic::SimSeconds`.** The clock the agents move on (Advance integrates it, substeps included), paused with the sim, world-free - and the order is checked against the agents' progress on it. Ops' `USimClock` is another clock (offers, ETAs) and Airside must not read it.
+- **Edges shareable one way, FIFO (correction to PR 1).** `FTaxiWindow` carries `ETaxiWay {Any, AToB, BToA}`. Two windows on one resource may overlap only when both go the same way and are FIFO: entry order == exit order, `Headway` apart at both ends (`MayShare`). Nodes, pushes and a merged push/taxi window are `Any` (exclusive). Headway = `TaxiPlanMargin` (one knob: the time twin of the gap). The planner's interval walk becomes `EarliestFit` (least shift that shares with every window), `LatestEnd` (how long a window may stretch - LeaveBy) and `PlaceAt` (a window's place in the resource's order - the SIPP key, as an interval index was).
+- **Push as the plan's first move.** `FTaxiRequest::PushSteps/PushSeconds`: Start is the stand (waiting there allowed - the stand IS the departure's hold), one fixed move books the push ground `Any` for the push's duration, the taxi starts at rest at the push end. `PushAt` = when the plan pushes. Push seconds and an arrival's seconds-to-vacate are FLOWN by quiet probes of `FPushbackRun`/`FLandingRun`, never estimated.
+- **Arrival requests: `bMayWaitAtStart=false`, `bStartsRolling=true`** - it vacates rolling and must not plan a hold on the runway.
+- **Order = window order per resource** (`FPassingOrder::WaitingFor`): Holder may enter R when every earlier window's holder has LEFT (released) - or, same way on an edge, has ENTERED. Checked per MOVE (the planner's chain between stoppable nodes, `FTaxiPlan::MoveStarts`), all-or-nothing, before the move is entered - so the order never holds an aircraft inside a junction. A refusal stops it `G` short of the move's start (the box-entry stop), logs `Agent N not my turn: waiting for agent M` on the transition, and writes WaitingOn, so the resolver and the inspector see it.
+- **Release when the tail clears:** per tick after `Arbitrate`, a planned resource behind the tail that the agent no longer claims is released (`ReleaseHolderOn`); "entered" = nose past its start. All released at `LinedUp`, `Gone`, retire. A route that no longer matches the plan (resolver replan, rebuild, redirect) drops the plan: "TaxiPlan: agent N unplanned - <why>" (PR 3 re-plans it).
+- **Arrival clearance:** `UGroundTraffic::ArrivalTaxiRefusal(Network, Near, Airframe, Holder)` (const) = `ArrivalPlanner::Plan` + a taxi-in plan (revoking unstarted departures if that is what it takes); `EArrivalRefusal::NoTaxiPlan` appended (transient). `FArrivalQueue::ClearanceFor` asks it and dates its cache by `TaxiPlanRevision()` too; `DispatchArrival` plans, revokes, books. Wake-up: `UGroundTraffic::OnTaxiPlansFreed`, fired from `DiffFreedom` once per Advance when something was released and an arrival has been refused a plan since, bridged to `FTaxiPlansFreedEvent`, which dirties the ArrivalQueue pass.
+- **Arrivals first:** an arrival that cannot be planned may revoke departures that are booked but have not started pushback, never a moving one. "TaxiPlan: agent D revoked by arrival A"; the departure goes back on the push watch.
+- **Departure clearance:** `AskDeparture` plans (push prefix, or straight out); none -> `PushbackBlocked` (push watch, now also keyed on the taxi table's revision). A plan whose push is due now (within 1 s) pushes at once; a later one is BOOKED - the aircraft stays parked, `DepartAgent` answers `PushbackBlocked` meanwhile, and `UGroundTraffic` starts the push when `SimSeconds >= PushAt` and it is its turn (`StartDuePushes`, end of AdvanceOnce).
+- **`UTaxiPlanning`** (Model/TaxiPlanning.h): a `UObject` made in `UGroundTraffic::PostInitProperties` (transient; a duplicate makes its own). Owns the table and the clearances; the ONLY writer of `FTaxiReservations` (lint). Logs on `LogAirsideTaxiPlan`, once per event: `TaxiPlan: agent N planned stand S via A,A3,B (eta T s)`, `... planned runway entry via ... (push at T s)`, `... refused - <reason>`, `... revoked by arrival M`, `... unplanned - <why>`.
+
+### Task 6: directional windows, FIFO sharing, the planner on the new queries, push prefix
+- Modify: `Model/TaxiReservations.h/.cpp` (`ETaxiWay`, `FTaxiWindow::Way`, `Headway`, `MayShare`, `EarliestFit`, `LatestEnd`, `PlaceAt`, `NextPlaceAfter`), `Model/TaxiPlanner.h/.cpp` (needs carry a way; `EarliestFit` in place of `FreeIntervals`+`LeastShift`; keys on `PlaceAt`; push prefix; `bMayWaitAtStart`, `bStartsRolling`; passes merged per resource; `MoveStarts`, `PushAt`).
+- Tests (`TaxiPlanTest.cpp`): `ReservationsShareOneWayInOrder` (same way FIFO books, overtaking refused, opposite refused, nodes exclusive); `FollowersShareOneEdge` (two aircraft along one long edge the same way: the second planned without waiting, both book); `OppositeDirectionWaits` (head-on on one edge: the second waits or is refused, never overlaps); `PushPrefixHoldsAtStand` (push ground booked from PushAt; a hold at the stand while the push ground is busy; the plan books).
+
+### Task 7: `FPassingOrder`
+- Create: `Model/PassingOrder.h/.cpp` - `WaitingFor(Table, Holder, Resource, HasEntered)`.
+- Test: `Airside.Model.TaxiPlan.OrderWaitsForWhoIsAhead` (node: waits until the earlier window is released; same-way edge: waits only until the leader has entered; no window of its own: 0).
+
+### Task 8: `UTaxiPlanning`, the claim pass's refusal, release
+- Create: `Model/TaxiPlanning.h/.cpp`, `Private/Model/GroundTrafficPlanning.cpp` (UGroundTraffic's planning methods). Modify: `GroundTraffic.h` (member, accessors, `OnTaxiPlansFreed`, `TaxiPlanRevision`), `GroundTraffic.cpp` (hooks), `TrafficContext.h` (`Planning`), `TrafficClaims.h/.cpp` (the order hold in Run/ApplyClaims), `GroundTrafficRebuild.cpp` (a rebuild drops plans).
+- Test: `Airside.Model.TaxiPlan.NotMyTurn` - two taxiing aircraft cleared on plans through one junction, the one planned second physically nearer: it stops short, WaitingOn = the first, "not my turn" logged; it goes once the first has cleared; resources released behind the tail.
+
+### Task 9: arrival clearance, arrivals first
+- Modify: `ArrivalPlanner.h/.cpp` (`NoTaxiPlan`: wording, transient), `GroundTraffic.cpp` (`DispatchArrival`), AirportOps `ArrivalQueue.h/.cpp` (`ClearanceFor` asks and stamps), `OpsEventBus.h/.cpp` + `OpsRuntime.cpp` (`FTaxiPlansFreedEvent`, bridge, ArrivalQueue dirtier).
+- Tests: `Airside.Model.TaxiPlan.ArrivalRevokesUnstartedDeparture` (also: never a moving one); `AirportOps.Present.Bus.TaxiPlansFreedIsBridged`.
+
+### Task 10: departure clearance
+- Modify: `GroundTraffic.cpp` (`AskDeparture`, `DepartAgent`, push watch key), `GroundTrafficPlanning.cpp` (`StartDuePushes`).
+- Test: `Airside.Model.TaxiPlan.PushbackGatedOnPlan` - a departure whose push ground another plan holds is booked with a hold on the stand, stays parked, and pushes when its plan says.
+
+### Task 11: lint and budgets
+- Check-Architecture rule: only `TaxiPlanning.cpp` (besides `TaxiReservations.cpp` and tests) calls `BookWindow|BookPasses|ReleaseHolder|ReleaseHolderOn`. Rule 77 rows raised with dated reasons for the hook lines.
+
+### Task 12: headline test
+- Create `Airside.Perf.TaxiPlan.NoPermanentDeadlock` from the spike harness (ac4562b4) on `Content/Maps/M_ScaleGatwick.umap` (committed from that branch): 2 h at 40 and 80 mov/h, seeded random delays (an aircraft held still 20-90 s), then a drain; asserts zero permanent deadlocks and every admitted aircraft parked and, once ordered off, departed; logs the spike's metrics row. Mutation: `UTaxiPlanning::bEnforceOrderForTest = false` must go red.
+
+### Task 13: existing tests, full suite, PR
+- Fix by understanding; list every changed test and why. Full suite once. PR against `feature/taxi-plan`.
