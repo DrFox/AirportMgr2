@@ -129,4 +129,36 @@ bool FRoadBuildEditorToolPreviewLabelTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/** The editor driver hands the names to DrawHUD too (spec: "Both drivers draw them"; plan D12: while hovering). */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadBuildEditorToolTaxiwayNamesTest,
+	"Airside.Editor.TaxiwayNamesReachTheEditor",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadBuildEditorToolTaxiwayNamesTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a target actor"), TestWorld.Actor)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	TestTrue(TEXT("a taxiway"), Actor->ConnectNodes(Actor->PlaceNode({ 0.0, 0.0 }), Actor->PlaceNode({ 60000.0, 0.0 }),
+		ERoadKind::Taxiway, INDEX_NONE, EPavement::Tarmac));
+
+	URoadBuildEdMode* Mode = NewObject<URoadBuildEdMode>(GetTransientPackage());
+	URoadBuildEditorToolBuilder* Builder = NewObject<URoadBuildEditorToolBuilder>(Mode);
+	Builder->ToolIndex = 0;
+	FToolBuilderState State;
+	State.ToolManager = NewObject<UInteractiveToolManager>(Mode);
+	URoadBuildEditorTool* Tool = Cast<URoadBuildEditorTool>(Builder->BuildTool(State));
+	if (!TestNotNull(TEXT("the builder made a tool"), Tool)) { return false; }
+	Tool->Setup();
+	Tool->SetTargetForTest(Actor);
+	const double SurfaceZ = Actor->SurfaceZ;
+	Tool->OnUpdateHover(FInputDeviceRay(FRay(FVector(100.0, 100.0, SurfaceZ + 1000.0), FVector(0.0, 0.0, -1.0)), FVector2D(100.0, 100.0)));
+	if (!TestNotNull(TEXT("a tool is active"), Tool->SessionForTest()->GetActiveTool())) { return false; }
+	Tool->CachePreviewLabelsForTest();
+	TestTrue(TEXT("A reaches the editor's labels"), Tool->CollectPreviewLabelTextForTest().Contains(TEXT("A")));
+	Tool->Shutdown(EToolShutdownType::Cancel);
+	return true;
+}
+
 #endif

@@ -218,9 +218,10 @@ public:
 	 *
 	 * The runtime HUD has always done this; the editor never did, which is why existing
 	 * nodes could not be seen, moved or removed, and why a snap had nothing visible to
-	 * attach to. The tool's own preview draws on top of this.
+	 * attach to. The tool's own preview draws on top of this. Returns how many taxiway-name labels it described, for
+	 * DescribeFrame's once-per-change log line.
 	 */
-	void DrawPersistentState(IToolPreviewSink& Sink) const;
+	int32 DrawPersistentState(IToolPreviewSink& Sink) const;
 
 	// --- IClickDragBehaviorTarget ------------------------------------------------------
 	virtual FInputRayHit CanBeginClickDragSequence(const FInputDeviceRay& PressPos) override;
@@ -414,6 +415,10 @@ private:
 	 * own bodies.
 	 */
 	TArray<FEditorPreviewLabel> PendingLabels;
+
+	/** The taxiway-name count DescribeFrame last logged ("TaxiwayNames: N label(s) drawn"), so the line fires once per
+	 *  change, not per frame - the PIE HUD's ARoadBuildHUD::LoggedTaxiwayNameCount twin. INDEX_NONE until the first frame. */
+	int32 LoggedTaxiwayNameCount = INDEX_NONE;
 
 	/**
 	 * World width the viewport currently spans at the cursor, refreshed each Render.

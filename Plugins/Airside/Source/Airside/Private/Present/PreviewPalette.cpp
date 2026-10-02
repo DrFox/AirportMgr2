@@ -81,6 +81,9 @@ FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 	// nothing and a brighter, thicker attempt read "too thick, too strong" (PIE, 2026-09-28).
 	case EPreviewStyle::GridMinor:                   return FLinearColor(1.0f, 1.0f, 1.0f, 0.22f);
 	case EPreviewStyle::GridMajor:                   return FLinearColor(1.0f, 1.0f, 1.0f, 0.4f);
+	// AIRFIELD SIGN YELLOW on the tag's black (spec: "yellow-on-black tags") - the colour a taxiway location sign is
+	// painted, so the name reads as a sign, and a hue no gesture style here uses at this saturation.
+	case EPreviewStyle::TaxiwayName:                 return FLinearColor(1.0f, 0.85f, 0.0f);
 	}
 
 	// Reached only if EPreviewStyle grew a value with no case above - not caught at compile
@@ -196,6 +199,11 @@ FPreviewLook PreviewPalette::DefaultLook(EPreviewStyle Style)
 	case EPreviewStyle::GridMajor:
 		Look.ThicknessScale = 0.6f;
 		Look.bTranslucentLine = true;
+		break;
+
+	// A NAME, read at any zoom: a fixed-pixel tag, not a road-sized label (spec "yellow-on-black tags").
+	case EPreviewStyle::TaxiwayName:
+		Look.bTag = true;
 		break;
 	}
 

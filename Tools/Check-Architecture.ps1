@@ -2212,6 +2212,13 @@ foreach ($caller in $gridOverlayCallers) {
     if (-not (Select-String -Path $caller -Pattern 'GridOverlay::Describe\(' -Quiet)) {
         $failures.Add("grid-overlay-both-drivers: $caller no longer calls GridOverlay::Describe - the grid overlay would show in one driver and not the other")
     }
+    # TAXIWAY NAMES, same shape (2026-10-02): the labels and the session's when-to-show predicate, in both drivers.
+    # Airside.Editor.TaxiwayNamesReachTheEditor sees the editor's call; nothing headless sees the HUD's DrawHUD.
+    foreach ($namesCall in @('TaxiwayNameOverlay::Describe\(', 'WantsTaxiwayNamesDrawn\(')) {
+        if (-not (Select-String -Path $caller -Pattern $namesCall -Quiet)) {
+            $failures.Add("grid-overlay-both-drivers: $caller no longer calls $namesCall - taxiway names would show in one driver and not the other")
+        }
+    }
 }
 $ranRules.Add('grid-overlay-both-drivers')
 

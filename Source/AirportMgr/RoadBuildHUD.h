@@ -239,4 +239,8 @@ private:
 	 * need is held here rather than threaded through the interface.
 	 */
 	double PlaneZ = 0.0;
+
+	/** The taxiway-name count last logged ("TaxiwayNames: N label(s) drawn"), so the line fires once per change, not
+	 *  per frame. INDEX_NONE until the first frame, so the first frame always logs. */
+	int32 LoggedTaxiwayNameCount = INDEX_NONE;
 };
