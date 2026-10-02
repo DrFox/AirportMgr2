@@ -404,6 +404,7 @@ double FSpeedProfile::SecondsToDrive(double EntrySpeed) const
 		// FLOORED AT THE FOLLOWER'S PROGRESS EPSILON: a stop-to-stop step with no acceleration would divide by
 		// zero, and the follower itself never runs slower than this while it has line left (FRouteFollower::
 		// ProgressEpsilon) - so neither does its clock.
+		// ENFORCED BY: Airside.Model.SteeringFloorZeroStillTaxis, Airside.Model.SteeringFloorSharpVertexStillCreeps
 		const double Mean = FMath::Max(0.5 * (Speed + Next), FRouteFollower::ProgressEpsilon);
 		Seconds += Ds / Mean;
 		Speed = Next;

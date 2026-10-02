@@ -257,20 +257,21 @@ public:
 	FTaxiPlan Plan(const FTaxiRequest& Request);
 	double RouteSeconds(const FRoutePlan& Route);   // rest at both ends, rolling between
 	const FTaxiEdgeSeconds& SecondsFor(FGuidelineEdgeId Edge, bool bReversed);
+	bool IsSharpJoint(FGuidelineEdgeId In, bool bInReversed, FGuidelineEdgeId Out, bool bOutReversed);
 	static bool CanHoldAt(const URoadNetwork& Network, const FTrafficRules& Rules, FGuidelineEdgeId Arrived, FGuidelineNodeId At);
 };
 ```
 
 - [ ] **Step 1: Failing tests** (all on hand-built `NewObject<URoadNetwork>` graphs, `TestAirframes::Piper()`, default `FTrafficRules`):
   - `EmptyNetworkIsShortestRouteTime` - diamond (RouteSearchTest's shape): planned; same steps as `RouteSearch::Find`; `Arrival == DepartAt + RouteSeconds(Find)` (1e-6); no holds.
-  - `EtaAgreesWithWholeRouteProfile` - curved diamond: `RouteSeconds(Find)` within 10% of a whole-route `FSpeedProfile::Build` + `SecondsToDrive(0)` over `Find.Polyline`.
+  - `EtaAgreesWithWholeRouteProfile` - a route with two instant corners: planner not optimistic by > 5%, not pessimistic by > 15% against a whole-route `FSpeedProfile::Build` + `SecondsToDrive(0)`; a smooth (straight) route within 1%.
   - `WaitsAtPlainNodeNotInJunction` - S -lane- P -turn path- J1 -turn path- J2 -lane- G (turn paths: `AtJunction` set, 400 uu); other holders: S from 30 s on, P->J1 [60, 200), J2->G [0, 100). Expect: planned; a hold at P; no hold at J1/J2; `Arrival > 200`. (Mutation: with holds allowed in the junction the plan holds at J2 and arrives ~110 s.) Plus `CanHoldAt` false on J1/J2 and on a short lane (`IsBox`), true at P.
   - `TakesOtherParallel` - X->Y twice (straight and curved, two edges = two resources); straight booked [0, 100): planned via the curved one, `Arrival < 100`.
   - `RefusesWhenNothingFree` - goal booked [0, Forever) -> `NoFreeWindow`, `RouteResult == Found`; goal booked [500, Forever) (someone due later) -> `NoFreeWindow`; start node held by another at `DepartAt` -> `NoFreeWindow`.
   - `RespectsOneWayAndSize` - only edge one-way against -> `NoRoute`/`Unreachable`; too narrow -> `NoRoute`/`TooWide`; short way one-way against + long way two-way -> planned the long way; `Errand::Unset` -> `NoRoute` with the expected "no errand" error.
   - `PlanBooksCleanly` - plan with a hold books via `BookPasses`; replanning the same holder with its windows booked gives the same arrival; a second holder's plan avoids the first's windows and books too.
 - [ ] **Step 2:** red with the batch.
-- [ ] **Step 3: Implement SIPP.** State = (node, index of its free interval, arriving edge). Arrive `t`; latest leave `L` = `min(node interval end, arriving-edge interval end) - m` if a hold is allowed there (start always), else `t`. Expand through `FRouteEdgeFilter::ForEachAdmitted` with `FRouteQuery::For(Request.Errand, Start, Goal, Airframe.Wingspan, ETraversalClass::Aircraft).NeedsPavement(Airframe.MinimumPavement)`. For each free interval `Ie` of the edge and `Im` of the next node: rolling option (not at start) `tau = t`, duration `RollRoll` (`RollRest` into the goal); held option `tau = max(t + StopLoss(in), Ie.Start + m, Im.Start + m - d)` with `d = RestRoll` (`RestRest` into the goal), allowed only when `tau <= L`; feasible when `tau - m >= Ie.Start`, `tau + d + m <= min(Ie.End, Im.End)`. Into the goal additionally `Im.End == Forever`. Priority `t' + dist(M, Goal) / Taxi.SpeedCap`. On failure: `RouteSearch::Find` with the same query decides `NoRoute` (its result) vs `NoFreeWindow`.
+- [ ] **Step 3: Implement SIPP.** *(Revised during execution, 2026-10-02 - see "Execution notes" below.)* States exist ONLY at nodes the aircraft may stop at (start, `CanHoldAt`, goal), keyed (node, node interval, arriving edge, arriving-edge interval). A MOVE runs from a state through every no-stop node (depth-first, `FRouteEdgeFilter::ForEachAdmitted`, at most 8 edges) to the next stoppable node or the goal, with ONE departure `Tau` that fits every resource on the chain: per edge `[Tau+Enter-m, Tau+Reach+m]`, per passed node `[Tau+Reach-m, Tau+Reach+m]`, end node at least as reached (for ever at the goal); `Tau` pushed by the least shift any need asks until a pass asks none, never past `LatestLeave` (= min(node interval end, arriving-edge interval end) - m). Two variants per move: rolling on (`Tau = Arrive`, not from the start, not round a sharp joint) or from rest (`Tau >= Arrive + StopLoss`). Step durations from `SecondsFor` (four timings), at rest after/into a sharp joint (`IsSharpJoint` = `FSpeedProfile::HasSharpVertex` on the two spans either side) or into the goal. Priority `Arrive + dist/Taxi.SpeedCap`. On failure, `RouteSearch::Find` with the same query decides `NoRoute` (its result) vs `NoFreeWindow`.
 - [ ] **Step 4:** green; then the full suite.
 - [ ] **Step 5: Commit** `taxiplan: FTaxiPlanner - SIPP earliest arrival over the table`.
 
@@ -278,3 +279,10 @@ public:
 
 - [ ] The rule "only `UTaxiPlanning` writes `FTaxiReservations`" LANDS IN PR 2. Why: its subject does not exist yet, and this codebase's rules fail when a file they name is missing ("do not let the rule check nothing"); in PR 1 no production code writes the table at all and the planner takes it `const&`, which the compiler enforces. PR 2 adds the row: callers of `BookWindow|BookPasses|ReleaseHolder|ReleaseHolderOn` only in `TaxiPlanning*.cpp`, `TaxiReservations.cpp` and tests.
 - [ ] Full suite, push, `gh pr create --base feature/taxiway-names`.
+
+## Execution notes (PR 1, 2026-10-02)
+
+- **Textbook SIPP keyed on (node, interval) was wrong here, measured.** `WaitsAtPlainNodeNotInJunction` failed: the early arrival at J1 (a junction node, no waiting) was a dead end and, keyed alike, discarded the later arrival that fitted. Earliest-arrival dominance needs waiting; inside a junction there is none. Fix: states only at stoppable nodes; chains through the rest as one move with one departure (Step 3 above).
+- **Instant corners between edges.** Per-piece timing first ignored a sharp vertex AT an edge boundary - 29.3 s against the whole-route profile's 39.8 s (26% optimistic). `IsSharpJoint` now asks the authority (`HasSharpVertex` on the joint's two spans) and times it as a stop: 44.2 s (+11%, pessimistic - the follower crawls at its steering floor, the planner stops). The test now bounds optimism (5%) and pessimism (15%) separately, and a smooth route to 1%.
+- `FTrafficRules::IsBox` and `TaxiPlanMargin` landed in the red commit (the tests read them).
+- Lint rule for table writers deferred to PR 2 (Task 5). Mutator names chosen for it: `BookWindow`, `BookPasses`, `ReleaseHolder`, `ReleaseHolderOn`.

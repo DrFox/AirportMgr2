@@ -224,6 +224,8 @@ struct AIRSIDE_API FTrafficRules
 	 * TWO READERS: the claim pass's box-entry rule (FClaimPass) and the taxi planner's "never wait inside a junction"
 	 * (FTaxiPlanner::CanHoldAt). Spelled inline in the claim pass until 2026-10-02; a planner that copied it could
 	 * hold an aircraft where the claim pass would never let it stop.
+	 * ENFORCED BY: Airside.Model.Traffic.BoxEntryFirstOnly (the claim pass's reader), Airside.Model.TaxiPlan.WaitsAtPlainNodeNotInJunction
+	 * (the planner's, through CanHoldAt)
 	 */
 	bool IsBox(double StepLength, ETraversalClass Class) const;
 
