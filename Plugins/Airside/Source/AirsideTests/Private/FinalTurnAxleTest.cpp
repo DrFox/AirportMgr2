@@ -345,4 +345,119 @@ bool FFinalTurnAircraftTypeParksSquareTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+namespace
+{
+	/**
+	 * A Code B stand lead-in EXACTLY as FAnchorLink::Join lays one: a quadratic sweep from the
+	 * taxiway into the stand, control at the corner, Offset = R / tan(45) = R for a square turn,
+	 * at Code B's painted 2000 uu - sampled by GuidelineGeom::Sample at its DefaultSamples, as
+	 * every guideline edge is. NOT the 48-sample circle the tests above use: that circle's
+	 * spans (~65 uu at R 2000) are shorter than the easing window, and this curve's (~140 uu)
+	 * are not, which is the whole of the 2026-10-01 report.
+	 */
+	FRoutePlan CoarseLeadInPlan()
+	{
+		const double R = 2000.0;
+		TArray<FVector2D> Points;
+		Points.Add(FVector2D(-20000.0, 0.0));
+		TArray<FVector2D> Curve;
+		GuidelineGeom::Sample(FVector2D(-R, 0.0), FVector2D(0.0, 0.0), FVector2D(0.0, R), Curve);
+		Points.Append(Curve);
+		Points.Add(FVector2D(0.0, R + 2450.0));   // the 2450 setback a drawn B stand logs
+		FRoutePlan Plan;
+		Plan.Result = ERouteResult::Found;
+		Plan.Polyline = Points;
+		Plan.Length = GuidelineGeom::PolylineLength(Points);
+		return Plan;
+	}
+
+	struct FYawRun
+	{
+		double PeakRateDegPerSec = 0.0;
+		double WorstAccelDegPerSec2 = 0.0;
+		FString Where;
+		bool bArmed = false;
+	};
+
+	/** Peak yaw rate and the worst frame-to-frame change in it, nose to stop. */
+	FYawRun DriveYaw(const FRoutePlan& Plan, const FChassis& Chassis)
+	{
+		FYawRun Run;
+		FRouteFollower Follower;
+		Follower.Start(Plan, Chassis);
+		Run.bArmed = Follower.FinalTurnFrom >= 0.0;
+		FVector2D Origin = FVector2D::ZeroVector;
+		double Heading = 0.0;
+		TOptional<double> LastHeading;
+		TOptional<double> LastRate;
+		for (int32 Frame = 0; Frame < 60 * 600; ++Frame)
+		{
+			if (!Follower.Advance(FinalTurnFrame, Chassis, Origin, Heading))
+			{
+				break;
+			}
+			if (LastHeading.IsSet())
+			{
+				const double Rate = FMath::RadiansToDegrees(FMath::UnwindRadians(Heading - LastHeading.GetValue())) / FinalTurnFrame;
+				Run.PeakRateDegPerSec = FMath::Max(Run.PeakRateDegPerSec, FMath::Abs(Rate));
+				if (LastRate.IsSet())
+				{
+					const double Accel = FMath::Abs(Rate - LastRate.GetValue()) / FinalTurnFrame;
+					if (Accel > Run.WorstAccelDegPerSec2)
+					{
+						Run.WorstAccelDegPerSec2 = Accel;
+						Run.Where = FString::Printf(TEXT("at %.0f uu: %.1f -> %.1f deg/s"), Follower.Travelled, LastRate.GetValue(), Rate);
+					}
+				}
+				LastRate = Rate;
+			}
+			LastHeading = Heading;
+			if (Follower.HasArrived())
+			{
+				break;
+			}
+		}
+		return Run;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFinalTurnSteadyOnCoarseLeadInTest,
+	"Airside.Model.FinalTurnSteadyOnCoarseLeadIn",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFinalTurnSteadyOnCoarseLeadInTest::RunTest(const FString& Parameters)
+{
+	// THE 2026-10-01 REPORT: "when an aircraft turns into a stand it jerks around the corner;
+	// not on other corners, not reversing out". Only the last turn flies the fixed-axle law,
+	// and on the real 16-sample lead-in its easing window (a quarter wheelbase, ~60 uu for a
+	// Piper) was shorter than a span, so the heading held still along each span and swung at
+	// each vertex: the yaw rate stuttered 0 / 50 / 0 / 70 deg/s, 858 deg/s^2 frame to frame.
+	FChassis Fixed = TestAirframes::Piper().Chassis;
+	Fixed.FinalTurnAxle = EFinalTurnAxle::Fixed;
+	FChassis Nose = Fixed;
+	Nose.FinalTurnAxle = EFinalTurnAxle::Steered;
+
+	const FRoutePlan Plan = CoarseLeadInPlan();
+	const FYawRun Mains = DriveYaw(Plan, Fixed);
+	const FYawRun Reference = DriveYaw(Plan, Nose);
+	TestTrue(TEXT("the main gear takes this turn - otherwise nothing below measures the law"), Mains.bArmed);
+	AddInfo(FString::Printf(TEXT("mains law: peak %.1f deg/s, worst %.0f deg/s^2 %s; nose law: peak %.1f deg/s, worst %.0f deg/s^2"),
+		Mains.PeakRateDegPerSec, Mains.WorstAccelDegPerSec2, *Mains.Where, Reference.PeakRateDegPerSec, Reference.WorstAccelDegPerSec2));
+
+	// THE BAR IS THE NOSE LAW ON THE SAME LINE, which nobody reports jerking: it turned this
+	// corner at a 23.5 deg/s peak and 39 deg/s^2 (2026-10-01). The mains law swings the body
+	// faster by design - it pivots on the mains, so the nose sweeps outside - but a steady turn
+	// at the same speed cannot need more than half as much again. And the 48-sample circle
+	// under the mains law, which is smooth to the eye, measured 148 deg/s^2; 300 leaves room
+	// for the easing at each end without admitting the stutter.
+	TestTrue(*FString::Printf(TEXT("peak yaw rate %.1f deg/s within 1.5x the nose law's %.1f"),
+		Mains.PeakRateDegPerSec, Reference.PeakRateDegPerSec),
+		Mains.PeakRateDegPerSec <= 1.5 * Reference.PeakRateDegPerSec);
+	TestTrue(*FString::Printf(TEXT("yaw rate steady frame to frame: worst %.0f deg/s^2 %s (bar 300)"),
+		Mains.WorstAccelDegPerSec2, *Mains.Where),
+		Mains.WorstAccelDegPerSec2 <= 300.0);
+	return true;
+}
+
 #endif
