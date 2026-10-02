@@ -116,6 +116,30 @@ bool FAirlineHistoryDriftDayTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlineHistoryQuietAirlineTest, "AirportOps.Model.AirlineHistory.QuietAirlineGetsTwoIncreasingDays",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirlineHistoryQuietAirlineTest::RunTest(const FString&)
+{
+	// AN AIRLINE WITH NOTHING RECORDED TODAY (the fresh game: zero drift records nothing) still gets a sane first trend: the
+	// closed day and the open one, in order, never today twice.
+	UAirlineHistory* H = NewObject<UAirlineHistory>(GetTransientPackage());
+	H->ResetForNewGame(4);
+	TArray<FAirlineStanding> Standings;
+	Standings.AddDefaulted_GetRef().AirlineId = TEXT("A");
+	Standings.AddDefaulted_GetRef().AirlineId = TEXT("B");
+	H->Record(TEXT("A"), ECause::OnTime, 0.03, 0.53);
+	H->CloseDay(Standings);
+	const FAirlineDays* B = H->Find(TEXT("B"));
+	if (!TestNotNull(TEXT("B has a row though nothing was recorded for it"), B)) { return false; }
+	if (!TestEqual(TEXT("two days"), B->Days.Num(), 2)) { return false; }
+	TestEqual(TEXT("the closed day"), B->Days[0].Day, 4);
+	TestEqual(TEXT("then the open one"), B->Days[1].Day, 5);
+	const FAirlineDays* A = H->Find(TEXT("A"));
+	if (!TestNotNull(TEXT("A's row"), A) || !TestEqual(TEXT("A also has two days"), A->Days.Num(), 2)) { return false; }
+	TestTrue(TEXT("A strictly increasing too"), A->Days[0].Day < A->Days[1].Day);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlineHistoryRolloverTest, "AirportOps.Model.AirlineHistory.RolloverGainsAPointAndRestartsToday",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FAirlineHistoryRolloverTest::RunTest(const FString&)
@@ -152,7 +176,9 @@ bool FAirlineHistoryClampTest::RunTest(const FString&)
 	TestEqual(TEXT("the summed delta is what really moved, not 40 x 0.03"), OnTime->SumDelta, 0.5, 1e-9);
 	const int32 CountAtCeiling = OnTime->Count;
 	F.OffBlocks(-30.0);
-	TestEqual(TEXT("at 1.0 another on-time records nothing"), HistTestTally(F.History->Find(TEXT("A"))->Days.Last(), ECause::OnTime)->Count, CountAtCeiling);
+	const FAirlineCauseTally* After = HistTestTally(F.History->Find(TEXT("A"))->Days.Last(), ECause::OnTime);
+	if (!TestNotNull(TEXT("the on-time tally is still there"), After)) { return false; }
+	TestEqual(TEXT("at 1.0 another on-time records nothing"), After->Count, CountAtCeiling);
 	return true;
 }
 
@@ -211,7 +237,7 @@ bool FAirlineHistorySaveTest::RunTest(const FString&)
 	UAirlineHistory* Empty = NewObject<UAirlineHistory>(GetTransientPackage());
 	Empty->Record(TEXT("Stale"), ECause::OnTime, 0.01, 0.51);
 	TArray<IOpsPersistent*> IntoEmpty = { Empty };
-	OpsSave::Restore(Bare, IntoEmpty, *Net);
+	TestTrue(TEXT("a snapshot with no history blob restores"), OpsSave::Restore(Bare, IntoEmpty, *Net));
 	TestNull(TEXT("no blob, no rows"), Empty->Find(TEXT("Stale")));
 	return true;
 }

@@ -71,11 +71,14 @@ void UAirlineHistory::Record(FName AirlineId, EAirlineSatisfactionCause Kind, do
 void UAirlineHistory::CloseDay(TArrayView<const FAirlineStanding> Standings)
 {
 	const int32 Closing = CurrentDay;
-	++CurrentDay;
+	// ROWS FIRST, UNDER THE CLOSING DAY: RowFor stamps a new row's first day with CurrentDay, so after the increment an airline
+	// with no Record today (zero drift records nothing) came out as [C+1, C, C+1] - not monotonic, today twice.
+	// ENFORCED BY: AirportOps.Model.AirlineHistory.QuietAirlineGetsTwoIncreasingDays
 	for (const FAirlineStanding& Standing : Standings)
 	{
 		RowFor(Standing.AirlineId, Standing.Satisfaction);
 	}
+	++CurrentDay;
 	for (FAirlineDays& Row : Airlines)
 	{
 		const FAirlineStanding* Standing = Standings.FindByPredicate([&Row](const FAirlineStanding& S) { return S.AirlineId == Row.AirlineId; });
