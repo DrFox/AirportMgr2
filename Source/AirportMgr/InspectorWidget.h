@@ -21,6 +21,7 @@ class UOpsRuntime;
 class UPanelWidget;
 class UUiButton;
 class UTextBlock;
+class UEditableTextBox;
 class UUIStyle;
 struct FAgentFacts;
 
@@ -84,6 +85,18 @@ public:
 	 * BuildActions row, for WaitingForButton's reason: the bar already has the camera, and only the card knows the subject's place.
 	 */
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> LocateButton;
+
+	/** The taxiway card's Rename field (taxiway naming spec, PIE only in v1) - Enter submits. Collapsed on every other card. */
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UEditableTextBox> RenameBox;
+	/** Why the last rename was refused ("B is taken"), in Style->Warning; collapsed when it was not. */
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> RenameRefusalText;
+
+	/**
+	 * Rename the shown taxiway to Requested through the facade (one undo step); returns the refusal, empty on success.
+	 * The Enter handler's body - public so a test drives it without Slate (memory: synthetic input never reaches Slate).
+	 * ENFORCED BY: AirportMgr.Inspector.RenameFromTheCard
+	 */
+	FString SubmitRename(const FString& Requested);
 
 	/**
 	 * THE DEPOT CARD'S PURCHASE ROWS (facility-upgrades spec §4) - a sub-widget of their own since issue #441, filled from the
@@ -345,4 +358,9 @@ private:
 	UFUNCTION() void HandleUnstickChosen(int32 Index);
 	UFUNCTION() void HandleWaitingFor();
 	UFUNCTION() void HandleLocate();
+	UFUNCTION() void HandleRenameCommitted(const FText& Text, ETextCommit::Type How);
+
+	/** The taxiway and actor the painted card renames - set by PaintView, reset with LocateFocus. Weak: a level change can take the actor. */
+	int32 RenameTaxiwayId = INDEX_NONE;
+	TWeakObjectPtr<const ARoadNetworkActor> PaintedTarget;
 };

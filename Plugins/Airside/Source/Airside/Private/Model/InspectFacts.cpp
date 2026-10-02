@@ -400,6 +400,11 @@ namespace InspectFacts
 		Out.Strip = TaxiwayStrip::StripWidthOf(Network, Id);   // THE strip - see its ruling
 		Out.MaxWingspan = IcaoCode::MaxWingspanForLetter(Operates);
 		Out.Surface = Segment.Surface;
+		// THE NAME AND THE CHAIN (taxiway naming spec 2026-10-02): the card is the taxiway's, not just this segment's.
+		Out.Taxiway = Network.TaxiwayOf(Id);
+		Out.Name = Network.TaxiwayDisplayName(Out.Taxiway);
+		Out.Length = Out.Taxiway != INDEX_NONE ? Network.TaxiwayChainOf(Out.Taxiway).Length : 0.0;
+		Out.Connectors = Network.TaxiwayConnectorCount(Out.Taxiway);
 		Out.RestrictedTo.Reset();
 		Out.RestrictedBy.Reset();
 		if (Operates != Own)

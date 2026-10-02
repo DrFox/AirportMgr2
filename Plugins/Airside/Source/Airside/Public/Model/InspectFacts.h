@@ -185,6 +185,12 @@ struct FStandFacts
 struct FTaxiwayCardFacts
 {
 	int32 Index = INDEX_NONE;
+	/** Its taxiway (URoadNetwork::TaxiwayOf) and name, "A3" - empty on an unnamed network (the card keeps its old title). */
+	int32 Taxiway = INDEX_NONE;
+	FString Name;
+	/** The whole chain's length, uu, and how many connectors name it their parent. */
+	double Length = 0.0;
+	int32 Connectors = 0;
 	/** The PAVEMENT's letter, "F" - what it was built for. */
 	FString Letter;
 	/** Pavement width, uu. */

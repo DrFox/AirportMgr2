@@ -162,8 +162,17 @@ bool FTaxiwayCard::Compose(const FInspectorCardInput& In, FInspectorCardView& Ou
 	// restricts it (spec: "max span 65 m - restricted by building at ..."). Composed like the
 	// runway card: when FInspectorCardKey moves, and the SetText gate still makes an
 	// unchanged one free.
-	Out.Title = FString::Format(*NSLOCTEXT("AirportMgr", "InspectorTaxiwayTitle", "Taxiway {0}").ToString(), { T.Index });
-	Out.Facts = FString::Format(
+	// "TAXIWAY A" (spec): the name when there is one; an unnamed network (a raw-built fixture) keeps the segment index (plan D14).
+	Out.Title = !T.Name.IsEmpty()
+		? FString::Format(*NSLOCTEXT("AirportMgr", "InspectorTaxiwayNamed", "Taxiway {0}").ToString(), { T.Name })
+		: FString::Format(*NSLOCTEXT("AirportMgr", "InspectorTaxiwayTitle", "Taxiway {0}").ToString(), { T.Index });
+	// THE WHOLE CHAIN'S LENGTH, not this segment's: the card names the taxiway, so its figures are the taxiway's too.
+	const FText ChainFormat = T.Connectors == 1
+		? NSLOCTEXT("AirportMgr", "InspectorTaxiwayChainOne", "Length {0} m, {1} connector\n")
+		: NSLOCTEXT("AirportMgr", "InspectorTaxiwayChain", "Length {0} m, {1} connectors\n");
+	const FString Chain = T.Name.IsEmpty() ? FString() : FString::Format(*ChainFormat.ToString(),
+		{ FString::Printf(TEXT("%.0f"), T.Length / 100.0), FString::FromInt(T.Connectors) });
+	Out.Facts = Chain + FString::Format(
 		*NSLOCTEXT("AirportMgr", "InspectorTaxiwayFacts", "Code {0}, {1} m wide, {2}\nStrip {3} m each side\nMax span {4} m").ToString(),
 		{ T.Letter, FString::Printf(TEXT("%.1f"), T.Width / 100.0), FString(Pavement::Name(T.Surface)),
 			FString::Printf(TEXT("%.1f"), T.Strip / 100.0), FString::Printf(TEXT("%.0f"), T.MaxWingspan / 100.0) });
@@ -177,6 +186,7 @@ bool FTaxiwayCard::Compose(const FInspectorCardInput& In, FInspectorCardView& Ou
 		? NSLOCTEXT("AirportMgr", "InspectorTaxiwayStatusRestricted", "Restricted").ToString()
 		: NSLOCTEXT("AirportMgr", "InspectorTaxiwayStatusOpen", "Open to its letter").ToString();
 	Out.Locate = InspectorSegmentFocus(*Network, In.Selection.Id);
+	Out.RenameTaxiwayId = T.Taxiway;
 	return true;
 }
 

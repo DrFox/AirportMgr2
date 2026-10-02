@@ -96,6 +96,12 @@ struct FInspectorCardView
 	 * ENFORCED BY: AirportMgr.Inspector.EveryCardLocatesItsSubject
 	 */
 	FAlertFocus Locate;
+
+	/**
+	 * THE TAXIWAY CARD'S RENAME (taxiway naming spec, PIE only in v1): the taxiway the Rename field renames, INDEX_NONE
+	 * on every other card, which collapses the field. ENFORCED BY: AirportMgr.Inspector.RenameFromTheCard
+	 */
+	int32 RenameTaxiwayId = INDEX_NONE;
 };
 
 /**
