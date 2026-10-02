@@ -156,6 +156,7 @@ FRoadNodeId URoadNetwork::SplitSegment(FRoadSegmentId Doomed, const FVector2D& A
 	URoadProfile* KeepProfile = Segment->Profile;
 	const FRunwayFacts KeepFacts = Segment->Runway;
 	const EPavement KeepSurface = Segment->Surface;
+	const int32 KeepTaxiway = Segment->TaxiwayId;
 	const FVector2D PositionA = EndA->Position;
 	const FVector2D PositionB = EndB->Position;
 
@@ -196,6 +197,7 @@ FRoadNodeId URoadNetwork::SplitSegment(FRoadSegmentId Doomed, const FVector2D& A
 	//
 	// THE ROAD SURFACE LIKEWISE: an exit cut into a grass taxiway would otherwise pave both
 	// halves, and the aircraft the grass kept off it would route straight down them.
+	// THE TAXIWAY NAME LIKEWISE (2026-10-02), below.
 	for (const FRoadSegmentId& Half : { First, Second })
 	{
 		if (FRoadSegment* Fresh = GetSegmentMutable(Half))
@@ -203,6 +205,9 @@ FRoadNodeId URoadNetwork::SplitSegment(FRoadSegmentId Doomed, const FVector2D& A
 			Fresh->Runway = KeepFacts;
 			Fresh->Surface = KeepSurface;
 		}
+		// AND THE TAXIWAY (spec: "insert a node / split a segment: both halves keep the taxiway") - through the one
+		// writer. ENFORCED BY: Airside.Model.TaxiwayNames.SplitKeepsTheTaxiway, Check-Architecture rule 103
+		WriteTaxiwayId(Half, KeepTaxiway);
 	}
 
 	// Both endpoints were checked live and the middle node was just created, so the only

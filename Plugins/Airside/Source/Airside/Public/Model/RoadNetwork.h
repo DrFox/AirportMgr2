@@ -927,6 +927,26 @@ public:
 	int32 TaxiwayConnectorCount(int32 TaxiwayId) const;
 
 	/**
+	 * THE ONE PASS that keeps names true (spec "The single-chain invariant"), run after EVERY topology change from ONE
+	 * place - URoadEditFacade::NotifyChanged for EChangeKind::Topology (plan D9) - and on load (EnsureTaxiwayNames).
+	 * Mutators never patch names themselves (issue #255: fixes at sites regress; fixes at shapes hold). In order:
+	 *   0. a name only on a live taxiway segment (a road or a runway carries none);
+	 *   1. every UNNAMED taxiway chain named by AssignTaxiway, longest first (plan D4);
+	 *   2-4. the invariant: a branch split off, a disconnected piece split off, an empty taxiway retired.
+	 * Deterministic: same network in, same names out. Returns one FTaxiwayRename per split ("C split off from A"); logs
+	 * each as "TaxiwayNames: C split off from A". Moves GuidelineRevision when it changed anything (NoteFactChanged):
+	 * the inspector card and the labels key on it.
+	 * ENFORCED BY: Airside.Model.TaxiwayNames.InvariantUnderRandomEdits, Airside.Present.TaxiwayNames.SplitIsAnnouncedAndUndone
+	 */
+	TArray<FTaxiwayRename> NormaliseTaxiways(const FTaxiwayNamingRules& Rules);
+
+	/** The taxiway's segments in chain order, from an end (a node holding one of them); a closed loop starts at its lowest. */
+	FTaxiwayChain TaxiwayChainOf(int32 TaxiwayId) const;
+
+	/** A junction named by the taxiways meeting there, sorted, "/"-joined ("A/B"); "A" for one; empty for none (plan D13). */
+	FString JunctionName(FRoadNodeId Node) const;
+
+	/**
 	 * Removes the entity, the anchor nodes it owns, and every guideline edge incident to
 	 * them - RemoveGuidelineNode cascades. So deleting a stand also deletes the taxi line
 	 * drawn into it, which is intended (a lead-in to a deleted stand leads nowhere) but is
@@ -1252,6 +1272,21 @@ private:
 	/** THE ONE WRITER of FRoadSegment::TaxiwayId (RoadNetworkTaxiways.cpp). ENFORCED BY: Check-Architecture rule 103 */
 	void WriteTaxiwayId(FRoadSegmentId Segment, int32 TaxiwayId);
 	FTaxiway* FindTaxiwayMutable(int32 TaxiwayId);
+	/**
+	 * Name ONE unnamed chain (spec "Assignment rules"), in order:
+	 *   inherit - it carries on (RoadGeom::IsInLine at a junction, FTaxiwayNamingRules::BendDegrees at a bend, plan D1)
+	 *             from a node where a named taxiway ENDS -> that taxiway, then RejudgeTaxiway (plan D3);
+	 *   connector - shorter than ConnectorMaxLength, both ends anchored (a named taxiway, a runway, or a dead end - plan
+	 *             D2) and a named taxiway at one end -> a connector of the lettered taxiway at its FIRST end, else its other;
+	 *   letter - anything else -> the next free letter.
+	 * ENFORCED BY: Airside.Model.TaxiwayNames.Assign / .ClickByClickDrawing / .Connector
+	 */
+	int32 AssignTaxiway(const FTaxiwayChain& Chain, const FTaxiwayNamingRules& Rules);
+	int32 AssignUnnamedTaxiways(const FTaxiwayNamingRules& Rules);
+	void RejudgeTaxiway(int32 TaxiwayId, const FTaxiwayNamingRules& Rules);
+	int32 MintTaxiway(int32 ParentId);
+	int32 IssueConnectorNumber(int32 ParentId);
+	FString NextFreeTaxiwayLetter(int32 Except) const;
 
 	friend struct FRoadNetworkTestAccess;
 
