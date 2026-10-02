@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Math/RandomStream.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
 #include "Model/TaxiwayStrip.h"
@@ -386,6 +387,154 @@ bool FTaxiwayNamesRejudgeTest::RunTest(const FString&)
 		TestEqual(TEXT("it reached A: A1"), N.NameOf(Click1), FString(TEXT("A1")));
 		const FRoadSegmentId Next = N.Click(N.Node(0.0, 100000.0), N.Node(60000.0, 100000.0));
 		TestEqual(TEXT("B is free again"), N.NameOf(Next), FString(TEXT("B")));
+	}
+	return true;
+}
+
+namespace TaxiwayNamesTest
+{
+	/** THE CONTRACT, measured (spec "Invariant test"): every live taxiway is ONE connected chain with at most 2 of its
+	 *  segments at any node, display names are unique and non-empty, an empty one is kept only for its connectors, every
+	 *  taxiway segment is named and nothing else is. Empty string when it holds; the first breach otherwise. */
+	FString InvariantViolation(const URoadNetwork& Net)
+	{
+		TMap<FString, int32> Shown;
+		for (const FTaxiway& T : Net.GetTaxiways())
+		{
+			if (!T.bAlive) { continue; }
+			const FString Name = Net.TaxiwayDisplayName(T.Id);
+			if (Name.IsEmpty()) { return FString::Printf(TEXT("taxiway %d has no display name"), T.Id); }
+			if (const int32* Other = Shown.Find(Name)) { return FString::Printf(TEXT("%s is shown by %d and %d"), *Name, *Other, T.Id); }
+			Shown.Add(Name, T.Id);
+			TArray<FRoadSegmentId> Own;
+			for (int32 Index = 0; Index < Net.GetSegments().Num(); ++Index)
+			{
+				const FRoadSegmentId Id = Net.SegmentIdAt(Index);
+				if (Id.IsSet() && Net.TaxiwayOf(Id) == T.Id) { Own.Add(Id); }
+			}
+			if (Own.Num() == 0)
+			{
+				if (!Net.HasTaxiwayConnectors(T.Id)) { return FString::Printf(TEXT("%s is empty with no connector, still alive"), *Name); }
+				continue;
+			}
+			TMap<int32, int32> PerNode;
+			for (const FRoadSegmentId& Id : Own)
+			{
+				const FRoadSegment* S = Net.GetSegment(Id);
+				for (const int32 Node : { S->A.Index, S->B.Index })
+				{
+					if (++PerNode.FindOrAdd(Node) > 2) { return FString::Printf(TEXT("%s has 3+ segments at node %d"), *Name, Node); }
+				}
+			}
+			TSet<FRoadSegmentId> Reached = { Own[0] };
+			for (bool bGrew = true; bGrew;)
+			{
+				bGrew = false;
+				for (const FRoadSegmentId& Id : Own)
+				{
+					if (Reached.Contains(Id)) { continue; }
+					const FRoadSegment* S = Net.GetSegment(Id);
+					for (const FRoadSegmentId& R : Reached)
+					{
+						const FRoadSegment* Q = Net.GetSegment(R);
+						if (S->A == Q->A || S->A == Q->B || S->B == Q->A || S->B == Q->B) { Reached.Add(Id); bGrew = true; break; }
+					}
+				}
+			}
+			if (Reached.Num() != Own.Num()) { return FString::Printf(TEXT("%s is in pieces (%d of %d reached)"), *Name, Reached.Num(), Own.Num()); }
+		}
+		for (int32 Index = 0; Index < Net.GetSegments().Num(); ++Index)
+		{
+			const FRoadSegmentId Id = Net.SegmentIdAt(Index);
+			if (!Id.IsSet()) { continue; }
+			const bool bTaxiway = TaxiwayStrip::HasStrip(Net, Id);
+			if (bTaxiway && Net.TaxiwayOf(Id) == INDEX_NONE) { return FString::Printf(TEXT("taxiway segment %d is unnamed"), Index); }
+			if (!bTaxiway && Net.GetSegment(Id)->TaxiwayId != INDEX_NONE) { return FString::Printf(TEXT("segment %d is no taxiway but is named"), Index); }
+		}
+		return FString();
+	}
+
+	/** One seeded run: 300 random raw edits, normalised after each. Fills the per-slot names for the determinism check. */
+	FString RandomEditRun(int32 Seed, TArray<FString>& OutNames)
+	{
+		FTaxiwayNamesNet N;
+		FRandomStream Stream(Seed);
+		for (int32 X = 0; X < 6; ++X)
+		{
+			for (int32 Y = 0; Y < 6; ++Y) { N.Node(X * 20000.0, Y * 20000.0); }
+		}
+		const auto AnyNode = [&N, &Stream]() { return N.Net->NodeIdAt(Stream.RandRange(0, N.Net->GetNodes().Num() - 1)); };
+		const auto AnySegment = [&N, &Stream]()
+		{
+			const int32 Count = N.Net->GetSegments().Num();
+			return Count == 0 ? FRoadSegmentId() : N.Net->SegmentIdAt(Stream.RandRange(0, Count - 1));
+		};
+		for (int32 Step = 0; Step < 300; ++Step)
+		{
+			const int32 Op = Stream.RandRange(0, 9);
+			if (Op <= 4)
+			{
+				URoadProfile* Profile = Op == 4 ? N.Road : (Op == 3 && Stream.FRand() < 0.3f ? N.Runway : N.Taxi);
+				const FRoadNodeId A = AnyNode();
+				const FRoadNodeId B = AnyNode();
+				if (A.IsSet() && B.IsSet() && A != B) { N.Lay(A, B, Profile); }
+			}
+			else if (Op == 5)
+			{
+				FVector2D A, B;
+				const FRoadSegmentId S = AnySegment();
+				if (S.IsSet() && N.Net->SegmentEnds(S, A, B)) { N.Net->SplitSegment(S, (A + B) * 0.5); }
+			}
+			else if (Op <= 7)
+			{
+				const FRoadSegmentId S = AnySegment();
+				if (S.IsSet()) { N.Net->RemoveSegment(S); }
+			}
+			else if (Op == 8)
+			{
+				const FRoadNodeId A = AnyNode();
+				const FRoadNodeId B = AnyNode();
+				if (A.IsSet() && B.IsSet()) { N.Net->MergeNodes(A, B); }
+			}
+			else
+			{
+				const FRoadNodeId A = AnyNode();
+				if (A.IsSet()) { N.Net->RemoveNode(A); }
+			}
+			N.Normalise();
+			const FString Violation = InvariantViolation(*N.Net);
+			if (!Violation.IsEmpty()) { return FString::Printf(TEXT("seed %d step %d op %d: %s"), Seed, Step, Op, *Violation); }
+		}
+		for (int32 Index = 0; Index < N.Net->GetSegments().Num(); ++Index)
+		{
+			const FRoadSegmentId Id = N.Net->SegmentIdAt(Index);
+			OutNames.Add(Id.IsSet() ? N.NameOf(Id) : FString(TEXT("-")));
+		}
+		return FString();
+	}
+}
+
+/** THE INVARIANT TEST (spec): a seeded random edit sequence, the contract measured after every mutator - and the same
+ *  seed twice gives the same names (spec: "same network in, same names out"). */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesInvariantTest, "Airside.Model.TaxiwayNames.InvariantUnderRandomEdits",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesInvariantTest::RunTest(const FString&)
+{
+	using namespace TaxiwayNamesTest;
+	{
+		// CONTROL: the checker sees a breach - a taxiway left unnamed.
+		FTaxiwayNamesNet N;
+		N.Lay(N.Node(0.0, 0.0), N.Node(50000.0, 0.0));
+		TestFalse(TEXT("control: an unnormalised taxiway is a breach the checker reports"), InvariantViolation(*N.Net).IsEmpty());
+	}
+	for (int32 Seed = 1; Seed <= 6; ++Seed)
+	{
+		TArray<FString> First;
+		TArray<FString> Second;
+		const FString Violation = RandomEditRun(Seed, First);
+		if (!TestTrue(FString::Printf(TEXT("the contract holds after every edit (%s)"), *Violation), Violation.IsEmpty())) { return false; }
+		RandomEditRun(Seed, Second);
+		TestEqual(FString::Printf(TEXT("seed %d: same edits, same names"), Seed), First, Second);
 	}
 	return true;
 }
