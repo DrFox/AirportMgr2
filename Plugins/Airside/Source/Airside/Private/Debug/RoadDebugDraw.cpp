@@ -79,7 +79,7 @@ void RoadDebug::DrawJunction(UWorld* World, const FJunctionInput& Input, const F
 
 	for (const RoadGeom::FFillet& Corner : Result.Corners)
 	{
-		if (!Corner.bValid || Corner.bStraightThrough)
+		if (!Corner.bValid || Corner.bStraightThrough || Corner.bStep)
 		{
 			continue;
 		}
