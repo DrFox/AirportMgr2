@@ -107,7 +107,9 @@ struct AIRSIDE_API FTrafficRules
 	 * 80 mov/h starvation): held for ever until it lined up, the entry turned every later departure into a queue at a
 	 * holding node, each held for ever too, and taxi-in routes through them found no window - arrivals held in the air.
 	 * Bounded, the next departure plans to the entry after it; one still there past it is ahead in the order and is
-	 * waited for, and a late one is re-timed. 0: for ever, PR 2's rule.
+	 * waited for, and a late one is re-timed. 0: for ever, PR 2's rule. Applied to every booking that ends AT an entry - the
+	 * first, the queue's rest, and a re-plan (UTaxiPlanning::CapEntryHold).
+	 * ENFORCED BY: Airside.Perf.TaxiPlan.NoPermanentDeadlock (80/h admitted floor), Airside.Model.TaxiPlan.ReplannedDepartureFreesItsEntry
 	 */
 	UPROPERTY(EditAnywhere, meta = (ClampMin = "0")) double TaxiPlanEntryHold = 90.0;
 

@@ -13,8 +13,10 @@ void UTaxiPlanning::TakeAllForRebuild(TArray<int32>& OutOrder, TMap<int32, FTaxi
 	OutOrder.Reset();
 	OutCleared = Clearances;
 
-	// THE ORDER, TOPOLOGICALLY (Kahn): every holder after every holder booked ahead of it on any resource. The table is one
-	// timeline, so the pairs have no cycle; ties - and any holder a broken table left in one - go by earliest window.
+	// THE ORDER, TOPOLOGICALLY (Kahn): every holder after every holder booked ahead of it on any resource. The pairs CAN
+	// form a cycle between holders (review of #534 finding 8): 1 ahead of 2 on one resource and 2 ahead of 1 on another is
+	// one timeline and legal - the order is per resource, not per aircraft. Kahn then finds no free holder; the earliest
+	// window goes next, as do ties. ENFORCED BY: Airside.Model.TaxiPlan.RebuildOrderIsTopological
 	TArray<TPair<int32, int32>> Pairs;
 	Table.OrderPairs(Pairs);
 	TMap<int32, double> Earliest;
@@ -81,7 +83,7 @@ void UTaxiPlanning::TakeAllForRebuild(TArray<int32>& OutOrder, TMap<int32, FTaxi
 
 bool UTaxiPlanning::BookAlong(const URoadNetwork& Network, int32 Holder, ETaxiClearanceKind Kind, ETaxiClearanceStage Stage,
 	const FRoutePlan& Live, int32 Prefix, const FTaxiPlan& Tail, TConstArrayView<FTaxiPass> PrefixPasses,
-	const FRoutePlan& PushRoute, TConstArrayView<FTaxiResource> PushOnly, double Now)
+	const FRoutePlan& PushRoute, TConstArrayView<FTaxiResource> PushOnly, double Now, bool bFromExit, double EntryHold)
 {
 	if (bRefuseReplansForTest || Prefix < 0 || Prefix > Live.Steps.Num() || Tail.Legs.Num() != Live.Steps.Num() - Prefix)
 	{
@@ -133,6 +135,8 @@ bool UTaxiPlanning::BookAlong(const URoadNetwork& Network, int32 Holder, ETaxiCl
 		Join(Pass);
 	}
 	Held.PushWindows = TArray<FTaxiResource>(PushOnly);
+	// TO A RUNWAY ENTRY, HELD A WHILE THERE - as the first booking held it (review of #534 finding 5).
+	CapEntryHold(Held, EntryHold);
 	if (!Book(Network, Holder, Kind, Held, Stage, PushRoute, Now))
 	{
 		return false;
@@ -141,11 +145,61 @@ bool UTaxiPlanning::BookAlong(const URoadNetwork& Network, int32 Holder, ETaxiCl
 	// BEHIND IT ALREADY: nothing booked there to release, nor its start.
 	Clearance.ReleasedThrough = FMath::Max<int32>(INDEX_NONE, Prefix - 2);
 	Clearance.bStartReleased = Prefix > 0;
+	Clearance.bFromExit = bFromExit;
+	Clearance.bOnFinal = bFromExit && Prefix == 0;
 	if (Prefix > 0)
 	{
 		Clearance.Entered.Add(FTaxiResource::Edge(Live.Steps[Prefix - 1].Edge));
+		// ON IT ALREADY: the step it stands on is let in for good - asked again, a window there ahead of its own would stop
+		// it on ground it is on, a gap short of nothing (review of #534 finding 1). Its END NODE is still asked (OrderHold).
+		Clearance.GrantedMove = 0;
 	}
 	return true;
+}
+
+bool UTaxiPlanning::TakeOut(int32 Holder, FTaxiClearance& Out)
+{
+	const bool bHad = Clearances.RemoveAndCopyValue(Holder, Out);
+	LastRefusal.Remove(Holder);
+	if (Table.ReleaseHolder(Holder) > 0 || bHad)
+	{
+		Bump(true);
+	}
+	return bHad;
+}
+
+FTaxiReservations UTaxiPlanning::TableWithout(TConstArrayView<int32> Holders) const
+{
+	FTaxiReservations Copy = Table;
+	for (const int32 Holder : Holders)
+	{
+		Copy.ReleaseHolder(Holder);
+	}
+	return Copy;
+}
+
+FTaxiPlan UTaxiPlanning::PlanOn(const FTaxiReservations& On, const URoadNetwork& Network, const FAirframe& Airframe,
+	const FTrafficRules& Rules, const FTaxiRequest& Request)
+{
+	FTaxiPlanner Planner(Network, On, Airframe, Rules);
+	return Planner.Plan(Request);
+}
+
+void UTaxiPlanning::CapEntryHold(FTaxiPlan& Plan, double Hold)
+{
+	if (!(Hold > 0.0) || Plan.Route.Steps.Num() == 0)
+	{
+		return;
+	}
+	const FTaxiResource Entry = FTaxiResource::Node(Plan.Route.Steps.Last().To);
+	const FTaxiResource Onto = FTaxiResource::Edge(Plan.Route.Steps.Last().Edge);
+	for (FTaxiPass& Pass : Plan.Passes)
+	{
+		if ((Pass.Resource == Entry || Pass.Resource == Onto) && Pass.Window.To >= FTaxiReservations::Forever)
+		{
+			Pass.Window.To = FMath::Max(Pass.Window.From + 1.0, Plan.Arrival + Hold);
+		}
+	}
 }
 
 void UTaxiPlanning::MarkUnplanned(int32 Holder, ETaxiUnplanned Cause, const FString& Why, ETaxiClearanceKind Kind, ERouteErrand Errand)
@@ -183,7 +237,8 @@ TArray<int32> UTaxiPlanning::UnplannedDueRetry(double Now) const
 	TArray<int32> Due;
 	for (const TPair<int32, FTaxiUnplanned>& Each : Unplanned)
 	{
-		if (Each.Value.TriedAt < 0.0 || (Each.Value.TriedRevision != RevisionCount && Now - Each.Value.TriedAt >= 1.0))
+		const double Since = Now - Each.Value.TriedAt;
+		if (Each.Value.TriedAt < 0.0 || (Each.Value.TriedRevision != RevisionCount && Since >= 1.0) || Since >= UnplannedRetryPeriod)
 		{
 			Due.Add(Each.Key);
 		}
@@ -210,10 +265,21 @@ bool UTaxiPlanning::TakeUnplannedChanged()
 bool UTaxiPlanning::Retime(int32 Holder, double Since, double Lag, double Now)
 {
 	TArray<FTaxiShift> Shifts;
-	if (!(Lag > 0.0) || !Clearances.Contains(Holder) || !Table.ShiftLater(Holder, Since, Lag, FTaxiReservations::Always, Shifts))
+	auto OnFinal = [this](int32 Other)
+	{
+		const FTaxiClearance* Clearance = Clearances.Find(Other);
+		return Clearance != nullptr && Clearance->bOnFinal;
+	};
+	if (!(Lag > 0.0) || !Clearances.Contains(Holder) || !Table.ShiftLater(Holder, Since, Lag, Now, OnFinal, Shifts))
 	{
 		NoteRefused(Holder, FString::Printf(TEXT("agent %d's re-time"), Holder),
-			TEXT("the windows behind it cannot all move (one is held for ever)"));
+			TEXT("the windows behind it cannot all move (one is held for ever, or an arrival on final is)"));
+		// NOT LEFT TO LAPSE (review of #534 finding 6): what it is on stays held as far as nobody behind is overrun, so no plan
+		// is made through ground it still stands on.
+		if (Lag > 0.0 && Clearances.Contains(Holder) && Table.StretchHeld(Holder, Now, Now + Lag))
+		{
+			Bump(false);
+		}
 		return false;
 	}
 	// THE PLANS CARRY THE TIMES TOO: legs, holds, arrival, push - moved exactly as their windows were, in the same order.

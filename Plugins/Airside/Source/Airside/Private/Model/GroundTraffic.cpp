@@ -1379,12 +1379,12 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 		AdvanceOnce(Step, Network);
 	}
 
-	// AFTER EVERY SUBSTEP, once a frame - see DiffFreedom. No network, no arbitration, no table to diff.
+	// AFTER EVERY SUBSTEP, once a frame (DiffFreedom); no network, no table to diff. Taxi table work first: diffed this frame.
 	if (Network != nullptr)
 	{
-		DiffFreedom(*Network, /*bRebuilt*/ false);
 		ExtendQueuedDepartures(*Network);
 		RetryUnplanned(*Network);
+		DiffFreedom(*Network, /*bRebuilt*/ false);
 	}
 }
 

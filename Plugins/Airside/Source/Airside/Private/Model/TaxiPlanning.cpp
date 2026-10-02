@@ -188,6 +188,10 @@ bool UTaxiPlanning::BookArrival(const URoadNetwork& Network, int32 Holder, const
 		OutRevoked.Reset();
 		return false;
 	}
+	// FROM ITS RUNWAY EXIT, ON FINAL: its first move is not the order's to refuse (OrderHold), and no re-time moves it.
+	FTaxiClearance& Cleared = Clearances[Holder];
+	Cleared.bFromExit = true;
+	Cleared.bOnFinal = true;
 	for (const int32 Departure : OutRevoked)
 	{
 		UE_LOG(LogAirsideTaxiPlan, Log, TEXT("TaxiPlan: agent %d revoked by arrival %d"), Departure, Holder);
@@ -400,6 +404,27 @@ int32 UTaxiPlanning::WaitingFor(int32 Holder, const FTaxiResource& Resource) con
 	});
 }
 
+int32 UTaxiPlanning::OpposingAhead(int32 Holder, const FTaxiResource& Edge) const
+{
+	if (!bEnforceOrderForTest)
+	{
+		return 0;
+	}
+	const TConstArrayView<FTaxiWindow> Windows = Table.WindowsOn(Edge);
+	const int32 Mine = Windows.IndexOfByPredicate([Holder](const FTaxiWindow& Window) { return Window.Holder == Holder; });
+	for (int32 Index = 0; Index < Mine; ++Index)
+	{
+		// STILL IN THE TABLE IS NOT YET LEFT (released as its tail clears, Track). Any - a push, a merged window - may come
+		// either way, so it counts as coming at it.
+		const FTaxiWindow& Ahead = Windows[Index];
+		if (Ahead.Holder != Holder && (Ahead.Way == ETaxiWay::Any || Windows[Mine].Way == ETaxiWay::Any || Ahead.Way != Windows[Mine].Way))
+		{
+			return Ahead.Holder;
+		}
+	}
+	return 0;
+}
+
 int32 UTaxiPlanning::PushWaitingFor(int32 Holder) const
 {
 	const FTaxiClearance* Clearance = Clearances.Find(Holder);
@@ -495,9 +520,26 @@ bool UTaxiPlanning::OrderHold(const FRoadAgent& Agent, double Now, double T, dou
 		}
 		// AN ARRIVAL'S FIRST MOVE IS NEVER REFUSED BY THE ORDER (review of #528 finding 4): it vacates rolling and may not
 		// wait (bMayWaitAtStart false) - a hold there is a hold ON THE RUNWAY, and whoever runs late ahead of it may need that
-		// runway: order against runway. It goes; the claim pass's spacing still keeps it off any body there.
-		// ENFORCED BY: Airside.Model.TaxiPlan.ArrivalNeverHeldOnTheExit
-		const bool bExitMove = Move == 0 && Clearance->Kind == ETaxiClearanceKind::TaxiIn;
+		// runway: order against runway. It goes; the claim pass's spacing still keeps it off any body there. ONLY A PLAN THAT
+		// STARTS AT THE EXIT (bFromExit - review of #534 finding 3: move 0 of a re-plan is wherever the aircraft is). AND NOT
+		// AGAINST ONE COMING THE OTHER WAY (finding 7): late and waiting at the far end, it would drive on in its turn and
+		// meet the arrival head-on mid-edge, for good - held at the exit is the lesser harm.
+		// ENFORCED BY: Airside.Model.TaxiPlan.ArrivalNeverHeldOnTheExit, Airside.Model.TaxiPlan.ReplannedArrivalIsOrderedMidRoute
+		const bool bExitMove = Move == 0 && Clearance->bFromExit;
+		if (bExitMove && Move > Clearance->GrantedMove)
+		{
+			for (int32 Index = First; Index <= Last; ++Index)
+			{
+				if (const int32 Opposer = OpposingAhead(Agent.Id, FTaxiResource::Edge(Route.Steps[Index].Edge)))
+				{
+					Out.Step = First;
+					Out.StepStart = Start;
+					Out.Blocker = Opposer;
+					Out.Resource = FTrafficResource::OfEdge(Route.Steps[Index].Edge);
+					return true;
+				}
+			}
+		}
 		if (Move > Clearance->GrantedMove)
 		{
 			for (int32 Index = First; Index <= Last && !bExitMove; ++Index)
@@ -595,6 +637,8 @@ bool UTaxiPlanning::Track(const FRoadAgent& Agent, const FTrafficOccupancy& Occu
 	switch (Agent.Phase)
 	{
 	case EAgentPhase::Arriving:
+		// ON FINAL: its landing is flown, so no re-time may move its windows (FTaxiReservations::ShiftLater's Immovable).
+		Clearance->bOnFinal = true;
 		return true;
 	case EAgentPhase::Manoeuvring:
 		Clearance->Stage = ETaxiClearanceStage::Moving;
@@ -629,6 +673,7 @@ bool UTaxiPlanning::Track(const FRoadAgent& Agent, const FTrafficOccupancy& Occu
 		return false;
 	}
 	Clearance->Stage = ETaxiClearanceStage::Moving;
+	Clearance->bOnFinal = false;
 
 	bool bReleased = false;
 	for (const FTaxiResource& Resource : Clearance->PushOnly)
@@ -697,7 +742,8 @@ bool UTaxiPlanning::Track(const FRoadAgent& Agent, const FTrafficOccupancy& Occu
 	{
 		const double Latest = Clearance->Plan.Legs.IsValidIndex(Current + 1) ? Clearance->Plan.Legs[Current + 1].Leave
 			: Clearance->Plan.Legs[Current].Reach;
-		if (Now > Latest + Rules.TaxiPlanRetimeLag && (Clearance->RetimeTriedAt < 0.0 || Now - Clearance->RetimeTriedAt >= 1.0))
+		if (Now > Latest + Rules.TaxiPlanRetimeLag
+			&& (Clearance->RetimeTriedAt < 0.0 || Now - Clearance->RetimeTriedAt >= Clearance->RetimeBackoff))
 		{
 			Clearance->RetimeTriedAt = Now;
 			const FAirframe* Aircraft = Agent.AsAircraft();
@@ -706,7 +752,9 @@ bool UTaxiPlanning::Track(const FRoadAgent& Agent, const FTrafficOccupancy& Occu
 			// FROM THE MOMENT IT IS LATE FOR (Since just before Latest), not from now: the overdue leave and the windows
 			// that straddle it move with the rest, so the plan reads on time again after it (measured: from now, the overdue
 			// leave never moved and it was re-timed every second by a growing lag - 709 re-times at 40/h, the field jammed).
-			Retime(Agent.Id, Latest - 0.001, Now + Rest / Speed - Latest, Now);
+			const bool bRetimed = Retime(Agent.Id, Latest - 0.001, Now + Rest / Speed - Latest, Now);
+			// BACKED OFF WHILE REFUSED (review of #534 finding 9): Retime changes no clearance's place in the map.
+			Clearance->RetimeBackoff = bRetimed ? 1.0 : FMath::Min(2.0 * Clearance->RetimeBackoff, 30.0);
 		}
 	}
 	return true;

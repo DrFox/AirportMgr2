@@ -104,8 +104,22 @@ struct FTaxiClearance
 	/** Where QueueFor is - re-found by position after a rebuild, which kills the handle (UGroundTraffic::ReplanTaxi). */
 	FVector2D QueueAt = FVector2D::ZeroVector;
 
-	/** When a re-time was last tried - tried at most once a sim second (a cascade copies the table). */
+	/** When a re-time was last tried, and how long to wait before the next: a sim second, doubled on each refusal up to 30 s
+	 *  and reset by a success (review of #534 finding 9 - a refused cascade copies the table and walks every pair, and was
+	 *  asked again every second for as long as the aircraft stayed late). */
 	double RetimeTriedAt = -1.0;
+	double RetimeBackoff = 1.0;
+
+	/**
+	 * Whether this plan STARTS AT A RUNWAY EXIT - an arrival's, booked as it is cleared to land (BookArrival) or re-made from
+	 * the exit while it is still on final. Its first move is then never refused by the order (OrderHold). A FACT OF THE
+	 * CLEARANCE, not "move 0 of a taxi in" (review of #534 finding 3): a re-plan along the live route makes move 0 the step
+	 * the aircraft is on, anywhere on its way, and its next node was entered unordered.
+	 */
+	bool bFromExit = false;
+
+	/** Whether the aircraft is still ON FINAL (Arriving): its landing is flown, so no re-time may move its windows (finding 6). */
+	bool bOnFinal = false;
 
 	/** When the rest was last asked for, and the table's revision then - asked again only once both have moved on. */
 	double ExtendAskedAt = -1.0;
@@ -172,6 +186,25 @@ public:
 	FTaxiPlan Plan(const URoadNetwork& Network, const FAirframe& Airframe, const FTrafficRules& Rules,
 		const FTaxiRequest& Request) const;
 
+	/** A plan made round On instead of the table - a copy TableWithout gave. Nothing booked. */
+	static FTaxiPlan PlanOn(const FTaxiReservations& On, const URoadNetwork& Network, const FAirframe& Airframe,
+		const FTrafficRules& Rules, const FTaxiRequest& Request);
+
+	/**
+	 * The table without Holders' windows - a COPY, nothing changed: what a re-plan is made round when those holders are to be
+	 * re-planned behind it (UGroundTraffic::ReplanTaxi, review of #534 finding 1).
+	 */
+	FTaxiReservations TableWithout(TConstArrayView<int32> Holders) const;
+
+	/**
+	 * A departure's plan to its runway entry holds the entry, and the edge onto it, for Hold seconds after it arrives rather
+	 * than for ever (FTrafficRules::TaxiPlanEntryHold). 0 leaves them for ever. Every booking of a plan that ends AT an entry
+	 * applies it - the first, the queue's rest, and a re-plan (review of #534 finding 5: a re-plan held the entry for ever
+	 * again, and every taxi-in through it waited for the departure to take off).
+	 * ENFORCED BY: Airside.Model.TaxiPlan.ReplannedDepartureFreesItsEntry
+	 */
+	static void CapEntryHold(FTaxiPlan& Plan, double Hold);
+
 	/**
 	 * AN ARRIVAL'S PLAN, ARRIVALS FIRST (spec ruling 2): on the table as it stands, or failing that on the table
 	 * without the Booked departures - those not yet pushing - in which case OutRevoke names the ones whose windows
@@ -222,11 +255,20 @@ public:
 	 * A plan ALONG A ROUTE ALREADY BEING DRIVEN booked for Holder: Live is that whole route, Tail the planner's plan for
 	 * its steps from Prefix on (FTaxiRequest::Along), PrefixPasses the windows of what it is on before them (the step it
 	 * is driving, a push under way). The clearance's route is Live, its legs and moves offset by Prefix, the steps before
-	 * the one it is on counted released. Replaces any plan Holder had; clears it as unplanned. False: nothing changed.
+	 * the one it is on counted released, and the step it is ON let in (GrantedMove): it is there, and nothing is asked of
+	 * it again. bFromExit: the plan starts at a runway exit (FTaxiClearance::bFromExit). EntryHold: CapEntryHold's, 0 for a
+	 * plan that does not end at a runway entry. Replaces any plan Holder had; clears it as unplanned. False: nothing changed.
 	 */
 	bool BookAlong(const URoadNetwork& Network, int32 Holder, ETaxiClearanceKind Kind, ETaxiClearanceStage Stage,
 		const FRoutePlan& Live, int32 Prefix, const FTaxiPlan& Tail, TConstArrayView<FTaxiPass> PrefixPasses,
-		const FRoutePlan& PushRoute, TConstArrayView<FTaxiResource> PushOnly, double Now);
+		const FRoutePlan& PushRoute, TConstArrayView<FTaxiResource> PushOnly, double Now, bool bFromExit, double EntryHold);
+
+	/**
+	 * Holder's clearance and windows taken out, silently, into Out (false and Out untouched when it had no clearance - its
+	 * windows go either way): to be re-planned BEHIND an aircraft physically ahead of it (UGroundTraffic::ReplanTaxi). Unlike
+	 * Drop, it keeps the holder's test delay.
+	 */
+	bool TakeOut(int32 Holder, FTaxiClearance& Out);
 
 	/** Holder taxis on with no plan - see FTaxiUnplanned. Logged "unplanned - Why" once per reason. Its windows go. */
 	void MarkUnplanned(int32 Holder, ETaxiUnplanned Cause, const FString& Why, ETaxiClearanceKind Kind, ERouteErrand Errand);
@@ -240,7 +282,11 @@ public:
 	/** Every unplanned holder. */
 	TArray<int32> UnplannedHolders() const;
 
-	/** The unplanned holders due a retry: not tried in the last sim second, or since the table last moved. */
+	/**
+	 * The unplanned holders due a retry: the table moved since the last try and a sim second has passed, or UnplannedRetryPeriod
+	 * has passed regardless - a window that runs out moves nothing, and the plan it blocked fits from then on (review of #534
+	 * finding 10).
+	 */
 	TArray<int32> UnplannedDueRetry(double Now) const;
 
 	/** A retry was made at Now on the table as it is - UnplannedDueRetry's date. */
@@ -252,10 +298,15 @@ public:
 	/**
 	 * RE-TIME (spec §2): Holder's windows still held after Since moved Lag later, everyone booked behind them with them,
 	 * same order (FTaxiReservations::ShiftLater); every shifted plan's legs, holds, arrival and push time moved alike.
-	 * Since is the moment it is late FOR, so that overdue moment moves too. Logged "re-timed +X s". Wakes waiters. False,
-	 * nothing changed, when the cascade cannot be made.
+	 * Since is the moment it is late FOR, so that overdue moment moves too; Now is the clock, and nothing started by it has its
+	 * start moved (ShiftLater). An arrival still on final is immovable (bOnFinal). Logged "re-timed +X s". Wakes waiters.
+	 * False when the cascade cannot be made: then the late one's started windows are stretched as far as nobody behind is
+	 * overrun (StretchHeld, review of #534 finding 6), so they do not lapse under it.
 	 */
 	bool Retime(int32 Holder, double Since, double Lag, double Now);
+
+	/** The retry period of an unplanned aircraft when the table has not moved - a window that merely runs out moves nothing. */
+	static constexpr double UnplannedRetryPeriod = 10.0;
 
 	/** Test only: every re-plan refused - the unplanned fallback, made on demand. */
 	bool bRefuseReplansForTest = false;
@@ -268,6 +319,13 @@ public:
 	 * 0 when its turn - or when bEnforceOrderForTest is off.
 	 */
 	int32 WaitingFor(int32 Holder, const FTaxiResource& Resource) const;
+
+	/**
+	 * Who is booked ahead of Holder on Edge COMING THE OTHER WAY (or both ways, a push) and has not left - what an arrival's
+	 * exempt first move still waits for (review of #534 finding 7): one going its way may share the edge behind it, one
+	 * coming at it would meet it head-on mid-edge. 0: nobody, or bEnforceOrderForTest off.
+	 */
+	int32 OpposingAhead(int32 Holder, const FTaxiResource& Edge) const;
 
 	/** Marks Holder's departure as QUEUEING for QueueFor - see FTaxiClearance::QueueFor. */
 	void SetQueued(int32 Holder, FGuidelineNodeId QueueFor, ERouteErrand Errand, const FVector2D& QueueAt);

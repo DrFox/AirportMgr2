@@ -202,8 +202,14 @@ bool FTaxiReservations::PullForward(const FTaxiResource& Resource, int32 Holder,
 
 namespace
 {
-	/** Holder's windows still held after Since, moved Delta later: those starting after it shifted, one straddling it stretched. */
-	void ShiftOne(TMap<FTaxiResource, TArray<FTaxiWindow>>& Table, int32 Holder, double Since, double Delta)
+	/**
+	 * Holder's windows still held after Since, moved Delta later: those starting after it shifted, one straddling it stretched
+	 * - and ONE THAT HAS STARTED (From at or before Now) only ever stretched (review of #534 finding 2). A started window is
+	 * one the holder stands on, or a move the order has committed it to (PullForward starts it at the commit): moving its
+	 * start opened a gap ahead of it there, and a plan made in that gap was booked AHEAD of an aircraft that could no longer
+	 * stop short of the ground.
+	 */
+	void ShiftOne(TMap<FTaxiResource, TArray<FTaxiWindow>>& Table, int32 Holder, double Since, double Delta, double Now)
 	{
 		for (TPair<FTaxiResource, TArray<FTaxiWindow>>& Each : Table)
 		{
@@ -213,7 +219,7 @@ namespace
 				{
 					continue;
 				}
-				if (Window.From > Since)
+				if (Window.From > Since && Window.From > Now)
 				{
 					Window.From += Delta;
 				}
@@ -226,22 +232,29 @@ namespace
 	}
 
 	/**
-	 * How much later Behind must go to stay behind Ahead: a headway after it the same way along an edge (entering and
-	 * leaving), after its end otherwise. Forever: it cannot - Ahead holds for ever and they may not share.
+	 * How much later Behind must go to stay behind Ahead: the LEAST of being wholly after it (past its end) and, the same way
+	 * along an edge, following it a headway apart at both ends. 0 when it already shares - wholly after it included, however
+	 * short: a window shorter than the headway that starts after the one ahead has ended was pushed on for nothing by the
+	 * FIFO figure alone (review of #534 finding 9). Forever: it cannot - Ahead holds for ever and they may not share.
 	 */
 	double NeedBehind(const FTaxiWindow& Ahead, const FTaxiWindow& Behind, double H)
 	{
 		constexpr double Forever = FTaxiReservations::Forever;
+		if (Ahead.To < Forever && Behind.From >= Ahead.To)
+		{
+			return 0.0;
+		}
+		const double After = Ahead.To >= Forever ? (Behind.From < Forever ? Forever : 0.0) : Ahead.To - Behind.From;
 		if (Ahead.Way != ETaxiWay::Any && Behind.Way == Ahead.Way)
 		{
-			double Need = Ahead.From + H - Behind.From;
+			double Fifo = Ahead.From + H - Behind.From;
 			if (Behind.To < Forever)
 			{
-				Need = FMath::Max(Need, Ahead.To >= Forever ? Forever : Ahead.To + H - Behind.To);
+				Fifo = FMath::Max(Fifo, Ahead.To >= Forever ? Forever : Ahead.To + H - Behind.To);
 			}
-			return Need;
+			return FMath::Min(Fifo, After);
 		}
-		return Ahead.To >= Forever ? (Behind.From < Forever ? Forever : 0.0) : Ahead.To - Behind.From;
+		return After;
 	}
 }
 
@@ -261,10 +274,10 @@ bool FTaxiReservations::ShiftLater(int32 Holder, double Since, double Delta, dou
 	const double H = FMath::Max(Headway, 0.001);
 
 	// ON A COPY, ALL OR NOTHING: a cascade that meets a window it cannot move - one behind a for-ever window it may not share
-	// with - leaves the table as it was.
+	// with, or an immovable one ahead of a late one already there - leaves the table as it was.
 	TMap<FTaxiResource, TArray<FTaxiWindow>> Trial = Windows;
 	TArray<FTaxiShift> Shifts;
-	ShiftOne(Trial, Holder, Since, Delta);
+	ShiftOne(Trial, Holder, Since, Delta, Now);
 	Shifts.Add({ Holder, Since, Delta });
 
 	// TO A FIXED POINT, IN THE ORDER AS BOOKED: each resource's array keeps its booked order (it is re-sorted only at the
@@ -279,9 +292,9 @@ bool FTaxiReservations::ShiftLater(int32 Holder, double Since, double Delta, dou
 	for (bool bMoved = true; bMoved;)
 	{
 		bMoved = false;
-		for (const TPair<FTaxiResource, TArray<FTaxiWindow>>& Each : Trial)
+		for (TPair<FTaxiResource, TArray<FTaxiWindow>>& Each : Trial)
 		{
-			const TArray<FTaxiWindow>& On = Each.Value;
+			TArray<FTaxiWindow>& On = Each.Value;
 			for (int32 A = 0; A < On.Num() && !bMoved; ++A)
 			{
 				for (int32 B = A + 1; B < On.Num() && !bMoved; ++B)
@@ -299,8 +312,45 @@ bool FTaxiReservations::ShiftLater(int32 Holder, double Since, double Delta, dou
 					{
 						return false;
 					}
+					if (Immovable(On[B].Holder))
+					{
+						// AN ARRIVAL ON FINAL CANNOT BE MADE LATER (review of #534 finding 6): its landing is flown, not planned,
+						// and it may not wait at its exit. The late one goes BEHIND it instead - if it is not there yet. Already
+						// there (started), nothing can be made of it: refused.
+						if (On[A].From <= Now || Immovable(On[A].Holder))
+						{
+							return false;
+						}
+						const double Behind = NeedBehind(On[B], On[A], H);
+						if (Behind >= Forever)
+						{
+							return false;
+						}
+						const FTaxiShift Swap{ On[A].Holder, std::nextafter(On[A].From, Always), FMath::Max(Behind, 0.0) };
+						ShiftOne(Trial, Swap.Holder, Swap.Since, Swap.Delta, Now);
+						const FTaxiWindow Moved = On[A];
+						On.RemoveAt(A);
+						On.Insert(Moved, B);
+						Shifts.Add(Swap);
+						bMoved = true;
+						continue;
+					}
+					const bool bStarted = On[B].From <= Now;
 					const FTaxiShift Cascade{ On[B].Holder, std::nextafter(On[B].From, Always), Need };
-					ShiftOne(Trial, Cascade.Holder, Cascade.Since, Cascade.Delta);
+					ShiftOne(Trial, Cascade.Holder, Cascade.Since, Cascade.Delta, Now);
+					// STARTED BUT NOT IN: a window whose time came while the late one still held the ground - its holder waits for
+					// it - was only stretched above. Its start goes up to ABUT the one ahead: the order it waits in is kept, and no
+					// gap opens before it for a newcomer to be booked into. (One it has entered shares the way and needed only its
+					// end moved.)
+					if (bStarted && NeedBehind(On[A], On[B], H) > 0.0)
+					{
+						On[B].From = (On[A].Way != ETaxiWay::Any && On[B].Way == On[A].Way)
+							? FMath::Max(On[B].From, FMath::Min(On[A].From + H, On[A].To)) : On[A].To;
+						if (!(On[B].From < On[B].To) || NeedBehind(On[A], On[B], H) > 0.0)
+						{
+							return false;
+						}
+					}
 					Shifts.Add(Cascade);
 					bMoved = true;
 				}
@@ -319,6 +369,29 @@ bool FTaxiReservations::ShiftLater(int32 Holder, double Since, double Delta, dou
 	Windows = MoveTemp(Trial);
 	OutShifts = MoveTemp(Shifts);
 	return true;
+}
+
+bool FTaxiReservations::StretchHeld(int32 Holder, double Now, double Until)
+{
+	bool bStretched = false;
+	for (TPair<FTaxiResource, TArray<FTaxiWindow>>& Each : Windows)
+	{
+		for (FTaxiWindow& Window : Each.Value)
+		{
+			if (Window.Holder != Holder || Window.From > Now || !(Window.To < Until))
+			{
+				continue;
+			}
+			// AS FAR AS THE NEXT ONE BEHIND ALLOWS (LatestEnd), never past it: this is no cascade.
+			const double To = FMath::Min(Until, LatestEnd(Each.Key, Window.Way, Window.From, Holder));
+			if (To > Window.To)
+			{
+				Window.To = To;
+				bStretched = true;
+			}
+		}
+	}
+	return bStretched;
 }
 
 void FTaxiReservations::OrderPairs(TArray<TPair<int32, int32>>& Out) const

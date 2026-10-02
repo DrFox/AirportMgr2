@@ -17,6 +17,7 @@ class URoadNetwork;
 class UTaxiPlanning;
 struct FTaxiClearance;
 enum class ETaxiUnplanned : uint8;
+enum class ETaxiClearanceKind : uint8;
 enum class EDepartureRefusal : uint8;
 struct FDeparturePlan;
 struct FPushbackPlan;
@@ -97,7 +98,11 @@ struct FGraphRebuildSummary
  *                                the one retry pass for every stopped waiter, by FRoadAgent::GetWait;
  *   - GroundTrafficRejoin.cpp    the rejoin search (Model/GroundTrafficRejoin.h, a private header) and
  *                                RescueStranded, its third caller (#502): moved out of the rebuild's
- *                                file, whose re-resolve is the other two.
+ *                                file, whose re-resolve is the other two;
+ *   - GroundTrafficPlanning.cpp  the taxi plan clearances (arrival, departure, queue, push) asked of
+ *                                UTaxiPlanning (spec 2026-10-02);
+ *   - GroundTrafficReplan.cpp    a taxi plan the world changed: ReplanTaxi, the rebuild's re-plan in
+ *                                order, the unplanned retry (#534 review).
  *
  * UGroundTraffic keeps the registry, dispatch, tick order and events; it owns one FClaimPass
  * (constructed fresh per Arbitrate call - it carries no state of its own), one
@@ -184,8 +189,8 @@ public:
 	/**
 	 * Which aircraft taxi UNPLANNED changed (taxi planning PR 3: one lost its plan, or regained one, or parked) - fired once,
 	 * at the end of the DiffFreedom that saw it. What the ops alert "lost its plan after a layout edit" is recomputed on;
-	 * bound here, not relayed, like OnTaxiPlansFreed.
-	 * ENFORCED BY: AirportOps.Present.Bus.TaxiUnplannedChangedIsBridged
+	 * bound here, not relayed, like OnTaxiPlansFreed. The retry runs before that diff, so a plan regained is said in its frame.
+	 * ENFORCED BY: Airside.Model.TaxiPlan.UnplannedChangeIsAnnouncedInItsFrame (fired by Advance), AirportOps.Present.Bus.TaxiUnplannedChangedIsBridged
 	 */
 	DECLARE_MULTICAST_DELEGATE(FOnTaxiUnplannedChanged);
 	FOnTaxiUnplannedChanged OnTaxiUnplannedChanged;
@@ -1049,7 +1054,17 @@ private:
 	 * Cause and Why (UTaxiPlanning::MarkUnplanned). True when it holds a plan after.
 	 */
 	bool ReplanTaxi(const FRoadAgent& Agent, const URoadNetwork& Network, ETaxiUnplanned Cause, const TCHAR* Why,
-		const FTaxiClearance* Old);
+		const FTaxiClearance* Old, int32 Depth = 0);
+
+	/**
+	 * ReplanTaxi's TAXIING arm: from the end of the step it is on, along the rest of its route - and anyone booked on that step
+	 * who is not physically ahead of it, and whom the new plan would put before it there or at the step's end (or conflict
+	 * with anywhere), taken out and re-planned BEHIND it, nearest first (review of #534 finding 1). Depth bounds that chain:
+	 * past 3 the rest taxi unplanned. Fail marks it unplanned and returns false. True when it holds a plan after.
+	 * ENFORCED BY: Airside.Model.TaxiPlan.ReplanKeepsTheFollowerBehind
+	 */
+	bool ReplanTaxiing(const FRoadAgent& Agent, const URoadNetwork& Network, const FAirframe& Aircraft, ETaxiClearanceKind Kind,
+		FTaxiRequest Request, const FTaxiClearance* Old, double EntryHold, int32 Depth, TFunctionRef<bool()> Fail);
 
 	/**
 	 * A LAYOUT EDIT'S RE-PLAN, from OnGraphRebuilt after the re-resolve: every aircraft that held a plan, in the old

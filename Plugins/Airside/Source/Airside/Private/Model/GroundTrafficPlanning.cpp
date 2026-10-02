@@ -8,41 +8,17 @@
 #include "AirsideLog.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/DepartureAsk.h"
-#include "Model/ExhaustiveSwitch.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/LandingRun.h"
 #include "Model/PushbackPlanner.h"
 #include "Model/PushbackRun.h"
+#include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TaxiPlanning.h"
-#include "Model/RoadAgent.h"
-#include "Model/RouteSearch.h"
-#include "Model/TrafficClaims.h"
 
 namespace
 {
 	/** Why a taxi plan was refused, in the log's words. */
-	/**
-	 * A departure's plan to its runway entry holds the entry, and the edge onto it, for Hold seconds after it arrives
-	 * rather than for ever (FTrafficRules::TaxiPlanEntryHold). 0 leaves it for ever.
-	 */
-	void CapEntryHold(FTaxiPlan& Plan, double Hold)
-	{
-		if (!(Hold > 0.0) || Plan.Route.Steps.Num() == 0)
-		{
-			return;
-		}
-		const FTaxiResource Entry = FTaxiResource::Node(Plan.Route.Steps.Last().To);
-		const FTaxiResource Onto = FTaxiResource::Edge(Plan.Route.Steps.Last().Edge);
-		for (FTaxiPass& Pass : Plan.Passes)
-		{
-			if ((Pass.Resource == Entry || Pass.Resource == Onto) && Pass.Window.To >= FTaxiReservations::Forever)
-			{
-				Pass.Window.To = FMath::Max(Pass.Window.From + 1.0, Plan.Arrival + Hold);
-			}
-		}
-	}
-
 	FString TaxiRefusalText(const FTaxiPlan& Taxi)
 	{
 		return Taxi.Result == ETaxiPlanResult::NoRoute
@@ -189,269 +165,6 @@ void UGroundTraffic::TrackTaxiPlans(const URoadNetwork& Network)
 		}
 	}
 }
-
-bool UGroundTraffic::ReplanTaxi(const FRoadAgent& Agent, const URoadNetwork& Network, ETaxiUnplanned Cause, const TCHAR* Why,
-	const FTaxiClearance* Old)
-{
-	const FAirframe* Aircraft = Agent.AsAircraft();
-	if (TaxiPlanning == nullptr || Aircraft == nullptr)
-	{
-		return false;
-	}
-	// WHAT IT WAS CLEARED FOR: from its old clearance, else from the unplanned record a retry keeps.
-	const FTaxiUnplanned* Record = TaxiPlanning->FindUnplanned(Agent.Id);
-	const ETaxiClearanceKind Kind = Old != nullptr ? Old->Kind : Record != nullptr ? Record->Kind
-		: Agent.bDepartureArmed ? ETaxiClearanceKind::TaxiOut : ETaxiClearanceKind::TaxiIn;
-	ERouteErrand Errand = Old != nullptr ? Old->QueueErrand : Record != nullptr ? Record->Errand : ERouteErrand::Unset;
-	if (Errand == ERouteErrand::Unset)
-	{
-		// THE TAXI-IN ERRAND FROM ITS ONE OWNER (ArrivalPlanner::TaxiInRequest - rule 4), not spelled here.
-		Errand = Kind == ETaxiClearanceKind::TaxiIn ? ArrivalPlanner::TaxiInRequest(FArrivalPlan(), 0.0).Errand
-			: ERouteErrand::DepartureToEntry;
-	}
-	const FString Because = Why;
-	auto Fail = [this, &Agent, Cause, &Because, Kind, Errand]()
-	{
-		TaxiPlanning->MarkUnplanned(Agent.Id, Cause, Because, Kind, Errand);
-		return false;
-	};
-	const double Margin = FMath::Max(0.0, Rules.TaxiPlanMargin);
-	const double Cap = FMath::Max(Aircraft->Chassis.Ground.Taxi.SpeedCap, 1.0);
-
-	// PARKED: its stand held for ever, as a plan that arrived there holds it; a departure booked to push later is back
-	// on the push watch, re-planned when it is asked again (as a revoked one is).
-	if (Agent.Phase == EAgentPhase::Parked)
-	{
-		if (Network.GetGuidelineNode(Agent.GoalNode) == nullptr)
-		{
-			TaxiPlanning->Drop(Agent.Id, nullptr);
-			return false;
-		}
-		FTaxiPlan Stay;
-		Stay.Result = ETaxiPlanResult::Planned;
-		Stay.Passes = { { FTaxiResource::Node(Agent.GoalNode), { Agent.Id, SimSeconds, FTaxiReservations::Forever } } };
-		const bool bHeld = TaxiPlanning->Book(Network, Agent.Id, Kind, Stay, ETaxiClearanceStage::Done, FRoutePlan(), SimSeconds);
-		if (Old != nullptr && Old->Stage == ETaxiClearanceStage::Booked)
-		{
-			FPushWatch& Watch = PushWatch.Add(Agent.Id);
-			Watch.Network = &Network;
-		}
-		return bHeld;
-	}
-
-	FTaxiRequest Request;
-	Request.Errand = Errand;
-	Request.Holder = Agent.Id;
-	FRoutePlan Live;
-	int32 Prefix = 0;
-	TArray<FTaxiPass> PrefixPasses;
-	FRoutePlan PushRoute;
-	TArray<FTaxiResource> PushOnly;
-	AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
-	switch (Agent.Phase)
-	{
-	case EAgentPhase::Taxiing:
-	{
-		// FROM THE END OF THE STEP IT IS ON, when it gets there at its speed (floored: a stopped aircraft still sets off);
-		// that step is held from now until it leaves - the prefix.
-		Live = Agent.PlanInProgress();
-		const double T = FClaimPass::CentreOf(Agent);
-		const int32 Current = CurrentStep(Live, T);
-		if (!Live.Steps.IsValidIndex(Current))
-		{
-			return Fail();
-		}
-		const FRouteStep& On = Live.Steps[Current];
-		const double Speed = FMath::Abs(Agent.SpeedAlongPlan());
-		double Reach = SimSeconds + FMath::Max(0.0, On.EndDistance - T) / FMath::Max(Speed, 0.25 * Cap);
-		const ETaxiWay Way = On.bReversed ? ETaxiWay::BToA : ETaxiWay::AToB;
-		Prefix = Current + 1;
-		FTaxiPlan Tail;
-		if (Prefix == Live.Steps.Num())
-		{
-			// ON ITS LAST STEP: nothing left to plan but staying - its goal, and the step under it, for ever.
-			Tail.Result = ETaxiPlanResult::Planned;
-			Tail.Passes = { { FTaxiResource::Node(On.To), { Agent.Id, Reach - Margin, FTaxiReservations::Forever } } };
-			Tail.PushAt = Reach;
-			Tail.Arrival = Reach;
-			PrefixPasses.Add({ FTaxiResource::Edge(On.Edge), { Agent.Id, SimSeconds, FTaxiReservations::Forever, Way } });
-		}
-		else
-		{
-			// SOMEBODY ON THE NODE AHEAD WHEN IT WOULD GET THERE: it waits for them where it is, on its own step.
-			double Shift = 0.0;
-			if (!TaxiPlanning->GetTable().EarliestFit(FTaxiResource::Node(On.To), ETaxiWay::Any, Reach, Reach + 0.001, Agent.Id, Shift))
-			{
-				return Fail();
-			}
-			Reach += Shift;
-			Request.Start = On.To;
-			Request.Goal = Live.Steps.Last().To;
-			Request.DepartAt = Reach;
-			Request.bStartsRolling = Shift <= 0.0 && Speed > 100.0;
-			Request.bMayWaitAtStart = FTaxiPlanner::CanHoldAt(Network, Rules, On.Edge, On.To);
-			Request.Along.Append(Live.Steps.GetData() + Prefix, Live.Steps.Num() - Prefix);
-			Tail = TaxiPlanning->bRefuseReplansForTest ? FTaxiPlan() : TaxiPlanning->Plan(Network, *Aircraft, Rules, Request);
-			if (!Tail.IsPlanned())
-			{
-				return Fail();
-			}
-			// THE STEP IT IS ON, from now - or, behind one ahead of it the same way, a headway after that one (the order's
-			// FIFO) - until it leaves.
-			const double To = Tail.PushAt + Margin;
-			double Behind = 0.0;
-			TaxiPlanning->GetTable().EarliestFit(FTaxiResource::Edge(On.Edge), Way, SimSeconds, To, Agent.Id, Behind);
-			const double From = FMath::Min(SimSeconds + Behind, To - 0.001);
-			PrefixPasses.Add({ FTaxiResource::Edge(On.Edge), { Agent.Id, From, To, Way } });
-		}
-		return TaxiPlanning->BookAlong(Network, Agent.Id, Kind, ETaxiClearanceStage::Moving, Live, Prefix, Tail, PrefixPasses,
-			PushRoute, PushOnly, SimSeconds) || Fail();
-	}
-	case EAgentPhase::Arriving:
-		// ON FINAL: from its exit, rolling, at the vacate time its first plan had - the landing is flown, not re-estimated.
-		if (Old == nullptr || !Agent.TaxiInPlan.IsValid())
-		{
-			return Fail();
-		}
-		Live = Agent.TaxiInPlan;
-		Request.DepartAt = Old->Plan.PushAt;
-		Request.bMayWaitAtStart = false;
-		Request.bStartsRolling = true;
-		break;
-	case EAgentPhase::Manoeuvring:
-	{
-		// PUSHING: from where the push ends, when it ends; the push's ground held from now till then, released at the
-		// hand-over as a planned push's is (PushOnly).
-		if (!Agent.TaxiOutPlan.IsValid())
-		{
-			return Fail();
-		}
-		Live = Agent.TaxiOutPlan;
-		PushRoute = Agent.Pushback.Plan;
-		const double PushLeft = FMath::Max(0.0, PushRoute.Length - Agent.Pushback.Travelled)
-			/ FMath::Max(Rules.PushSpeedFor(Aircraft->PushbackNeed), 1.0);
-		Request.DepartAt = SimSeconds + PushLeft;
-		for (const FRouteStep& Step : PushRoute.Steps)
-		{
-			for (const FTaxiResource& Resource : { FTaxiResource::Edge(Step.Edge), FTaxiResource::Node(Step.To) })
-			{
-				PrefixPasses.Add({ Resource, { Agent.Id, SimSeconds, Request.DepartAt + Margin, ETaxiWay::Any } });
-				PushOnly.Add(Resource);
-			}
-		}
-		break;
-	}
-	case EAgentPhase::Parked:      // above
-	case EAgentPhase::Departing:   // lined up: the runway's own
-	case EAgentPhase::Reversing:   // never an aircraft on a taxiway
-	case EAgentPhase::Gone:
-	case EAgentPhase::Stranded:
-		TaxiPlanning->Drop(Agent.Id, nullptr);
-		return false;
-	}
-	AIRSIDE_EXHAUSTIVE_SWITCH_END
-
-	Request.Start = StepFromNode(Live, 0);
-	Request.Goal = Live.Steps.Num() > 0 ? Live.Steps.Last().To : FGuidelineNodeId();
-	Request.Along = Live.Steps;
-	const FTaxiPlan Tail = TaxiPlanning->bRefuseReplansForTest ? FTaxiPlan() : TaxiPlanning->Plan(Network, *Aircraft, Rules, Request);
-	if (!Tail.IsPlanned() || !TaxiPlanning->BookAlong(Network, Agent.Id, Kind, ETaxiClearanceStage::Moving, Live, 0, Tail,
-		PrefixPasses, PushRoute, PushOnly, SimSeconds))
-	{
-		return Fail();
-	}
-	return true;
-}
-
-void UGroundTraffic::RequeueAfterReplan(const FRoadAgent& Agent, const URoadNetwork& Network, const FTaxiClearance& Old)
-{
-	// STILL QUEUEING, if its route still ends short of the entry: the entry re-found by where it was when the handle died
-	// in a rebuild, as the re-resolve re-finds every node.
-	const FTaxiClearance* Now = TaxiPlanning->Find(Agent.Id);
-	if (Now == nullptr || !Old.QueueFor.IsSet() || Now->Plan.Route.Steps.Num() == 0)
-	{
-		return;
-	}
-	FGuidelineNodeId Entry = Old.QueueFor;
-	if (Network.GetGuidelineNode(Entry) == nullptr)
-	{
-		Entry = RouteSearch::FindNearestNode(Network, Old.QueueAt, Agent.Class, Rules.ResolveRadius);
-	}
-	if (Entry.IsSet() && Now->Plan.Route.Steps.Last().To != Entry)
-	{
-		TaxiPlanning->SetQueued(Agent.Id, Entry, Old.QueueErrand, Old.QueueAt);
-	}
-}
-
-void UGroundTraffic::ReplanAfterRebuild(const URoadNetwork& Network, const TArray<int32>& Order, const TMap<int32, FTaxiClearance>& Old)
-{
-	if (TaxiPlanning == nullptr)
-	{
-		return;
-	}
-	// THE MOVING FIRST, IN THE ORDER THEY HELD - each planned round those already re-booked, as each was booked behind
-	// them before - then the parked. Nothing else runs inside OnGraphRebuilt, so nobody new is admitted ahead of them.
-	int32 Replanned = 0;
-	int32 Lost = 0;
-	for (int32 Pass = 0; Pass < 2; ++Pass)
-	{
-		for (const int32 Id : Order)
-		{
-			const FRoadAgent* Agent = FindAgent(Id);
-			const FTaxiClearance* Was = Old.Find(Id);
-			if (Agent == nullptr || Was == nullptr || (Agent->Phase == EAgentPhase::Parked) != (Pass == 1))
-			{
-				continue;
-			}
-			if (ReplanTaxi(*Agent, Network, ETaxiUnplanned::LayoutEdit, TEXT("a layout edit rebuilt the taxiways under it"), Was))
-			{
-				RequeueAfterReplan(*Agent, Network, *Was);
-				++Replanned;
-			}
-			else
-			{
-				Lost += TaxiPlanning->FindUnplanned(Id) != nullptr ? 1 : 0;
-			}
-		}
-	}
-	if (Order.Num() > 0)
-	{
-		UE_LOG(LogAirsideTaxiPlan, Log, TEXT("TaxiPlan: layout rebuilt - %d plan(s) re-made in their old order, %d unplanned"),
-			Replanned, Lost);
-	}
-}
-
-void UGroundTraffic::RetryUnplanned(const URoadNetwork& Network)
-{
-	if (TaxiPlanning == nullptr)
-	{
-		return;
-	}
-	// ARRIVED, GONE, OR OFF THE TAXIWAYS: no longer unplanned (spec §3 - the alert clears on arrival).
-	for (const int32 Id : TaxiPlanning->UnplannedHolders())
-	{
-		const FRoadAgent* Agent = FindAgent(Id);
-		if (Agent == nullptr || (Agent->Phase != EAgentPhase::Taxiing && Agent->Phase != EAgentPhase::Arriving
-			&& Agent->Phase != EAgentPhase::Manoeuvring))
-		{
-			TaxiPlanning->ClearUnplanned(Id);
-		}
-	}
-	// THE REST TRIED AGAIN when the table has moved - a plan along the route it drives, from where it is now.
-	for (const int32 Id : TaxiPlanning->UnplannedDueRetry(SimSeconds))
-	{
-		const FRoadAgent* Agent = FindAgent(Id);
-		const FTaxiUnplanned* Record = TaxiPlanning->FindUnplanned(Id);
-		if (Agent == nullptr || Record == nullptr || Agent->Phase != EAgentPhase::Taxiing)
-		{
-			continue;
-		}
-		TaxiPlanning->NoteUnplannedTried(Id, SimSeconds);
-		const FString Why = Record->Why;
-		ReplanTaxi(*Agent, Network, Record->Cause, *Why, nullptr);
-	}
-}
-
 
 void UGroundTraffic::StartDuePushes(const URoadNetwork& Network)
 {
@@ -616,7 +329,7 @@ EDepartureRefusal UGroundTraffic::ClearDeparture(int32 AgentId, const URoadNetwo
 	FTaxiPlan Taxi = Ask.Taxi;
 	if (!Ask.QueueFor.IsSet())
 	{
-		CapEntryHold(Taxi, Rules.TaxiPlanEntryHold);
+		UTaxiPlanning::CapEntryHold(Taxi, Rules.TaxiPlanEntryHold);
 	}
 	if (!TaxiPlanning->Book(Network, AgentId, ETaxiClearanceKind::TaxiOut, Taxi, ETaxiClearanceStage::Booked, PushRoute,
 		SimSeconds))
@@ -689,7 +402,7 @@ void UGroundTraffic::ExtendQueuedDepartures(const URoadNetwork& Network)
 		Rest.Holder = Id;
 		Rest.DepartAt = FMath::Max(SimSeconds, Clearance->Plan.Arrival);
 		FTaxiPlan Ext = TaxiPlanning->Plan(Network, *Aircraft, Rules, Rest);
-		CapEntryHold(Ext, Rules.TaxiPlanEntryHold);
+		UTaxiPlanning::CapEntryHold(Ext, Rules.TaxiPlanEntryHold);
 		if (!Ext.IsPlanned() || !TaxiPlanning->Extend(Network, Id, Ext, SimSeconds))
 		{
 			continue;
