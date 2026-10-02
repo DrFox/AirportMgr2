@@ -191,11 +191,14 @@ bool FParkingAtTheOffersRateTest::RunTest(const FString& Parameters)
 	// It asked UPricing::ParkingFeePerHour then, which applies the CURRENT landing-fee multiplier: the trade the landing fee rules out
 	// ("a fee computed on landing would let them accept cheaply and put the price up afterwards").
 	FAirframe Airframe;
-	Airframe.Wingspan = 3400.0;   // 34 m: Code C, 120 an hour at the lever's start
+	Airframe.Wingspan = 3400.0;   // 34 m: Code C
 	Airframe.TurnaroundSeconds = 1800.0;
 	const FTestAirport Field = FTestAirport::Build(Airframe);
 
 	UPricing* Pricing = NewObject<UPricing>(GetTransientPackage());
+	// THE RATE AT THE LEVER'S START, read rather than typed: the table is retuned (x5 on 2026-10-02) and PricingByCodeLetter
+	// pins it; this test is about WHICH rate is billed, so every figure below is a multiple of this one.
+	const double OfferRate = Pricing->ParkingFeePerHour(Airframe);
 	UOfferGenerator* Generator = NewObject<UOfferGenerator>(GetTransientPackage());
 	Generator->Stream.Initialize(7);
 	Generator->Pricing = Pricing;
@@ -225,8 +228,8 @@ bool FParkingAtTheOffersRateTest::RunTest(const FString& Parameters)
 	}
 	if (!TestTrue(TEXT("the generator made an offer"), !Made.IsEmpty())) { return false; }
 	UFlight* Flight = Made[0];
-	TestEqual(TEXT("the offer carries the parking rate of the lever it was made at - a tenth of a Code C's 1200 landing fee"),
-		Flight->ParkingRatePerHour, 120.0, 1e-6);
+	TestEqual(TEXT("the offer carries the parking rate of the lever it was made at"),
+		Flight->ParkingRatePerHour, OfferRate, 1e-6);
 
 	// ACCEPTED, through the board, with an aeroplane already its own (the fixture route FFlightBoardFollowsTheAgentTest uses).
 	ULedger* Ledger = NewObject<ULedger>(GetTransientPackage());
@@ -246,7 +249,7 @@ bool FParkingAtTheOffersRateTest::RunTest(const FString& Parameters)
 	// THE PLAYER PUTS THE PRICE UP before the aeroplane leaves - five steps, +50%.
 	for (int32 Step = 0; Step < 5; ++Step) { Pricing->StepLandingFee(+1); }
 	TestTrue(TEXT("CONTROL: the lever moved the LIVE rate - asking UPricing at departure would now bill more"),
-		Pricing->ParkingFeePerHour(Airframe) > 150.0);
+		Pricing->ParkingFeePerHour(Airframe) > OfferRate);
 
 	// DEPARTS: two game hours on the stand, then the push ends and the taxi out begins - the TaxiOut row is where parking posts.
 	Flight->SetPhaseForTest(EFlightPhase::Manoeuvring);
@@ -255,8 +258,8 @@ bool FParkingAtTheOffersRateTest::RunTest(const FString& Parameters)
 	Board->OnAgentPhase(*Field.Net, *Clock, OpsTestTransition(5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing, EAgentEvent::PushedBack));
 	Billing.Bus.Drain();
 	if (!TestEqual(TEXT("taxiing out"), Flight->GetPhase(), EFlightPhase::TaxiOut)) { return false; }
-	TestEqual(TEXT("parking is billed at the OFFER's rate: 2 h at 120, not at the lever's 180"), Ledger->Balance(), 240.0, 1e-3);
-	TestEqual(TEXT("and recorded on the flight"), Flight->ParkingFee, 240.0, 1e-3);
+	TestEqual(TEXT("parking is billed at the OFFER's rate: 2 h at the offer's rate, not at the lever's +50%"), Ledger->Balance(), 2.0 * OfferRate, 1e-3);
+	TestEqual(TEXT("and recorded on the flight"), Flight->ParkingFee, 2.0 * OfferRate, 1e-3);
 	return true;
 }
 

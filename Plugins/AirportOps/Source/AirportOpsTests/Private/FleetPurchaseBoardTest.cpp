@@ -24,6 +24,12 @@
 namespace
 {
 	/** A board with the scenario's figures and a depot id to be home. Prefixed: unity build. */
+	/**
+	 * The bowser's row in the scenario the board is resolved from - read, not retyped, because the figures are retuned
+	 * whenever a service lands (x0.4 on 2026-10-02). AirportOps.Model.Facility.ScenarioPricesTheCatalogue pins them.
+	 */
+	const FFuelVehicleSpec& FleetTestBowserRow() { return GetDefault<UScenario>()->FuelVehicles.FindChecked(FName(TEXT("FUEL"))); }
+
 	UJobBoard* FleetBoardWithSpecs()
 	{
 		UJobBoard* Board = NewObject<UJobBoard>(GetTransientPackage());
@@ -260,7 +266,7 @@ bool FFleetEveryChangeOwesTheSameTest::RunTest(const FString&)
 	uint32 Fleet = Board->GetFleetRevision();
 	uint32 Composition = Board->GetFleetCompositionRevision();
 	const int32 Bought = Board->Fleet().Add(TEXT("FUEL"), Depot, EFleetOrigin::Bought, 10.0);
-	Expect({ TEXT("bought"), EFleetChange::Bought, -90000.0 }, Bought, Balance, Fleet, Composition);
+	Expect({ TEXT("bought"), EFleetChange::Bought, -FleetTestBowserRow().Price }, Bought, Balance, Fleet, Composition);
 
 	Balance = Ledger->Balance(); Fleet = Board->GetFleetRevision(); Composition = Board->GetFleetCompositionRevision();
 	const int32 Seeded = Board->Fleet().Add(TEXT("UTILITY"), Depot, EFleetOrigin::Seeded, 10.0);
@@ -272,7 +278,7 @@ bool FFleetEveryChangeOwesTheSameTest::RunTest(const FString&)
 	// starter vehicle's way out is asserted as what it is now - announced, counted, and worth nothing.
 	Balance = Ledger->Balance(); Fleet = Board->GetFleetRevision(); Composition = Board->GetFleetCompositionRevision();
 	TestTrue(TEXT("sold: an idle vehicle leaves"), Board->Fleet().Withdraw(Bought, EFleetReason::Sold, 20.0));
-	Expect({ TEXT("sold"), EFleetChange::Sold, 45000.0 }, Bought, Balance, Fleet, Composition);
+	Expect({ TEXT("sold"), EFleetChange::Sold, FleetTestBowserRow().ResaleValue() }, Bought, Balance, Fleet, Composition);
 
 	Balance = Ledger->Balance(); Fleet = Board->GetFleetRevision(); Composition = Board->GetFleetCompositionRevision();
 	TestTrue(TEXT("withdrawn: a vehicle leaves with its depot"), Board->Fleet().Withdraw(Seeded, EFleetReason::DepotRemoved, 30.0));
@@ -339,7 +345,7 @@ bool FFleetSeededVehicleFetchesNothingTest::RunTest(const FString&)
 	Board->TickForTest(*Traffic, *Net, *Clock);
 	TestEqual(TEXT("all three left with the depot"), Board->GetVehicles().Num(), 0);
 	TestEqual(TEXT("and the ledger gained exactly the bought bowser's resale, Price x ResaleFraction - the seeded two added nothing"),
-		Ledger->Balance() - BalanceBeforeMixed, 45000.0, 1e-6);
+		Ledger->Balance() - BalanceBeforeMixed, FleetTestBowserRow().ResaleValue(), 1e-6);
 	TestEqual(TEXT("in one line"), Ledger->Entries().Num(), EntriesBeforeMixed + 1);
 
 	// 3. A SOLD SEEDED VEHICLE: worth nothing, and the quote says so.

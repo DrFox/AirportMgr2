@@ -57,7 +57,17 @@ double UOfferGenerator::DemandFactor() const
 
 double UOfferGenerator::AirlineFactor(const UAirlineDefinition& Airline) const
 {
-	return AirlineFactorOf ? AirlineFactorOf(Airline) : 1.0;
+	return (AirlineFactorOf ? AirlineFactorOf(Airline) : 1.0) * FleetShare(Airline);
+}
+
+double UOfferGenerator::FleetShare(const UAirlineDefinition& Airline) const
+{
+	const FAdmissionCache* Cache = AdmissionCache.Find(Airline.GetFName());
+	if (Cache == nullptr || Cache->FleetSize <= 0)
+	{
+		return 1.0;
+	}
+	return static_cast<double>(Cache->Admissible.Num()) / Cache->FleetSize;
 }
 
 TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const FVector2D& Focus,
@@ -96,8 +106,11 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 
 		// NOTHING TO OFFER THIS MINUTE, NOTHING TO ASK (review I2): a night-quiet club at x32
 		// would otherwise buy a route search per type per game minute for a rate of zero.
-		const double Rate = RateAt(Airline, TimeOfDay, bDaylight, Factor, AirlineFactor(Airline));
-		if (Rate <= 0.0)
+		// WITHOUT THE FLEET SHARE, deliberately: the share comes from the admission check below, and
+		// an airline whose last share was 0 would read a zero rate here, skip the check, and never
+		// be judged again - an airport that paved its runway would wait for ever for the King Air.
+		const double MoodFactor = AirlineFactorOf ? AirlineFactorOf(Airline) : 1.0;
+		if (RateAt(Airline, TimeOfDay, bDaylight, Factor, MoodFactor) <= 0.0)
 		{
 			continue;
 		}
@@ -190,6 +203,8 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 			}
 		}
 
+		// THE SHARE NOW, from the check just made - see FleetShare.
+		const double Rate = RateAt(Airline, TimeOfDay, bDaylight, Factor, MoodFactor * FleetShare(Airline));
 		State.Accumulated += Rate * (TickSeconds / 3600.0);
 		while (State.Accumulated >= State.Threshold)
 		{

@@ -654,6 +654,9 @@ bool FFacilityRepairWiredTest::RunTest(const FString&)
 	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
 	if (!TestEqual(TEXT("setup: before the pass, the presenter drops the shed the plot cannot seat"), Plots->GetDroppedCount(), 2 - Seats)) { return false; }
 	const double Balance = Ledger->Balance();
+	// THE SHOP'S OWN SHED OFFER, as Attach copied it from the scenario - the price the refund is made at, read rather than
+	// retyped because the figures are retuned (x0.4 on 2026-10-02); ScenarioPricesTheCatalogue pins them.
+	const FModuleOffer& Shed = Runtime->GetFacilityPurchases()->ModuleOffers.FindChecked(EDepotModule::Shed);
 
 	FRepairWarningSpy Spy;
 	GLog->AddOutputDevice(&Spy);
@@ -663,7 +666,7 @@ bool FFacilityRepairWiredTest::RunTest(const FString&)
 	TestEqual(TEXT("the pass removed the unseated sheds: owned == placed"), FacilityWiredOwned(*Actor, Depot, EDepotModule::Shed), Seats);
 	TestEqual(TEXT("through the facade's door - the presenter was rebuilt and drops nothing"), Plots->GetDroppedCount(), 0);
 	TestFalse(TEXT("and the repair left nothing to undo"), Actor->GetEditFacade()->CanUndo());
-	TestEqual(TEXT("refunded at the shed's price"), Ledger->Balance(), Balance + (2 - Seats) * 40000.0, 1e-6);
+	TestEqual(TEXT("refunded at the shed's price"), Ledger->Balance(), Balance + (2 - Seats) * Shed.Price, 1e-6);
 	TestEqual(TEXT("on one Refund line"), FacilityWiredRefunds(*Ledger), 1);
 	const FString Expected = FString::Printf(TEXT("depot %d at"), Depot.Index);
 	TestTrue(FString::Printf(TEXT("the log names the depot and the modules (%s)"), *FString::Join(Spy.Lines, TEXT(" | "))),
@@ -674,9 +677,9 @@ bool FFacilityRepairWiredTest::RunTest(const FString&)
 	if (const FOpsPurchase* Refund = Listener->Purchases.FindByPredicate([](const FOpsPurchase& P) { return P.Kind == EOpsPurchaseKind::ModulesRefunded; }))
 	{
 		TestEqual(TEXT("counting the sheds removed"), Refund->Count, 2 - Seats);
-		TestEqual(TEXT("with the refund as posted"), Refund->Amount, (2 - Seats) * 40000.0, 1e-6);
+		TestEqual(TEXT("with the refund as posted"), Refund->Amount, (2 - Seats) * Shed.Price, 1e-6);
 	}
-	TestEqual(TEXT("upkeep charges only the standing sheds"), Runtime->GetFacilityPurchases()->DailyUpkeep(*Actor->Network).Modules, Seats * 200.0, 1e-9);
+	TestEqual(TEXT("upkeep charges only the standing sheds"), Runtime->GetFacilityPurchases()->DailyUpkeep(*Actor->Network).Modules, Seats * Shed.UpkeepPerDay, 1e-9);
 
 	Runtime->Tick(Step);
 	TestEqual(TEXT("once repaired, the next frame repairs nothing"), FacilityWiredRefunds(*Ledger), 1);
@@ -719,20 +722,24 @@ bool FFacilityRepairAfterLoadTest::RunTest(const FString&)
 	if (!TestEqual(TEXT("setup: with no removal hook the save's own drain removed nothing"), FacilityWiredOwned(*Actor, Depot, EDepotModule::Shed), 21)) { return false; }
 	ULedger* Ledger = Runtime->GetLedger();
 	const double Saved = Ledger->Balance();
+	// SAVED IS THE SCENARIO'S OPENING BALANCE (nothing was bought) and the refund is the shop's shed price, both read: on
+	// 2026-10-02 the opening fell 500,000 -> 260,000 and the shed 40,000 -> 16,000, and with 15 sheds over the ceiling the
+	// new answer (260,000 + 15 x 16,000 = 500,000) happened to equal the OLD opening - a retyped 40,000 read as "no refund".
+	const double ShedPrice = Runtime->GetFacilityPurchases()->ModuleOffers.FindChecked(EDepotModule::Shed).Price;
 
 	Runtime->Attach(Actor);
 	TestEqual(TEXT("setup: the new session opens at the saved balance"), Ledger->Balance(), Saved, 1e-6);
 	constexpr float Step = 1.0f / 30.0f;
 	Runtime->Tick(Step);
 	TestEqual(TEXT("the attach's first frame repairs: owned == placed"), FacilityWiredOwned(*Actor, Depot, EDepotModule::Shed), Seats);
-	TestEqual(TEXT("and refunds the excess"), Ledger->Balance(), Saved + (21 - Seats) * 40000.0, 1e-6);
+	TestEqual(TEXT("and refunds the excess"), Ledger->Balance(), Saved + (21 - Seats) * ShedPrice, 1e-6);
 
 	if (!TestTrue(TEXT("the over-owned save loads"), Runtime->LoadFromSlot(Slot))) { return false; }
 	TestEqual(TEXT("setup: the load brought the twenty-one sheds back"), FacilityWiredOwned(*Actor, Depot, EDepotModule::Shed), 21);
 	TestEqual(TEXT("setup: and the balance from before the refund"), Ledger->Balance(), Saved, 1e-6);
 	Runtime->Tick(Step);
 	TestEqual(TEXT("the load's first frame repairs again: owned == placed"), FacilityWiredOwned(*Actor, Depot, EDepotModule::Shed), Seats);
-	TestEqual(TEXT("refunded once, on top of the restored balance"), Ledger->Balance(), Saved + (21 - Seats) * 40000.0, 1e-6);
+	TestEqual(TEXT("refunded once, on top of the restored balance"), Ledger->Balance(), Saved + (21 - Seats) * ShedPrice, 1e-6);
 	TestEqual(TEXT("on one Refund line - the loaded ledger had none"), FacilityWiredRefunds(*Ledger), 1);
 	TestEqual(TEXT("and the presenter drops nothing"), TestWorld.Buildings->GetPlotPresenter()->GetDroppedCount(), 0);
 	return true;

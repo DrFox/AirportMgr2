@@ -109,8 +109,10 @@ public:
 	 */
 	double FuelFee(double Litres) const;
 
-	/** What the airport charges per litre of fuel delivered. First guess. Transient - see Elasticity. */
-	UPROPERTY(Transient) double FuelPricePerLitre = 1.5;
+	/** What the airport charges per litre of fuel delivered. Transient - see Elasticity.
+	 *  2.0 since 2026-10-02 (was 1.5): fuel must stay a meaningful share of income (~30% in the
+	 *  pacing model) once landing fees went x5 - spec 2026-10-02-progression-and-fuel-supply §9. */
+	UPROPERTY(Transient) double FuelPricePerLitre = 2.0;
 
 	/** Offers per day scale by this. See Elasticity. */
 	double DemandFactor() const;

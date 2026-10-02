@@ -25,24 +25,27 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityScenarioCatalogueTest, "AirportOps.Mod
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FFacilityScenarioCatalogueTest::RunTest(const FString&)
 {
-	// THE SPEC'S TABLE (§2), as data: a rebalance is an edit here and nowhere in code.
+	// THE SPEC'S TABLE (§2), as data: a rebalance is an edit here and nowhere in code. THIS IS THE ONE TEST THAT PINS THE
+	// FIGURES - every behaviour test below reads them from the scenario (FacilityTestVehicleRow / FacilityTestShedOffer), so a
+	// rebalance fails here alone. x0.4 on 2026-10-02 (spec 2026-10-02-progression-and-fuel-supply §9; was 90,000/500,
+	// 25,000/150 and a 40,000/200 shed).
 	const UScenario* Scenario = GetDefault<UScenario>();
 	const FFuelVehicleSpec* Bowser = Scenario->FuelVehicles.Find(TEXT("FUEL"));
 	const FFuelVehicleSpec* Tow = Scenario->FuelVehicles.Find(TEXT("UTILITY"));
 	if (!TestNotNull(TEXT("the bowser row exists"), Bowser) || !TestNotNull(TEXT("the tow row exists"), Tow)) { return false; }
-	TestEqual(TEXT("a bowser costs 90,000"), Bowser->Price, 90000.0, 1e-9);
-	TestEqual(TEXT("and 500 a day to keep"), Bowser->UpkeepPerDay, 500.0, 1e-9);
+	TestEqual(TEXT("a bowser costs 36,000"), Bowser->Price, 36000.0, 1e-9);
+	TestEqual(TEXT("and 200 a day to keep"), Bowser->UpkeepPerDay, 200.0, 1e-9);
 	TestEqual(TEXT("and sells back for half"), Bowser->ResaleFraction, 0.5, 1e-9);
-	TestEqual(TEXT("a utility tow costs 25,000"), Tow->Price, 25000.0, 1e-9);
-	TestEqual(TEXT("and 150 a day to keep"), Tow->UpkeepPerDay, 150.0, 1e-9);
+	TestEqual(TEXT("a utility tow costs 10,000"), Tow->Price, 10000.0, 1e-9);
+	TestEqual(TEXT("and 60 a day to keep"), Tow->UpkeepPerDay, 60.0, 1e-9);
 	TestEqual(TEXT("the capacities are unchanged by pricing"), Bowser->CapacityLitres, 10000.0, 1e-9);
 
 	// ONLY THE SHED IS FOR SALE THIS SLICE (spec §1 out of scope: pumps, tanks).
 	TestEqual(TEXT("one module offer"), Scenario->ModuleOffers.Num(), 1);
 	const FModuleOffer* Shed = Scenario->ModuleOffers.Find(EDepotModule::Shed);
 	if (!TestNotNull(TEXT("the shed is offered"), Shed)) { return false; }
-	TestEqual(TEXT("a shed costs 40,000"), Shed->Price, 40000.0, 1e-9);
-	TestEqual(TEXT("and 200 a day to keep"), Shed->UpkeepPerDay, 200.0, 1e-9);
+	TestEqual(TEXT("a shed costs 16,000"), Shed->Price, 16000.0, 1e-9);
+	TestEqual(TEXT("and 80 a day to keep"), Shed->UpkeepPerDay, 80.0, 1e-9);
 	TestEqual(TEXT("and grants one vehicle bay (R2)"), Shed->VehicleSlots, 1);
 	TestNull(TEXT("a tank is not for sale"), Scenario->ModuleOffers.Find(EDepotModule::Tank));
 	TestNull(TEXT("nor a pump"), Scenario->ModuleOffers.Find(EDepotModule::Pump));
@@ -51,6 +54,15 @@ bool FFacilityScenarioCatalogueTest::RunTest(const FString&)
 
 namespace
 {
+	/**
+	 * THE SCENARIO'S OWN ROWS, for every behaviour test that needs a price: the figures are retuned whenever a service lands
+	 * (x0.4 on 2026-10-02), and a test that retyped them went red on each rebalance while the behaviour it guards stood still.
+	 * ScenarioPricesTheCatalogue is the one place the numbers are pinned. The fixture's board and shop are resolved from
+	 * this same default scenario, so the row read here IS the row the code under test charges from.
+	 */
+	const FFuelVehicleSpec& FacilityTestVehicleRow(const TCHAR* TypeCode) { return GetDefault<UScenario>()->FuelVehicles.FindChecked(FName(TypeCode)); }
+	const FModuleOffer& FacilityTestShedOffer() { return GetDefault<UScenario>()->ModuleOffers.FindChecked(EDepotModule::Shed); }
+
 	/**
 	 * A depot with the start kit on a NewObject network, a board with the scenario's vehicles, a ledger,
 	 * an unwired bus, and the two hooks as world-free lambdas: the reserved-slot ceiling is a number the
@@ -148,10 +160,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityBuyVehicleTest, "AirportOps.Model.Faci
 bool FFacilityBuyVehicleTest::RunTest(const FString&)
 {
 	FFacilityFixture F;
+	const double Opening = F.Ledger->Balance();
+	const double Price = FacilityTestVehicleRow(TEXT("FUEL")).Price;
 	const FPurchaseResult R = F.Shop->BuyVehicle(*F.Net, F.Depot, TEXT("FUEL"));
 	if (!TestTrue(TEXT("a bay and the money: bought"), R.Succeeded())) { return false; }
-	TestEqual(TEXT("for the bowser's price"), R.Amount, 90000.0, 1e-9);
-	TestEqual(TEXT("taken from the balance, synchronously"), F.Ledger->Balance(), 410000.0, 1e-6);
+	TestEqual(TEXT("for the bowser's price"), R.Amount, Price, 1e-9);
+	TestEqual(TEXT("taken from the balance, synchronously"), F.Ledger->Balance(), Opening - Price, 1e-6);
 	TestEqual(TEXT("as a Fleet entry"), static_cast<int32>(F.Ledger->Entries().Last().Category), static_cast<int32>(ELedgerCategory::Fleet));
 	const FServiceVehicle* Vehicle = F.Board->FindVehicle(R.VehicleId);
 	if (!TestNotNull(TEXT("the vehicle is on the board"), Vehicle)) { return false; }
@@ -249,8 +263,9 @@ bool FFacilitySellTest::RunTest(const FString&)
 	const int32 Queued = F.Bus.QueuedCount();
 	const FPurchaseResult Sold = F.Shop->SellVehicle(Bought.VehicleId);
 	if (!TestTrue(TEXT("an idle vehicle sells"), Sold.Succeeded())) { return false; }
-	TestEqual(TEXT("for Price x ResaleFraction"), Sold.Amount, 45000.0, 1e-9);
-	TestEqual(TEXT("credited at once"), F.Ledger->Balance(), AfterBuy + 45000.0, 1e-6);
+	const double Resale = FacilityTestVehicleRow(TEXT("FUEL")).ResaleValue();
+	TestEqual(TEXT("for Price x ResaleFraction"), Sold.Amount, Resale, 1e-9);
+	TestEqual(TEXT("credited at once"), F.Ledger->Balance(), AfterBuy + Resale, 1e-6);
 	TestEqual(TEXT("as a Fleet entry"), static_cast<int32>(F.Ledger->Entries().Last().Category), static_cast<int32>(ELedgerCategory::Fleet));
 	TestNull(TEXT("and it is gone"), F.Board->FindVehicle(Bought.VehicleId));
 	TestEqual(TEXT("one FleetChanged published"), F.Bus.QueuedCount(), Queued + 1);
@@ -274,7 +289,7 @@ bool FFacilitySeededSaleQuotesNothingTest::RunTest(const FString&)
 	const FFleetRowQuote* BoughtRow = Quote.Fleet.FindByPredicate([BoughtId](const FFleetRowQuote& Row) { return Row.VehicleId == BoughtId; });
 	if (!TestTrue(TEXT("both vehicles are on the card"), SeededRow != nullptr && BoughtRow != nullptr)) { return false; }
 	TestEqual(TEXT("the seeded vehicle's Sell quote is nothing"), SeededRow->Refund, 0.0, 1e-9);
-	TestEqual(TEXT("the bought one's is its resale, Price x ResaleFraction"), BoughtRow->Refund, 45000.0, 1e-9);
+	TestEqual(TEXT("the bought one's is its resale, Price x ResaleFraction"), BoughtRow->Refund, FacilityTestVehicleRow(TEXT("FUEL")).ResaleValue(), 1e-9);
 
 	const double Before = F.Ledger->Balance();
 	const FPurchaseResult Sold = F.Shop->SellVehicle(SeededId);
@@ -289,8 +304,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityDepotRemovedCreditsTest, "AirportOps.M
 bool FFacilityDepotRemovedCreditsTest::RunTest(const FString&)
 {
 	// RULED 2026-09-30: a vehicle withdrawn because its depot went (bulldoze, undo of the placement) is
-	// credited its resale value, as a sale would have been. Before it, the player paid 90000 for a bowser
-	// and removing the depot took it without a penny back.
+	// credited its resale value, as a sale would have been. Before it, the player paid full price for a bowser
+	// (90000 then) and removing the depot took it without a penny back.
 	FFacilityFixture F;
 	F.Board->Ledger = F.Ledger;
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
@@ -302,7 +317,7 @@ bool FFacilityDepotRemovedCreditsTest::RunTest(const FString&)
 	F.Net->RemoveEntity(F.Depot);
 	F.Board->Step(*Traffic, *F.Net, *F.Clock);
 	TestNull(TEXT("the vehicle is withdrawn with its depot"), F.Board->FindVehicle(Bought.VehicleId));
-	TestEqual(TEXT("and credited Price x ResaleFraction"), F.Ledger->Balance(), AfterBuy + 45000.0, 1e-6);
+	TestEqual(TEXT("and credited Price x ResaleFraction"), F.Ledger->Balance(), AfterBuy + FacilityTestVehicleRow(TEXT("FUEL")).ResaleValue(), 1e-6);
 	if (!TestEqual(TEXT("in exactly one entry"), F.Ledger->Entries().Num(), EntriesBefore + 1)) { return true; }
 	TestEqual(TEXT("filed under Fleet, where its purchase was"),
 		static_cast<int32>(F.Ledger->Entries().Last().Category), static_cast<int32>(ELedgerCategory::Fleet));
@@ -339,7 +354,7 @@ bool FFacilityDepotRemovedPublishesTest::RunTest(const FString&)
 	TestEqual(TEXT("which vehicle"), Seen[0].VehicleId, Bought.VehicleId);
 	TestEqual(TEXT("of what kind"), Seen[0].TypeCode, FName(TEXT("FUEL")));
 	TestEqual(TEXT("from which depot"), Seen[0].Depot, F.Depot.Index);
-	TestEqual(TEXT("and what it was credited"), Seen[0].Amount, 45000.0, 1e-9);
+	TestEqual(TEXT("and what it was credited - its resale"), Seen[0].Amount, FacilityTestVehicleRow(TEXT("FUEL")).ResaleValue(), 1e-9);
 	Seen.Reset();
 	F.Board->Step(*Traffic, *F.Net, *F.Clock);
 	F.Bus.Drain();
@@ -410,7 +425,7 @@ bool FFacilityShedOpensBayTest::RunTest(const FString&)
 	const int32 Queued = F.Bus.QueuedCount();
 	const FPurchaseResult Shed = F.Shop->BuyModule(*F.Net, F.Depot, EDepotModule::Shed);
 	if (!TestTrue(TEXT("a shed into a free reserved slot"), Shed.Succeeded())) { return false; }
-	TestEqual(TEXT("costs 40,000"), F.Ledger->Balance(), Before - 40000.0, 1e-6);
+	TestEqual(TEXT("costs the shed offer's price"), F.Ledger->Balance(), Before - FacilityTestShedOffer().Price, 1e-6);
 	TestEqual(TEXT("posted as Placement - a module is building work"),
 		static_cast<int32>(F.Ledger->Entries().Last().Category), static_cast<int32>(ELedgerCategory::Placement));
 	TestEqual(TEXT("through the module hook exactly once"), F.ApplyCalls, 1);
@@ -543,8 +558,9 @@ bool FFacilityUpkeepTest::RunTest(const FString&)
 	F.Net->RemoveEntity(F.Net->PlaceEntity(Gone));
 
 	const FFacilityUpkeep Upkeep = F.Shop->DailyUpkeep(*F.Net);
-	TestEqual(TEXT("one live shed at 200 - a removed depot's sheds cost nothing"), Upkeep.Modules, 200.0, 1e-9);
-	TestEqual(TEXT("a bowser and a tow, busy or not, 500 + 150"), Upkeep.Fleet, 650.0, 1e-9);
+	TestEqual(TEXT("one live shed's upkeep - a removed depot's sheds cost nothing"), Upkeep.Modules, FacilityTestShedOffer().UpkeepPerDay, 1e-9);
+	TestEqual(TEXT("a bowser's and a tow's upkeep, busy or not"), Upkeep.Fleet,
+		FacilityTestVehicleRow(TEXT("FUEL")).UpkeepPerDay + FacilityTestVehicleRow(TEXT("UTILITY")).UpkeepPerDay, 1e-9);
 	return true;
 }
 
@@ -594,9 +610,10 @@ bool FFacilityRepairTest::RunTest(const FString&)
 	TestEqual(TEXT("one pump"), Count(F.Depot, EDepotModule::Pump), 1);
 	TestEqual(TEXT("one tank"), Count(F.Depot, EDepotModule::Tank), 1);
 	TestEqual(TEXT("the plotless depot keeps all five - no plot, nothing to be smaller than"), Count(Legacy, EDepotModule::Shed), 5);
-	TestEqual(TEXT("the two sheds are refunded at the offer's price"), F.Ledger->Balance(), Balance + 2.0 * 40000.0, 1e-6);
+	const double ShedRefund = 2.0 * FacilityTestShedOffer().Price;
+	TestEqual(TEXT("the two sheds are refunded at the offer's price"), F.Ledger->Balance(), Balance + ShedRefund, 1e-6);
 	const FLedgerEntry& Line = F.Ledger->Entries().Last();
-	TestEqual(TEXT("on ONE line"), Line.Amount, 80000.0, 1e-6);
+	TestEqual(TEXT("on ONE line"), Line.Amount, ShedRefund, 1e-6);
 	TestEqual(TEXT("in the Refund column"), static_cast<int32>(Line.Category), static_cast<int32>(ELedgerCategory::Refund));
 	TestTrue(FString::Printf(TEXT("saying what and why (%s)"), *Line.What.ToString()), Line.What.ToString().Contains(TEXT("2 x Shed")));
 	F.Bus.Drain();
@@ -605,14 +622,14 @@ bool FFacilityRepairTest::RunTest(const FString&)
 		const FModulesRefundedEvent* Sheds = Seen.FindByPredicate([](const FModulesRefundedEvent& E) { return E.Module == EDepotModule::Shed; });
 		const FModulesRefundedEvent* Pumps = Seen.FindByPredicate([](const FModulesRefundedEvent& E) { return E.Module == EDepotModule::Pump; });
 		TestTrue(TEXT("the sheds' names the depot, the count and the credit"),
-			Sheds != nullptr && Sheds->Entity == F.Depot.Index && Sheds->Count == 2 && FMath::IsNearlyEqual(Sheds->Amount, 80000.0));
+			Sheds != nullptr && Sheds->Entity == F.Depot.Index && Sheds->Count == 2 && FMath::IsNearlyEqual(Sheds->Amount, ShedRefund));
 		TestTrue(TEXT("a kind the shop does not sell is removed with nothing to refund"),
 			Pumps != nullptr && Pumps->Count == 2 && Pumps->Amount == 0.0);
 	}
 	const int32 Lines = F.Ledger->Entries().Num();
 	TestEqual(TEXT("run again, there is nothing left to repair"), F.Shop->RemoveUnseated(*F.Net), 0);
 	TestEqual(TEXT("and nothing more is posted"), F.Ledger->Entries().Num(), Lines);
-	TestEqual(TEXT("upkeep charges the three standing sheds and the plotless five - none past a plot's ceiling"), F.Shop->DailyUpkeep(*F.Net).Modules, (3.0 + 5.0) * 200.0, 1e-9);
+	TestEqual(TEXT("upkeep charges the three standing sheds and the plotless five - none past a plot's ceiling"), F.Shop->DailyUpkeep(*F.Net).Modules, (3.0 + 5.0) * FacilityTestShedOffer().UpkeepPerDay, 1e-9);
 	return true;
 }
 

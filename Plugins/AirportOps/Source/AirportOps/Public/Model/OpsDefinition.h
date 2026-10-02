@@ -167,8 +167,12 @@ class AIRPORTOPS_API UScenario : public UOpsDefinition
 	GENERATED_BODY()
 
 public:
+	/** The opening build plus about 50,000 (2026-10-02, was 500,000): the pacing model's opening - a
+	 *  26 x 600 m grass runway, taxiway, two stands, the fuel depot with its bowser and shed - costs
+	 *  ~207,000 at the x0.4 build prices, and the margin left over is what makes paving at ~2 real hours
+	 *  a goal rather than a day-0 purchase. Spec 2026-10-02-progression-and-fuel-supply §9. */
 	UPROPERTY(EditAnywhere, Category = "Scenario", meta = (ClampMin = "0.0"))
-	double StartingBalance = 500000.0;
+	double StartingBalance = 260000.0;
 
 	/**
 	 * Real seconds the daylight hours (DawnHour..DuskHour) take at x1, and the night hours.
@@ -211,11 +215,12 @@ public:
 	 * REPLACED FuelDwellSeconds, a flat 40 movement-seconds for every aircraft whatever it held.
 	 *
 	 * PRICES (spec 2026-09-29-facility-upgrades §2): first guesses against a 500k opening balance and a ~15k full bowser load; unjudged in play.
+	 * x0.4 ON 2026-10-02 with every other build price (spec 2026-10-02-progression-and-fuel-supply §9), upkeep with them.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Scenario")
 	TMap<FName, FFuelVehicleSpec> FuelVehicles = {
-		{ FName(AirsideVehicleCodes::UtilityTow), FFuelVehicleSpec(1000.0, 75.0, 25000.0, 150.0, NSLOCTEXT("Scenario", "UtilityTow", "Utility tow")) },
-		{ FName(AirsideVehicleCodes::Fuel), FFuelVehicleSpec(10000.0, 200.0, 90000.0, 500.0, NSLOCTEXT("Scenario", "Bowser", "Bowser")) } };
+		{ FName(AirsideVehicleCodes::UtilityTow), FFuelVehicleSpec(1000.0, 75.0, 10000.0, 60.0, NSLOCTEXT("Scenario", "UtilityTow", "Utility tow")) },
+		{ FName(AirsideVehicleCodes::Fuel), FFuelVehicleSpec(10000.0, 200.0, 36000.0, 200.0, NSLOCTEXT("Scenario", "Bowser", "Bowser")) } };
 
 	/**
 	 * The kinds of vehicle a STARTER depot begins with (spec 2026-09-28-service-vehicle-lifecycle §3.4): a depot placed
@@ -240,10 +245,11 @@ public:
 	 * scope) - a module with no row here is not for sale, and its buy is refused UnknownType.
 	 * ENFORCED BY: AirportOps.Present.Facility.AttachCopiesTheOffers (the copy),
 	 * AirportOps.Model.Facility.RefusalsChargeAndPublishNothing ("UnknownType module (no offer)")
+	 * The shed x0.4 on 2026-10-02 (was 40,000 and 200/day), with every other build price.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Facilities")
 	TMap<EDepotModule, FModuleOffer> ModuleOffers = {
-		{ EDepotModule::Shed, FModuleOffer(40000.0, 200.0, 1, NSLOCTEXT("Scenario", "Shed", "Shed"), NSLOCTEXT("Scenario", "Sheds", "Sheds")) } };
+		{ EDepotModule::Shed, FModuleOffer(16000.0, 80.0, 1, NSLOCTEXT("Scenario", "Shed", "Shed"), NSLOCTEXT("Scenario", "Sheds", "Sheds")) } };
 
 	/**
 	 * How many offers the inbox holds before new ones are dropped (spec 2026-09-28 ruling 6).
