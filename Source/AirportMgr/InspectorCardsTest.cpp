@@ -220,12 +220,12 @@ bool FInspectorAircraftCardTest::RunTest(const FString&)
 	TestEqual(TEXT("it is the aircraft card's"), View->Card, EInspectorCard::Aircraft);
 	TestEqual(TEXT("no registration: the type and the id title it"), View->Title, FString(TEXT("SR22  #7")));
 	TestEqual(TEXT("the figures as printed"), View->Facts,
-		FString(TEXT("Heading 090\nSpeed 5.2 m/s (10 kt)\nVertical speed 0.0 m/s (0 ft/s)\nAltitude 13 m\nTo Stand 3\nEngine running")));
+		FString(TEXT("Heading 090\nSpeed 5.2 m/s (10 kt)\nVertical speed 0.0 m/s (0 ft/min)\nAltitude 13 m\nTo Stand 3\nEngine running")));
 	// DESCENDING: the sign survives, and the tenths are not "-3.-2" (speed's "%d.%d" applied to a negative).
-	F.VerticalSpeed = -320.0;   // -3.2 m/s, -10.5 ft/s
+	F.VerticalSpeed = -320.0;   // -3.2 m/s, -629.9 ft/min
 	View = Card.Describe(In);
 	if (!TestNotNull(TEXT("a view, descending"), View)) { return false; }
-	TestTrue(TEXT("a descent prints signed in m/s and ft/s"), View->Facts.Contains(TEXT("\nVertical speed -3.2 m/s (-10 ft/s)\n")));
+	TestTrue(TEXT("a descent prints signed in m/s and ft/min"), View->Facts.Contains(TEXT("\nVertical speed -3.2 m/s (-630 ft/min)\n")));
 	F.VerticalSpeed = 0.0;
 	TestEqual(TEXT("the status as the model said it"), View->Status, FString(TEXT("Taxiing")));
 	TestEqual(TEXT("no ring: no deadlock line"), View->Deadlock, FString());
