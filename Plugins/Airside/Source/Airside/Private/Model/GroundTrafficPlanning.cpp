@@ -6,11 +6,13 @@
 #include "Model/GroundTraffic.h"
 
 #include "AirsideLog.h"
+#include "Model/ArrivalPlanner.h"
 #include "Model/DepartureAsk.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/LandingRun.h"
 #include "Model/PushbackPlanner.h"
 #include "Model/PushbackRun.h"
+#include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TaxiPlanning.h"
 
@@ -133,7 +135,7 @@ FTaxiRequest UGroundTraffic::TaxiOutRequest(const FRoadAgent& Agent, const FAirf
 	return Out;
 }
 
-void UGroundTraffic::TrackTaxiPlans()
+void UGroundTraffic::TrackTaxiPlans(const URoadNetwork& Network)
 {
 	if (TaxiPlanning == nullptr)
 	{
@@ -150,7 +152,17 @@ void UGroundTraffic::TrackTaxiPlans()
 			TaxiPlanning->Drop(Holder, nullptr);
 			continue;
 		}
-		TaxiPlanning->Track(*Agent, Occupancy, Rules);
+		if (!TaxiPlanning->Track(*Agent, Occupancy, Rules, SimSeconds))
+		{
+			// ITS ROUTE CHANGED UNDER IT - the resolver's replan, a redirect, a re-offer: re-planned along the new one from
+			// where it is (taxi planning PR 3), unplanned only if nothing fits. COPIED: the re-plan replaces the clearance.
+			const FTaxiClearance Old = *TaxiPlanning->Find(Holder);
+			if (ReplanTaxi(*Agent, Network, ETaxiUnplanned::RouteChanged,
+				TEXT("its route changed under it (a replan, a redirect or a re-offer) and no plan fits the new one"), &Old))
+			{
+				RequeueAfterReplan(*Agent, Network, Old);
+			}
+		}
 	}
 }
 
@@ -313,14 +325,21 @@ EDepartureRefusal UGroundTraffic::ClearDeparture(int32 AgentId, const URoadNetwo
 	// the push's whole ground asked of the order as StartDuePushes asks it; a straight-out departure is ordered as it
 	// taxis (UTaxiPlanning::OrderHold), from its stand.
 	const FRoutePlan PushRoute = Ask.bStraightOut ? FRoutePlan() : Ask.Push.PushRoute;
-	if (!TaxiPlanning->Book(Network, AgentId, ETaxiClearanceKind::TaxiOut, Ask.Taxi, ETaxiClearanceStage::Booked, PushRoute,
+	// TO THE ENTRY ITSELF: held a while there, not for ever (TaxiPlanEntryHold). A queue's end stays for ever - it waits there.
+	FTaxiPlan Taxi = Ask.Taxi;
+	if (!Ask.QueueFor.IsSet())
+	{
+		UTaxiPlanning::CapEntryHold(Taxi, Rules.TaxiPlanEntryHold);
+	}
+	if (!TaxiPlanning->Book(Network, AgentId, ETaxiClearanceKind::TaxiOut, Taxi, ETaxiClearanceStage::Booked, PushRoute,
 		SimSeconds))
 	{
 		return WatchForTaxiPlan(AgentId, Network, PushRoute);
 	}
 	if (Ask.QueueFor.IsSet())
 	{
-		TaxiPlanning->SetQueued(AgentId, Ask.QueueFor, Ask.QueueErrand);
+		const FGuidelineNode* Entry = Network.GetGuidelineNode(Ask.QueueFor);
+		TaxiPlanning->SetQueued(AgentId, Ask.QueueFor, Ask.QueueErrand, Entry != nullptr ? Entry->Position : FVector2D::ZeroVector);
 	}
 	// "NOW" WITHIN THE WINDOW'S OWN MARGIN, never more (review of #528 finding 7): the push ground is booked from a margin
 	// before PushAt, so starting that much early is inside the booking; a fixed second was not, under a margin below it.
@@ -382,7 +401,8 @@ void UGroundTraffic::ExtendQueuedDepartures(const URoadNetwork& Network)
 		Rest.Errand = Clearance->QueueErrand;
 		Rest.Holder = Id;
 		Rest.DepartAt = FMath::Max(SimSeconds, Clearance->Plan.Arrival);
-		const FTaxiPlan Ext = TaxiPlanning->Plan(Network, *Aircraft, Rules, Rest);
+		FTaxiPlan Ext = TaxiPlanning->Plan(Network, *Aircraft, Rules, Rest);
+		UTaxiPlanning::CapEntryHold(Ext, Rules.TaxiPlanEntryHold);
 		if (!Ext.IsPlanned() || !TaxiPlanning->Extend(Network, Id, Ext, SimSeconds))
 		{
 			continue;

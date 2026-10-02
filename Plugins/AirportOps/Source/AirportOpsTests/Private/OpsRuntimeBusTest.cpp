@@ -165,6 +165,8 @@ bool FOpsRuntimeBusReattachTest::RunTest(const FString&)
 			[&]() { return Bus.DispatchedCountOfForTest<FPushGroundFreedEvent>(); } },
 		{ TEXT("TaxiPlansFreed"), [&]() { Model->OnTaxiPlansFreed.Broadcast(); },
 			[&]() { return Bus.DispatchedCountOfForTest<FTaxiPlansFreedEvent>(); } },
+		{ TEXT("TaxiUnplannedChanged"), [&]() { Model->OnTaxiUnplannedChanged.Broadcast(); },
+			[&]() { return Bus.DispatchedCountOfForTest<FTaxiUnplannedChangedEvent>(); } },
 		{ TEXT("NetworkChanged"), [&]() { TestWorld.Actor->OnNetworkChanged.Broadcast(EChangeKind::Topology, *TestWorld.Actor->Network); },
 			[&]() { return Bus.DispatchedCountOfForTest<FNetworkChangedEvent>(); } },
 		{ TEXT("BuildRefused"), [&]() { Facade->OnRefused.Broadcast(FBuildQuote(), EBuildRefusal::CannotAfford); },

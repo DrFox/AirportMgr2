@@ -6,6 +6,7 @@
 #include "Model/Airport.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
+#include "Model/TaxiPlanning.h"
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
 #include "Model/OfferGenerator.h"
@@ -175,6 +176,40 @@ bool FOpsAlertsStrandedFlightTest::RunTest(const FString&)
 	TestEqual(TEXT("retired, the flight is no longer stranded - the alert clears with no 'unstranded' event anywhere"),
 		F.ClearedOf(EAlertKind::FlightStranded), 1);
 	TestEqual(TEXT("and is no longer held"), F.Alerts->GetAlerts().Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsAlertsLostTaxiPlanTest, "AirportOps.Model.Alerts.LostTaxiPlanRaisesAndClears",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsAlertsLostTaxiPlanTest::RunTest(const FString&)
+{
+	// ONE ALERT PER AIRCRAFT THAT LOST ITS PLAN TO A LAYOUT EDIT (taxi planning spec 2026-10-02 §3), cleared on a new
+	// plan or arrival - derived from Airside's unplanned record (UTaxiPlanning::FindUnplanned), so it clears whatever
+	// ended it. One that lost its plan for another reason (its route changed) is the inspector's, not an alert.
+	FAlertsField F;
+	if (!TestTrue(TEXT("an aircraft taxiing in"), F.Build())) { return false; }
+	UTaxiPlanning* Planning = FGroundTrafficTestAccess(*F.Traffic).TaxiPlanning();
+	if (!TestNotNull(TEXT("a planning owner"), Planning)) { return false; }
+
+	Planning->MarkUnplanned(F.Plane, ETaxiUnplanned::RouteChanged, TEXT("its route changed"), ETaxiClearanceKind::TaxiIn,
+		ERouteErrand::ArrivalTaxiIn);
+	F.Recompute();
+	TestEqual(TEXT("a route change is not the edit's - no alert"), F.RaisedOf(EAlertKind::FlightLostTaxiPlan), 0);
+
+	Planning->MarkUnplanned(F.Plane, ETaxiUnplanned::LayoutEdit, TEXT("the layout was edited"), ETaxiClearanceKind::TaxiIn,
+		ERouteErrand::ArrivalTaxiIn);
+	F.Recompute();
+	if (!TestEqual(TEXT("lost to a layout edit: one alert"), F.RaisedOf(EAlertKind::FlightLostTaxiPlan), 1)) { return false; }
+	const FOpsAlert& Alert = F.Raised.Last();
+	TestEqual(TEXT("keyed by the flight"), Alert.Key.Id, F.Flight->Id);
+	TestEqual(TEXT("in the spec's words"), Alert.Text.ToString(), FString(TEXT("CU 204 lost its plan after a layout edit - taxiing unplanned")));
+	TestEqual(TEXT("focused on its aircraft"), Alert.Focus.Id, F.Plane);
+	F.Recompute();
+	TestEqual(TEXT("once"), F.RaisedOf(EAlertKind::FlightLostTaxiPlan), 1);
+
+	Planning->ClearUnplanned(F.Plane);
+	F.Recompute();
+	TestEqual(TEXT("a plan again (or arrived): cleared"), F.ClearedOf(EAlertKind::FlightLostTaxiPlan), 1);
 	return true;
 }
 

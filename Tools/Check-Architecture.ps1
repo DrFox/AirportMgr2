@@ -1340,12 +1340,12 @@ $AllowedCallers = @(
         # table's order is what FPassingOrder enforces, and it is deadlock-free only while every window is booked on ONE
         # timeline by one owner (spec section 2: "all orders come from ONE timeline"). A second writer - a dispatch booking its
         # own windows, a test hook in production - is a second timeline the order cannot see. The mutators were named to be
-        # grepped (PR 1's plan, Task 5): BookWindow, BookPasses, ReleaseHolder, ReleaseHolderOn (and PR 2's ReleaseFirstOn, #528 review's PullForward), called on a table (`.` or
+        # grepped (PR 1's plan, Task 5): BookWindow, BookPasses, ReleaseHolder, ReleaseHolderOn (and PR 2's ReleaseFirstOn, #528 review's PullForward, PR 3's ShiftLater; TaxiPlanningReplan.cpp is UTaxiPlanning's own second file), called on a table (`.` or
         # `->`). TaxiReservations.cpp's own calls (BookPasses' verify(BookWindow(...))) carry no receiver and are not seen.
         # DOES NOT SEE a write through a reference renamed to hide it, or a table copied, written and assigned back elsewhere.
         Name        = 'taxi reservation table written (rule 104)'
-        Pattern     = '(?:\.|->)\s*(?:BookWindow|BookPasses|ReleaseHolder|ReleaseHolderOn|ReleaseFirstOn|PullForward)\s*\('
-        ProdAllowed = @('Private\Model\TaxiPlanning.cpp', 'Private\Model\TaxiReservations.cpp')
+        Pattern     = '(?:\.|->)\s*(?:BookWindow|BookPasses|ReleaseHolder|ReleaseHolderOn|ReleaseFirstOn|PullForward|ShiftLater)\s*\('
+        ProdAllowed = @('Private\Model\TaxiPlanning.cpp', 'Private\Model\TaxiPlanningReplan.cpp', 'Private\Model\TaxiReservations.cpp')
         TestExempt  = $true
         ProdReason  = 'book or release through UTaxiPlanning (Book, Revoke, Drop, Track) - the table has one writer so its order is one timeline (spec 2026-10-02 section 2)'
     }
@@ -4988,7 +4988,9 @@ $modelLineBudget = [ordered]@{
     # start (moved out of DepartAgent) and the clearance bodies went to GroundTrafficPlanning.cpp, FDepartureAsk to DepartureAsk.h.
     # RAISED 1962 -> 1966 by #528's review (2026-10-02): the arrival's taxi plan booked BEFORE Admit under the id it will get,
     # so a failed booking admits nothing (finding 6) - the refusal itself went to RefuseNoTaxiPlan in GroundTrafficPlanning.cpp.
-    'Plugins\Airside\Source\Airside\Private\Model\GroundTraffic.cpp'          = 1966
+    # RAISED 1966 -> 1972 by taxi planning PR 3 (2026-10-02): OnTaxiUnplannedChanged fired from the freed diff, and the
+    # unplanned retry called from Advance - hooks only; ReplanTaxi/RetryUnplanned live in GroundTrafficReplan.cpp (#534 review).
+    'Plugins\Airside\Source\Airside\Private\Model\GroundTraffic.cpp'          = 1972
     # 2026-10-01: the claim arbiter, one algorithm (Run and its windows, crossings and ranking - 13 functions, long ones);
     # splitting it would scatter one invariant across files. RAISED 1898 -> 1963 by #502 (2026-10-01): a push held on a dead
     # plan claims the ground its body stands on (HoldBodyFootprint, a geometric claim for a body on no route) - what a body
@@ -5025,7 +5027,9 @@ $modelLineBudget = [ordered]@{
     # place of the arms' hand re-points - each with its reason and pin).
     # RAISED 1490 -> 1498 by taxi planning PR 2 (2026-10-02): a rebuild drops every taxi plan (their handles may be dead;
     # re-planning round an edit is PR 3's), with its reason.
-    'Plugins\Airside\Source\Airside\Private\Model\GroundTrafficRebuild.cpp'   = 1498
+    # RAISED 1498 -> 1505 by taxi planning PR 3 (2026-10-02): a rebuild takes the plans out with their order kept and re-plans
+    # them along the re-resolved routes (ReplanAfterRebuild, in GroundTrafficReplan.cpp since #534's review) instead of dropping them - hooks only.
+    'Plugins\Airside\Source\Airside\Private\Model\GroundTrafficRebuild.cpp'   = 1505
     # 2026-10-01: the route search (A* over the guideline graph, plan building, run description) - one algorithm.
     # LOWERED 1191 -> 1031 on 2026-10-02 (taxi planning PR 1): the edge-admissibility filter moved whole to
     # RouteEdgeFilter.cpp (held by the default) so FTaxiPlanner shares it rather than copying it.

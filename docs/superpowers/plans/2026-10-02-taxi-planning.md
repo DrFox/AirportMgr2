@@ -361,3 +361,73 @@ public:
 - **Finding 5:** a queueing departure with nobody on its entry waits on `UTaxiPlanning::QueueBlocker`, worded as its own ("its way on to the runway to be booked"), not as a test's delay.
 - **Finding 6:** the arrival's taxi plan is booked BEFORE Admit, under the id Admit gives it, revoking in the same swap (`BookArrival`); a failed booking admits nothing. `TaxiInRefusal` is non-const (`ClearanceFor` takes a non-const traffic). ENFORCED BY markers on the queue's "no arrival waits on a node held for ever" (RefusesWhenNothingFree) and Track's "the push's window is the earliest" (PushPrefixHoldsAtStand, now asserting it).
 - **Finding 7:** Book (a re-booking) and Extend (a for-ever window ended) wake waiters (`Bump(true)`); `QueuedDueAsk` is const and an ask is dated only when made (`NoteExtendAsked`); a push "due now" starts within the margin, never a fixed second.
+
+---
+
+## PR 3 - re-time, re-plan, unplanned fallback (detailed 2026-10-02, against feature/taxi-plan-order 5f289c1e, #528 review fixed)
+
+**Goal:** a plan survives what the world does to it. A late aircraft's remaining windows move later (same order); a layout edit, a resolver replan or a redirect re-plans the aircraft ALONG the route it now drives instead of dropping it; one that cannot be re-planned is UNPLANNED - claims and resolver, as before plans - flagged on the inspector and, after a layout edit, alerted once.
+
+**Facts located (live code, 2026-10-02):**
+- `OnGraphRebuilt` (GroundTrafficRebuild.cpp:226) runs on Topology rebuilds only (`ARoadNetworkActor::RebuildForKind`): a drag frame is Geometry and never reaches traffic. `FRoadGuidelineBuilder::Build` reallocates EVERY guideline handle, so the whole table is dead after one - only its ORDER (who was ahead of whom) survives, in holder ids. The re-resolve loop (`FPlanReResolver::ReResolvePlan`) re-points `Follower.Plan` (Taxiing), `Pushback.Plan` + `TaxiOutPlan` (Manoeuvring), `TaxiInPlan` (Arriving); then `Arbitrate`.
+- PR 2's rebuild hook: `TaxiPlanning->DropAll` before the re-resolve. Track (TaxiPlanning.cpp) drops a plan whose route no longer matches (`SameRoute`) - the resolver's `ReplanAt` splice, a redirect, a re-offer.
+- The planner (`FTaxiPlanner::Plan`) searches any route RouteSearch admits; a re-plan must keep the route the re-resolve or the resolver chose (the agent is driving it). Nothing plans along a GIVEN route today.
+- Alerts are derived (`UOpsAlerts::Recompute`, AirportOps), keyed per subject, dirtied by bus events (`FNetworkChangedEvent`, `FAgentPhaseEvent`, ...). The deadlock alert reads `UGroundTraffic::CurrentDeadlocks`.
+- Inspector facts: `FAgentFacts` (InspectFacts.h), filled by `InspectFacts::DescribeAgent`.
+- Budgets (rule 77): GroundTraffic.cpp 1966, GroundTrafficRebuild.cpp 1498, TrafficClaims.cpp 2011; TaxiPlanning.cpp and TaxiPlanner.cpp sit under the 800 default.
+
+**Design decisions:**
+- **Plan along a route: `FTaxiRequest::Along`.** The planner's state gets the index of the next step (`FSippState::AlongAt`, in the key); a state's one chain is the route's next steps up to the next stoppable node (`CanHoldAt`) or the route's end - the moves are the planner's usual ones, the edges the route's. The goal is the route's end, not a node met on the way (a dead-end loop passes a node twice). Rejected: banning every other edge in RouteSearch's filter - a loop's two passes of one node would be one key, and the search could leave the loop early.
+- **Re-plan from where it is (`UGroundTraffic::ReplanTaxi`).** Taxiing: the plan starts at the END node of the step it is on, `DepartAt` = now + the rest of that step at its speed (floored), rolling if it moves, may wait there only if `CanHoldAt`; the step it is on is booked from now to when it leaves (the plan's prefix). Arriving: along `TaxiInPlan` from the exit at the old plan's vacate time, as the arrival's first plan was. Pushing: along `TaxiOutPlan` from the push's end, the push ground held from now. The clearance's route is the LIVE route, its legs and moves offset by the prefix, so `SameRoute` holds.
+- **Layout edit (`UGroundTraffic::ReplanAfterRebuild`):** before the re-resolve, the old table's ORDER is snapshotted (`FTaxiReservations::OrderPairs` - consecutive windows per resource, as holder pairs) and every plan dropped; after it, every moving cleared aircraft is re-planned along its re-resolved route IN THAT ORDER (topological, ties by earliest window) before anything else books - nobody new is admitted first, since nothing else runs inside OnGraphRebuilt. Then parked ones re-hold their stand for ever; a Booked departure re-holds its stand and goes back on the push watch (as a revoke does). One that cannot be planned is UNPLANNED.
+- **Unplanned (`UTaxiPlanning::MarkUnplanned`, `ETaxiUnplanned {RouteChanged, LayoutEdit}`):** no windows, today's claims and resolver; "TaxiPlan: agent N unplanned - <why>" once; cleared by a booking, by parking, by going. Retried when the table moves (coalesced to a sim second, as a queue's rest is), so an aircraft dropped by an edit regains a plan when traffic clears.
+- **Alert `EAlertKind::FlightLostTaxiPlan`**, derived like the rest: a flight whose agent is unplanned BECAUSE OF A LAYOUT EDIT - "<callsign> lost its plan after a layout edit - taxiing unplanned". Cleared when that stops being true (new plan, parked, gone). Dirtied by a new bridged Airside event, `OnTaxiUnplannedChanged` -> `FTaxiUnplannedChangedEvent`, fired from DiffFreedom when the unplanned set changed (FNetworkChangedEvent covers the edit itself).
+- **Re-time (`UTaxiPlanning::Retime`, knob `FTrafficRules::TaxiPlanRetimeLag` = 15 s):** lag = now - the planned time at the aircraft's position (its leg, interpolated). Over the knob, the holder's windows still ahead are shifted later by the lag, and every window booked BEHIND one of them that would then overlap or overtake is shifted too, recursively (`FTaxiReservations::ShiftLater`) - same order, later times; all or nothing on a copy. The shifted plans' legs, holds, arrival and push time move with them. Not while queueing at its plan's end (its windows there are for ever). Logged "TaxiPlan: agent N re-timed +X s" (and "+k others" for the cascade). Rejected: growing only the late aircraft's windows - the next window behind would then overlap it, and the table's every-pair-may-share invariant is what the order is derived from.
+- **Wake-ups:** re-time, revoke, release and an unplanned aircraft regaining a plan all `Bump(true)` - the arrival queue (OnTaxiPlansFreed), the push watch and the queued departures all date themselves by the revision.
+- **Finding 4 (#528 review): an arrival's first move is never refused by the order.** It vacates rolling and may not wait (`bMayWaitAtStart=false`); a late aircraft booked ahead of it there held it on the exit - on the runway - while that aircraft might need the runway: order <-> runway. Its first move is granted at once (the claim pass's spacing still applies), committed as #528's finding 2 commits a move.
+- **80/h starvation (time-boxed, two attempts):** a departure's runway entry is held from reaching it for ever, until it lines up - so every taxi-in route through an entry waits for a departure to take off. Attempt 1: a departure's entry window ends a margin after its estimated line-up (`FTrafficRules::TaxiPlanEntryHold`), not for ever. Measured in the headline test; if two attempts do not move admitted-at-80/h, the numbers are recorded here and it is left to its own PR.
+
+### Task 14: plan along a route
+- Modify `TaxiPlanner.h/.cpp` (`FTaxiRequest::Along`, `AlongAt` in state and key, the one chain, the goal by index).
+- Test `Airside.Model.TaxiPlan.PlansAlongAGivenRoute`: a route that is not the shortest is kept; waits where the route allows; a loop's node passed twice.
+
+### Task 15: re-time
+- `FTaxiReservations::ShiftLater`, `UTaxiPlanning::Retime`, Track's lag check, `FTrafficRules::TaxiPlanRetimeLag`.
+- Tests: `Airside.Model.TaxiPlan.ShiftLaterKeepsOrder` (table: a cascade through two resources; order and MayShare kept; a for-ever window behind refuses); `Airside.Model.TaxiPlan.LateAircraftIsRetimed` (traffic: one aircraft held 60 s - re-time fires, the one behind waits, both arrive, no deadlock).
+
+### Task 16: re-plan, unplanned, layout edit
+- `UGroundTraffic::ReplanTaxi`, `ReplanAfterRebuild`, `RetryUnplanned`; `UTaxiPlanning::{MarkUnplanned, UnplannedWhy, BookAlong}`; Track hands a changed route back instead of dropping; GroundTrafficRebuild.cpp's hook.
+- Tests: `Airside.Model.TaxiPlan.ResolverReplanKeepsAPlan` (a replan splice: still planned, along the new route); `Airside.Model.TaxiPlan.LayoutEditReplans` (a segment removed mid-traffic: moving aircraft re-planned along their re-resolved routes or unplanned, nobody keeps a dead handle).
+
+### Task 17: alert and inspector
+- `EAlertKind::FlightLostTaxiPlan` (appended), Recompute, `FTaxiUnplannedChangedEvent` + bridge + Alerts dirtier; `FAgentFacts::TaxiUnplanned`.
+- Tests: `AirportOps.Model.Alerts.LostTaxiPlanRaisesAndClears` (raised for a layout-edit unplanned agent, cleared when it is planned again); `AirportOps.Present.Bus.TaxiUnplannedChangedIsBridged`; ReattachDoesNotDouble's probe list.
+
+### Task 18: arrival's first move (finding 4)
+- `UTaxiPlanning::OrderHold`.
+- Test `Airside.Model.TaxiPlan.ArrivalNeverHeldOnTheExit`: a stand-in booked ahead of an arrival on its first move, never released (late) - the arrival leaves the runway, never "not my turn" there.
+
+### Task 19: starvation attempt, headline, full suite, PR
+
+## Execution notes (PR 3, 2026-10-02)
+
+- **A re-time from NOW never caught up, measured.** The first cut shifted windows held after now by the lag; the overdue leave (the moment it was late FOR) was before now and never moved, so it read late again a second later and was re-timed by a growing lag every second - 709 re-times at 40 mov/h, push times thrown hours out, 16 of 40 admitted and the field jammed on order waits. Re-timed from just before the overdue moment (`Retime(Since = Latest)`), the plan reads on time after it: 411 re-times, 40/40.
+- **80 mov/h starvation, attempt 1 converged.** A departure's entry window bounded to `TaxiPlanEntryHold` (90 s) after it arrives, not for ever: admitted at 80/h 41 -> 67 of 80, arrDelay mean 340 -> 218 s, departure wait mean 373 -> 156 s. Its drain needed longer than 3600 s (five still moving, none stuck) - the headline drain is 5400 s. The headline's 80/h floor (60) pins it: a hold of 0 (for ever) admits 41.
+- **UTaxiPlanning split** for rule 77: `TaxiPlanningReplan.cpp` (rebuild take-out, BookAlong, unplanned record, re-time), rule 104 lists it.
+- `FTaxiShift`, `ShiftLater`'s fixed point runs in BOOKED order (arrays re-sorted only at the end), so "behind" is the order as booked, and each push is the least that restores it.
+- Not done: provisional windows for every moving aircraft's current edge before a rebuild's re-plan (the topological order replaced it; a follower on the same edge is placed a headway behind by `EarliestFit` on its prefix). Vehicles still unplanned at road-taxiway crossings (spec ruling 1) - PR 4 or its own.
+
+### Review of #534 (2026-10-03), fixed on PR 3
+- **Finding 1, a re-plan trapped its follower:** `ReplanTaxi`'s taxiing arm (now `ReplanTaxiing`, `GroundTrafficReplan.cpp`) plans round the table WITHOUT everyone booked on the edge it stands on who is not physically ahead of it (a leader: taxiing that edge the same way, centre further along). Those its plan then conflicts with, or comes after on that edge or its end node, are taken out (`UTaxiPlanning::TakeOut`) and re-planned behind it, nearest first, depth-bounded at 3. The prefix window starts where it already stood in the edge's order (FIFO behind leaders), and the step it is on is granted (`GrantedMove = 0`). `ReplanKeepsTheFollowerBehind` (red before: X waited on Y at B, neither home). The old "follower placed a headway behind by EarliestFit on its prefix" note above was the bug.
+- **Finding 2:** `ShiftLater` takes `Now`: a window that has started is only stretched; a started one that waited for the late one is moved up to abut it (no gap). `ShiftLaterNeverMovesWhatHasStarted`.
+- **Finding 3:** `FTaxiClearance::bFromExit`, set only by `BookArrival` or a re-plan from the exit (or still on the old exit move). `ReplannedArrivalIsOrderedMidRoute`.
+- **Finding 4:** the rebuild re-holds the PARKED (Booked departures included) before the moving re-plan. `RebuildReholdsABookedStandFirst`.
+- **Finding 5:** `UTaxiPlanning::CapEntryHold` on every booking ending at an entry, a re-plan included (`BookAlong`'s `EntryHold`, when the route arms a take-off). `ReplannedDepartureFreesItsEntry`.
+- **Finding 6, measured, not as proposed:** making an arrival on final IMMOVABLE in the cascade jammed the headline at 80/h both ways tried - the late one swapped behind it (1 permanent jam, 45/80 admitted), or the re-time refused with the late one's held ground stretched (1 jam, 67/80). With pinning only (finding 2): 0 jams, 66/80. So arrivals' windows still shift in a cascade (their exit move is order-exempt anyway), and the FLOWN vacate time is kept apart (`FTaxiClearance::VacateAt`) for a re-plan on final. `RetimeKeepsAnArrivalsVacateTime`. The "refused re-time lapses" half: with pinning, refusal is reachable only by the cascade budget - left.
+- **Finding 7:** the exit move still waits for an opposing (or Any) window ahead on its edges (`OpposingAhead`). `ArrivalNeverHeldOnTheExit` extended; its same-way stand-in now books the arrival's way (was Any).
+- **Finding 8:** `TakeAllForRebuild` comment - holder-level cycles are legal. `RebuildOrderIsTopological` (green from the start; red with Kahn removed by construction: 3's earliest window precedes 4's).
+- **Finding 9:** `NeedBehind` is the least of FIFO and wholly-after; a refused re-time backs off 1 -> 30 s. Backoff not tested.
+- **Finding 10:** unplanned retried every `UnplannedRetryPeriod` (10 s) regardless of the table. `UnplannedRetriedOnTheClock`.
+- **Finding 11:** queue extension and unplanned retry run before `DiffFreedom`. `UnplannedChangeIsAnnouncedInItsFrame` drives the broadcast through Advance.
+- **Finding 12:** stacked comment gone with `CapEntryHold`'s move; includes sorted; ENFORCED BY on `TaxiPlanEntryHold` and the delegate.
+- Headline after (2026-10-03): 40/h 0 jams, 40/40, depWait 8/81 s, arrDelay 3 s; 80/h 0 jams, 66/80, depWait 154/927 s, arrDelay 311 s, resolver sets 0.
