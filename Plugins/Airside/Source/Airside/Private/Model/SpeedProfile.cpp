@@ -348,3 +348,13 @@ double FSpeedProfile::LimitAt(double Distance) const
 
 	return VertexLimits.Last();
 }
+
+// RED-PHASE STUBS (batched testing).
+void FSpeedProfile::BuildPiece(const TArray<FVector2D>& Points, const FChassis& Chassis, EPieceEnd End)
+{
+}
+
+double FSpeedProfile::SecondsToDrive(double EntrySpeed) const
+{
+	return 0.0;
+}

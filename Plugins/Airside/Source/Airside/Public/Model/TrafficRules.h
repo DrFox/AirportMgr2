@@ -70,6 +70,15 @@ struct AIRSIDE_API FTrafficRules
 	UPROPERTY(EditAnywhere) double VehicleGap = 300.0;
 
 	/**
+	 * Seconds of slack added before AND after every window a taxi plan books (FTaxiPlanner, spec 2026-10-02 §1),
+	 * so an aircraft a little early or late on its plan is still inside its own window rather than in the next
+	 * one's. HERE, beside the spacing figures, because it is the space-time twin of AircraftGap: the gap keeps two
+	 * aircraft apart in distance, this in time. Order, not time, is what is enforced at run time (spec §2), so this
+	 * shapes plans, never safety; 5 s is a starting figure, to be judged against M_ScaleGatwick in PR 2.
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0")) double TaxiPlanMargin = 5.0;
+
+	/**
 	 * How fast a push off a stand runs, uu/s. 1 uu is 1 cm - see UAircraftType::MainWheelRadius.
 	 *
 	 * ON THE RULES AND NOT THE AIRFRAME, unlike the braking figure the claim window reads:
@@ -208,6 +217,15 @@ struct AIRSIDE_API FTrafficRules
 	 * separately until #502's review.
 	 */
 	double PushClearBy(ETraversalClass Class) const;
+
+	/**
+	 * Whether a step StepLength long is a BOX for this class: too short to stand on without still blocking the node
+	 * behind it - Length < FootprintFor + GapFor, which is every junction turn path (spec 2026-09-06 §3.1). ONE RULE,
+	 * TWO READERS: the claim pass's box-entry rule (FClaimPass) and the taxi planner's "never wait inside a junction"
+	 * (FTaxiPlanner::CanHoldAt). Spelled inline in the claim pass until 2026-10-02; a planner that copied it could
+	 * hold an aircraft where the claim pass would never let it stop.
+	 */
+	bool IsBox(double StepLength, ETraversalClass Class) const;
 
 	/** Which of the three push speeds above applies. The ONE consumer that has to agree with
 	 *  EPushbackNeed - see its body for why that matters. */
