@@ -189,9 +189,10 @@ public:
 	 * WHETHER AN ARRIVAL PLANNED AS Plan COULD BE GIVEN A TAXI-IN PLAN NOW (spec 2026-10-02 §1, arrival clearance):
 	 * None, or EArrivalRefusal::NoTaxiPlan - asked of the plan the caller already made (ArrivalPlanner::Plan), so the
 	 * arrival queue's clearance and this model's dispatch judge one plan. Revoking a departure that has not started
-	 * pushback counts as possible (ruling 2: arrivals first). Nothing booked or revoked here.
+	 * pushback counts as possible (ruling 2: arrivals first). Nothing booked or revoked here. NOT CONST (review of #528
+	 * finding 6): a refusal notes that an arrival is waiting, so the next release wakes the queue (OnTaxiPlansFreed).
 	 */
-	EArrivalRefusal TaxiInRefusal(const URoadNetwork& Network, const FArrivalPlan& Plan, const FAirframe& Airframe) const;
+	EArrivalRefusal TaxiInRefusal(const URoadNetwork& Network, const FArrivalPlan& Plan, const FAirframe& Airframe);
 
 	virtual void PostInitProperties() override;
 
@@ -995,8 +996,8 @@ private:
 	 */
 	UPROPERTY(Transient) TObjectPtr<UTaxiPlanning> TaxiPlanning;
 
-	/** Set when TaxiInRefusal refused an arrival a plan; cleared when OnTaxiPlansFreed fires for it. Mutable: a const question notes who is waiting. */
-	mutable bool bArrivalAwaitsTaxiPlan = false;
+	/** Set when TaxiInRefusal refused an arrival a plan; cleared when OnTaxiPlansFreed fires for it. */
+	bool bArrivalAwaitsTaxiPlan = false;
 
 	/** The taxi-in request for an arrival planned as Plan (ArrivalPlanner::TaxiInRequest), timed from now by a flown landing. */
 	FTaxiRequest TaxiInRequestNow(const FArrivalPlan& Plan, const FAirframe& Airframe) const;
@@ -1015,10 +1016,14 @@ private:
 	EDepartureRefusal WatchForTaxiPlan(int32 AgentId, const URoadNetwork& Network, const FRoutePlan& PushRoute);
 
 	/**
-	 * A dispatched arrival's taxi-in booked under its new id, after revoking the unstarted departures its plan needs
-	 * (ruling 2: arrivals first) and putting each of those back on the push watch, so it re-plans when the table moves.
+	 * An arrival's taxi-in booked under the id it is about to be admitted with, revoking - in the same swap - the
+	 * unstarted departures its plan needs (ruling 2: arrivals first; only those still parked), and putting each of those
+	 * back on the push watch, so it re-plans when the table moves. False: nothing booked or revoked, and no arrival.
 	 */
 	bool BookTaxiIn(int32 Id, const URoadNetwork& Network, const FTaxiPlan& Taxi, const TArray<int32>& Revoke);
+
+	/** DispatchArrival's refusal for want of a taxi plan: worded, logged (Detail appended), noted as waiting, broadcast. 0. */
+	int32 RefuseNoTaxiPlan(const FAirframe& Airframe, const TCHAR* Detail);
 
 	/** After the claim pass: every cleared aircraft tracked (release, entry, phase), and the gone ones' plans dropped. */
 	void TrackTaxiPlans();

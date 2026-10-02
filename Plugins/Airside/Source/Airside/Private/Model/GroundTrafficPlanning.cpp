@@ -51,7 +51,7 @@ FTaxiRequest UGroundTraffic::TaxiInRequestNow(const FArrivalPlan& Plan, const FA
 	return ArrivalPlanner::TaxiInRequest(Plan, SimSeconds + FLandingRun::SecondsToVacate(Plan.End, Airframe, Plan.VacateAt));
 }
 
-EArrivalRefusal UGroundTraffic::TaxiInRefusal(const URoadNetwork& Network, const FArrivalPlan& Plan, const FAirframe& Airframe) const
+EArrivalRefusal UGroundTraffic::TaxiInRefusal(const URoadNetwork& Network, const FArrivalPlan& Plan, const FAirframe& Airframe)
 {
 	if (!Plan.IsValid())
 	{
@@ -75,17 +75,39 @@ EArrivalRefusal UGroundTraffic::TaxiInRefusal(const URoadNetwork& Network, const
 
 bool UGroundTraffic::BookTaxiIn(int32 Id, const URoadNetwork& Network, const FTaxiPlan& Taxi, const TArray<int32>& Revoke)
 {
+	// ONLY ONE STILL ON ITS STAND (ruling 2), asked of the agent as well as of the clearance's stage: the stage moves
+	// where the motion starts (MarkMoving), and the phase is the motion itself - two witnesses to one fact.
+	TArray<int32> Parked;
 	for (const int32 Departure : Revoke)
 	{
-		if (TaxiPlanning->Revoke(Departure, Id))
+		const FRoadAgent* Agent = FindAgent(Departure);
+		if (Agent == nullptr || Agent->Phase == EAgentPhase::Parked)
 		{
-			// BACK ON THE PUSH WATCH, asked whole at the next diff (revision 0 matches nothing): its turnaround heard
-			// PushbackBlocked while it was booked, and hears again only through the watch.
-			FPushWatch& Watch = PushWatch.Add(Departure);
-			Watch.Network = &Network;
+			Parked.Add(Departure);
 		}
 	}
-	return TaxiPlanning->Book(Network, Id, ETaxiClearanceKind::TaxiIn, Taxi, ETaxiClearanceStage::Moving, FRoutePlan(), SimSeconds);
+	TArray<int32> Revoked;
+	if (!TaxiPlanning->BookArrival(Network, Id, Taxi, Parked, SimSeconds, Revoked))
+	{
+		return false;
+	}
+	for (const int32 Departure : Revoked)
+	{
+		// BACK ON THE PUSH WATCH, asked whole at the next diff (revision 0 matches nothing): its turnaround heard
+		// PushbackBlocked while it was booked, and hears again only through the watch.
+		FPushWatch& Watch = PushWatch.Add(Departure);
+		Watch.Network = &Network;
+	}
+	return true;
+}
+
+int32 UGroundTraffic::RefuseNoTaxiPlan(const FAirframe& Airframe, const TCHAR* Detail)
+{
+	const FString Sentence = ArrivalPlanner::DescribeRefusal(EArrivalRefusal::NoTaxiPlan, Airframe.Wingspan);
+	UE_LOG(LogAirsideTraffic, Warning, TEXT("%s%s"), *Sentence, Detail);
+	bArrivalAwaitsTaxiPlan = true;
+	OnArrivalRefused.Broadcast(EArrivalRefusal::NoTaxiPlan, Sentence);
+	return 0;
 }
 
 FTaxiRequest UGroundTraffic::TaxiOutRequest(const FRoadAgent& Agent, const FAirframe& Aircraft, const FDeparturePlan& Departure,
@@ -180,7 +202,12 @@ bool UGroundTraffic::StartPlannedDeparture(int32 AgentId, const URoadNetwork& Ne
 	{
 		// DepartOrdered, NOT Redirected: this is the taxi OUT, and the flight board reads it so (review M4) - it used to
 		// ask the live agent whether a departure was armed, a drain later.
-		return RedirectAgent(AgentId, &Network, TaxiRoute, EAgentEvent::DepartOrdered);
+		if (!RedirectAgent(AgentId, &Network, TaxiRoute, EAgentEvent::DepartOrdered))
+		{
+			return false;
+		}
+		TaxiPlanning->MarkMoving(AgentId);   // as the push's, below
+		return true;
 	}
 
 	FRoadAgent& Agent = Agents[Index];
@@ -210,6 +237,8 @@ bool UGroundTraffic::StartPlannedDeparture(int32 AgentId, const URoadNetwork& Ne
 	// THE NEED IS NAMED even though nothing branches on it yet. Slice 1 pushes all three the
 	// same way and nobody is doing the pushing, so this line is the only place the gap between
 	// "needs a tug" and "has one" is visible at all.
+	// MOVING FROM THIS CALL, not from the next tick's Track: an arrival dispatched between ticks must not revoke it.
+	TaxiPlanning->MarkMoving(AgentId);
 	UE_LOG(LogAirsideTraffic, Log,
 		TEXT("Agent %d pushing back %.0f uu, then %.0f uu to taxi out, %s"),
 		AgentId, PushRoute.Length, TaxiRoute.Length,
@@ -239,6 +268,7 @@ void UGroundTraffic::PlanTaxiOut(const FRoadAgent& Agent, const FAirframe& Aircr
 	// it is planned AS FAR AS IT CAN STAY - the latest node on its way where it may hold, off the runway - and the rest is
 	// booked when the entry frees (ExtendQueuedDepartures). Holding there for ever is itself a place it can stay, so the
 	// rule holds; and since nothing is planned through a node held for ever, no arrival can come to wait on it.
+	// ENFORCED BY: Airside.Model.TaxiPlan.RefusesWhenNothingFree (a node held for ever refuses a plan through it)
 	const FRoutePlan& Way = Ask.bStraightOut ? Ask.Plan.Route : Ask.Push.TaxiOutRoute;
 	int32 Tried = 0;
 	for (int32 Index = Way.Steps.Num() - 2; Index >= 0 && Tried < Rules.TaxiPlanQueueCandidates; --Index)
@@ -253,7 +283,13 @@ void UGroundTraffic::PlanTaxiOut(const FRoadAgent& Agent, const FAirframe& Aircr
 		FTaxiRequest Short = Request;
 		Short.Goal = Step.To;
 		FTaxiPlan Queued = TaxiPlanning->Plan(Network, Aircraft, Rules, Short);
-		if (Queued.IsPlanned())
+		// AND IT MAY STAND THERE AS IT ARRIVES (review of #528, measured on M_ScaleGatwick at 40 mov/h, 2026-10-02): the
+		// planner may reach the node along another edge than this route's, and a goal is admitted along any - so a departure
+		// queued at the end of a lane too short for the node behind's reach still claimed that node, which its plan had
+		// released, and the arrival booked through it next waited on it while it waited on that arrival (resolver, twice).
+		const bool bStands = Queued.IsPlanned() && Queued.Route.Steps.Num() > 0
+			&& FTaxiPlanner::CanHoldAt(Network, Rules, Queued.Route.Steps.Last().Edge, Step.To);
+		if (bStands)
 		{
 			Ask.Taxi = MoveTemp(Queued);
 			Ask.QueueFor = Request.Goal;
@@ -286,7 +322,10 @@ EDepartureRefusal UGroundTraffic::ClearDeparture(int32 AgentId, const URoadNetwo
 	{
 		TaxiPlanning->SetQueued(AgentId, Ask.QueueFor, Ask.QueueErrand);
 	}
-	const bool bNow = Ask.Taxi.PushAt <= SimSeconds + 1.0 && (Ask.bStraightOut || TaxiPlanning->PushWaitingFor(AgentId) == 0);
+	// "NOW" WITHIN THE WINDOW'S OWN MARGIN, never more (review of #528 finding 7): the push ground is booked from a margin
+	// before PushAt, so starting that much early is inside the booking; a fixed second was not, under a margin below it.
+	const bool bNow = Ask.Taxi.PushAt <= SimSeconds + FMath::Min(1.0, FMath::Max(0.0, Rules.TaxiPlanMargin))
+		&& (Ask.bStraightOut || TaxiPlanning->PushWaitingFor(AgentId) == 0);
 	if (!bNow)
 	{
 		UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d cleared to %s in %.0f s, when its taxi plan's ground is due"),
@@ -335,6 +374,7 @@ void UGroundTraffic::ExtendQueuedDepartures(const URoadNetwork& Network)
 		{
 			continue;
 		}
+		TaxiPlanning->NoteExtendAsked(Id, SimSeconds);
 		// THE REST, FROM WHERE ITS PLAN ENDS - its holding node - no earlier than it is due there.
 		FTaxiRequest Rest;
 		Rest.Start = Clearance->Plan.Route.Steps.Last().To;

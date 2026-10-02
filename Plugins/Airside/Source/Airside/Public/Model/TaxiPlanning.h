@@ -52,8 +52,15 @@ struct FTaxiClearance
 	/** Edges whose start its NOSE has passed - what a follower booked the same way behind it waits for. */
 	TSet<FTaxiResource> Entered;
 
-	/** The last move (index into Plan.MoveStarts) it was let into. A move let into is never asked again. */
+	/**
+	 * The last move (index into Plan.MoveStarts) it was let into. A move let into is never asked again: it is let in as
+	 * soon as its claim window reaches the move - within its stopping distance - and its windows there are pulled forward
+	 * to now (FTaxiReservations::PullForward), so nothing booked later can be placed ahead of it (review of #528 finding 2).
+	 */
 	int32 GrantedMove = INDEX_NONE;
+
+	/** The last move whose END NODE - a lane's, asked on its own (OrderHold) - it was let onto, committed likewise. */
+	int32 GrantedEnd = INDEX_NONE;
 
 	/** Route steps whose edge and end node are released, through this index. */
 	int32 ReleasedThrough = INDEX_NONE;
@@ -149,8 +156,23 @@ public:
 	bool Book(const URoadNetwork& Network, int32 Holder, ETaxiClearanceKind Kind, const FTaxiPlan& Plan,
 		ETaxiClearanceStage Stage, const FRoutePlan& PushRoute = FRoutePlan(), double Now = 0.0);
 
+	/**
+	 * Books Plan as Book does, giving up each of Revoke's Booked departures' plans for it in the same swap - none of them
+	 * if the plan cannot be booked, and the arrival is not cleared (review of #528 finding 6: revoked first, they were lost
+	 * to a booking that then failed). OutRevoked: those given up, each logged "revoked by arrival".
+	 */
+	bool BookArrival(const URoadNetwork& Network, int32 Holder, const FTaxiPlan& Plan, TConstArrayView<int32> Revoke,
+		double Now, TArray<int32>& OutRevoked);
+
 	/** A Booked departure's plan given up for arrival ByArrival - logged "revoked by arrival". False for any other stage. */
 	bool Revoke(int32 Holder, int32 ByArrival);
+
+	/**
+	 * Holder's push (or straight-out taxi) has STARTED: Moving from now, so no arrival may revoke it (ruling 2). Called
+	 * where the motion starts (UGroundTraffic::StartPlannedDeparture), not left to the next tick's Track - the arrival
+	 * queue dispatches between ticks (review of #528 finding 1).
+	 */
+	void MarkMoving(int32 Holder);
 
 	/** Holder's clearance and every window gone. Why non-null: logged "unplanned - Why"; null: a completion, silent. */
 	void Drop(int32 Holder, const TCHAR* Why);
@@ -171,7 +193,10 @@ public:
 	void SetQueued(int32 Holder, FGuidelineNodeId QueueFor, ERouteErrand Errand);
 
 	/** The queueing departures not asked in the last second, or since the table last moved - ExtendQueuedDepartures' list. */
-	TArray<int32> QueuedDueAsk(double Now);
+	TArray<int32> QueuedDueAsk(double Now) const;
+
+	/** Holder's rest was asked for at Now, on the table as it is - QueuedDueAsk's date. Only an ask that was made is noted. */
+	void NoteExtendAsked(int32 Holder, double Now);
 
 	/**
 	 * A queueing departure's REST booked onto its plan: Ext runs from where the plan ends (its holding node) to the entry.
@@ -195,7 +220,7 @@ public:
 	/**
 	 * THE CLAIM PASS'S QUESTION (FClaimPass::Run): may Agent enter each MOVE of its plan that its claim window reaches
 	 * (T is its centre, Head the window's far end, both route distance; Now the sim clock)? The first move it may not enter - any of its
-	 * resources not its turn - fills Out; a move it may enter, with its centre on it, is granted for good. False
+	 * resources not its turn - fills Out; a move it may enter, once its window reaches it, is granted for good (committed: GrantedMove). False
 	 * when the agent has no Moving clearance or nothing holds it.
 	 */
 	bool OrderHold(const FRoadAgent& Agent, double Now, double T, double Head, FTaxiOrderHold& Out);
@@ -226,6 +251,13 @@ public:
 
 	/** What a delayed agent waits on: an id no agent has, so the wait-for graph gets no edge from it. */
 	static constexpr int32 DelayBlocker = MAX_int32;
+
+	/**
+	 * What a QUEUEING departure waits on at its holding node when nobody holds the entry it queues for - the entry has
+	 * just freed and its rest is not booked yet (ExtendQueuedDepartures books it within a sim second). Its own sentinel,
+	 * not DelayBlocker: the log said "a test's delay" for it (review of #528 finding 5). No agent has it either.
+	 */
+	static constexpr int32 QueueBlocker = MAX_int32 - 1;
 
 private:
 	void Bump(bool bReleasedSomething);

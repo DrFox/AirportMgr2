@@ -930,6 +930,22 @@ bool FTaxiPlanPushPrefixTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("the push ground is booked both ways from the push"), bPushGroundAny);
 	TestTrue(TEXT("and the plan books"), BooksInto(Table, Plan));
+
+	// THE PUSH'S WINDOW IS ITS EARLIEST on every resource the push alone holds - what UTaxiPlanning::Track's hand-over
+	// relies on when it releases the FIRST window there (ReleaseFirstOn), leaving any later one, the taxi's, still due.
+	FTaxiReservations Booked = Table;
+	const bool bBooked = Booked.BookPasses(Plan.Passes);
+	bool bPushFirst = bBooked && Plan.PushWindows.Num() > 0;
+	for (const FTaxiResource& Resource : Plan.PushWindows)
+	{
+		double Earliest = FTaxiReservations::Forever;
+		for (const FTaxiWindow& Window : Booked.WindowsOn(Resource))
+		{
+			Earliest = Window.Holder == OurId ? FMath::Min(Earliest, Window.From) : Earliest;
+		}
+		bPushFirst &= Earliest <= Plan.PushAt;
+	}
+	TestTrue(TEXT("the push's windows are the holder's earliest where the push alone holds"), bPushFirst);
 	return true;
 }
 

@@ -1776,12 +1776,15 @@ void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 bool FClaimPass::RefuseForOrder(FRoadAgent& Agent, const FClaimWindow& Window, const FTaxiOrderHold& OrderHold,
 	int32 WasWaitingOn, int32 WasBlockedStep, double ReachExcess)
 {
-	// ON THE TRANSITION ONLY, as every refusal's line is. A test's delay names nobody (UTaxiPlanning::DelayBlocker).
+	// ON THE TRANSITION ONLY, as every refusal's line is. A test's delay and a queue's empty entry name nobody
+	// (UTaxiPlanning::DelayBlocker, QueueBlocker), each in its own words.
 	if (WasWaitingOn != OrderHold.Blocker || WasBlockedStep != OrderHold.Step)
 	{
+		const FString Who = OrderHold.Blocker == UTaxiPlanning::DelayBlocker ? FString(TEXT("a test's delay"))
+			: OrderHold.Blocker == UTaxiPlanning::QueueBlocker ? FString(TEXT("its way on to the runway to be booked (queueing)"))
+			: FString::Printf(TEXT("agent %d"), OrderHold.Blocker);
 		UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d not my turn: waiting for %s (booked ahead through %s)"), Agent.Id,
-			OrderHold.Blocker == UTaxiPlanning::DelayBlocker ? TEXT("a test's delay") : *FString::Printf(TEXT("agent %d"), OrderHold.Blocker),
-			*OrderHold.Resource.Describe());
+			*Who, *OrderHold.Resource.Describe());
 	}
 	const double HoldAt = OrderHold.bAtNode ? OrderHold.StepEnd - ReachExcess : OrderHold.StepStart;
 	Agent.Refuse(OrderHold.Step, OrderHold.Resource, FMath::Max(0.0, HoldAt - Window.T - Window.G), OrderHold.Blocker);

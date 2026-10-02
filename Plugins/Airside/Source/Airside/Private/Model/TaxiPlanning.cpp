@@ -138,7 +138,7 @@ bool UTaxiPlanning::Book(const URoadNetwork& Network, int32 Holder, ETaxiClearan
 	}
 	// ON A COPY, THEN SWAPPED IN: the holder's old plan goes and the new one lands together, or neither does.
 	FTaxiReservations Trial = Table;
-	Trial.ReleaseHolder(Holder);
+	const bool bReplaced = Trial.ReleaseHolder(Holder) > 0;
 	if (!Trial.BookPasses(Held.Passes))
 	{
 		UE_LOG(LogAirsideTaxiPlan, Warning, TEXT("TaxiPlan: agent %d's plan could not be booked - the table moved under it"), Holder);
@@ -156,12 +156,55 @@ bool UTaxiPlanning::Book(const URoadNetwork& Network, int32 Holder, ETaxiClearan
 	// WHAT ONLY THE PUSH HOLDS - the planner's PushWindows - released, one window each, when the push hands over (Track).
 	Clearance.PushOnly = Clearance.Plan.PushWindows;
 	LastRefusal.Remove(Holder);
-	Bump(false);
+	// A RE-BOOKING MAY HAVE FREED what the old plan held (review of #528 finding 7): a waiting arrival hears of it.
+	Bump(bReplaced);
 
 	UE_LOG(LogAirsideTaxiPlan, Log, TEXT("TaxiPlan: agent %d planned %s via %s (eta %.0f s%s)"), Holder,
 		*GoalText(Network, Clearance.Plan.Route, Kind), *ViaText(Network, Clearance.Plan.Route), Clearance.Plan.Arrival - Now,
 		Stage == ETaxiClearanceStage::Booked ? *FString::Printf(TEXT(", pushes in %.0f s"), Clearance.Plan.PushAt - Now) : TEXT(""));
 	return true;
+}
+
+bool UTaxiPlanning::BookArrival(const URoadNetwork& Network, int32 Holder, const FTaxiPlan& InPlan, TConstArrayView<int32> Revoke,
+	double Now, TArray<int32>& OutRevoked)
+{
+	OutRevoked.Reset();
+	// ONE SWAP: the revoked departures' windows go only if the arrival's plan then books - on a copy, as Book's own.
+	const FTaxiReservations Before = Table;
+	for (const int32 Departure : Revoke)
+	{
+		const FTaxiClearance* Clearance = Clearances.Find(Departure);
+		if (Clearance != nullptr && Clearance->Stage == ETaxiClearanceStage::Booked)
+		{
+			Table.ReleaseHolder(Departure);
+			OutRevoked.Add(Departure);
+		}
+	}
+	if (!Book(Network, Holder, ETaxiClearanceKind::TaxiIn, InPlan, ETaxiClearanceStage::Moving, FRoutePlan(), Now))
+	{
+		Table = Before;
+		OutRevoked.Reset();
+		return false;
+	}
+	for (const int32 Departure : OutRevoked)
+	{
+		UE_LOG(LogAirsideTaxiPlan, Log, TEXT("TaxiPlan: agent %d revoked by arrival %d"), Departure, Holder);
+		Clearances.Remove(Departure);
+		LastRefusal.Remove(Departure);
+	}
+	if (OutRevoked.Num() > 0)
+	{
+		Bump(true);
+	}
+	return true;
+}
+
+void UTaxiPlanning::MarkMoving(int32 Holder)
+{
+	if (FTaxiClearance* Clearance = Clearances.Find(Holder); Clearance != nullptr && Clearance->Stage == ETaxiClearanceStage::Booked)
+	{
+		Clearance->Stage = ETaxiClearanceStage::Moving;
+	}
 }
 
 void UTaxiPlanning::SetQueued(int32 Holder, FGuidelineNodeId QueueFor, ERouteErrand Errand)
@@ -175,23 +218,32 @@ void UTaxiPlanning::SetQueued(int32 Holder, FGuidelineNodeId QueueFor, ERouteErr
 	}
 }
 
-TArray<int32> UTaxiPlanning::QueuedDueAsk(double Now)
+TArray<int32> UTaxiPlanning::QueuedDueAsk(double Now) const
 {
 	TArray<int32> Due;
-	for (TPair<int32, FTaxiClearance>& Each : Clearances)
+	for (const TPair<int32, FTaxiClearance>& Each : Clearances)
 	{
-		FTaxiClearance& Clearance = Each.Value;
+		const FTaxiClearance& Clearance = Each.Value;
 		// EVENT-DRIVEN, COALESCED: asked when the table has moved since the last ask - something released or re-booked -
 		// and not more than once a sim second, the push watch's bound for the same reason (FPushWatch::TaxiRevision).
+		// DATED ONLY WHEN ASKED (NoteExtendAsked): one still pushing is listed and skipped, and must be listed again once
+		// it taxis rather than wait for the table to move (review of #528 finding 7).
 		if (Clearance.QueueFor.IsSet() && Clearance.Stage != ETaxiClearanceStage::Booked
 			&& (Clearance.ExtendAskedAt < 0.0 || (Clearance.ExtendRevision != RevisionCount && Now - Clearance.ExtendAskedAt >= 1.0)))
 		{
-			Clearance.ExtendAskedAt = Now;
-			Clearance.ExtendRevision = RevisionCount;
 			Due.Add(Each.Key);
 		}
 	}
 	return Due;
+}
+
+void UTaxiPlanning::NoteExtendAsked(int32 Holder, double Now)
+{
+	if (FTaxiClearance* Clearance = Clearances.Find(Holder))
+	{
+		Clearance->ExtendAskedAt = Now;
+		Clearance->ExtendRevision = RevisionCount;
+	}
 }
 
 bool UTaxiPlanning::Extend(const URoadNetwork& Network, int32 Holder, const FTaxiPlan& Ext, double Now)
@@ -259,7 +311,8 @@ bool UTaxiPlanning::Extend(const URoadNetwork& Network, int32 Holder, const FTax
 	Clearance->Plan.Passes = MoveTemp(Passes);
 	Clearance->Plan.Arrival = Ext.Arrival;
 	Clearance->QueueFor = FGuidelineNodeId();
-	Bump(false);
+	// ITS FOR-EVER WINDOWS ENDED: time freed on its holding node and the edge into it (review of #528 finding 7).
+	Bump(true);
 	UE_LOG(LogAirsideTaxiPlan, Log, TEXT("TaxiPlan: agent %d planned on to runway entry (node %d) via %s (eta %.0f s)"), Holder,
 		Ext.Route.Steps.Num() > 0 ? Ext.Route.Steps.Last().To.Index : INDEX_NONE, *ViaText(Network, Ext.Route), Ext.Arrival - Now);
 	return true;
@@ -418,7 +471,7 @@ bool UTaxiPlanning::OrderHold(const FRoadAgent& Agent, double Now, double T, dou
 
 	// PER MOVE, ALL OR NOTHING, BEFORE IT IS ENTERED: every edge and every node it PASSES from one stoppable node to the
 	// next must be its turn - and through a junction (a move of more than one edge) its end node too - so the order never
-	// holds an aircraft inside a junction. A move it has been let into with its centre on it is granted for good: it is in
+	// holds an aircraft inside a junction. A move it has been let into is granted for good (committed, below): it is in
 	// it, and the order behind it waits on it. A LANE'S END NODE IS ASKED ON ITS OWN, as the window reaches it: the lane is
 	// one the aircraft may stand on (FTaxiPlanner::CanHoldAt), so it waits a gap short of it, on its own lane. Every wait therefore points at
 	// a move booked to start - or a node booked to be reached - EARLIER on the one timeline (TaxiPlanner.cpp's needs):
@@ -460,9 +513,24 @@ bool UTaxiPlanning::OrderHold(const FRoadAgent& Agent, double Now, double T, dou
 					return true;
 				}
 			}
-			if (Current >= First)
+			// LET IN FOR GOOD AS SOON AS ITS WINDOW REACHES THE MOVE - within its stopping distance - not once its centre is
+			// on it (review of #528 finding 2): between the two, a plan booked ahead of an EARLY aircraft's late window there
+			// turned the order against it with no room left to stop, and it halted on the move's approach, its claims
+			// blocking the newcomer that its order now waited on. Committed, its windows there start now: nothing booked from
+			// here on can be placed ahead of it. ENFORCED BY: Airside.Model.TaxiPlan.CommittedMoveIsNotReordered
+			Clearance->GrantedMove = Move;
+			bool bPulled = false;
+			for (int32 Index = First; Index <= Last; ++Index)
 			{
-				Clearance->GrantedMove = Move;
+				bPulled |= Table.PullForward(FTaxiResource::Edge(Route.Steps[Index].Edge), Agent.Id, Now);
+				if (Index < Last || Last > First)
+				{
+					bPulled |= Table.PullForward(FTaxiResource::Node(Route.Steps[Index].To), Agent.Id, Now);
+				}
+			}
+			if (bPulled)
+			{
+				Bump(false);
 			}
 		}
 		const FRouteStep& EndStep = Route.Steps[Last];
@@ -476,11 +544,12 @@ bool UTaxiPlanning::OrderHold(const FRoadAgent& Agent, double Now, double T, dou
 			Out.StepStart = UGroundTraffic::StepStart(Route, Last);
 			Out.StepEnd = EndStep.EndDistance;
 			Out.bAtNode = true;
-			Out.Blocker = OnEntry.Num() > 0 && OnEntry[0].Holder != Agent.Id ? OnEntry[0].Holder : DelayBlocker;
+			Out.Blocker = OnEntry.Num() > 0 && OnEntry[0].Holder != Agent.Id ? OnEntry[0].Holder : QueueBlocker;
 			Out.Resource = FTrafficResource::OfNode(EndStep.To);
 			return true;
 		}
-		if (const int32 Blocker = bEndAskedWithBody ? 0 : WaitingFor(Agent.Id, FTaxiResource::Node(EndStep.To)))
+		const bool bEndGranted = bEndAskedWithBody || Move <= Clearance->GrantedEnd;
+		if (const int32 Blocker = bEndGranted ? 0 : WaitingFor(Agent.Id, FTaxiResource::Node(EndStep.To)))
 		{
 			Out.Step = Last;
 			Out.StepStart = UGroundTraffic::StepStart(Route, Last);
@@ -489,6 +558,15 @@ bool UTaxiPlanning::OrderHold(const FRoadAgent& Agent, double Now, double T, dou
 			Out.Blocker = Blocker;
 			Out.Resource = FTrafficResource::OfNode(EndStep.To);
 			return true;
+		}
+		// A LANE'S END NODE, its turn and inside the window: committed as a move is, above, for the same reason.
+		if (!bEndGranted && EndStep.EndDistance < Head)
+		{
+			Clearance->GrantedEnd = Move;
+			if (Table.PullForward(FTaxiResource::Node(EndStep.To), Agent.Id, Now))
+			{
+				Bump(false);
+			}
 		}
 		if (EndStep.EndDistance >= Head)
 		{
@@ -548,7 +626,8 @@ void UTaxiPlanning::Track(const FRoadAgent& Agent, const FTrafficOccupancy& Occu
 	bool bReleased = false;
 	for (const FTaxiResource& Resource : Clearance->PushOnly)
 	{
-		// ITS EARLIEST WINDOW THERE IS THE PUSH'S: the push came first. A later one is the taxi's, still due.
+		// ITS EARLIEST WINDOW THERE IS THE PUSH'S: the planner books the push from PushAt, before every taxi window. A later
+		// one is the taxi's, still due. ENFORCED BY: Airside.Model.TaxiPlan.PushPrefixHoldsAtStand
 		bReleased |= Table.ReleaseFirstOn(Resource, Agent.Id);
 	}
 	Clearance->PushOnly.Reset();

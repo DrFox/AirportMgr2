@@ -172,6 +172,34 @@ bool FTaxiReservations::ReleaseFirstOn(const FTaxiResource& Resource, int32 Hold
 	return true;
 }
 
+bool FTaxiReservations::PullForward(const FTaxiResource& Resource, int32 Holder, double Earliest)
+{
+	TArray<FTaxiWindow>* On = Windows.Find(Resource);
+	const int32 Mine = On != nullptr ? On->IndexOfByPredicate([Holder](const FTaxiWindow& Window) { return Window.Holder == Holder; })
+		: INDEX_NONE;
+	if (Mine == INDEX_NONE)
+	{
+		return false;
+	}
+	FTaxiWindow& Own = (*On)[Mine];
+	const double H = FMath::Max(Headway, 0.001);
+	// NO EARLIER THAN THE WINDOWS AHEAD ALLOW - so MayShare still holds with each, and the array stays sorted: every bound
+	// below is at or after the From of the window it comes from.
+	double From = Earliest;
+	for (int32 Index = 0; Index < Mine; ++Index)
+	{
+		const FTaxiWindow& Ahead = (*On)[Index];
+		const bool bFollowing = Own.Way != ETaxiWay::Any && Ahead.Way == Own.Way;
+		From = FMath::Max(From, bFollowing ? Ahead.From + H : Ahead.To);
+	}
+	if (!(From < Own.From) || !(From < Own.To))
+	{
+		return false;
+	}
+	Own.From = From;
+	return true;
+}
+
 void FTaxiReservations::FreeIntervals(const FTaxiResource& Resource, int32 IgnoreHolder, TArray<FTaxiInterval>& Out) const
 {
 	Out.Reset();

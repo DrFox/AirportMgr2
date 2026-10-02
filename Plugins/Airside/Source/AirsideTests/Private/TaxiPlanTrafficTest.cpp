@@ -270,4 +270,144 @@ bool FTaxiPlanPushGatedTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanMovingNotRevokedTest, "Airside.Model.TaxiPlan.StartedDepartureIsNeverRevoked",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanMovingNotRevokedTest::RunTest(const FString& Parameters)
+{
+	// RULING 2 ON THE REAL PATH (review of #528 finding 1): a departure whose push DepartAgent has just started is Moving
+	// AT ONCE - not at the next tick's Track - because the arrival queue dispatches BETWEEN ticks: an arrival in the same
+	// frame revoked a departure already rolling back off its stand, and the order behind it lost what it waited on.
+	const FAirframe Piper = TestAirframes::Piper();
+	const FTestAirport Airport = FTestAirport::Build(Piper, { .StandCount = 2 });
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	FGroundTrafficTestAccess Access(*Traffic);
+	UTaxiPlanning* Planning = Access.TaxiPlanning();
+	const int32 First = Traffic->DispatchArrival(*Airport.Net, Airport.Threshold, Piper, 0.0);
+	if (!TestNotNull(TEXT("a planning owner"), Planning) || !TestTrue(TEXT("the first arrival is dispatched"), First > 0))
+	{
+		return false;
+	}
+	for (int32 Tick = 0; Tick < 30 * 900 && Traffic->FindAgent(First)->Phase != EAgentPhase::Parked; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Airport.Net);
+	}
+	if (!TestTrue(TEXT("it lands and parks"), Traffic->FindAgent(First)->Phase == EAgentPhase::Parked))
+	{
+		return false;
+	}
+
+	if (!TestEqual(TEXT("ordered off, it starts at once (nothing else is booked)"), Traffic->DepartAgent(First, *Airport.Net),
+		EDepartureRefusal::None))
+	{
+		return false;
+	}
+	const FTaxiClearance* Cleared = Planning->Find(First);
+	TestTrue(TEXT("started: its clearance is Moving in the same call, before any tick"), Cleared != nullptr
+		&& Cleared->Stage == ETaxiClearanceStage::Moving);
+	TestFalse(TEXT("so it can no longer be revoked"), Planning->Revoke(First, 999));
+
+	// AND THE ARRIVAL QUEUE'S OWN CALL, in the same frame: whatever it is told, the moving departure keeps its plan.
+	const int32 Second = Traffic->DispatchArrival(*Airport.Net, Airport.Threshold, Piper, 0.0);
+	TestTrue(FString::Printf(TEXT("the departure keeps its plan through a same-frame arrival (dispatched as %d)"), Second),
+		Planning->Find(First) != nullptr);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanCommittedTest, "Airside.Model.TaxiPlan.CommittedMoveIsNotReordered",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanCommittedTest::RunTest(const FString& Parameters)
+{
+	// AN EARLY AIRCRAFT INSIDE ITS STOPPING DISTANCE KEEPS ITS TURN (review of #528 finding 2). X, planned to cross J at
+	// two minutes, is let go at once - early. As it closes on J, past the point it could stop short, Y is planned through
+	// J from now: the gap before X's late window used to let Y be booked AHEAD of it there, the order then refused X with
+	// no room to stop (the claim pass floors the stop at 0), and X halted on J's approach - its claims blocking Y, Y's turn
+	// blocking it: an order/occupancy cycle. Now X's move is committed when its window reaches it, its windows there
+	// pulled to now, and Y is planned behind it.
+	//                 D (0, 30000)
+	//                 |
+	//   A (-30000) ---J (0,0)--- B (30000)
+	//                 |
+	//                 C (0, -12000)
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FGuidelineNodeId A = TestGraph::Node(*Net, -30000.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 30000.0, 0.0);
+	const FGuidelineNodeId C = TestGraph::Node(*Net, 0.0, -12000.0);
+	const FGuidelineNodeId D = TestGraph::Node(*Net, 0.0, 30000.0);
+	const FGuidelineNodeId J = TestGraph::Node(*Net, 0.0, 0.0);
+	TaxiLane(*Net, A, J);
+	TaxiLane(*Net, J, B);
+	TaxiLane(*Net, C, J);
+	TaxiLane(*Net, J, D);
+
+	const FAirframe Piper = TestAirframes::Piper();
+	FGroundTrafficTestAccess Access(*Traffic);
+	UTaxiPlanning* Planning = Access.TaxiPlanning();
+	if (!TestNotNull(TEXT("a planning owner"), Planning))
+	{
+		return false;
+	}
+	const FTaxiPlan PlanX = Planning->Plan(*Net, Piper, Traffic->Rules, TaxiRequest(A, B, 120.0));
+	const int32 X = PlanX.IsPlanned() ? Traffic->DispatchAgent(Net, PlanX.Route, Piper, ETraversalClass::Aircraft, 0.0) : 0;
+	if (!TestTrue(TEXT("X planned late, let go now"), X > 0
+		&& Planning->Book(*Net, X, ETaxiClearanceKind::TaxiOut, PlanX, ETaxiClearanceStage::Moving)))
+	{
+		return false;
+	}
+
+	const FVector2D JAt = Net->GetGuidelineNode(J)->Position;
+	const FVector2D BAt = Net->GetGuidelineNode(B)->Position;
+	const FVector2D DAt = Net->GetGuidelineNode(D)->Position;
+	const double G = Traffic->Rules.GapFor(ETraversalClass::Aircraft);
+	const double F = Traffic->Rules.FootprintFor(ETraversalClass::Aircraft);
+	const double Decel = FMath::Max(Piper.Chassis.Ground.Taxi.Decel, 1.0);
+	int32 Y = 0;
+	double XAtJ = -1.0;
+	double YAtJ = -1.0;
+	bool bXStoppedShort = false;
+	bool bXWaitedForY = false;
+	bool bBothHome = false;
+	for (int32 Tick = 0; Tick < 30 * 600 && !bBothHome; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+		const double Now = Traffic->GetSimSeconds();
+		const FRoadAgent* XAgent = Traffic->FindAgent(X);
+		if (XAgent == nullptr)
+		{
+			break;
+		}
+		const double ToJ = FVector2D::Distance(XAgent->GroundPosition(), JAt);
+		const double Speed = XAgent->SpeedAlongPlan();
+		if (Y == 0 && XAtJ < 0.0 && ToJ > F * 0.5 && ToJ < Speed * Speed / (2.0 * Decel) + G)
+		{
+			// INSIDE ITS STOPPING DISTANCE OF J: Y planned through J from now, and let go.
+			const FTaxiPlan PlanY = Planning->Plan(*Net, Piper, Traffic->Rules, TaxiRequest(C, D, Now));
+			Y = PlanY.IsPlanned() ? Traffic->DispatchAgent(Net, PlanY.Route, Piper, ETraversalClass::Aircraft, 0.0) : -1;
+			if (Y > 0)
+			{
+				Planning->Book(*Net, Y, ETaxiClearanceKind::TaxiOut, PlanY, ETaxiClearanceStage::Moving, FRoutePlan(), Now);
+			}
+		}
+		if (Y > 0 && XAtJ < 0.0)
+		{
+			bXStoppedShort |= FMath::Abs(Speed) < 1.0;
+			bXWaitedForY |= XAgent->GetWaitingOn() == Y;
+		}
+		XAtJ = (XAtJ < 0.0 && ToJ < 500.0) ? Now : XAtJ;
+		YAtJ = (Y > 0 && YAtJ < 0.0 && DistanceTo(*Traffic, Y, JAt) < 500.0) ? Now : YAtJ;
+		bBothHome = Y > 0 && DistanceTo(*Traffic, X, BAt) < 500.0 && DistanceTo(*Traffic, Y, DAt) < 500.0;
+	}
+	if (!TestTrue(TEXT("Y was planned and let go while X was inside its stopping distance of J"), Y > 0))
+	{
+		return false;
+	}
+	TestFalse(TEXT("X never waited on Y once committed"), bXWaitedForY);
+	TestFalse(TEXT("X never stopped short of J once committed"), bXStoppedShort);
+	TestTrue(FString::Printf(TEXT("X crossed J first (%.1f s), Y after (%.1f s)"), XAtJ, YAtJ), XAtJ > 0.0 && YAtJ > XAtJ);
+	TestTrue(TEXT("both reached their goals - no order/occupancy cycle"), bBothHome);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

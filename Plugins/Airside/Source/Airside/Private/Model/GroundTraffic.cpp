@@ -76,11 +76,7 @@ int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 	const FTaxiPlan Taxi = TaxiPlanning->PlanArrival(Network, Airframe, Rules, TaxiInRequestNow(Plan, Airframe), Revoke);
 	if (!Taxi.IsPlanned())
 	{
-		const FString Sentence = ArrivalPlanner::DescribeRefusal(EArrivalRefusal::NoTaxiPlan, Airframe.Wingspan);
-		UE_LOG(LogAirsideTraffic, Warning, TEXT("%s"), *Sentence);
-		bArrivalAwaitsTaxiPlan = true;
-		OnArrivalRefused.Broadcast(EArrivalRefusal::NoTaxiPlan, Sentence);
-		return 0;
+		return RefuseNoTaxiPlan(Airframe, TEXT(""));
 	}
 
 	FRoadAgent Agent;
@@ -89,6 +85,14 @@ int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 		// FLandingRun has already logged why. Nothing is admitted: an arrival that cannot be
 		// flown must leave no aircraft in the world, rather than one frozen on final.
 		return 0;
+	}
+
+	// ITS TAXI PLAN BOOKED BEFORE IT IS ADMITTED, under the id Admit is about to give it (review of #528 finding 6): a
+	// booking that fails - the departures it would revoke kept - admits nothing, rather than an arrival with no plan.
+	const int32 Expected = NextAgentId;
+	if (!BookTaxiIn(Expected, Network, Taxi, Revoke))
+	{
+		return RefuseNoTaxiPlan(Airframe, TEXT(" (its taxi plan could not be booked)"));
 	}
 
 	// FRoadAgent is world-free and cannot read the actor's UPROPERTY or the rules table for
@@ -144,8 +148,8 @@ int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 	// just appended.
 	ClaimGoalNodeAtDispatch(Agents.Last(), Id, Network);
 
-	// AND ITS TAXI PLAN, under the id it has now, for the same between-ticks reason: the next request plans round it.
-	BookTaxiIn(Id, Network, Taxi, Revoke);
+	// ITS TAXI PLAN WAS BOOKED under this id above (Expected): Admit hands out NextAgentId, and nothing between admits.
+	ensureMsgf(Id == Expected, TEXT("arrival admitted as %d, its taxi plan booked as %d"), Id, Expected);
 	return Id;
 }
 

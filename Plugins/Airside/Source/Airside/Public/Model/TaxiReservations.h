@@ -179,6 +179,15 @@ public:
 	bool ReleaseFirstOn(const FTaxiResource& Resource, int32 Holder);
 
 	/**
+	 * Holder's EARLIEST window on Resource made to start no later than Earliest - as early as the windows ahead of it
+	 * allow (past a non-sharing one's end; a headway behind a same-way one's start), never later than it was, its end
+	 * unchanged. A COMMITMENT (UTaxiPlanning::OrderHold, review of #528 finding 2): an aircraft early on its plan that the
+	 * order has let into a move can no longer stop short of it, and a gap left before its window would let a plan made
+	 * now be booked AHEAD of it there - an order it could not obey. True when the window moved.
+	 */
+	bool PullForward(const FTaxiResource& Resource, int32 Holder, double Earliest);
+
+	/**
 	 * Resource's free intervals, earliest first, treating IgnoreHolder's own windows as free -
 	 * so a holder re-planning is not blocked by the plan it is replacing. Never empty: a
 	 * resource nobody holds is one interval [Always, Forever). Touching windows leave no

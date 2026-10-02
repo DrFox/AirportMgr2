@@ -74,7 +74,7 @@ TArray<UFlight*> FArrivalQueue::Queue(const UFlightBoard& Board) const
 	return Out;
 }
 
-EArrivalRefusal FArrivalQueue::ClearanceFor(const UGroundTraffic& Traffic, const URoadNetwork& Network,
+EArrivalRefusal FArrivalQueue::ClearanceFor(UGroundTraffic& Traffic, const URoadNetwork& Network,
 	const UFlight& Flight)
 {
 	FClearance& Clearance = Clearances.FindOrAdd(Flight.Id);

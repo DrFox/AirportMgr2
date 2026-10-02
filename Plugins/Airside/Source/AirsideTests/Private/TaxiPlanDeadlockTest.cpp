@@ -23,6 +23,8 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
 #include "Model/TaxiPlanning.h"
+#include "Model/TrafficClaims.h"
+#include "Entities/AircraftType.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
 #include "UObject/Package.h"
@@ -45,6 +47,98 @@ namespace TaxiPlanDeadlock
 		TMap<FString, double> FirstSeen;
 		int32 NotMyTurnLines = 0;
 		double Now = 0.0;
+
+		/**
+		 * RESOLVER ACTIVITY ON PLANNED AIRCRAFT (review of #528 finding 3): sets with a member that held a taxi plan when the
+		 * line was written. The plan's order is what keeps planned aircraft out of cycles; the resolver turning one is a
+		 * planner bug, whether or not it untangles it. Read on the game thread's log call, as the model writes the line.
+		 */
+		const UTaxiPlanning* Planning = nullptr;
+		const UGroundTraffic* Traffic = nullptr;
+		TSet<FString> PlannedSets;
+		TArray<FString> PendingDumps;
+		TSet<FString> Dumped;
+
+		/** Off the log call (logging from inside Serialize re-enters the redirector): after the tick. */
+		void FlushDumps()
+		{
+			for (const FString& Set : PendingDumps)
+			{
+				if (!Dumped.Contains(Set))
+				{
+					Dumped.Add(Set);
+					DumpSet(Set);
+				}
+			}
+			PendingDumps.Reset();
+		}
+
+		/** DIAGNOSIS, once per planned set: each member's wait, the windows on what it waits for, and its plan ahead. */
+		void DumpSet(const FString& Set) const
+		{
+			if (Planning == nullptr || Traffic == nullptr)
+			{
+				return;
+			}
+			TArray<FString> Ids;
+			Set.ParseIntoArray(Ids, TEXT(","));
+			for (const FString& IdText : Ids)
+			{
+				const int32 Id = FCString::Atoi(*IdText.TrimStartAndEnd());
+				const FRoadAgent* Agent = Traffic->FindAgent(Id);
+				const FTaxiClearance* Clearance = Planning->Find(Id);
+				if (Agent == nullptr || Clearance == nullptr)
+				{
+					continue;
+				}
+				const FTrafficResource& On = Agent->GetBlockedResource();
+				const FTaxiResource R = On.Kind == ETrafficResourceKind::Edge ? FTaxiResource::Edge(On.Edge) : FTaxiResource::Node(On.Node);
+				FString Windows;
+				for (const FTaxiWindow& W : Planning->GetTable().WindowsOn(R))
+				{
+					Windows += FString::Printf(TEXT(" [%d %.0f-%.0f w%d]"), W.Holder, W.From, W.To >= FTaxiReservations::Forever ? -1.0 : W.To, (int32)W.Way);
+				}
+				const FRoutePlan& Route = Agent->PlanInProgress();
+				const int32 Cur = UGroundTraffic::CurrentStep(Route, Agent->Follower.Travelled);
+				FString Ahead;
+				for (int32 I = FMath::Max(0, Cur - 2); I < Route.Steps.Num() && I < Cur + 10; ++I)
+				{
+					const double Reach = Clearance->Plan.Legs.IsValidIndex(I) ? Clearance->Plan.Legs[I].Reach : -1.0;
+					Ahead += FString::Printf(TEXT(" %s%d(e%d@%.0f)"), I == Cur ? TEXT("*") : TEXT(""), Route.Steps[I].To.Index, Route.Steps[I].Edge.Index, Reach);
+				}
+				FString Steps;
+				const double Centre = FClaimPass::CentreOf(*Agent);
+				for (int32 I = FMath::Max(0, Cur - 3); I <= Cur && I < Route.Steps.Num(); ++I)
+				{
+					const bool bNodeHeld = Traffic->GetOccupancy().FindClaim(Id, FTrafficResource::OfNode(Route.Steps[I].To)) != nullptr;
+					const bool bEdgeHeld = Traffic->GetOccupancy().FindClaim(Id, FTrafficResource::OfEdge(Route.Steps[I].Edge)) != nullptr;
+					Steps += FString::Printf(TEXT(" [%d end %.0f e%d n%d]"), Route.Steps[I].To.Index, Route.Steps[I].EndDistance, bEdgeHeld ? 1 : 0, bNodeHeld ? 1 : 0);
+				}
+				UE_LOG(LogAirsideTests, Display, TEXT("TaxiPlanDeadlock:   diag2 agent %d centre %.0f released-through %d start-released %d phase %s steps%s"),
+					Id, Centre, Clearance->ReleasedThrough, Clearance->bStartReleased ? 1 : 0, *UEnum::GetValueAsString(Agent->Phase), *Steps);
+				UE_LOG(LogAirsideTests, Display, TEXT("TaxiPlanDeadlock:   diag t=%.0f agent %d waits %d on %s:%s | moves granted %d/%d end %d queue %d | route%s"),
+					Traffic->GetSimSeconds(), Id, Agent->GetWaitingOn(), *On.Describe(), *Windows, Clearance->GrantedMove,
+					Clearance->Plan.MoveStarts.Num(), Clearance->GrantedEnd, Clearance->QueueFor.Index, *Ahead);
+			}
+		}
+
+		bool AnyMemberPlanned(const FString& Set) const
+		{
+			if (Planning == nullptr)
+			{
+				return false;
+			}
+			TArray<FString> Ids;
+			Set.ParseIntoArray(Ids, TEXT(","));
+			for (const FString& Id : Ids)
+			{
+				if (Planning->Find(FCString::Atoi(*Id.TrimStartAndEnd())) != nullptr)
+				{
+					return true;
+				}
+			}
+			return false;
+		}
 
 		virtual bool CanBeUsedOnMultipleThreads() const override { return true; }
 		virtual bool CanBeUsedOnAnyThread() const override { return true; }
@@ -77,6 +171,11 @@ namespace TaxiPlanDeadlock
 				NoTurnBySet.FindOrAdd(S)++;
 				LastSeen.Add(S, Now);
 				FirstSeen.FindOrAdd(S, Now);
+				if (AnyMemberPlanned(S))
+				{
+					PendingDumps.AddUnique(S);
+					PlannedSets.Add(S);
+				}
 			}
 			else if (Line.Contains(TEXT("eadlock among agents")) && Line.Contains(TEXT("resolved")))
 			{
@@ -84,6 +183,11 @@ namespace TaxiPlanDeadlock
 				ResolvedBySet.FindOrAdd(S)++;
 				LastSeen.Add(S, Now);
 				FirstSeen.FindOrAdd(S, Now);
+				if (AnyMemberPlanned(S))
+				{
+					PendingDumps.AddUnique(S);
+					PlannedSets.Add(S);
+				}
 			}
 		}
 	};
@@ -101,8 +205,26 @@ namespace TaxiPlanDeadlock
 		double TaxiOut = 0.0;
 		double StoppedRun = 0.0;
 		double MaxStoppedRun = 0.0;
+		/** When a stop first passed 300 s: who it waited on, and whether it was queueing for a runway entry (its plan's end). */
+		int32 Stuck300WaitingOn = 0;
+		bool bStuck300Queued = false;
+		double Stuck300At = -1.0;
 		bool bGone = false;
 		bool bInbound = true;
+	};
+
+	/** What one run measured - the assertions' inputs. */
+	struct FRunResult
+	{
+		int32 Scheduled = 0;
+		int32 Admitted = 0;
+		int32 Pending = 0;
+		int32 Permanent = 0;
+		int32 Unparked = 0;
+		int32 Undeparted = 0;
+		int32 PlannedResolverSets = 0;
+		int32 Stuck300 = 0;
+		int32 LargeAdmitted = 0;
 	};
 
 	struct FSim
@@ -110,6 +232,15 @@ namespace TaxiPlanDeadlock
 		URoadNetwork* Net = nullptr;
 		UGroundTraffic* Traffic = nullptr;
 		FAirframe Airframe;
+
+		/**
+		 * A LARGER AIRFRAME IN THE MIX (review of #528 finding 3d): every LargeEvery-th scheduled arrival is this one -
+		 * DA_Aircraft_A320, a Code C jet, where the spike flew Pipers only - so sizes, stand fit and longer pieces are in
+		 * the plans the order is checked on. 0: none.
+		 */
+		FAirframe Large;
+		int32 LargeEvery = 0;
+		int32 LargeAdmitted = 0;
 		TArray<FVector2D> RunwayNear;
 		FRandomStream Random;
 		double Now = 0.0;
@@ -141,21 +272,25 @@ namespace TaxiPlanDeadlock
 			for (int32 I = 0; I < PendingArrivals.Num();)
 			{
 				const double Sched = PendingArrivals[I];
-				const FVector2D Near = RunwayNear[(static_cast<int32>(Sched / ArrivalInterval)) % RunwayNear.Num()];
+				const int32 Ordinal = static_cast<int32>(Sched / ArrivalInterval);
+				const FVector2D Near = RunwayNear[Ordinal % RunwayNear.Num()];
+				const bool bLarge = LargeEvery > 0 && Ordinal % LargeEvery == LargeEvery - 1;
+				const FAirframe& Flying = bLarge ? Large : Airframe;
 				// THE ARRIVAL QUEUE'S QUESTION, asked as it asks it: the plan, then whether it gets a taxi-in plan. A
 				// refusal keeps it holding - FIFO, as the spike's admission did - and it is asked again next second.
-				const FArrivalPlan Plan = ArrivalPlanner::Plan(*Net, Near, Airframe, &Traffic->GetOccupancy());
-				if (!Plan.IsValid() || Traffic->TaxiInRefusal(*Net, Plan, Airframe) != EArrivalRefusal::None)
+				const FArrivalPlan Plan = ArrivalPlanner::Plan(*Net, Near, Flying, &Traffic->GetOccupancy());
+				if (!Plan.IsValid() || Traffic->TaxiInRefusal(*Net, Plan, Flying) != EArrivalRefusal::None)
 				{
 					++ArrivalRefusals;
 					break;
 				}
-				const int32 Id = Traffic->DispatchArrival(*Net, Near, Airframe, 1.0);
+				const int32 Id = Traffic->DispatchArrival(*Net, Near, Flying, 1.0);
 				if (Id <= 0)
 				{
 					++ArrivalRefusals;
 					break;
 				}
+				LargeAdmitted += bLarge ? 1 : 0;
 				FAgentStat& S = Stats.Add(Id);
 				S.Id = Id;
 				S.Dispatched = Now;
@@ -236,6 +371,7 @@ namespace TaxiPlanDeadlock
 			const double Begin = FPlatformTime::Seconds();
 			Traffic->Advance(Dt, Net);
 			TickMs.Add((FPlatformTime::Seconds() - Begin) * 1000.0);
+			Spy.FlushDumps();
 
 			int32 Moving = 0;
 			for (TPair<int32, FAgentStat>& Pair : Stats)
@@ -273,6 +409,13 @@ namespace TaxiPlanDeadlock
 					if (FMath::Abs(Agent->SpeedAlongPlan()) < 1.0)
 					{
 						S.StoppedRun += Dt;
+						if (S.StoppedRun >= 300.0 && S.MaxStoppedRun < 300.0)
+						{
+							const FTaxiClearance* Clearance = Traffic->GetTaxiPlanning()->Find(S.Id);
+							S.Stuck300WaitingOn = Agent->GetWaitingOn();
+							S.bStuck300Queued = Clearance != nullptr && Clearance->QueueFor.IsSet();
+							S.Stuck300At = Now;
+						}
 						S.MaxStoppedRun = FMath::Max(S.MaxStoppedRun, S.StoppedRun);
 					}
 					else
@@ -344,14 +487,14 @@ namespace TaxiPlanDeadlock
 			return V.Num() > 0 ? Sum / V.Num() : 0.0;
 		}
 
-		/** The spike's row, plus what this harness adds (delays, refusals). Returns the permanent deadlock count. */
-		int32 Report(const FDeadlockSpy& Spy, const TCHAR* Label, int32& OutUnparked, int32& OutUndeparted) const
+		/** The spike's row, plus what this harness adds (delays, refusals, planned resolver sets). */
+		FRunResult Report(const FDeadlockSpy& Spy, const TCHAR* Label, int32 Scheduled) const
 		{
 			int32 Arrived = 0;
 			int32 Departed = 0;
 			int32 Stuck300 = 0;
-			OutUnparked = 0;
-			OutUndeparted = 0;
+			int32 OutUnparked = 0;
+			int32 OutUndeparted = 0;
 			TArray<double> In;
 			TArray<double> Out;
 			TArray<double> DepWait;
@@ -386,10 +529,23 @@ namespace TaxiPlanDeadlock
 				Mean(In), Pct(In, 0.95), Mean(Out), Pct(Out, 0.95), Mean(DepWait), Pct(DepWait, 0.95),
 				ArrivalDelayN > 0 ? ArrivalDelaySum / ArrivalDelayN : 0.0,
 				MaxTaxiing, Mean(TickMs), Pct(TickMs, 0.95), Pct(TickMs, 1.0), ArrivalRefusals, DepartRefusals, Delays, Now);
+			UE_LOG(LogAirsideTests, Display, TEXT("TaxiPlanDeadlock: [%s] scheduled=%d largeAdmitted=%d plannedResolverSets=%d"),
+				Label, Scheduled, LargeAdmitted, Spy.PlannedSets.Num());
 			for (const auto& P : Spy.FirstSeen)
 			{
 				UE_LOG(LogAirsideTests, Display, TEXT("TaxiPlanDeadlock:   set [%s] first %.0f s last %.0f s noTurn=%d resolved=%d"),
 					*P.Key, P.Value, Spy.LastSeen.FindRef(P.Key), Spy.NoTurnBySet.FindRef(P.Key), Spy.ResolvedBySet.FindRef(P.Key));
+			}
+			for (const TPair<int32, FAgentStat>& Pair : Stats)
+			{
+				const FAgentStat& S = Pair.Value;
+				if (S.MaxStoppedRun >= 300.0)
+				{
+					UE_LOG(LogAirsideTests, Display,
+						TEXT("TaxiPlanDeadlock:   stood 300 s: agent %d %s from %.0f s, longest %.0f s, waitingOn=%d queued=%d"),
+						S.Id, S.bInbound ? TEXT("IN") : TEXT("OUT"), S.Stuck300At - 300.0, S.MaxStoppedRun, S.Stuck300WaitingOn,
+						S.bStuck300Queued ? 1 : 0);
+				}
 			}
 			for (const TPair<int32, FAgentStat>& Pair : Stats)
 			{
@@ -404,7 +560,17 @@ namespace TaxiPlanDeadlock
 						A->GetWaitingOn(), S.StoppedRun);
 				}
 			}
-			return Permanent;
+			FRunResult Result;
+			Result.Scheduled = Scheduled;
+			Result.Admitted = Stats.Num();
+			Result.Pending = PendingArrivals.Num();
+			Result.Permanent = Permanent;
+			Result.Unparked = OutUnparked;
+			Result.Undeparted = OutUndeparted;
+			Result.PlannedResolverSets = Spy.PlannedSets.Num();
+			Result.Stuck300 = Stuck300;
+			Result.LargeAdmitted = LargeAdmitted;
+			return Result;
 		}
 	};
 
@@ -428,8 +594,7 @@ namespace TaxiPlanDeadlock
 	}
 
 	/** One run on a fresh copy of the saved network. False only when the field could not be set up. */
-	bool RunOne(FAutomationTestBase& Test, double ArrivalInterval, const TCHAR* Label, bool bEnforceOrder, int32& OutPermanent,
-		int32& OutUnparked, int32& OutUndeparted)
+	bool RunOne(FAutomationTestBase& Test, double ArrivalInterval, const TCHAR* Label, bool bEnforceOrder, FRunResult& Out)
 	{
 		ARoadNetworkActor* Saved = LoadSavedActor();
 		if (!Test.TestNotNull(TEXT("M_ScaleGatwick's road network actor loaded"), Saved) || Saved->Network == nullptr)
@@ -470,6 +635,18 @@ namespace TaxiPlanDeadlock
 		Sim.Traffic = Actor->GetTraffic()->GetModel();
 		Sim.Traffic->Rules = Saved->TrafficRules;
 		Sim.Airframe = TestAirframes::Piper();
+		if (const UAircraftType* A320 = Cast<UAircraftType>(StaticLoadObject(UAircraftType::StaticClass(), nullptr,
+			TEXT("/Game/Entities/DA_Aircraft_A320"))))
+		{
+			Sim.Large = A320->Airframe();
+			Sim.LargeEvery = 4;
+		}
+		Test.TestTrue(TEXT("the A320 loads - the larger airframe in the mix"), Sim.LargeEvery > 0);
+		// A PAPER TYPE (AirsideSettings.cpp: DA_Aircraft_A320 carries no mesh) with no axle layout: its follower says once per
+		// flight that it pivots rather than steers, at Error. That is the content's gap, not this test's subject - its size,
+		// pavement and stand fit are what it is in the mix for. Expected, not hidden: it must still be said.
+		Test.AddExpectedMessage(TEXT("Chassis declares RollingSteer with no wheelbase"), ELogVerbosity::Error,
+			EAutomationExpectedMessageFlags::Contains, 0);
 		Sim.ArrivalInterval = ArrivalInterval;
 		Sim.Random.Initialize(20261002);
 		FGroundTrafficTestAccess(*Sim.Traffic).TaxiPlanning()->bEnforceOrderForTest = bEnforceOrder;
@@ -483,10 +660,12 @@ namespace TaxiPlanDeadlock
 		}
 
 		FDeadlockSpy Spy;
+		Spy.Planning = Sim.Traffic->GetTaxiPlanning();
+		Spy.Traffic = Sim.Traffic;
 		GLog->AddOutputDevice(&Spy);
 		Sim.Run(Spy);
 		GLog->RemoveOutputDevice(&Spy);
-		OutPermanent = Sim.Report(Spy, Label, OutUnparked, OutUndeparted);
+		Out = Sim.Report(Spy, Label, FMath::CeilToInt32(Sim.Duration / ArrivalInterval));
 		return true;
 	}
 }
@@ -502,19 +681,42 @@ bool FTaxiPlanNoPermanentDeadlockTest::RunTest(const FString& Parameters)
 	// ZERO PERMANENT DEADLOCKS, AND THE FIELD EMPTIES: every aircraft admitted parks, and every one ordered off departs,
 	// within the drain - an aircraft stuck for good fails here even when the resolver never names a set.
 	// Baseline on this map (spec table): one permanent jam at each rate (27 and 53 aircraft stuck).
-	const TPair<double, const TCHAR*> Rates[] = { { 180.0, TEXT("40/h") }, { 90.0, TEXT("80/h") } };
-	for (const TPair<double, const TCHAR*>& Rate : Rates)
+	//
+	// NOT VACUOUS (review of #528 finding 3): a field that admits nobody has no deadlock either, so each rate also asserts
+	// how many arrivals LANDED, and that the resolver never touched a planned aircraft.
+	// - 40/h: every scheduled arrival admitted - all 40 (2026-10-02, with every fourth an A320: 40 admitted).
+	// - 80/h: an honest floor, not all 80: 39 of 80 admitted with the A320 in the mix (Pipers only, PR 2: 48) - the rest
+	//   held in the air for want of a taxi-in plan, because a departure holds its runway entry for ever until it lines up.
+	//   That starvation is PR 3's to work on (plan, PR 3); the floor is 39 less a slack of 3, so a regression in arrival
+	//   capacity goes red without the floor pretending the starvation is solved.
+	// MUTATION PROOF, not in the suite (it doubles the test's ~6 min): with UTaxiPlanning::bEnforceOrderForTest false this
+	// went red, "40/h: 1 jam, 80/h: 2 jams" (one-off local build, 2026-10-02 - see the plan's PR 2 execution notes).
+	struct FRate
 	{
-		int32 Permanent = 0;
-		int32 Unparked = 0;
-		int32 Undeparted = 0;
-		if (!TaxiPlanDeadlock::RunOne(*this, Rate.Key, Rate.Value, /*bEnforceOrder*/ true, Permanent, Unparked, Undeparted))
+		double Interval;
+		const TCHAR* Label;
+		int32 AdmittedFloor;
+	};
+	const FRate Rates[] = { { 180.0, TEXT("40/h"), 40 }, { 90.0, TEXT("80/h"), 36 } };
+	for (const FRate& Rate : Rates)
+	{
+		TaxiPlanDeadlock::FRunResult Run;
+		if (!TaxiPlanDeadlock::RunOne(*this, Rate.Interval, Rate.Label, /*bEnforceOrder*/ true, Run))
 		{
 			return false;
 		}
-		TestEqual(FString::Printf(TEXT("%s: no permanent deadlock"), Rate.Value), Permanent, 0);
-		TestEqual(FString::Printf(TEXT("%s: every admitted aircraft parked"), Rate.Value), Unparked, 0);
-		TestEqual(FString::Printf(TEXT("%s: every aircraft ordered off departed"), Rate.Value), Undeparted, 0);
+		TestEqual(FString::Printf(TEXT("%s: no permanent deadlock"), Rate.Label), Run.Permanent, 0);
+		TestEqual(FString::Printf(TEXT("%s: every admitted aircraft parked"), Rate.Label), Run.Unparked, 0);
+		TestEqual(FString::Printf(TEXT("%s: every aircraft ordered off departed"), Rate.Label), Run.Undeparted, 0);
+		TestTrue(FString::Printf(TEXT("%s: arrivals landed - %d of %d admitted, floor %d"), Rate.Label, Run.Admitted, Run.Scheduled,
+			Rate.AdmittedFloor), Run.Admitted >= Rate.AdmittedFloor);
+		TestTrue(FString::Printf(TEXT("%s: the larger airframe flew too (%d admitted)"), Rate.Label, Run.LargeAdmitted),
+			Run.LargeAdmitted > 0);
+		TestEqual(FString::Printf(TEXT("%s: the resolver never touched a planned aircraft"), Rate.Label), Run.PlannedResolverSets, 0);
+		// NOT ASSERTED: "stood still 300 s" (logged per aircraft, "stood 300 s: ... queued="). Measured 2026-10-02 every one was
+		// a departure queueing at a holding node for its runway entry, an aircraft under a test's delay, or one waiting for
+		// either - a queue for the runway, not a jam (a jam is the two assertions above and the drain). Asserting none would be
+		// asserting the 80/h starvation solved, which is PR 3's to measure.
 	}
 	return true;
 }
