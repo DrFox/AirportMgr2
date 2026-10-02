@@ -347,6 +347,9 @@ private:
 	/** The facade's OnRefused, bridged onto the bus as FBuildRefusedEvent - see OnBuildRefused. Bound by the "BuildRefused" bridge. */
 	void OnBuildRefused(const FBuildQuote& Quote, EBuildRefusal Why);
 
+	/** The facade's OnLandBought, bridged onto the bus as FLandPurchasedEvent - bound by the "LandBought" bridge. */
+	void OnLandBought(FIntPoint Tile, const FBuildQuote& Quote);
+
 	/** Live sources for UOpsAlerts::Recompute, read fresh - the network object can be replaced. */
 	void RecomputeAlerts();
 

@@ -188,6 +188,7 @@ void UToastStackWidget::OnPurchase(const FOpsPurchase& Purchase)
 	{
 	case EOpsPurchaseKind::VehicleBought:
 	case EOpsPurchaseKind::ModuleBought:
+	case EOpsPurchaseKind::LandBought:
 		Notifications->PostFeed(FText::Format(NSLOCTEXT("AirportMgr", "Bought", "Bought {0} — {1}"), Purchase.Name, Purchase.Money),
 			ENotificationSeverity::Info);
 		return;

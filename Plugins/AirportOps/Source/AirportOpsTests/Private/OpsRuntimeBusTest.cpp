@@ -16,6 +16,7 @@
 #include "Model/OfferGenerator.h"
 #include "Model/Ledger.h"
 #include "Model/RoadGuideline.h"
+#include "Model/LandGrid.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
 #include "Model/TaxiwayStrip.h"
@@ -1805,6 +1806,41 @@ bool FTurnaroundsBothBoardsBeginTest::RunTest(const FString&)
 	TestEqual(TEXT("the flight board entered Turnaround on the same event"), Rig.Flight->GetPhase(), EFlightPhase::Turnaround);
 	TestTrue(TEXT("on a real stand"), Turnaround->Stand.IsSet());
 	TestTrue(TEXT("and both boards name the SAME stand - the one BeganAt answered"), Rig.Flight->Stand == Turnaround->Stand);
+	return true;
+}
+
+
+/**
+ * A LAND PURCHASE REACHES THE BUS, AND THE TOAST (land purchase spec R10). The facade buys and charges; the runtime's
+ * "LandBought" bridge publishes FLandPurchasedEvent, and its Presentation subscriber hands the purchase face the kind,
+ * the money as the ledger took it and the pricing's words for it. Unbridged, the land grows silently - the purchase
+ * this test makes would charge with no word said.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FRuntimeBusLandBoughtTest, "AirportOps.Present.LandBoughtIsPublished",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FRuntimeBusLandBoughtTest::RunTest(const FString&)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
+	Runtime->GetEvents()->OnPurchase.AddDynamic(Listener, &UOpsEventsTestListener::OnPurchase);
+	const FIntPoint Start[] = { FIntPoint(0, 3), FIntPoint(0, 4) };
+	TestWorld.Actor->GetEditFacade()->AuthorOwnedLand(FLandGrid::Make(FVector2D(-30000.0, -240000.0), 60000.0, 8, 8, Start));
+	Runtime->Tick(0.0);
+	const int32 Before = Listener->Purchases.Num();
+	const int32 Published = Runtime->GetBus().DispatchedCountOfForTest<FLandPurchasedEvent>();
+	const double Balance = Runtime->GetLedger()->Balance();
+
+	if (!TestTrue(TEXT("setup: the tile is bought"), TestWorld.Actor->GetEditFacade()->BuyLandTile(FIntPoint(1, 3)))) { return false; }
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("one LandPurchased published"), Runtime->GetBus().DispatchedCountOfForTest<FLandPurchasedEvent>(), Published + 1);
+	TestEqual(TEXT("the ledger fell by the tile's price"), Balance - Runtime->GetLedger()->Balance(), 300000.0, 1e-6);
+	if (!TestEqual(TEXT("exactly one purchase reached the face"), Listener->Purchases.Num(), Before + 1)) { return false; }
+	const FOpsPurchase Bought = Listener->Purchases.Last();
+	TestEqual(TEXT("as land"), Bought.Kind, EOpsPurchaseKind::LandBought);
+	TestEqual(TEXT("at the price the ledger took"), Bought.Amount, 300000.0, 1e-6);
+	TestEqual(TEXT("worded by the pricing"), Bought.Money.ToString(), Runtime->GetPricing()->Format(300000.0).ToString());
 	return true;
 }
 
