@@ -7,6 +7,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
 #include "Model/RouteSearch.h"
+#include "Model/TaxiwayLabels.h"
 #include "Model/TaxiwayStrip.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/TaxiwayLetters.h"
@@ -642,6 +643,48 @@ bool FTaxiwayNamesWhereIsTest::RunTest(const FString&)
 	{
 		TestEqual(TEXT("the card's On is the same answer"), Facts.On, Where);
 	}
+	return true;
+}
+
+/** Labels (spec "UI"): one per taxiway at the middle of its longest segment, repeated every RepeatEvery along it;
+ *  none for an empty parent kept only for its connectors. Meanings - a name and a road-plane point - never a colour. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesLabelAnchorsTest, "Airside.Model.TaxiwayNames.LabelAnchors",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesLabelAnchorsTest::RunTest(const FString&)
+{
+	using namespace TaxiwayNamesTest;
+	FTaxiwayNamesNet N;
+	TArray<FRoadNodeId> A;
+	for (int32 Index = 0; Index <= 4; ++Index) { A.Add(N.Node(30000.0 * Index, 0.0)); }
+	for (int32 Index = 0; Index < 4; ++Index) { N.Click(A[Index], A[Index + 1]); }
+	const FRoadSegmentId Stub = N.Click(A[2], N.Node(60000.0, -20000.0));
+	const TArray<FTaxiwayLabel> Labels = TaxiwayLabels::Anchors(*N.Net, 50000.0);
+	TArray<double> AxAt;
+	int32 Connectors = 0;
+	for (const FTaxiwayLabel& Label : Labels)
+	{
+		if (Label.Name == TEXT("A")) { AxAt.Add(Label.At.X); }
+		if (Label.Name == TEXT("A1")) { ++Connectors; TestTrue(FString::Printf(TEXT("A1 at its middle, not %s"), *Label.At.ToString()), Label.At.Equals(FVector2D(60000.0, -10000.0), 1.0)); }
+	}
+	AxAt.Sort();
+	// 1200 m in four equal 300 m segments: the tie goes to the first in chain order, middle at 150 m; then every 500 m.
+	// ONE ASSERTION PER ANCHOR: TestEqual has no TArray<double> overload (plan correction), and a count alone would pass misplaced tags.
+	const TArray<double> Expected{ 15000.0, 65000.0, 115000.0 };
+	if (TestEqual(TEXT("A repeated every 500 m: three anchors"), AxAt.Num(), Expected.Num()))
+	{
+		for (int32 Index = 0; Index < Expected.Num(); ++Index)
+		{
+			TestEqual(FString::Printf(TEXT("A's anchor %d from the middle of its longest segment"), Index), AxAt[Index], Expected[Index], 1.0);
+		}
+	}
+	TestEqual(TEXT("a short connector once"), Connectors, 1);
+	N.Net->RemoveSegment(N.Net->SegmentIdAt(0));
+	for (int32 Index = 1; Index < 4; ++Index) { N.Net->RemoveSegment(N.Net->SegmentIdAt(Index)); }
+	N.Normalise();
+	bool bParentLabel = false;
+	for (const FTaxiwayLabel& Label : TaxiwayLabels::Anchors(*N.Net, 50000.0)) { bParentLabel |= Label.Name == TEXT("A"); }
+	TestFalse(TEXT("an empty parent kept for A1 draws no label"), bParentLabel);
+	TestEqual(TEXT("A1 is still drawn"), N.NameOf(Stub), FString(TEXT("A1")));
 	return true;
 }
 
