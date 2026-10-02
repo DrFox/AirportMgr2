@@ -181,7 +181,18 @@ struct AIRSIDE_API FLandingRun
 	 */
 	static constexpr double LandingMargin = 1.25;
 
+	/**
+	 * How long an arrival armed for End takes from joining final to VACATED at VacateAt - FLOWN, by a probe of this
+	 * run, never estimated (RequiredLandingDistance's reason: a closed form is a second description of the model).
+	 * What a taxi-in plan's DepartAt is timed from (taxi planning, spec 2026-10-02). 0 when it cannot be armed.
+	 * QUIET: the probe's touchdown and vacate are not the aircraft's, and its log lines would read as though they were.
+	 */
+	static double SecondsToVacate(const FRunwayEnd& End, const FAirframe& Airframe, double VacateAt);
+
 private:
+	/** A probe's flight says nothing - see SecondsToVacate. Not a UPROPERTY: no real run is ever quiet. */
+	bool bQuiet = false;
+
 	/** Arms without the runway-length check, so RequiredLandingDistance can fly a probe. */
 	bool Begin(const FRunwayEnd& InEnd, const FAirframe& InAirframe, double InVacateAt);
 };

@@ -835,7 +835,7 @@ bool FTaxiPlanHeadOnTest::RunTest(const FString& Parameters)
 	//         A ============== B
 	//   A1 ==/                  \== B1
 	// One aircraft A0 -> B0, another B1 -> A1: head-on along A-B, the 2026-10-02 jam. The second may not be on A-B
-	// while the first is - it waits (at its start, the only place it may) until the first has gone.
+	// while the first is - it waits (at its start, where a plan may wait) until the first has gone.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	const FGuidelineNodeId A0 = Net->AddGuidelineNode(FVector2D(-10000.0, 3000.0));
 	const FGuidelineNodeId A1 = Net->AddGuidelineNode(FVector2D(-10000.0, -3000.0));
@@ -972,6 +972,35 @@ bool FTaxiPlanOrderTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and no longer once it has"), FPassingOrder::WaitingFor(Table, 2, E, HasEntered), 0);
 	Entered.Add(2);
 	TestEqual(TEXT("the other way waits for them to LEAVE, entered or not"), FPassingOrder::WaitingFor(Table, 3, E, HasEntered), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanOnePassTest, "Airside.Model.TaxiPlan.ReleasesOnePassAtATime",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanOnePassTest::RunTest(const FString& Parameters)
+{
+	// A ROUTE MAY PASS ONE RESOURCE TWICE - a turnaround loop at a dead end, out along an edge and back. The tail clearing
+	// it the first time releases THAT pass only; the way back is still booked, and still ordered. Releasing every window
+	// of the holder on the first pass (ReleaseHolderOn) let a departure back onto the edge with no window - unordered -
+	// ahead of the one booked before it (measured on M_ScaleGatwick at 80 mov/h, 2026-10-02: a jam of a dozen aircraft).
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(40000.0, 0.0));
+	const FTaxiResource E = FTaxiResource::Edge(Join(*Net, A, B));
+
+	FTaxiReservations Table;
+	Table.BookWindow(E, { 1, 0.0, 20.0, ETaxiWay::AToB });   // out
+	Table.BookWindow(E, { 2, 30.0, 50.0, ETaxiWay::AToB });  // another, out
+	Table.BookWindow(E, { 1, 60.0, 80.0, ETaxiWay::BToA });  // the first, back
+	auto Never = [](int32) { return false; };
+
+	TestTrue(TEXT("the first pass released"), Table.ReleaseFirstOn(E, 1));
+	TestEqual(TEXT("and only it: the way back is still booked"), Table.WindowsOn(E).Num(), 2);
+	TestEqual(TEXT("so on its way back it waits for the one booked between"), FPassingOrder::WaitingFor(Table, 1, E, Never), 2);
+	TestTrue(TEXT("which passes"), Table.ReleaseFirstOn(E, 2));
+	TestEqual(TEXT("and then it is its turn"), FPassingOrder::WaitingFor(Table, 1, E, Never), 0);
+	TestFalse(TEXT("nothing of a holder with no window to release"), Table.ReleaseFirstOn(E, 3));
 	return true;
 }
 

@@ -46,7 +46,7 @@ struct FTaxiClearance
 	/** The push off the stand, for a departure that pushes; invalid for one that drives straight out. */
 	FRoutePlan PushRoute;
 
-	/** Resources only the push books, not on Plan.Route - released when the push hands over to the taxi. */
+	/** The push's own windows (FTaxiPlan::PushWindows) - released, one each, when the push hands over to the taxi. */
 	TArray<FTaxiResource> PushOnly;
 
 	/** Edges whose start its NOSE has passed - what a follower booked the same way behind it waits for. */
@@ -60,6 +60,18 @@ struct FTaxiClearance
 
 	/** Whether its route's start node has been released. */
 	bool bStartReleased = false;
+
+	/**
+	 * A DEPARTURE QUEUEING: its plan ends at a holding node short of the runway entry (QueueFor), because the entry is
+	 * booked for ever by the departure ahead of it until that one lines up. It is held at that node until the rest is
+	 * planned and booked onto the end of this plan (UTaxiPlanning::Extend) and driven (UGroundTraffic::ExtendRoute).
+	 */
+	FGuidelineNodeId QueueFor;
+	ERouteErrand QueueErrand = ERouteErrand::Unset;
+
+	/** When the rest was last asked for, and the table's revision then - asked again only once both have moved on. */
+	double ExtendAskedAt = -1.0;
+	uint32 ExtendRevision = 0;
 };
 
 /** The claim pass's one more refusal: where the agent stops, and for whom. Blocker 0: none. */
@@ -70,6 +82,13 @@ struct FTaxiOrderHold
 
 	/** Where that step starts, in route distance. */
 	double StepStart = 0.0;
+
+	/**
+	 * Held at the END NODE of Step (its turn on the node has not come) rather than at the start of a move: it stops a gap
+	 * short of the node, on the lane it is driving - StepEnd says where the node is. False: a gap short of StepStart.
+	 */
+	bool bAtNode = false;
+	double StepEnd = 0.0;
 
 	/** Who it waits for, and on what. */
 	int32 Blocker = 0;
@@ -84,8 +103,9 @@ struct FTaxiOrderHold
  * PostInitProperties), driven by it: UGroundTraffic decides WHEN an aircraft is cleared (dispatch, pushback) and
  * asks this for the plan; this decides nothing about traffic on its own.
  *
- * THE ONLY WRITER OF FTaxiReservations (Check-Architecture rule 107): one owner, so the table's order is one
+ * THE ONLY WRITER OF FTaxiReservations: one owner, so the table's order is one
  * timeline and every wait it orders points at something booked earlier on it (spec §2's acyclicity).
+ * ENFORCED BY: Check-Architecture rule 104 (taxi reservation table written)
  *
  * PATTERN: a Mediator's colleague, as FDeadlockResolver and FPlanReResolver are - but a UObject, unlike them, so
  * PR 4's inspector and overlay can hold it weakly. Its state is all session state: nothing is saved (agents are not).
@@ -127,7 +147,7 @@ public:
 	 * replacing whatever Holder had. Logs "planned". False, and nothing changed, when the table refuses it.
 	 */
 	bool Book(const URoadNetwork& Network, int32 Holder, ETaxiClearanceKind Kind, const FTaxiPlan& Plan,
-		ETaxiClearanceStage Stage, const FRoutePlan& PushRoute = FRoutePlan());
+		ETaxiClearanceStage Stage, const FRoutePlan& PushRoute = FRoutePlan(), double Now = 0.0);
 
 	/** A Booked departure's plan given up for arrival ByArrival - logged "revoked by arrival". False for any other stage. */
 	bool Revoke(int32 Holder, int32 ByArrival);
@@ -146,6 +166,31 @@ public:
 	 * 0 when its turn - or when bEnforceOrderForTest is off.
 	 */
 	int32 WaitingFor(int32 Holder, const FTaxiResource& Resource) const;
+
+	/** Marks Holder's departure as QUEUEING for QueueFor - see FTaxiClearance::QueueFor. */
+	void SetQueued(int32 Holder, FGuidelineNodeId QueueFor, ERouteErrand Errand);
+
+	/** The queueing departures not asked in the last second, or since the table last moved - ExtendQueuedDepartures' list. */
+	TArray<int32> QueuedDueAsk(double Now);
+
+	/**
+	 * A queueing departure's REST booked onto its plan: Ext runs from where the plan ends (its holding node) to the entry.
+	 * Its windows on that node and the edge into it - held for ever while it queued - end as Ext leaves; Ext's passes join
+	 * them; the whole lot is re-booked at once. False, nothing changed, when the table refuses it. Logged.
+	 */
+	bool Extend(const URoadNetwork& Network, int32 Holder, const FTaxiPlan& Ext, double Now);
+
+	/** The route the agent now drives, adopted as its plan's after ExtendRoute spliced the rest on. */
+	void AdoptRoute(int32 Holder, const FRoutePlan& Live);
+
+	/** Who a Booked departure waits for before it may start its push: the order over every window its plan holds from the push. 0: its turn. */
+	int32 PushWaitingFor(int32 Holder) const;
+
+	/** Booked departures whose push is due by Now. */
+	TArray<int32> DuePushes(double Now) const;
+
+	/** Every holder with a clearance. */
+	TArray<int32> Holders() const;
 
 	/**
 	 * THE CLAIM PASS'S QUESTION (FClaimPass::Run): may Agent enter each MOVE of its plan that its claim window reaches

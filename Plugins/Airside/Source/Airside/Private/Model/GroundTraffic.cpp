@@ -10,11 +10,13 @@
 #include "Model/AirsideCapability.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/DeparturePlanner.h"
+#include "Model/DepartureAsk.h"
 #include "Model/PushbackPlanner.h"
 #include "Model/PushbackRun.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RouteChange.h"
 #include "Model/RunwayQuery.h"
+#include "Model/TaxiPlanning.h"
 #include "Model/TrafficClaims.h"
 #include "Model/TrafficContext.h"
 #include "Model/VehicleFit.h"
@@ -68,8 +70,21 @@ int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 		return 0;
 	}
 
+	// A TAXI-IN PLAN, OR NO ARRIVAL (taxi planning, spec 2026-10-02 §1) - on the table as it stands, or by revoking a
+	// departure that has not started its push (ruling 2). The arrival queue asked the same (TaxiInRefusal) before this.
+	TArray<int32> Revoke;
+	const FTaxiPlan Taxi = TaxiPlanning->PlanArrival(Network, Airframe, Rules, TaxiInRequestNow(Plan, Airframe), Revoke);
+	if (!Taxi.IsPlanned())
+	{
+		const FString Sentence = ArrivalPlanner::DescribeRefusal(EArrivalRefusal::NoTaxiPlan, Airframe.Wingspan);
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("%s"), *Sentence);
+		bArrivalAwaitsTaxiPlan = true;
+		OnArrivalRefused.Broadcast(EArrivalRefusal::NoTaxiPlan, Sentence);
+		return 0;
+	}
+
 	FRoadAgent Agent;
-	if (!Agent.StartArrival(Plan.End, Airframe, Plan.VacateAt, Plan.TaxiIn))
+	if (!Agent.StartArrival(Plan.End, Airframe, Plan.VacateAt, Taxi.Route))
 	{
 		// FLandingRun has already logged why. Nothing is admitted: an arrival that cannot be
 		// flown must leave no aircraft in the world, rather than one frozen on final.
@@ -129,6 +144,8 @@ int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 	// just appended.
 	ClaimGoalNodeAtDispatch(Agents.Last(), Id, Network);
 
+	// AND ITS TAXI PLAN, under the id it has now, for the same between-ticks reason: the next request plans round it.
+	BookTaxiIn(Id, Network, Taxi, Revoke);
 	return Id;
 }
 
@@ -952,21 +969,6 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	return true;
 }
 
-/**
- * What AskDeparture found: DepartAgent's decision before it logs or acts. Why is the refusal DepartAgent returns for
- * it - None for a departure it would start, straight out or by a push whose ground is free.
- */
-struct FDepartureAsk
-{
-	FDeparturePlan Plan;
-	/** The measured angle between the route's first tangent and the parked heading - DepartAgent's log line. */
-	double OffDegrees = 180.0;
-	bool bStraightOut = false;
-	/** Planned only when the departure is valid and not straight out. */
-	FPushbackPlan Push;
-	EDepartureRefusal Why = EDepartureRefusal::None;
-};
-
 FDepartureAsk UGroundTraffic::AskDeparture(const FRoadAgent& Agent, const FAirframe& Aircraft,
 	const URoadNetwork& Network) const
 {
@@ -1004,6 +1006,7 @@ FDepartureAsk UGroundTraffic::AskDeparture(const FRoadAgent& Agent, const FAirfr
 	if (bHaveTangent && Ask.OffDegrees <= Rules.StraightOutDegrees)
 	{
 		Ask.bStraightOut = true;
+		PlanTaxiOut(Agent, Aircraft, Network, Ask);
 		return Ask;
 	}
 
@@ -1034,7 +1037,9 @@ FDepartureAsk UGroundTraffic::AskDeparture(const FRoadAgent& Agent, const FAirfr
 	if (!IsPushGroundFree(Agent.Id, Ask.Push.PushRoute, Ask.Push.PushRoute.Length))
 	{
 		Ask.Why = EDepartureRefusal::PushbackBlocked;
+		return Ask;
 	}
+	PlanTaxiOut(Agent, Aircraft, Network, Ask);
 	return Ask;
 }
 
@@ -1068,6 +1073,13 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 		return EDepartureRefusal::NoRoute;
 	}
 
+	// ALREADY CLEARED, TO PUSH LATER (taxi planning): its plan is booked and StartDuePushes starts it. Asked again
+	// meanwhile it is still not pushing - and is not re-planned, which would give up its place in the order.
+	if (const FTaxiClearance* Booked = TaxiPlanning->Find(AgentId); Booked != nullptr && Booked->Stage == ETaxiClearanceStage::Booked)
+	{
+		return EDepartureRefusal::PushbackBlocked;
+	}
+
 	// THE DECISION, planned once - see AskDeparture, which the push watch asks too. What follows logs and acts on it,
 	// in the order the decision was made.
 	const FDepartureAsk Ask = AskDeparture(Agent, *Aircraft, Network);
@@ -1086,6 +1098,10 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 		return Plan.Why;
 	}
 
+	if (Ask.bStraightOut && Ask.bNoTaxiPlan)
+	{
+		return WatchForTaxiPlan(AgentId, Network, FRoutePlan());
+	}
 	if (Ask.bStraightOut)
 	{
 		// THE MEASURED ANGLE IS IN THE LINE. When a player asks why an aeroplane did not push
@@ -1095,10 +1111,8 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("Agent %d departs straight out of its stand (%.0f deg off the parked heading)"),
 			AgentId, Ask.OffDegrees);
-		// DepartOrdered, NOT Redirected: this is the taxi OUT, and the flight board reads it so (review M4) - it used to
-		// ask the live agent whether a departure was armed, a drain later.
-		return RedirectAgent(AgentId, &Network, Plan.Route, EAgentEvent::DepartOrdered)
-			? EDepartureRefusal::None : EDepartureRefusal::NoRoute;
+		// ON ITS TAXI PLAN'S ROUTE, now or when the plan says - see ClearDeparture; StartPlannedDeparture redirects it.
+		return ClearDeparture(AgentId, Network, Ask);
 	}
 
 	const FPushbackPlan& Push = Ask.Push;
@@ -1117,6 +1131,10 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 		return EDepartureRefusal::NoPushbackRoute;
 	}
 
+	if (Ask.bNoTaxiPlan)
+	{
+		return WatchForTaxiPlan(AgentId, Network, Push.PushRoute);
+	}
 	if (Ask.Why == EDepartureRefusal::PushbackBlocked)
 	{
 		// AT Log AND NOT Warning: a taxiway the player has left busy refuses this for as long
@@ -1135,45 +1153,15 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 		Watch.Network = &Network;
 		Watch.EditRevision = Network.GetEditRevision();
 		Watch.GuidelineRevision = Network.GetGuidelineRevision();
+		Watch.TaxiRevision = TaxiPlanRevision();
+		Watch.AskedAt = SimSeconds;
 		RunwaysHeldNow(Network, Watch.RunwaysHeld);
 		return EDepartureRefusal::PushbackBlocked;
 	}
 
-	const EAgentPhase Before = Agent.Phase;
-	// COPIED, because StartPushback assigns the agent's own airframe from its argument and
-	// Aircraft points at that very field.
-	const FAirframe Own = *Aircraft;
-	if (!Agent.StartPushback(Push.PushRoute, Push.TaxiOutRoute, Own,
-		Rules.PushSpeedFor(Own.PushbackNeed), Rules.PushAccel,
-		Own.Engine.MaxRPM * Rules.PowerbackRPMFraction))
-	{
-		return EDepartureRefusal::NoRoute;
-	}
-
-	// THE GOAL IS THE TAXI OUT'S, not the push's. The claim pass reserves the node an agent is
-	// heading FOR, and a push that claimed its own end would have the aeroplane reserving a
-	// patch of taxiway as though it were a stand. What it is going to is the runway.
-	//
-	// ReleaseGoal THEN TakeGoal (issue #295), not a hand-spelled copy of TakeGoal's three
-	// calls: this used to re-type SetGoalFrom/ArmDepartureIfRunway/ClaimGoalNodeAtDispatch here
-	// and never called ReleaseGoal at all, so a departing aeroplane kept its OWN stand's node
-	// claimed against the re-offer pass for the rest of the session - the exact drift
-	// RedirectAgent and ExtendRoute already avoid by sharing this same pair.
-	ReleaseGoal(Agent, AgentId);
-	TakeGoal(Agent, AgentId, &Network, Push.TaxiOutRoute);
-
-	// THE NEED IS NAMED even though nothing branches on it yet. Slice 1 pushes all three the
-	// same way and nobody is doing the pushing, so this line is the only place the gap between
-	// "needs a tug" and "has one" is visible at all.
-	UE_LOG(LogAirsideTraffic, Log,
-		TEXT("Agent %d pushing back %.0f uu, then %.0f uu to taxi out, %s"),
-		AgentId, Push.PushRoute.Length, Push.TaxiOutRoute.Length,
-		*UEnum::GetValueAsString(Own.PushbackNeed));
-
-	Announce(TransitionOf(Agent, Before, EAgentEvent::DepartOrdered));
-	// #169: the occupancy revision was bumped in TakeGoal, with the claim - unconditional,
-	// unlike the broadcast above. See RedirectAgent's own copy of this comment.
-	return EDepartureRefusal::None;
+	// THE START MOVED TO StartPlannedDeparture (GroundTrafficPlanning.cpp, taxi planning PR 2), comments and log line
+	// with it: a booked departure's push is started there too, when its plan says (StartDuePushes).
+	return ClearDeparture(AgentId, Network, Ask);
 }
 
 bool UGroundTraffic::IsPushGroundFree(int32 AgentId, const FRoutePlan& Plan,
@@ -1389,6 +1377,7 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 	if (Network != nullptr)
 	{
 		DiffFreedom(*Network, /*bRebuilt*/ false);
+		ExtendQueuedDepartures(*Network);
 	}
 }
 
@@ -1509,10 +1498,12 @@ void UGroundTraffic::DiffFreedom(const URoadNetwork& Network, bool bRebuilt)
 			&& Watch.EditRevision == Network.GetEditRevision()
 			&& Watch.GuidelineRevision == Network.GetGuidelineRevision()
 			&& Watch.RunwaysHeld.Num() == HeldRunways.Num() && Watch.RunwaysHeld.Includes(HeldRunways);
+		// THE TAXI TABLE MOVED, but asked whole at most once a sim second - see FPushWatch::TaxiRevision.
+		const bool bSameTaxi = Watch.TaxiRevision == TaxiPlanRevision() || SimSeconds - Watch.AskedAt < 1.0;
 		bool bStillBlocked = false;
-		if (bSamePlan)
+		if (bSamePlan && (bSameTaxi || !Watch.bTaxiBlocked))
 		{
-			bStillBlocked = !IsPushGroundFree(It.Key(), Watch.PushRoute, Watch.PushRoute.Length);
+			bStillBlocked = Watch.bTaxiBlocked || !IsPushGroundFree(It.Key(), Watch.PushRoute, Watch.PushRoute.Length);
 		}
 		else
 		{
@@ -1525,6 +1516,9 @@ void UGroundTraffic::DiffFreedom(const URoadNetwork& Network, bool bRebuilt)
 				Watch.EditRevision = Network.GetEditRevision();
 				Watch.GuidelineRevision = Network.GetGuidelineRevision();
 				Watch.RunwaysHeld = HeldRunways;
+				Watch.TaxiRevision = TaxiPlanRevision();
+				Watch.AskedAt = SimSeconds;
+				Watch.bTaxiBlocked = Ask.bNoTaxiPlan;
 			}
 		}
 		if (!bStillBlocked)
@@ -1551,6 +1545,12 @@ void UGroundTraffic::DiffFreedom(const URoadNetwork& Network, bool bRebuilt)
 			bRebuilt ? TEXT(" (after a rebuild)") : TEXT(""));
 		OnPushGroundFreed.Broadcast(AgentId);
 	}
+	// AN ARRIVAL REFUSED A TAXI PLAN, AND THE TABLE HAS RELEASED A WINDOW SINCE: the queue's wake-up (OnTaxiPlansFreed).
+	if (TaxiPlanning != nullptr && TaxiPlanning->TakeReleased() && bArrivalAwaitsTaxiPlan)
+	{
+		bArrivalAwaitsTaxiPlan = false;
+		OnTaxiPlansFreed.Broadcast();
+	}
 }
 
 void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Network)
@@ -1565,6 +1565,8 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 	if (Network != nullptr)
 	{
 		Arbitrate(*Network);
+		// TAXI PLANS FOLLOW THE CLAIMS JUST MADE: released behind each tail, entered at each nose (GroundTrafficPlanning.cpp).
+		TrackTaxiPlans();
 		// THE HELD TAXI-OUT REPLAN RAN HERE, before the agents moved, until #444: it is RetryWaiters' arm now, at the end
 		// of this step with the stand re-offer - see RetryWaiters for why the handover lands on the same tick.
 	}
@@ -1838,6 +1840,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 	if (Network != nullptr)
 	{
 		RetryWaiters(*Network);
+		StartDuePushes(*Network);
 	}
 }
 
@@ -1903,7 +1906,10 @@ void UGroundTraffic::Arbitrate(const URoadNetwork& Network)
 	// as correct as a fresh one per agent, and cheaper. RunwayChains (issue #170) makes that
 	// sharing pay for a second thing too: two agents in the same Arbitrate call naming the
 	// same runway seed now walk it once between them, not once each.
-	FClaimPass Pass{FTrafficContext{Network, Rules, Occupancy, NodeReach, RunwayChains, SimSeconds}};
+	// WITH THE TAXI PLANNING OWNER, whose order is the claim pass's one more refusal (taxi planning PR 2).
+	FTrafficContext Context{Network, Rules, Occupancy, NodeReach, RunwayChains, SimSeconds};
+	Context.Planning = TaxiPlanning;
+	FClaimPass Pass{Context};
 
 	// BY RANK, NOT BY LIST ORDER. Indices rather than a sorted copy of the agents: the claim
 	// pass writes to the agents, so a copy would be arbitrating over stale ones.

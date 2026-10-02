@@ -13,6 +13,7 @@
 #include "Model/RoutePolicy.h"
 #include "Model/RouteChange.h"
 #include "Model/RunwayQuery.h"
+#include "Model/TaxiPlanning.h"
 #include "Model/TrafficClaims.h"
 #include "Model/TrafficContext.h"
 #include "Model/VehicleFit.h"
@@ -233,6 +234,13 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 	// rather than waiting for the next Get/GetOrSeed says so where the rebuild is, same as
 	// NodeReach above.
 	RunwayChains.Invalidate();
+
+	// EVERY TAXI PLAN DROPPED (taxi planning PR 2): its windows name handles a rebuild may have re-pointed or killed, and
+	// re-planning aircraft round an edit is PR 3's. Until then they taxi as everything did before plans - claims, resolver.
+	if (TaxiPlanning != nullptr)
+	{
+		TaxiPlanning->DropAll(TEXT("the layout was rebuilt"));
+	}
 
 	// EVERY RUNWAY AN AGENT HOLDS OR WILL HOLD, RE-POINTED (playtest 2026-09-28). An exit built
 	// onto a runway splits it, and the split kills the handles a landing, a lined-up departure,

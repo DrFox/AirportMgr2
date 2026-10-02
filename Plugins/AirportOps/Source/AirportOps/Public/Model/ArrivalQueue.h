@@ -252,6 +252,8 @@ private:
 		uint32 GuidelineAt = 0;
 		uint32 OccupancyAt = 0;
 		uint32 StandChurnAt = 0;
+		/** UGroundTraffic::TaxiPlanRevision when judged: the taxi-in plan's date (taxi planning PR 2). */
+		uint32 TaxiPlansAt = 0;
 		bool bValid = false;
 		/** The plan's FArrivalPlan::UsableRunways: the strips TickQueue's live gate asks about. Dated with Why. */
 		TArray<FRunwayEnd> Usable;

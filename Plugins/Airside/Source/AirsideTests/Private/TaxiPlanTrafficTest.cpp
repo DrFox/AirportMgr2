@@ -75,9 +75,9 @@ bool FTaxiPlanNotMyTurnTest::RunTest(const FString& Parameters)
 	//   A (-30000) ---J (0,0)--- B (30000)
 	//                 |
 	//                 C (0, -12000)
-	// X goes A to B, Y goes C to D; both cross J. X is planned FIRST, so the table has X through J first and Y waiting
-	// for it - but Y starts much nearer J. The claim pass alone would let Y through first (nobody is there yet); the
-	// ORDER holds Y until X has gone: "not my turn: waiting for X".
+	// X goes A to B, Y goes C to D; both cross J. X is planned FIRST and Y booked through J after it - but Y starts much
+	// nearer J and is let go at once. The claim pass alone would let Y through first (nobody is there yet); the ORDER
+	// holds Y until X has gone: "not my turn: waiting for X".
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const FGuidelineNodeId A = TestGraph::Node(*Net, -30000.0, 0.0);
@@ -105,9 +105,11 @@ bool FTaxiPlanNotMyTurnTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	const FTaxiPlan PlanY = Planning->Plan(*Net, Piper, Traffic->Rules, TaxiRequest(C, D, 0.0));
-	TestTrue(TEXT("Y, planned second, holds at its start for X"), PlanY.IsPlanned() && PlanY.Holds.Num() > 0
-		&& PlanY.Holds[0].At == C);
+	// Y's plan sets off at 30 s, so it reaches J after X - but Y is dispatched NOW, and nothing physical stops it
+	// driving straight to J and through it long before X gets there. Only the order does.
+	const FTaxiPlan PlanY = Planning->Plan(*Net, Piper, Traffic->Rules, TaxiRequest(C, D, 30.0));
+	TestTrue(TEXT("Y, planned second, is booked through J after X"), PlanY.IsPlanned() && PlanX.Legs.Num() > 0
+		&& PlanY.Legs.Num() > 0 && PlanY.Legs[0].Reach > PlanX.Legs[0].Reach);
 	const int32 Y = PlanY.IsPlanned() ? Traffic->DispatchAgent(Net, PlanY.Route, Piper, ETraversalClass::Aircraft, 0.0) : 0;
 	if (!TestTrue(TEXT("Y dispatched and booked"), Y > 0
 		&& Planning->Book(*Net, Y, ETaxiClearanceKind::TaxiOut, PlanY, ETaxiClearanceStage::Moving)))
@@ -253,6 +255,11 @@ bool FTaxiPlanPushGatedTest::RunTest(const FString& Parameters)
 	for (int32 I = 0; I < 30 * 240 && PushedAt < 0.0; ++I)
 	{
 		Traffic->Advance(1.0 / 30.0, Net);
+		// THE STAND-IN PASSES at FreeAt: as traffic tracked by the planner is released when its tail clears, so is this.
+		if (Traffic->GetSimSeconds() >= FreeAt)
+		{
+			Access.TaxiPlanning()->Drop(TaxiStandIn, nullptr);
+		}
 		if (Traffic->FindAgent(Id) != nullptr && Traffic->FindAgent(Id)->Phase != EAgentPhase::Parked)
 		{
 			PushedAt = Traffic->GetSimSeconds();

@@ -1334,6 +1334,20 @@ $AllowedCallers = @(
         ProdAllowed = @('Private\Model\RoadNetworkTaxiways.cpp')
         TestExempt  = $true
         ProdReason  = 'name a segment through URoadNetwork::NormaliseTaxiways / EnsureTaxiwayNames (their one writer, WriteTaxiwayId, is in RoadNetworkTaxiways.cpp) - a second writer is a second naming the invariant never sees (spec 2026-10-02-taxiway-naming)'
+    },
+    @{
+        # RULE 104 (taxi planning PR 2, spec 2026-10-02 section 4): ONLY UTaxiPlanning WRITES THE TAXI RESERVATION TABLE. The
+        # table's order is what FPassingOrder enforces, and it is deadlock-free only while every window is booked on ONE
+        # timeline by one owner (spec section 2: "all orders come from ONE timeline"). A second writer - a dispatch booking its
+        # own windows, a test hook in production - is a second timeline the order cannot see. The mutators were named to be
+        # grepped (PR 1's plan, Task 5): BookWindow, BookPasses, ReleaseHolder, ReleaseHolderOn (and PR 2's ReleaseFirstOn), called on a table (`.` or
+        # `->`). TaxiReservations.cpp's own calls (BookPasses' verify(BookWindow(...))) carry no receiver and are not seen.
+        # DOES NOT SEE a write through a reference renamed to hide it, or a table copied, written and assigned back elsewhere.
+        Name        = 'taxi reservation table written (rule 104)'
+        Pattern     = '(?:\.|->)\s*(?:BookWindow|BookPasses|ReleaseHolder|ReleaseHolderOn|ReleaseFirstOn)\s*\('
+        ProdAllowed = @('Private\Model\TaxiPlanning.cpp', 'Private\Model\TaxiReservations.cpp')
+        TestExempt  = $true
+        ProdReason  = 'book or release through UTaxiPlanning (Book, Revoke, Drop, Track) - the table has one writer so its order is one timeline (spec 2026-10-02 section 2)'
     }
 )
 # EACH FILE'S COMMENT-STRIPPED LINES, made once and only for a file some row's raw pattern hits (Strip-ArchComments, with the helpers at the top).
@@ -4968,12 +4982,19 @@ $modelLineBudget = [ordered]@{
     # took route changes and transitions to one door each; the rebuild half already lives in GroundTrafficRebuild.cpp.
     # LOWERED 2121 -> 1954 the same day by #444: the retry pass and its two arms went to GroundTrafficWaiters.cpp (one
     # responsibility). RAISED 1954 -> 1955 the same day by #497: the refusal's sentence handed to OnArrivalRefused (#471).
-    'Plugins\Airside\Source\Airside\Private\Model\GroundTraffic.cpp'          = 1955
+    # RAISED 1955 -> 1960 by taxi planning PR 2 (2026-10-02): the arrival's taxi-in plan asked and booked in DispatchArrival
+    # (refused NoTaxiPlan otherwise), the departure's asked in AskDeparture, the push watch keyed on the taxi table, the
+    # OnTaxiPlansFreed diff, Track/StartDuePushes called from AdvanceOnce and ExtendQueuedDepartures from Advance - hooks only: the planning itself, the push
+    # start (moved out of DepartAgent) and the clearance bodies went to GroundTrafficPlanning.cpp, FDepartureAsk to DepartureAsk.h.
+    'Plugins\Airside\Source\Airside\Private\Model\GroundTraffic.cpp'          = 1960
     # 2026-10-01: the claim arbiter, one algorithm (Run and its windows, crossings and ranking - 13 functions, long ones);
     # splitting it would scatter one invariant across files. RAISED 1898 -> 1963 by #502 (2026-10-01): a push held on a dead
     # plan claims the ground its body stands on (HoldBodyFootprint, a geometric claim for a body on no route) - what a body
     # holds is the claim pass's own question, so it lives beside HoldRunwayOnly; with its reason and pin.
-    'Plugins\Airside\Source\Airside\Private\Model\TrafficClaims.cpp'          = 1963
+    # RAISED 1963 -> 2008 by taxi planning PR 2 (2026-10-02): the order's refusal ("not my turn: waiting for X") is a refusal of
+    # the claim pass's own, taken in route order in ApplyClaims (RefuseForOrder: its stop, a node hold's reach, its log line) and the box give-back - the question itself
+    # is UTaxiPlanning::OrderHold's, in TaxiPlanning.cpp.
+    'Plugins\Airside\Source\Airside\Private\Model\TrafficClaims.cpp'          = 2008
     # 2026-10-01: the flight registry and the one transition owner - the save, the indices, TransitionTo and every door that names a
     # transition (the cancels, OnAgentPhase's mapping, the load's steps) and the quote both owners ask. LOWERED 1803 -> 1112 the same
     # day by #442 item 4: the offers went to FOfferInbox (OfferInbox.cpp), the arrival queue, its clearances, the dispatch and every
@@ -4999,7 +5020,9 @@ $modelLineBudget = [ordered]@{
     # RescueStranded moved whole to GroundTrafficRejoin.cpp (held by the default), less #502's own push fixes here (the
     # own-step rule, the push's re-route policy and length bound, and each plan re-resolved to its own end - bOwnsGoal in
     # place of the arms' hand re-points - each with its reason and pin).
-    'Plugins\Airside\Source\Airside\Private\Model\GroundTrafficRebuild.cpp'   = 1490
+    # RAISED 1490 -> 1498 by taxi planning PR 2 (2026-10-02): a rebuild drops every taxi plan (their handles may be dead;
+    # re-planning round an edit is PR 3's), with its reason.
+    'Plugins\Airside\Source\Airside\Private\Model\GroundTrafficRebuild.cpp'   = 1498
     # 2026-10-01: the route search (A* over the guideline graph, plan building, run description) - one algorithm.
     # LOWERED 1191 -> 1031 on 2026-10-02 (taxi planning PR 1): the edge-admissibility filter moved whole to
     # RouteEdgeFilter.cpp (held by the default) so FTaxiPlanner shares it rather than copying it.

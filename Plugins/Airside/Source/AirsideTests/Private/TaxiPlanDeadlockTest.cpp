@@ -33,7 +33,8 @@
 namespace TaxiPlanDeadlock
 {
 	/**
-	 * Counts the deadlock resolver's lines by member set - the spike's spy. UNBUFFERED (memory: a log spy that is not
+	 * Counts the deadlock resolver's lines by member set - the spike's spy, with its reservation cycles counted as jams too:
+	 * a cycle the resolver can only answer by yielding, again and again, is one nobody gets out of. UNBUFFERED (memory: a log spy that is not
 	 * gets its lines on the log thread after it is gone - the #216 flake).
 	 */
 	struct FDeadlockSpy : public FOutputDevice
@@ -70,7 +71,7 @@ namespace TaxiPlanDeadlock
 			{
 				++NotMyTurnLines;
 			}
-			else if (Line.Contains(TEXT("no member can turn")))
+			else if (Line.Contains(TEXT("no member can turn")) || Line.Contains(TEXT("Reservation cycle among agents")))
 			{
 				const FString S = SetOf(Line);
 				NoTurnBySet.FindOrAdd(S)++;

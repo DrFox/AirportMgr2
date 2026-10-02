@@ -89,6 +89,13 @@ struct AIRSIDE_API FTrafficRules
 	UPROPERTY(EditAnywhere, meta = (ClampMin = "1")) int32 TaxiPlanMaxChainEdges = 8;
 
 	/**
+	 * How many holding nodes short of its runway entry a departure tries to queue at, latest first, when the entry itself
+	 * is booked ahead of it (UGroundTraffic::PlanTaxiOut). Each is one planner call, asked when the table moves; 6 reached
+	 * back past the queue of two or three departures M_ScaleGatwick built up at 80 mov/h (2026-10-02).
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0")) int32 TaxiPlanQueueCandidates = 6;
+
+	/**
 	 * How fast a push off a stand runs, uu/s. 1 uu is 1 cm - see UAircraftType::MainWheelRadius.
 	 *
 	 * ON THE RULES AND NOT THE AIRFRAME, unlike the braking figure the claim window reads:

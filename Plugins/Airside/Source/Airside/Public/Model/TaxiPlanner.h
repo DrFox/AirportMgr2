@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/NodeReach.h"
 #include "Model/RoadHandles.h"
 #include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
@@ -132,6 +133,13 @@ struct AIRSIDE_API FTaxiPlan
 	 */
 	TArray<int32> MoveStarts;
 
+	/**
+	 * Resources whose window is the PUSH's alone - no taxi pass joined it - each the holder's earliest window there: the
+	 * push hands over to the taxi, and these go (UTaxiPlanning::Track). A resource the taxi drives again later keeps that
+	 * later window: releasing everything the push touched as one gave the taxi's own pass back before it was driven.
+	 */
+	TArray<FTaxiResource> PushWindows;
+
 	bool IsPlanned() const { return Result == ETaxiPlanResult::Planned; }
 };
 
@@ -179,11 +187,12 @@ public:
 	/**
 	 * Whether an aircraft that reached At along Arrived may stop and wait there: Arrived is not a
 	 * junction turn path and not a box (FTrafficRules::IsBox - its body fits on it, clear of the
-	 * node behind), and At is not a road-taxiway crossing's conflict node. The start of a plan is
-	 * always a hold and is not asked.
+	 * node behind), long enough that a body held there leaves the node behind unclaimed (both nodes'
+	 * reach - FClaimPass::ReachExcessAt), and At is not a road-taxiway crossing's conflict node. The
+	 * start of a plan is always a hold and is not asked. Reach: a cache to share; null makes one.
 	 */
 	static bool CanHoldAt(const URoadNetwork& Network, const FTrafficRules& Rules, FGuidelineEdgeId Arrived,
-		FGuidelineNodeId At);
+		FGuidelineNodeId At, FNodeReachCache* Reach = nullptr);
 
 	/**
 	 * Whether driving from In onto Out turns INSTANTLY at the node between them - a corner with no curve in it,
@@ -205,4 +214,7 @@ private:
 	TMap<TPair<FGuidelineEdgeId, bool>, FTaxiEdgeSeconds> EdgeSeconds;
 	TMap<TPair<FGuidelineEdgeId, bool>, TArray<FVector2D>> EdgeSamples;
 	TMap<TTuple<FGuidelineEdgeId, bool, FGuidelineEdgeId, bool>, bool> SharpJoints;
+
+	/** The node reach the hold rule asks (CanHoldAt), memoised for the planner's life - see FNodeReachCache. */
+	FNodeReachCache Reach;
 };

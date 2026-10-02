@@ -18,6 +18,7 @@ class UTaxiPlanning;
 enum class EDepartureRefusal : uint8;
 struct FDeparturePlan;
 struct FPushbackPlan;
+struct FTaxiPlan;
 struct FTaxiRequest;
 struct FDepartureAsk;
 
@@ -1004,8 +1005,26 @@ private:
 	FTaxiRequest TaxiOutRequest(const FRoadAgent& Agent, const FAirframe& Aircraft, const FDeparturePlan& Departure,
 		const FPushbackPlan* Push) const;
 
+	/** AskDeparture's last step: the taxi plan a departure would be cleared on, or PushbackBlocked with bNoTaxiPlan. */
+	void PlanTaxiOut(const FRoadAgent& Agent, const FAirframe& Aircraft, const URoadNetwork& Network, FDepartureAsk& Ask) const;
+
+	/** DepartAgent's last step: Ask's taxi plan booked, and the departure started now or booked to start when it says. */
+	EDepartureRefusal ClearDeparture(int32 AgentId, const URoadNetwork& Network, const FDepartureAsk& Ask);
+
+	/** A departure refused for want of a taxi plan, put on the push watch keyed on the taxi table. PushbackBlocked. */
+	EDepartureRefusal WatchForTaxiPlan(int32 AgentId, const URoadNetwork& Network, const FRoutePlan& PushRoute);
+
+	/**
+	 * A dispatched arrival's taxi-in booked under its new id, after revoking the unstarted departures its plan needs
+	 * (ruling 2: arrivals first) and putting each of those back on the push watch, so it re-plans when the table moves.
+	 */
+	bool BookTaxiIn(int32 Id, const URoadNetwork& Network, const FTaxiPlan& Taxi, const TArray<int32>& Revoke);
+
 	/** After the claim pass: every cleared aircraft tracked (release, entry, phase), and the gone ones' plans dropped. */
 	void TrackTaxiPlans();
+
+	/** Every queueing departure (FTaxiClearance::QueueFor) asked again for the rest of its way, when the table has moved. Per Advance. */
+	void ExtendQueuedDepartures(const URoadNetwork& Network);
 
 	/** A BOOKED departure whose push is due and whose turn it is starts it (StartPlannedDeparture). End of AdvanceOnce. */
 	void StartDuePushes(const URoadNetwork& Network);
@@ -1301,6 +1320,18 @@ private:
 		uint32 EditRevision = 0;
 		uint32 GuidelineRevision = 0;
 		TSet<FRoadSegmentId> RunwaysHeld;
+
+		/**
+		 * The taxi reservation table's revision when it was last asked (taxi planning PR 2): a refusal for want of a taxi
+		 * plan clears only when the table moves. Asked whole when it has - at most once a SIM SECOND (AskedAt): a busy
+		 * field releases windows every frame, and a departure re-planned per frame per release is a planner per frame,
+		 * which spec §2 rules out ("never per frame"). A second of lag on a push is nothing a player sees.
+		 */
+		uint32 TaxiRevision = 0;
+		double AskedAt = 0.0;
+
+		/** Refused for want of a taxi plan, not for the push ground - so only the taxi table moving can clear it. */
+		bool bTaxiBlocked = false;
 	};
 
 	/**

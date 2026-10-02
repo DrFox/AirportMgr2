@@ -167,8 +167,16 @@ public:
 	/** Removes every window Holder has, on every resource. Returns how many went. */
 	int32 ReleaseHolder(int32 Holder);
 
-	/** Removes Holder's windows on Resource only - the tail clearing one resource. Returns how many went. */
+	/** Removes Holder's windows on Resource only. Returns how many went. */
 	int32 ReleaseHolderOn(const FTaxiResource& Resource, int32 Holder);
+
+	/**
+	 * Removes Holder's EARLIEST window on Resource - the tail clearing it ONCE. A route may pass one resource twice (a
+	 * turnaround loop at a dead end, out along an edge and back along it), and the second pass's window is still due:
+	 * releasing all of them on the first let the aircraft back onto it unordered (measured on M_ScaleGatwick, 2026-10-02 -
+	 * two departures through one loop, the second out first). True when one went.
+	 */
+	bool ReleaseFirstOn(const FTaxiResource& Resource, int32 Holder);
 
 	/**
 	 * Resource's free intervals, earliest first, treating IgnoreHolder's own windows as free -
