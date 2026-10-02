@@ -102,6 +102,14 @@ struct FTaxiInterval
 	double End = 0.0;
 };
 
+/** One step of a re-time (FTaxiReservations::ShiftLater): Holder's windows still held after Since, moved Delta later. */
+struct FTaxiShift
+{
+	int32 Holder = 0;
+	double Since = 0.0;
+	double Delta = 0.0;
+};
+
 /** One window a plan wants, on one resource - what FTaxiReservations::BookPasses takes. */
 struct FTaxiPass
 {
@@ -186,6 +194,21 @@ public:
 	 * now be booked AHEAD of it there - an order it could not obey. True when the window moved.
 	 */
 	bool PullForward(const FTaxiResource& Resource, int32 Holder, double Earliest);
+
+	/**
+	 * A RE-TIME (spec 2026-10-02 §2): Holder's windows still held after Since moved Delta later - one that starts after
+	 * Since shifted, one that straddles it stretched - and EVERY window booked behind one of them that would then overlap
+	 * or overtake it moved on by the least that keeps it behind, recursively: same order, later times. All or nothing:
+	 * false, and the table untouched, when a window would have to move behind one held for ever that it may not share
+	 * with. OutShifts: every move made, the first Holder's, for the plans that carry the times (UTaxiPlanning::Retime).
+	 */
+	bool ShiftLater(int32 Holder, double Since, double Delta, TArray<FTaxiShift>& OutShifts);
+
+	/**
+	 * The ORDER the table holds, as (ahead, behind) holder pairs - consecutive windows of two holders on one resource.
+	 * What survives a rebuild that kills every handle (UGroundTraffic::ReplanAfterRebuild re-plans in this order).
+	 */
+	void OrderPairs(TArray<TPair<int32, int32>>& Out) const;
 
 	/**
 	 * Resource's free intervals, earliest first, treating IgnoreHolder's own windows as free -

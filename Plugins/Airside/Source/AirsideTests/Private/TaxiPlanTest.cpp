@@ -1020,4 +1020,103 @@ bool FTaxiPlanOnePassTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanAlongTest, "Airside.Model.TaxiPlan.PlansAlongAGivenRoute",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanAlongTest::RunTest(const FString& Parameters)
+{
+	// A RE-PLAN KEEPS THE ROUTE BEING DRIVEN (taxi planning PR 3): after a layout edit or a resolver replan the aircraft
+	// is already on a route someone else chose, and its plan must time THAT route, not find a quicker one. A to B direct
+	// is shorter; the route given goes round by C, and the plan must go round by C - waiting where that route allows.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(40000.0, 0.0));
+	const FGuidelineNodeId C = Net->AddGuidelineNode(FVector2D(20000.0, 20000.0));
+	Join(*Net, A, B);
+	const FGuidelineEdgeId AC = Join(*Net, A, C);
+	const FGuidelineEdgeId CB = Join(*Net, C, B);
+
+	const FAirframe Piper = TestAirframes::Piper();
+	const FTrafficRules Rules;
+	FTaxiReservations Table;
+	Table.SetHeadway(Rules.TaxiPlanMargin);
+	FTaxiPlanner Planner(*Net, Table, Piper, Rules);
+
+	const FTaxiPlan Free = Planner.Plan(Request(A, B));
+	TestTrue(TEXT("left to itself it goes direct"), Free.IsPlanned() && Free.Route.Steps.Num() == 1);
+
+	// SOMEONE ON C until 200 s: the plan along A-C-B must wait for it - at A, the one place it may.
+	Table.BookWindow(FTaxiResource::Node(C), { TheirId, 0.0, 200.0 });
+	FTaxiRequest Along = Request(A, B);
+	FRouteStep First;
+	First.Edge = AC;
+	First.To = C;
+	FRouteStep Second;
+	Second.Edge = CB;
+	Second.To = B;
+	Along.Along = { First, Second };
+	FTaxiPlanner AlongPlanner(*Net, Table, Piper, Rules);
+	const FTaxiPlan Kept = AlongPlanner.Plan(Along);
+	TestTrue(TEXT("planned"), Kept.IsPlanned());
+	TestTrue(TEXT("along the route given, not the shorter one"), Kept.Route.Steps.Num() == 2
+		&& Kept.Route.Steps[0].Edge == AC && Kept.Route.Steps[1].Edge == CB);
+	TestTrue(FString::Printf(TEXT("timed round C's holder (reaches C at %.0f s)"), Kept.Legs.Num() > 0 ? Kept.Legs[0].Reach : -1.0),
+		Kept.Legs.Num() == 2 && Kept.Legs[0].Reach >= 200.0);
+	TestTrue(TEXT("and books"), BooksInto(Table, Kept));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanShiftTest, "Airside.Model.TaxiPlan.ShiftLaterKeepsOrder",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanShiftTest::RunTest(const FString& Parameters)
+{
+	// RE-TIME: SAME ORDER, LATER TIMES (spec §2). Holder 1 runs 15 s late; whoever was booked behind it on anything it
+	// still holds moves on just enough to stay behind it, and whoever was behind THEM too - the cascade - so the table's
+	// every window still shares with every other, in the order it was booked.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FTaxiResource R1 = FTaxiResource::Node(Net->AddGuidelineNode(FVector2D(0.0, 0.0)));
+	const FTaxiResource R2 = FTaxiResource::Node(Net->AddGuidelineNode(FVector2D(10000.0, 0.0)));
+	const FGuidelineNodeId EA = Net->AddGuidelineNode(FVector2D(0.0, 10000.0));
+	const FGuidelineNodeId EB = Net->AddGuidelineNode(FVector2D(10000.0, 10000.0));
+	const FTaxiResource Lane = FTaxiResource::Edge(Join(*Net, EA, EB));
+
+	FTaxiReservations Table;
+	Table.SetHeadway(5.0);
+	TestTrue(TEXT("booked"), Table.BookWindow(R1, { 1, 10.0, 20.0 }) && Table.BookWindow(R1, { 2, 20.0, 30.0 })
+		&& Table.BookWindow(R2, { 2, 30.0, 40.0 }) && Table.BookWindow(R2, { 3, 40.0, 50.0 })
+		&& Table.BookWindow(Lane, { 1, 0.0, 20.0, ETaxiWay::AToB }) && Table.BookWindow(Lane, { 4, 5.0, 25.0, ETaxiWay::AToB })
+		&& Table.BookWindow(R2, { 5, 60.0, FTaxiReservations::Forever }));
+
+	TArray<FTaxiShift> Shifts;
+	if (!TestTrue(TEXT("holder 1 re-timed 15 s"), Table.ShiftLater(1, 0.0, 15.0, Shifts)))
+	{
+		return false;
+	}
+	auto Of = [&Table](const FTaxiResource& R, int32 Holder)
+	{
+		for (const FTaxiWindow& W : Table.WindowsOn(R))
+		{
+			if (W.Holder == Holder)
+			{
+				return W;
+			}
+		}
+		return FTaxiWindow();
+	};
+	TestEqual(TEXT("its own window moved"), Of(R1, 1).From, 25.0);
+	TestTrue(TEXT("the one behind it on R1 stays behind"), Of(R1, 2).From >= Of(R1, 1).To);
+	TestTrue(TEXT("and carried its later window on R2"), Of(R2, 2).From >= 45.0);
+	TestTrue(TEXT("which moved the one behind THAT (the cascade)"), Of(R2, 3).From >= Of(R2, 2).To);
+	TestTrue(TEXT("a for-ever window behind them moved its start only"), Of(R2, 5).From >= Of(R2, 3).To
+		&& Of(R2, 5).To >= FTaxiReservations::Forever);
+	TestTrue(TEXT("a follower the same way kept its headway at both ends"), Of(Lane, 4).From >= Of(Lane, 1).From + 5.0
+		&& Of(Lane, 4).To >= Of(Lane, 1).To + 5.0);
+	bool bOrdered = Table.WindowsOn(R1).Num() == 2 && Table.WindowsOn(R1)[0].Holder == 1
+		&& Table.WindowsOn(R2).Num() == 3 && Table.WindowsOn(R2)[0].Holder == 2 && Table.WindowsOn(R2)[1].Holder == 3;
+	TestTrue(TEXT("same order on every resource"), bOrdered);
+	TestTrue(TEXT("every move reported, the first holder's first"), Shifts.Num() >= 4 && Shifts[0].Holder == 1);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

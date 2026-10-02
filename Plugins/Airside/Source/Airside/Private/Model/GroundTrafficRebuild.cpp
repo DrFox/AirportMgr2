@@ -235,11 +235,14 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 	// NodeReach above.
 	RunwayChains.Invalidate();
 
-	// EVERY TAXI PLAN DROPPED (taxi planning PR 2): its windows name handles a rebuild may have re-pointed or killed, and
-	// re-planning aircraft round an edit is PR 3's. Until then they taxi as everything did before plans - claims, resolver.
+	// EVERY TAXI PLAN TAKEN OUT, ITS ORDER KEPT (taxi planning PR 3): the windows name handles this rebuild has killed, so
+	// the table cannot survive it - but who was ahead of whom can, in holder ids. Re-planned at the end, along the routes
+	// the re-resolve below leaves them on, in that order (ReplanAfterRebuild), before anything else is admitted.
+	TArray<int32> TaxiOrder;
+	TMap<int32, FTaxiClearance> TaxiCleared;
 	if (TaxiPlanning != nullptr)
 	{
-		TaxiPlanning->DropAll(TEXT("the layout was rebuilt"));
+		TaxiPlanning->TakeAllForRebuild(TaxiOrder, TaxiCleared);
 	}
 
 	// EVERY RUNWAY AN AGENT HOLDS OR WILL HOLD, RE-POINTED (playtest 2026-09-28). An exit built
@@ -619,6 +622,10 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 				Hold.Key, Hold.Value.Index);
 		}
 	}
+
+	// THE TAXI PLANS AGAIN, along the routes the re-resolve left, in the order they held (taxi planning PR 3) - before the
+	// claim pass below, which asks their order.
+	ReplanAfterRebuild(Network, TaxiOrder, TaxiCleared);
 
 	// AND EVERY BODY AND ROUTE CLAIM, NOW - THE TICK'S OWN CLAIM PASS, run with no motion (push-ground-freed review I1).
 	// The release above took every agent's guideline claims, and only goals and holds came back: a TAXIING or PUSHING

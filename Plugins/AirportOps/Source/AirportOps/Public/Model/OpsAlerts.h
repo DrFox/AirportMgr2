@@ -34,7 +34,12 @@ enum class EAlertKind : uint8
 	 * (UFlightBoard::CancelByPlayer, offered by the alerts panel). Appended LAST: the kind is saved nowhere, but the order is
 	 * the panel's.
 	 */
-	FlightCannotLand
+	FlightCannotLand,
+	/**
+	 * An aircraft lost its taxi plan after a layout edit and taxis UNPLANNED - today's claims and resolver (taxi planning
+	 * spec 2026-10-02 §3: one alert per aircraft, cleared on a new plan or arrival). Id is the flight's id. Appended LAST.
+	 */
+	FlightLostTaxiPlan
 };
 
 /** What "Go" moves the camera to. None for a problem with no place in the world. */

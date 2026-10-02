@@ -630,6 +630,8 @@ void UOpsRuntime::WireBus()
 	// AirportOps.Present.Bus.WiringOrderIsDeclared
 	Bus.RegisterPass(TEXT("Alerts"), [this](const FPassRun&) { RecomputeAlerts(); }, { TEXT("JobBoard"), TEXT("ArrivalQueue") });
 	Bus.Subscribe<FAgentPhaseEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FAgentPhaseEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
+	// AN AIRCRAFT LOST OR REGAINED ITS TAXI PLAN (taxi planning PR 3): FlightLostTaxiPlan raises and clears on it.
+	Bus.Subscribe<FTaxiUnplannedChangedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FTaxiUnplannedChangedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 	Bus.Subscribe<FNetworkChangedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FNetworkChangedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 	Bus.Subscribe<FOfferExpiredEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FOfferExpiredEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 	Bus.Subscribe<FOfferDeclinedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FOfferDeclinedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
@@ -939,6 +941,16 @@ TArray<UOpsRuntime::FAirsideBridge> UOpsRuntime::AirsideBridges()
 				[&Runtime]() { Runtime.Bus.Publish(FTaxiPlansFreedEvent{}); });
 		},
 		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UGroundTraffic* Model = Actor.GetGroundTraffic()) { Model->OnTaxiPlansFreed.Remove(Handle); } } });
+
+	// ENFORCED BY: AirportOps.Present.Bus.TaxiUnplannedChangedIsBridged
+	Out.Add({ TEXT("TaxiUnplannedChanged"),
+		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
+		{
+			UGroundTraffic* Model = Actor.GetGroundTraffic();
+			return Model == nullptr ? FDelegateHandle() : Model->OnTaxiUnplannedChanged.AddWeakLambda(&Runtime,
+				[&Runtime]() { Runtime.Bus.Publish(FTaxiUnplannedChangedEvent{}); });
+		},
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UGroundTraffic* Model = Actor.GetGroundTraffic()) { Model->OnTaxiUnplannedChanged.Remove(Handle); } } });
 
 	// "THE NETWORK CHANGED", BRIDGED LIKE THE ABOVE (#446) - it was a per-frame poll in Tick. See OnNetworkChanged, which adds behaviour (Geometry is no change).
 	Out.Add({ TEXT("NetworkChanged"),

@@ -5,6 +5,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/StandAdmission.h"
+#include "Model/TaxiPlanning.h"
 #include "Model/TaxiwayRestriction.h"
 #include "Profiles/RoadProfile.h"
 #include "Model/TrafficOccupancy.h"
@@ -227,6 +228,8 @@ namespace InspectFacts
 		}
 		Out.bEngineRunning = Agent->bEngineRunning;
 		Out.bCanDepart = Agent->Phase == EAgentPhase::Parked;
+		const FTaxiUnplanned* Unplanned = Traffic.GetTaxiPlanning() != nullptr ? Traffic.GetTaxiPlanning()->FindUnplanned(Agent->Id) : nullptr;
+		Out.TaxiUnplanned = Unplanned != nullptr ? Unplanned->Why : FString();
 		if (const FAirframe* Aircraft = Agent->AsAircraft())
 		{
 			Out.Pushback = PushbackText(Aircraft->PushbackNeed);

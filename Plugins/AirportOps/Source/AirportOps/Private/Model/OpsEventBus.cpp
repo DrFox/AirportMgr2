@@ -187,6 +187,11 @@ FString FTaxiPlansFreedEvent::Describe() const
 	return TEXT("a taxi plan window released");
 }
 
+FString FTaxiUnplannedChangedEvent::Describe() const
+{
+	return TEXT("an aircraft lost or regained its taxi plan");
+}
+
 FString FTaxiwaySplitEvent::Describe() const
 {
 	return FString::Printf(TEXT("%s split off from %s"), *SplitOff, *From);

@@ -33,6 +33,31 @@ enum class ETaxiClearanceStage : uint8
 	Done,
 };
 
+/** Why an aircraft lost its plan - the alert speaks only of a layout edit (spec §3); the inspector of either. */
+enum class ETaxiUnplanned : uint8
+{
+	/** Its route was changed under it (the resolver's replan, a redirect, a re-offer) and no plan fits the new one. */
+	RouteChanged,
+	/** A layout edit rebuilt the graph under it and no plan fits the route it was re-resolved onto. */
+	LayoutEdit,
+};
+
+/**
+ * An aircraft taxiing UNPLANNED (spec §2): no windows - today's claims and the resolver keep it apart - until a plan
+ * along its route fits again (retried when the table moves) or it parks, departs or goes.
+ */
+struct FTaxiUnplanned
+{
+	ETaxiUnplanned Cause = ETaxiUnplanned::RouteChanged;
+	FString Why;
+	ETaxiClearanceKind Kind = ETaxiClearanceKind::TaxiIn;
+	ERouteErrand Errand = ERouteErrand::Unset;
+
+	/** When a re-plan was last tried, and the table's revision then - tried again only once both have moved on. */
+	double TriedAt = -1.0;
+	uint32 TriedRevision = 0;
+};
+
 /** One cleared aircraft: its plan, and how far through it it is. */
 struct FTaxiClearance
 {
@@ -75,6 +100,12 @@ struct FTaxiClearance
 	 */
 	FGuidelineNodeId QueueFor;
 	ERouteErrand QueueErrand = ERouteErrand::Unset;
+
+	/** Where QueueFor is - re-found by position after a rebuild, which kills the handle (UGroundTraffic::ReplanTaxi). */
+	FVector2D QueueAt = FVector2D::ZeroVector;
+
+	/** When a re-time was last tried - tried at most once a sim second (a cascade copies the table). */
+	double RetimeTriedAt = -1.0;
 
 	/** When the rest was last asked for, and the table's revision then - asked again only once both have moved on. */
 	double ExtendAskedAt = -1.0;
@@ -180,6 +211,55 @@ public:
 	/** Every clearance dropped - a rebuild. Logged once. */
 	void DropAll(const TCHAR* Why);
 
+	/**
+	 * A REBUILD'S FIRST HALF (taxi planning PR 3): every clearance taken out of the table - whose handles the rebuild is
+	 * about to kill - with the table's ORDER as a list of holders, ahead first (topological over OrderPairs; ties by
+	 * earliest window). UGroundTraffic::ReplanAfterRebuild books them again, along their re-resolved routes, in that order.
+	 */
+	void TakeAllForRebuild(TArray<int32>& OutOrder, TMap<int32, FTaxiClearance>& OutCleared);
+
+	/**
+	 * A plan ALONG A ROUTE ALREADY BEING DRIVEN booked for Holder: Live is that whole route, Tail the planner's plan for
+	 * its steps from Prefix on (FTaxiRequest::Along), PrefixPasses the windows of what it is on before them (the step it
+	 * is driving, a push under way). The clearance's route is Live, its legs and moves offset by Prefix, the steps before
+	 * the one it is on counted released. Replaces any plan Holder had; clears it as unplanned. False: nothing changed.
+	 */
+	bool BookAlong(const URoadNetwork& Network, int32 Holder, ETaxiClearanceKind Kind, ETaxiClearanceStage Stage,
+		const FRoutePlan& Live, int32 Prefix, const FTaxiPlan& Tail, TConstArrayView<FTaxiPass> PrefixPasses,
+		const FRoutePlan& PushRoute, TConstArrayView<FTaxiResource> PushOnly, double Now);
+
+	/** Holder taxis on with no plan - see FTaxiUnplanned. Logged "unplanned - Why" once per reason. Its windows go. */
+	void MarkUnplanned(int32 Holder, ETaxiUnplanned Cause, const FString& Why, ETaxiClearanceKind Kind, ERouteErrand Errand);
+
+	/** Holder's unplanned record, or null when it has a plan or never had one. */
+	const FTaxiUnplanned* FindUnplanned(int32 Holder) const { return Unplanned.Find(Holder); }
+
+	/** Holder no longer counts as unplanned - it parked, departed or went (UGroundTraffic::RetryUnplanned). */
+	void ClearUnplanned(int32 Holder);
+
+	/** Every unplanned holder. */
+	TArray<int32> UnplannedHolders() const;
+
+	/** The unplanned holders due a retry: not tried in the last sim second, or since the table last moved. */
+	TArray<int32> UnplannedDueRetry(double Now) const;
+
+	/** A retry was made at Now on the table as it is - UnplannedDueRetry's date. */
+	void NoteUnplannedTried(int32 Holder, double Now);
+
+	/** True once after the unplanned set changed since it was last asked - DiffFreedom's question (OnTaxiUnplannedChanged). */
+	bool TakeUnplannedChanged();
+
+	/**
+	 * RE-TIME (spec §2): Holder's windows still held after Since moved Lag later, everyone booked behind them with them,
+	 * same order (FTaxiReservations::ShiftLater); every shifted plan's legs, holds, arrival and push time moved alike.
+	 * Since is the moment it is late FOR, so that overdue moment moves too. Logged "re-timed +X s". Wakes waiters. False,
+	 * nothing changed, when the cascade cannot be made.
+	 */
+	bool Retime(int32 Holder, double Since, double Lag);
+
+	/** Test only: every re-plan refused - the unplanned fallback, made on demand. */
+	bool bRefuseReplansForTest = false;
+
 	/** A refusal, said once per holder per reason (0 holder: an arrival not yet admitted - said per reason). */
 	void NoteRefused(int32 Holder, const FString& What, const FString& Why);
 
@@ -190,7 +270,7 @@ public:
 	int32 WaitingFor(int32 Holder, const FTaxiResource& Resource) const;
 
 	/** Marks Holder's departure as QUEUEING for QueueFor - see FTaxiClearance::QueueFor. */
-	void SetQueued(int32 Holder, FGuidelineNodeId QueueFor, ERouteErrand Errand);
+	void SetQueued(int32 Holder, FGuidelineNodeId QueueFor, ERouteErrand Errand, const FVector2D& QueueAt);
 
 	/** The queueing departures not asked in the last second, or since the table last moved - ExtendQueuedDepartures' list. */
 	TArray<int32> QueuedDueAsk(double Now) const;
@@ -227,10 +307,12 @@ public:
 
 	/**
 	 * After the claim pass, per agent: release what its TAIL has cleared (behind it, and no claim of its left on it),
-	 * note what its NOSE has entered, and follow its phase - parked is Done, lined up drops the plan (the runway is the
-	 * runway's own authority from there), a route that is not the plan's drops it as unplanned.
+	 * note what its NOSE has entered, follow its phase - parked is Done, lined up drops the plan (the runway is the
+	 * runway's own authority from there) - and re-time it when it runs later than its plan by more than the knob
+	 * (FTrafficRules::TaxiPlanRetimeLag). False: its route is no longer the plan's - the caller re-plans it along the new
+	 * one (UGroundTraffic::ReplanTaxi), which PR 2 dropped instead.
 	 */
-	void Track(const FRoadAgent& Agent, const FTrafficOccupancy& Occupancy, const FTrafficRules& Rules);
+	bool Track(const FRoadAgent& Agent, const FTrafficOccupancy& Occupancy, const FTrafficRules& Rules, double Now);
 
 	/** True once after anything was released since it was last asked - UGroundTraffic::DiffFreedom's question. */
 	bool TakeReleased();
@@ -272,4 +354,8 @@ private:
 
 	/** See DelayForTest. */
 	TMap<int32, double> DelayedUntilForTest;
+
+	/** See FTaxiUnplanned. */
+	TMap<int32, FTaxiUnplanned> Unplanned;
+	bool bUnplannedChanged = false;
 };

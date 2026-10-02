@@ -1384,6 +1384,7 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 	{
 		DiffFreedom(*Network, /*bRebuilt*/ false);
 		ExtendQueuedDepartures(*Network);
+		RetryUnplanned(*Network);
 	}
 }
 
@@ -1557,6 +1558,11 @@ void UGroundTraffic::DiffFreedom(const URoadNetwork& Network, bool bRebuilt)
 		bArrivalAwaitsTaxiPlan = false;
 		OnTaxiPlansFreed.Broadcast();
 	}
+	// AND WHO TAXIS UNPLANNED CHANGED - the ops alert's wake-up (OnTaxiUnplannedChanged).
+	if (TaxiPlanning != nullptr && TaxiPlanning->TakeUnplannedChanged())
+	{
+		OnTaxiUnplannedChanged.Broadcast();
+	}
 }
 
 void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Network)
@@ -1572,7 +1578,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 	{
 		Arbitrate(*Network);
 		// TAXI PLANS FOLLOW THE CLAIMS JUST MADE: released behind each tail, entered at each nose (GroundTrafficPlanning.cpp).
-		TrackTaxiPlans();
+		TrackTaxiPlans(*Network);
 		// THE HELD TAXI-OUT REPLAN RAN HERE, before the agents moved, until #444: it is RetryWaiters' arm now, at the end
 		// of this step with the stand re-offer - see RetryWaiters for why the handover lands on the same tick.
 	}

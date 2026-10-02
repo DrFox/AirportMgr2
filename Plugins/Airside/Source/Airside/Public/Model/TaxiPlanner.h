@@ -65,6 +65,13 @@ struct FTaxiRequest
 
 	/** How long the push takes, start to standing at its end - FLOWN by a probe of FPushbackRun, never estimated. */
 	double PushSeconds = 0.0;
+
+	/**
+	 * A ROUTE TO KEEP, or empty (taxi planning PR 3): the steps from Start to Goal the aircraft is already driving - a
+	 * layout edit's re-resolve or the resolver chose them - planned in TIME only, its waits where the route allows. Goal is
+	 * the route's end, reached by step count (a dead-end loop passes one node twice). Not with PushSteps.
+	 */
+	TArray<FRouteStep> Along;
 };
 
 /** One planned edge: when the aircraft leaves its start node and reaches To. Legs[i] times Route.Steps[i]. */

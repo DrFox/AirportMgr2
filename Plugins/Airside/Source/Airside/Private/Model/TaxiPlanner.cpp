@@ -101,6 +101,9 @@ namespace
 		/** That move was the push off the stand. */
 		bool bPushMove = false;
 
+		/** Planning ALONG a route (FTaxiRequest::Along): the index of the next step to drive. 0 otherwise. */
+		int32 AlongAt = 0;
+
 		int32 Parent = INDEX_NONE;
 	};
 
@@ -111,17 +114,20 @@ namespace
 		FGuidelineEdgeId InEdge;
 		int32 EdgePlace = 0;
 
+		/** Along a route, how far along it: a loop's node met twice is two states, not one. */
+		int32 AlongAt = 0;
+
 		bool operator==(const FSippKey& Other) const
 		{
 			return Node == Other.Node && NodePlace == Other.NodePlace && InEdge == Other.InEdge
-				&& EdgePlace == Other.EdgePlace;
+				&& EdgePlace == Other.EdgePlace && AlongAt == Other.AlongAt;
 		}
 	};
 
 	uint32 GetTypeHash(const FSippKey& Key)
 	{
-		return HashCombine(HashCombine(GetTypeHash(Key.Node), ::GetTypeHash(Key.NodePlace)),
-			HashCombine(GetTypeHash(Key.InEdge), ::GetTypeHash(Key.EdgePlace)));
+		return HashCombine(HashCombine(HashCombine(GetTypeHash(Key.Node), ::GetTypeHash(Key.NodePlace)),
+			HashCombine(GetTypeHash(Key.InEdge), ::GetTypeHash(Key.EdgePlace))), ::GetTypeHash(Key.AlongAt));
 	}
 
 	bool ByEstimate(const TPair<double, int32>& A, const TPair<double, int32>& B)
@@ -217,7 +223,10 @@ FTaxiPlan FTaxiPlanner::Plan(const FTaxiRequest& Request)
 		return Out;
 	};
 
-	if (TaxiStart == Request.Goal || Network.GetGuidelineNode(Request.Start) == nullptr
+	// ALONG A ROUTE (PR 3): its steps are the only edges, its end the goal, counted by steps. It may start and end on one
+	// node (a loop), so the start-is-goal refusal is the free search's only.
+	const bool bAlong = Request.Along.Num() > 0 && !bPush;
+	if ((!bAlong && TaxiStart == Request.Goal) || Network.GetGuidelineNode(Request.Start) == nullptr
 		|| Network.GetGuidelineNode(Request.Goal) == nullptr || Network.GetGuidelineNode(TaxiStart) == nullptr)
 	{
 		return Refuse();
@@ -378,14 +387,14 @@ FTaxiPlan FTaxiPlanner::Plan(const FTaxiRequest& Request)
 		TPair<double, int32> Top;
 		Open.HeapPop(Top, ByEstimate);
 		const FSippState S = States[Top.Value];
-		const FSippKey Key{ S.Node, S.NodePlace, S.InEdge, S.EdgePlace };
+		const FSippKey Key{ S.Node, S.NodePlace, S.InEdge, S.EdgePlace, S.AlongAt };
 		if (Closed.Contains(Key))
 		{
 			continue;
 		}
 		Closed.Add(Key);
 
-		if (S.Node == Request.Goal)
+		if (bAlong ? S.AlongAt >= Request.Along.Num() : S.Node == Request.Goal)
 		{
 			Reached = Top.Value;
 			break;
@@ -402,6 +411,32 @@ FTaxiPlan FTaxiPlanner::Plan(const FTaxiRequest& Request)
 		{
 			Chains.Add(PushChain);
 		}
+		else if (bAlong)
+		{
+			// THE ONE CHAIN THE ROUTE ALLOWS: its next steps, to the next node it may stop at or its end - the moves the free
+			// search would make along the same edges, so the order sees the same moves either way.
+			TArray<FChainStep> Next;
+			bool bUsable = true;
+			for (int32 Index = S.AlongAt; Index < Request.Along.Num() && bUsable; ++Index)
+			{
+				const FRouteStep& Step = Request.Along[Index];
+				bUsable = SecondsFor(Step.Edge, Step.bReversed).bUsable;
+				FChainStep Chained;
+				Chained.Edge = Step.Edge;
+				Chained.bReversed = Step.bReversed;
+				Chained.To = Step.To;
+				Chained.Way = WayFor(Step.Edge, Step.bReversed);
+				Next.Add(Chained);
+				if (Index + 1 == Request.Along.Num() || CanHoldAt(Network, Rules, Step.Edge, Step.To, &Reach))
+				{
+					break;
+				}
+			}
+			if (bUsable && Next.Num() > 0)
+			{
+				Chains.Add(MoveTemp(Next));
+			}
+		}
 		else
 		{
 			Chains = ChainsOf(S.Node, S.NoReverseOf);
@@ -411,6 +446,8 @@ FTaxiPlan FTaxiPlanner::Plan(const FTaxiRequest& Request)
 		{
 			// TWO WAYS TO SET OFF: rolling straight on (not from rest, nor round an instant corner), or from rest after a
 			// stop here - waiting as long as the node and the tail's edge allow. A push is from rest, timed whole.
+			// Whether this chain ends at the goal: the route's last step when planning along one, the goal node otherwise.
+			const bool bChainAtGoal = bAlong ? S.AlongAt + Walked.Num() >= Request.Along.Num() : Walked.Last().To == Request.Goal;
 			for (int32 Variant = 0; Variant < 2; ++Variant)
 			{
 				const bool bRolling = Variant == 0;
@@ -431,7 +468,7 @@ FTaxiPlan FTaxiPlanner::Plan(const FTaxiRequest& Request)
 						const FTaxiEdgeSeconds& Seconds = SecondsFor(Step.Edge, Step.bReversed);
 						Step.bFromRest = Index == 0 ? !bRolling
 							: IsSharpJoint(Chain[Index - 1].Edge, Chain[Index - 1].bReversed, Step.Edge, Step.bReversed);
-						const bool bToRest = Step.To == Request.Goal || (Index + 1 < Chain.Num()
+						const bool bToRest = (Index + 1 == Chain.Num() && bChainAtGoal) || (Index + 1 < Chain.Num()
 							&& IsSharpJoint(Step.Edge, Step.bReversed, Chain[Index + 1].Edge, Chain[Index + 1].bReversed));
 						Step.Enter = Clock;
 						Clock += Step.bFromRest ? (bToRest ? Seconds.RestRest : Seconds.RestRoll)
@@ -463,7 +500,7 @@ FTaxiPlan FTaxiPlanner::Plan(const FTaxiRequest& Request)
 				{
 					const FChainStep& Step = Chain[Index];
 					const bool bEnd = Index == Chain.Num() - 1;
-					const bool bAtGoal = bEnd && Step.To == Request.Goal;
+					const bool bAtGoal = bEnd && bChainAtGoal;
 					Needs.Add({ FTaxiResource::Edge(Step.Edge), 0.0, Step.Reach, bAtGoal, Step.Way });
 					Needs.Add({ FTaxiResource::Node(Step.To), (bWholeMove || !bEnd) ? 0.0 : Step.Reach, Step.Reach, bAtGoal, ETaxiWay::Any });
 				}
@@ -550,13 +587,14 @@ FTaxiPlan FTaxiPlanner::Plan(const FTaxiRequest& Request)
 					Next.Left = Tau;
 					Next.Chain = Chain;
 					Next.bPushMove = bPushMove;
+					Next.AlongAt = bAlong ? S.AlongAt + Chain.Num() : 0;
 					Next.Parent = Top.Value;
 
 					// It may stay as long as the node AND the edge its tail is still on may stretch.
 					Next.LeaveBy = FMath::Min(Table.LatestEnd(EndNode, ETaxiWay::Any, NodeLo, Holder),
 						Table.LatestEnd(EndEdge, Last.Way, EdgeLo, Holder));
 
-					const FSippKey NextKey{ Next.Node, Next.NodePlace, Next.InEdge, Next.EdgePlace };
+					const FSippKey NextKey{ Next.Node, Next.NodePlace, Next.InEdge, Next.EdgePlace, Next.AlongAt };
 					const double* Known = BestArrive.Find(NextKey);
 					if (!Closed.Contains(NextKey) && (Known == nullptr || *Known > Next.Arrive))
 					{

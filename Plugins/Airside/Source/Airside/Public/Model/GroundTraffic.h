@@ -15,6 +15,8 @@
 
 class URoadNetwork;
 class UTaxiPlanning;
+struct FTaxiClearance;
+enum class ETaxiUnplanned : uint8;
 enum class EDepartureRefusal : uint8;
 struct FDeparturePlan;
 struct FPushbackPlan;
@@ -178,6 +180,15 @@ public:
 	 */
 	DECLARE_MULTICAST_DELEGATE(FOnTaxiPlansFreed);
 	FOnTaxiPlansFreed OnTaxiPlansFreed;
+
+	/**
+	 * Which aircraft taxi UNPLANNED changed (taxi planning PR 3: one lost its plan, or regained one, or parked) - fired once,
+	 * at the end of the DiffFreedom that saw it. What the ops alert "lost its plan after a layout edit" is recomputed on;
+	 * bound here, not relayed, like OnTaxiPlansFreed.
+	 * ENFORCED BY: AirportOps.Present.Bus.TaxiUnplannedChangedIsBridged
+	 */
+	DECLARE_MULTICAST_DELEGATE(FOnTaxiUnplannedChanged);
+	FOnTaxiUnplannedChanged OnTaxiUnplannedChanged;
 
 	/** The taxi planning owner - its table, its clearances, the order the claim pass enforces. Null only on the CDO. */
 	const UTaxiPlanning* GetTaxiPlanning() const { return TaxiPlanning; }
@@ -1025,8 +1036,33 @@ private:
 	/** DispatchArrival's refusal for want of a taxi plan: worded, logged (Detail appended), noted as waiting, broadcast. 0. */
 	int32 RefuseNoTaxiPlan(const FAirframe& Airframe, const TCHAR* Detail);
 
-	/** After the claim pass: every cleared aircraft tracked (release, entry, phase), and the gone ones' plans dropped. */
-	void TrackTaxiPlans();
+	/**
+	 * After the claim pass: every cleared aircraft tracked (release, entry, phase, re-time), the gone ones' plans dropped,
+	 * and one whose route changed under it re-planned along the new one (ReplanTaxi).
+	 */
+	void TrackTaxiPlans(const URoadNetwork& Network);
+
+	/**
+	 * RE-PLAN ALONG THE ROUTE IT DRIVES (taxi planning PR 3), from where it is: a Taxiing aircraft from the end of the step
+	 * it is on, an Arriving one from its exit at its planned vacate time, a pushing one from where its push ends; a parked
+	 * one re-holds its stand. Old: the clearance it had (its kind, stage, queue), or null. No plan fits: UNPLANNED, with
+	 * Cause and Why (UTaxiPlanning::MarkUnplanned). True when it holds a plan after.
+	 */
+	bool ReplanTaxi(const FRoadAgent& Agent, const URoadNetwork& Network, ETaxiUnplanned Cause, const TCHAR* Why,
+		const FTaxiClearance* Old);
+
+	/**
+	 * A LAYOUT EDIT'S RE-PLAN, from OnGraphRebuilt after the re-resolve: every aircraft that held a plan, in the old
+	 * table's order (Order, from UTaxiPlanning::TakeAllForRebuild) - the moving ones first, along their re-resolved
+	 * routes, then the parked; a Booked departure back on the push watch. Nothing else is admitted in between.
+	 */
+	void ReplanAfterRebuild(const URoadNetwork& Network, const TArray<int32>& Order, const TMap<int32, FTaxiClearance>& Old);
+
+	/** After a re-plan: a departure that was queueing for its runway entry (Old.QueueFor) queues again, the entry re-found by position after a rebuild. */
+	void RequeueAfterReplan(const FRoadAgent& Agent, const URoadNetwork& Network, const FTaxiClearance& Old);
+
+	/** Every unplanned aircraft retried when the table has moved, and forgotten once it parks or goes. Per Advance. */
+	void RetryUnplanned(const URoadNetwork& Network);
 
 	/** Every queueing departure (FTaxiClearance::QueueFor) asked again for the rest of its way, when the table has moved. Per Advance. */
 	void ExtendQueuedDepartures(const URoadNetwork& Network);

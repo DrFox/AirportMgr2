@@ -96,6 +96,13 @@ struct AIRSIDE_API FTrafficRules
 	UPROPERTY(EditAnywhere, meta = (ClampMin = "0")) int32 TaxiPlanQueueCandidates = 6;
 
 	/**
+	 * How late on its plan an aircraft may run, seconds, before its remaining windows are RE-TIMED (spec 2026-10-02 §2,
+	 * "~15 s (knob)"): moved later, with every window booked behind them, in the same order (UTaxiPlanning::Retime). Order,
+	 * not time, keeps the field safe, so this shapes only how realistic the table stays for the next plan made round it.
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "1")) double TaxiPlanRetimeLag = 15.0;
+
+	/**
 	 * How fast a push off a stand runs, uu/s. 1 uu is 1 cm - see UAircraftType::MainWheelRadius.
 	 *
 	 * ON THE RULES AND NOT THE AIRFRAME, unlike the braking figure the claim window reads:
