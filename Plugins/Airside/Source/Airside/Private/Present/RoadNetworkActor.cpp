@@ -1266,6 +1266,21 @@ FString ARoadNetworkActor::WhyApronRefused(TArrayView<const FVector2D> Outline) 
 	return Facade->WhyApronRefused(Outline);
 }
 
+FBuildQuote ARoadNetworkActor::QuoteLandTile(FIntPoint Tile) const
+{
+	return Facade->QuoteLandTile(Tile);
+}
+
+FString ARoadNetworkActor::WhyLandTileRefused(FIntPoint Tile) const
+{
+	return Facade->WhyLandTileRefused(Tile);
+}
+
+bool ARoadNetworkActor::BuyLandTile(FIntPoint Tile)
+{
+	return Facade->BuyLandTile(Tile);
+}
+
 FString ARoadNetworkActor::WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const
 {
 	return Facade->WhyStandRefused(Outline, Pavement);
