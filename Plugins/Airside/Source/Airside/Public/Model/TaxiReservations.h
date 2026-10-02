@@ -202,7 +202,11 @@ public:
 	 * false, and the table untouched, when a window would have to move behind one held for ever that it may not share
 	 * with. OutShifts: every move made, the first Holder's, for the plans that carry the times (UTaxiPlanning::Retime).
 	 */
-	bool ShiftLater(int32 Holder, double Since, double Delta, TArray<FTaxiShift>& OutShifts);
+	bool ShiftLater(int32 Holder, double Since, double Delta, double Now, TFunctionRef<bool(int32 Holder)> Immovable,
+		TArray<FTaxiShift>& OutShifts);
+
+	/** ShiftLater with no holder immovable. */
+	bool ShiftLater(int32 Holder, double Since, double Delta, double Now, TArray<FTaxiShift>& OutShifts);
 
 	/**
 	 * The ORDER the table holds, as (ahead, behind) holder pairs - consecutive windows of two holders on one resource.

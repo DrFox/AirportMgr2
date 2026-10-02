@@ -245,7 +245,13 @@ namespace
 	}
 }
 
-bool FTaxiReservations::ShiftLater(int32 Holder, double Since, double Delta, TArray<FTaxiShift>& OutShifts)
+bool FTaxiReservations::ShiftLater(int32 Holder, double Since, double Delta, double Now, TArray<FTaxiShift>& OutShifts)
+{
+	return ShiftLater(Holder, Since, Delta, Now, [](int32) { return false; }, OutShifts);
+}
+
+bool FTaxiReservations::ShiftLater(int32 Holder, double Since, double Delta, double Now, TFunctionRef<bool(int32 Holder)> Immovable,
+	TArray<FTaxiShift>& OutShifts)
 {
 	OutShifts.Reset();
 	if (!(Delta > 0.0))

@@ -1089,7 +1089,8 @@ bool FTaxiPlanShiftTest::RunTest(const FString& Parameters)
 		&& Table.BookWindow(R2, { 5, 60.0, FTaxiReservations::Forever }));
 
 	TArray<FTaxiShift> Shifts;
-	if (!TestTrue(TEXT("holder 1 re-timed 15 s"), Table.ShiftLater(1, 0.0, 15.0, Shifts)))
+	// NOW AT THE START OF TIME: nothing has started, so every window may move (ShiftLaterNeverMovesWhatHasStarted pins the rest).
+	if (!TestTrue(TEXT("holder 1 re-timed 15 s"), Table.ShiftLater(1, 0.0, 15.0, FTaxiReservations::Always, Shifts)))
 	{
 		return false;
 	}
@@ -1116,6 +1117,99 @@ bool FTaxiPlanShiftTest::RunTest(const FString& Parameters)
 		&& Table.WindowsOn(R2).Num() == 3 && Table.WindowsOn(R2)[0].Holder == 2 && Table.WindowsOn(R2)[1].Holder == 3;
 	TestTrue(TEXT("same order on every resource"), bOrdered);
 	TestTrue(TEXT("every move reported, the first holder's first"), Shifts.Num() >= 4 && Shifts[0].Holder == 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanShiftStartedTest, "Airside.Model.TaxiPlan.ShiftLaterNeverMovesWhatHasStarted",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanShiftStartedTest::RunTest(const FString& Parameters)
+{
+	// REVIEW OF #534 FINDING 2: a re-time moved WHOLE every window starting after the overdue moment - and a move the order
+	// has committed X to starts at the commit (PullForward), which for a late aircraft is after that moment. The window
+	// jumped later, a gap opened ahead of X on ground it could no longer stop short of, and a plan made then was booked
+	// into it AHEAD of X. Likewise a victim's window on the edge it was already driving. A window that has STARTED (From at
+	// or before now) is only ever stretched; one that waited for the late one is moved up to abut it - no gap either way.
+	// Finding 9 too: a short window wholly after the one ahead of it was pushed on for nothing.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FTaxiResource R1 = FTaxiResource::Node(Net->AddGuidelineNode(FVector2D(0.0, 0.0)));
+	const FTaxiResource R2 = FTaxiResource::Node(Net->AddGuidelineNode(FVector2D(10000.0, 0.0)));
+	const FTaxiResource R3 = FTaxiResource::Node(Net->AddGuidelineNode(FVector2D(20000.0, 0.0)));
+	const FGuidelineNodeId EA = Net->AddGuidelineNode(FVector2D(0.0, 10000.0));
+	const FGuidelineNodeId EB = Net->AddGuidelineNode(FVector2D(10000.0, 10000.0));
+	const FTaxiResource Lane = FTaxiResource::Edge(Join(*Net, EA, EB));
+
+	constexpr double Now = 20.0;
+	FTaxiReservations Table;
+	Table.SetHeadway(5.0);
+	// X (1): committed onto R1 at 10, due on R2 at 40, on the lane since 0, still on R3. V (2) follows it down the lane,
+	// entered at 8. W (3) waits for R3 - its window began at 18, X is still there. Q (4) is due on R1 after X, not started.
+	// S (5) drives the lane well after everyone has left it, in a window shorter than the headway.
+	TestTrue(TEXT("booked"), Table.BookWindow(R1, { 1, 10.0, 30.0 }) && Table.BookWindow(R2, { 1, 40.0, 50.0 })
+		&& Table.BookWindow(Lane, { 1, 0.0, 30.0, ETaxiWay::AToB }) && Table.BookWindow(Lane, { 2, 8.0, 36.0, ETaxiWay::AToB })
+		&& Table.BookWindow(R3, { 1, 0.0, 18.0 }) && Table.BookWindow(R3, { 3, 18.0, 25.0 })
+		&& Table.BookWindow(R1, { 4, 30.0, 40.0 }) && Table.BookWindow(Lane, { 5, 52.0, 53.0, ETaxiWay::AToB }));
+
+	TArray<FTaxiShift> Shifts;
+	if (!TestTrue(TEXT("X re-timed 15 s from 5 s"), Table.ShiftLater(1, 5.0, 15.0, Now, Shifts)))
+	{
+		return false;
+	}
+	auto Of = [&Table](const FTaxiResource& R, int32 Holder)
+	{
+		for (const FTaxiWindow& W : Table.WindowsOn(R))
+		{
+			if (W.Holder == Holder)
+			{
+				return W;
+			}
+		}
+		return FTaxiWindow();
+	};
+	TestEqual(TEXT("X's committed window keeps its start"), Of(R1, 1).From, 10.0);
+	TestEqual(TEXT("and is stretched"), Of(R1, 1).To, 45.0);
+	TestEqual(TEXT("X's window not yet reached moves whole"), Of(R2, 1).From, 55.0);
+	TestEqual(TEXT("X's lane window keeps its start"), Of(Lane, 1).From, 0.0);
+	TestEqual(TEXT("V, entered behind it, keeps its start"), Of(Lane, 2).From, 8.0);
+	TestTrue(TEXT("and leaves a headway after X"), Of(Lane, 2).To >= Of(Lane, 1).To + 5.0);
+	TestEqual(TEXT("W, waiting on R3, now starts as X leaves it - abutting, no gap"), Of(R3, 3).From, Of(R3, 1).To);
+	TestTrue(TEXT("Q, due after X on R1, stays after it"), Of(R1, 4).From >= Of(R1, 1).To);
+	TestEqual(TEXT("S, wholly after everyone on the lane, is not moved (finding 9)"), Of(Lane, 5).From, 52.0);
+	double Shift = 0.0;
+	TestTrue(TEXT("a newcomer fits R1 somewhere"), Table.EarliestFit(R1, ETaxiWay::Any, Now, Now + 1.0, 99, Shift));
+	TestTrue(FString::Printf(TEXT("but never ahead of X, committed there (placed at %.1f s)"), Now + Shift), Now + Shift >= Of(R1, 1).To);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanShiftLandingTest, "Airside.Model.TaxiPlan.ShiftLaterNeverMovesALanding",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanShiftLandingTest::RunTest(const FString& Parameters)
+{
+	// REVIEW OF #534 FINDING 6: an arrival on final cannot be late to order - the landing is flown, not planned, and it may
+	// not wait at its exit. A re-time cascade shifted its windows behind a late aircraft anyway. Now an immovable holder's
+	// window stays; the late one, not yet there, goes BEHIND it instead. Already there (started): no re-time can be made,
+	// and the table is left as it was (finding 11: the refusal branch).
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FTaxiResource R = FTaxiResource::Node(Net->AddGuidelineNode(FVector2D(0.0, 0.0)));
+	auto Landing = [](int32 Holder) { return Holder == 2; };
+
+	FTaxiReservations Table;
+	Table.SetHeadway(5.0);
+	TestTrue(TEXT("booked"), Table.BookWindow(R, { 1, 10.0, 20.0 }) && Table.BookWindow(R, { 2, 22.0, 30.0 }));
+	TArray<FTaxiShift> Shifts;
+	TestTrue(TEXT("X, not yet there, re-timed 15 s"), Table.ShiftLater(1, 0.0, 15.0, 5.0, Landing, Shifts));
+	const TConstArrayView<FTaxiWindow> On = Table.WindowsOn(R);
+	TestTrue(TEXT("the landing's window did not move"), On.Num() == 2 && On[0].Holder == 2 && On[0].From == 22.0 && On[0].To == 30.0);
+	TestTrue(TEXT("X goes after it"), On.Num() == 2 && On[1].Holder == 1 && On[1].From >= 30.0);
+
+	FTaxiReservations Started;
+	Started.SetHeadway(5.0);
+	TestTrue(TEXT("booked"), Started.BookWindow(R, { 1, 0.0, 20.0 }) && Started.BookWindow(R, { 2, 22.0, 30.0 }));
+	TestFalse(TEXT("X already there: refused"), Started.ShiftLater(1, 0.0, 15.0, 10.0, Landing, Shifts));
+	const TConstArrayView<FTaxiWindow> Kept = Started.WindowsOn(R);
+	TestTrue(TEXT("and nothing changed"), Kept.Num() == 2 && Kept[0].Holder == 1 && Kept[0].To == 20.0
+		&& Kept[1].Holder == 2 && Kept[1].From == 22.0);
 	return true;
 }
 

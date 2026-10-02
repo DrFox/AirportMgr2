@@ -255,7 +255,7 @@ public:
 	 * Since is the moment it is late FOR, so that overdue moment moves too. Logged "re-timed +X s". Wakes waiters. False,
 	 * nothing changed, when the cascade cannot be made.
 	 */
-	bool Retime(int32 Holder, double Since, double Lag);
+	bool Retime(int32 Holder, double Since, double Lag, double Now);
 
 	/** Test only: every re-plan refused - the unplanned fallback, made on demand. */
 	bool bRefuseReplansForTest = false;

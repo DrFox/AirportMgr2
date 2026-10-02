@@ -641,14 +641,17 @@ bool FTaxiPlanExitTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	// AHEAD OF IT ON ITS FIRST EDGE, ending before its window there begins - and never released.
+	// AHEAD OF IT ON ITS FIRST EDGE, ending before its window there begins - and never released. GOING ITS WAY: the
+	// exemption is for one ahead of it the same way (or on a node); one coming the other way still holds it (below).
 	const FTaxiResource First = FTaxiResource::Edge(Preview.Route.Steps[0].Edge);
 	double FirstFrom = Vacate;
+	ETaxiWay FirstWay = ETaxiWay::Any;
 	for (const FTaxiPass& Pass : Preview.Passes)
 	{
+		FirstWay = Pass.Resource == First ? Pass.Window.Way : FirstWay;
 		FirstFrom = Pass.Resource == First ? FMath::Min(FirstFrom, Pass.Window.From) : FirstFrom;
 	}
-	const TArray<FTaxiPass> Late = { { First, { TaxiStandIn, 0.0, FMath::Max(1.0, FirstFrom - 1.0), ETaxiWay::Any } } };
+	const TArray<FTaxiPass> Late = { { First, { TaxiStandIn, 0.0, FMath::Max(1.0, FirstFrom - 1.0), FirstWay } } };
 	if (!TestTrue(TEXT("a late stand-in booked ahead of it there"), Planning->BookPassesForTest(Late)))
 	{
 		return false;
@@ -666,6 +669,470 @@ bool FTaxiPlanExitTest::RunTest(const FString& Parameters)
 	}
 	TestFalse(TEXT("never held on the exit for the late one"), bHeldByIt);
 	TestEqual(TEXT("it leaves the runway and parks"), Traffic->FindAgent(Id)->Phase, EAgentPhase::Parked);
+
+	// REVIEW OF #534 FINDING 7: ONE COMING THE OTHER WAY still holds it. Booked ahead of it on its first edge head-on, late
+	// and waiting at the far end, it would drive onto that edge on its turn while the exempt arrival drove onto it from the
+	// runway: a head-on mid-edge, permanent. Better held at the exit than that.
+	const FTestAirport Second = FTestAirport::Build(Piper);
+	UGroundTraffic* Opposed = NewObject<UGroundTraffic>(GetTransientPackage());
+	FGroundTrafficTestAccess OpposedAccess(*Opposed);
+	UTaxiPlanning* OpposedPlanning = OpposedAccess.TaxiPlanning();
+	const FArrivalPlan Again = ArrivalPlanner::Plan(*Second.Net, Second.Threshold, Piper, &Opposed->GetOccupancy());
+	const FTaxiPlan Shown = OpposedPlanning != nullptr && Again.IsValid()
+		? OpposedPlanning->Plan(*Second.Net, Piper, Opposed->Rules, ArrivalPlanner::TaxiInRequest(Again, Vacate)) : FTaxiPlan();
+	if (!TestTrue(TEXT("a second field's taxi-in plan"), Shown.IsPlanned() && Shown.Route.Steps.Num() > 0))
+	{
+		return false;
+	}
+	const FTaxiResource Exit = FTaxiResource::Edge(Shown.Route.Steps[0].Edge);
+	const ETaxiWay Against = Shown.Route.Steps[0].bReversed ? ETaxiWay::AToB : ETaxiWay::BToA;
+	const TArray<FTaxiPass> HeadOn = { { Exit, { TaxiStandIn, 0.0, FMath::Max(1.0, FirstFrom - 1.0), Against } } };
+	if (!TestTrue(TEXT("one booked ahead of it there the other way"), OpposedPlanning->BookPassesForTest(HeadOn)))
+	{
+		return false;
+	}
+	const int32 Held = Opposed->DispatchArrival(*Second.Net, Second.Threshold, Piper, 0.0);
+	if (!TestTrue(TEXT("dispatched behind it"), Held > 0))
+	{
+		return false;
+	}
+	bool bHeldByOpposer = false;
+	for (int32 Tick = 0; Tick < 30 * 600 && !bHeldByOpposer; ++Tick)
+	{
+		Opposed->Advance(1.0 / 30.0, Second.Net);
+		bHeldByOpposer |= Opposed->FindAgent(Held)->GetWaitingOn() == TaxiStandIn;
+	}
+	TestTrue(TEXT("held at the exit for the one coming the other way"), bHeldByOpposer);
+	OpposedPlanning->Drop(TaxiStandIn, nullptr);
+	for (int32 Tick = 0; Tick < 30 * 600 && Opposed->FindAgent(Held)->Phase != EAgentPhase::Parked; ++Tick)
+	{
+		Opposed->Advance(1.0 / 30.0, Second.Net);
+	}
+	TestEqual(TEXT("and parks once it has passed"), Opposed->FindAgent(Held)->Phase, EAgentPhase::Parked);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanFollowerTest, "Airside.Model.TaxiPlan.ReplanKeepsTheFollowerBehind",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanFollowerTest::RunTest(const FString& Parameters)
+{
+	// REVIEW OF #534 FINDING 1: X leads Y down AB. X stops for a while (a test delay), Y closes up behind it, and X's route
+	// changes (the resolver's splice). The re-plan placed X round the table as it stood: its time at B fell after Y's, and
+	// its window on AB - the edge it stands on - after Y's too. X then waited for Y at B by order, and Y could not pass X:
+	// permanent. Now whoever is not physically ahead of X on the edge it is on is re-planned BEHIND it.
+	//                 F (0, 30000)
+	//                 |
+	//   A (-30000) ---B (0,0)--- D (30000)
+	//                  \        /
+	//                   E (15000, -15000)
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FGuidelineNodeId A = TestGraph::Node(*Net, -30000.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId D = TestGraph::Node(*Net, 30000.0, 0.0);
+	const FGuidelineNodeId E = TestGraph::Node(*Net, 15000.0, -15000.0);
+	const FGuidelineNodeId F = TestGraph::Node(*Net, 0.0, 30000.0);
+	const FGuidelineEdgeId AB = TaxiLane(*Net, A, B);
+	const FGuidelineEdgeId BD = TaxiLane(*Net, B, D);
+	TaxiLane(*Net, B, E);
+	TaxiLane(*Net, E, D);
+	TaxiLane(*Net, B, F);
+
+	const FAirframe Piper = TestAirframes::Piper();
+	FGroundTrafficTestAccess Access(*Traffic);
+	UTaxiPlanning* Planning = Access.TaxiPlanning();
+	const FTaxiPlan PlanX = Planning != nullptr ? Planning->Plan(*Net, Piper, Traffic->Rules, TaxiRequest(A, D, 0.0)) : FTaxiPlan();
+	const int32 X = PlanX.IsPlanned() ? Traffic->DispatchAgent(Net, PlanX.Route, Piper, ETraversalClass::Aircraft, 0.0) : 0;
+	if (!TestTrue(TEXT("X planned, dispatched and booked"), X > 0
+		&& Planning->Book(*Net, X, ETaxiClearanceKind::TaxiOut, PlanX, ETaxiClearanceStage::Moving)))
+	{
+		return false;
+	}
+	for (int32 Tick = 0; Tick < 30 * 8; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+	}
+	const double Then = Traffic->GetSimSeconds();
+	const FTaxiPlan PlanY = Planning->Plan(*Net, Piper, Traffic->Rules, TaxiRequest(A, F, Then));
+	const int32 Y = PlanY.IsPlanned() ? Traffic->DispatchAgent(Net, PlanY.Route, Piper, ETraversalClass::Aircraft, 0.0) : 0;
+	if (!TestTrue(TEXT("Y planned behind X down AB, dispatched and booked"), Y > 0
+		&& Planning->Book(*Net, Y, ETaxiClearanceKind::TaxiOut, PlanY, ETaxiClearanceStage::Moving, FRoutePlan(), Then)
+		&& Planning->GetTable().WindowsOn(FTaxiResource::Edge(AB)).Num() == 2
+		&& Planning->GetTable().WindowsOn(FTaxiResource::Edge(AB))[0].Holder == X))
+	{
+		return false;
+	}
+	Planning->DelayForTest(X, Then + 12.0);
+	for (int32 Tick = 0; Tick < 30 * 8; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+	}
+	if (!TestTrue(TEXT("the resolver's splice sends X round by E"), Access.ReplanAt(X, *Net, 1, BD)))
+	{
+		return false;
+	}
+	Traffic->Advance(1.0 / 30.0, Net);
+	TestTrue(TEXT("X re-planned along its new route"), Planning->Find(X) != nullptr && Planning->FindUnplanned(X) == nullptr);
+	auto IndexOn = [Planning](const FTaxiResource& R, int32 Holder)
+	{
+		return Planning->GetTable().WindowsOn(R).IndexOfByPredicate([Holder](const FTaxiWindow& W) { return W.Holder == Holder; });
+	};
+	TestEqual(TEXT("on AB, the edge both stand on, X - ahead - is first"), IndexOn(FTaxiResource::Edge(AB), X), 0);
+	const int32 YAtB = IndexOn(FTaxiResource::Node(B), Y);
+	TestTrue(TEXT("and at B, X is before Y"), IndexOn(FTaxiResource::Node(B), X) != INDEX_NONE
+		&& (YAtB == INDEX_NONE || IndexOn(FTaxiResource::Node(B), X) < YAtB));
+
+	const FVector2D DAt = Net->GetGuidelineNode(D)->Position;
+	const FVector2D FAt = Net->GetGuidelineNode(F)->Position;
+	bool bXWaitedOnY = false;
+	bool bBothHome = false;
+	for (int32 Tick = 0; Tick < 30 * 600 && !bBothHome; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+		if (const FRoadAgent* XAgent = Traffic->FindAgent(X))
+		{
+			bXWaitedOnY |= XAgent->GetWaitingOn() == Y;
+		}
+		bBothHome = DistanceTo(*Traffic, X, DAt) < 500.0 && DistanceTo(*Traffic, Y, FAt) < 500.0;
+	}
+	TestFalse(TEXT("X never waited on Y, stuck behind it"), bXWaitedOnY);
+	TestTrue(TEXT("both reached their goals - no jam"), bBothHome);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanMidRouteArrivalTest, "Airside.Model.TaxiPlan.ReplannedArrivalIsOrderedMidRoute",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanMidRouteArrivalTest::RunTest(const FString& Parameters)
+{
+	// REVIEW OF #534 FINDING 3: an arrival's FIRST MOVE - off the runway - is never refused by the order (#528 finding 4).
+	// "First" was read as MoveStarts[0], and a re-plan along the live route makes that the step the aircraft is ON,
+	// anywhere along its taxi: its next node was then entered with no regard for who was booked there first. The
+	// exemption is now a fact of the clearance, set only where a plan starts at the runway exit.
+	//   A ---- B ---- D
+	//           \    /
+	//             E
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FGuidelineNodeId A = TestGraph::Node(*Net, -30000.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId D = TestGraph::Node(*Net, 30000.0, 0.0);
+	const FGuidelineNodeId E = TestGraph::Node(*Net, 15000.0, -15000.0);
+	TaxiLane(*Net, A, B);
+	const FGuidelineEdgeId BD = TaxiLane(*Net, B, D);
+	TaxiLane(*Net, B, E);
+	TaxiLane(*Net, E, D);
+
+	const FAirframe Piper = TestAirframes::Piper();
+	FGroundTrafficTestAccess Access(*Traffic);
+	UTaxiPlanning* Planning = Access.TaxiPlanning();
+	const FTaxiPlan Plan = Planning != nullptr ? Planning->Plan(*Net, Piper, Traffic->Rules, TaxiRequest(A, D, 0.0)) : FTaxiPlan();
+	const int32 X = Plan.IsPlanned() ? Traffic->DispatchAgent(Net, Plan.Route, Piper, ETraversalClass::Aircraft, 0.0) : 0;
+	if (!TestTrue(TEXT("an arrival's taxi in, booked"), X > 0
+		&& Planning->Book(*Net, X, ETaxiClearanceKind::TaxiIn, Plan, ETaxiClearanceStage::Moving)))
+	{
+		return false;
+	}
+	for (int32 Tick = 0; Tick < 30 * 5; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+	}
+	if (!TestTrue(TEXT("its route changes mid-way (the resolver's splice)"), Access.ReplanAt(X, *Net, 1, BD)))
+	{
+		return false;
+	}
+	Traffic->Advance(1.0 / 30.0, Net);
+	const FTaxiClearance* Replanned = Planning->Find(X);
+	double XAtB = -1.0;
+	for (const FTaxiWindow& W : Planning->GetTable().WindowsOn(FTaxiResource::Node(B)))
+	{
+		XAtB = W.Holder == X ? W.From : XAtB;
+	}
+	const double Now = Traffic->GetSimSeconds();
+	if (!TestTrue(FString::Printf(TEXT("re-planned, due at B at %.0f s (now %.0f s)"), XAtB, Now), Replanned != nullptr && XAtB > Now + 1.0))
+	{
+		return false;
+	}
+	// AHEAD OF IT AT B, and never released: the order must hold it short of B.
+	const TArray<FTaxiPass> Ahead = { { FTaxiResource::Node(B), { TaxiStandIn, Now, XAtB - 0.5 } } };
+	if (!TestTrue(TEXT("a stand-in booked ahead of it at B"), Planning->BookPassesForTest(Ahead)))
+	{
+		return false;
+	}
+	bool bWaited = false;
+	for (int32 Tick = 0; Tick < 30 * 120 && !bWaited; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+		bWaited |= Traffic->FindAgent(X)->GetWaitingOn() == TaxiStandIn;
+	}
+	TestTrue(TEXT("mid-route, it waits its turn at B like anyone"), bWaited);
+	Planning->Drop(TaxiStandIn, nullptr);
+	const FVector2D DAt = Net->GetGuidelineNode(D)->Position;
+	for (int32 Tick = 0; Tick < 30 * 300 && DistanceTo(*Traffic, X, DAt) >= 500.0; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+	}
+	TestTrue(TEXT("and goes on once it is its turn"), DistanceTo(*Traffic, X, DAt) < 500.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanBookedStandTest, "Airside.Model.TaxiPlan.RebuildReholdsABookedStandFirst",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanBookedStandTest::RunTest(const FString& Parameters)
+{
+	// REVIEW OF #534 FINDING 4: P, a departure on stand S, is booked to push later; X taxis in to S, booked to arrive after
+	// P has gone. A layout edit re-made the MOVING plans first: X re-booked S - for ever, from when it can get there - and
+	// P's stand could not then be held, so P's next plan could never fit before X, and X could never reach a stand P's body
+	// stood on. The parked are re-held first now: they are where they are.
+	//   C (-30000, 0) ---- J (0, 0)
+	//                      |
+	//                      S (0, -20000)
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FGuidelineNodeId C = TestGraph::Node(*Net, -30000.0, 0.0);
+	const FGuidelineNodeId J = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId S = TestGraph::Node(*Net, 0.0, -20000.0);
+	TaxiLane(*Net, C, J);
+	TaxiLane(*Net, J, S);
+
+	const FAirframe Piper = TestAirframes::Piper();
+	FGroundTrafficTestAccess Access(*Traffic);
+	UTaxiPlanning* Planning = Access.TaxiPlanning();
+	const int32 P = Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, J, S, ETraversalClass::Aircraft), Piper,
+		ETraversalClass::Aircraft, 0.0);
+	for (int32 I = 0; I < 30 * 300 && P > 0 && Traffic->FindAgent(P)->Phase != EAgentPhase::Parked; ++I)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+	}
+	if (!TestNotNull(TEXT("a planning owner"), Planning)
+		|| !TestTrue(TEXT("P parks on S"), P > 0 && Traffic->FindAgent(P)->Phase == EAgentPhase::Parked))
+	{
+		return false;
+	}
+	const double Now = Traffic->GetSimSeconds();
+	FTaxiPlan Push;
+	Push.Result = ETaxiPlanResult::Planned;
+	Push.PushAt = Now + 1000.0;
+	Push.Passes = { { FTaxiResource::Node(S), { P, Now, Now + 120.0 } } };
+	TestTrue(TEXT("P booked to push later"), Planning->Book(*Net, P, ETaxiClearanceKind::TaxiOut, Push, ETaxiClearanceStage::Booked,
+		FRoutePlan(), Now));
+	const FTaxiPlan Inbound = Planning->Plan(*Net, Piper, Traffic->Rules, TaxiRequest(C, S, Now));
+	const int32 X = Inbound.IsPlanned() ? Traffic->DispatchAgent(Net, Inbound.Route, Piper, ETraversalClass::Aircraft, 0.0) : 0;
+	if (!TestTrue(TEXT("X planned to S after P, dispatched and booked"), X > 0
+		&& Planning->Book(*Net, X, ETaxiClearanceKind::TaxiIn, Inbound, ETaxiClearanceStage::Moving, FRoutePlan(), Now)
+		&& Planning->GetTable().WindowsOn(FTaxiResource::Node(S)).Num() == 2
+		&& Planning->GetTable().WindowsOn(FTaxiResource::Node(S))[0].Holder == P))
+	{
+		return false;
+	}
+	for (int32 Tick = 0; Tick < 30 * 2; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+	}
+
+	Traffic->OnGraphRebuilt(*Net);
+	const TConstArrayView<FTaxiWindow> OnS = Planning->GetTable().WindowsOn(FTaxiResource::Node(S));
+	TestTrue(TEXT("P, on the stand, holds it first after the rebuild"), OnS.Num() > 0 && OnS[0].Holder == P);
+	bool bXAhead = false;
+	for (const FTaxiWindow& W : OnS)
+	{
+		if (W.Holder == P)
+		{
+			break;
+		}
+		bXAhead |= W.Holder == X;
+	}
+	TestFalse(TEXT("X is never booked onto S ahead of P"), bXAhead);
+	TestTrue(TEXT("X is still accounted for - planned after P, or unplanned and retried"), Planning->Find(X) != nullptr
+		|| Planning->FindUnplanned(X) != nullptr);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanReplannedEntryTest, "Airside.Model.TaxiPlan.ReplannedDepartureFreesItsEntry",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanReplannedEntryTest::RunTest(const FString& Parameters)
+{
+	// REVIEW OF #534 FINDING 5: a departure's plan holds its runway entry TaxiPlanEntryHold after it gets there, not for ever
+	// (the 80/h starvation). A re-plan - a layout edit, a resolver splice - booked the entry for ever again, and every taxi-in
+	// through that entry waited for the departure to take off.
+	const FAirframe Piper = TestAirframes::Piper();
+	const FTestAirport Airport = FTestAirport::Build(Piper, { .StandCount = 2 });
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	FGroundTrafficTestAccess Access(*Traffic);
+	UTaxiPlanning* Planning = Access.TaxiPlanning();
+	const int32 Id = Traffic->DispatchArrival(*Airport.Net, Airport.Threshold, Piper, 0.0);
+	if (!TestNotNull(TEXT("a planning owner"), Planning) || !TestTrue(TEXT("an arrival"), Id > 0))
+	{
+		return false;
+	}
+	for (int32 Tick = 0; Tick < 30 * 900 && Traffic->FindAgent(Id)->Phase != EAgentPhase::Parked; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Airport.Net);
+	}
+	if (!TestTrue(TEXT("it parks"), Traffic->FindAgent(Id)->Phase == EAgentPhase::Parked)
+		|| !TestEqual(TEXT("ordered off, it goes at once"), Traffic->DepartAgent(Id, *Airport.Net), EDepartureRefusal::None))
+	{
+		return false;
+	}
+	for (int32 Tick = 0; Tick < 30 * 300 && Traffic->FindAgent(Id)->Phase != EAgentPhase::Taxiing; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Airport.Net);
+	}
+	auto EntryHeldUntil = [Planning, Id]()
+	{
+		const FTaxiClearance* Cleared = Planning->Find(Id);
+		double Until = -1.0;
+		if (Cleared != nullptr && Cleared->Plan.Route.Steps.Num() > 0)
+		{
+			for (const FTaxiWindow& W : Planning->GetTable().WindowsOn(FTaxiResource::Node(Cleared->Plan.Route.Steps.Last().To)))
+			{
+				Until = W.Holder == Id ? FMath::Max(Until, W.To) : Until;
+			}
+		}
+		return Until;
+	};
+	if (!TestTrue(TEXT("taxiing out to its entry on a plan that holds it a while"), Traffic->FindAgent(Id)->Phase == EAgentPhase::Taxiing
+		&& EntryHeldUntil() > 0.0 && EntryHeldUntil() < FTaxiReservations::Forever))
+	{
+		return false;
+	}
+
+	// AN EDIT ELSEWHERE: every guideline handle reallocated, every plan re-made.
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	Airport.Net->PlaceEntity(Stand, Stand->Anchors, Airport.ExitAt + FVector2D(60000.0, -30000.0), 0.0);
+	TestGraph::Rebuild(*Airport.Net);
+	Traffic->OnGraphRebuilt(*Airport.Net);
+	const double Until = EntryHeldUntil();
+	TestTrue(FString::Printf(TEXT("re-planned, it still holds its entry a while, not for ever (until %.0f s)"), Until),
+		Until > 0.0 && Until < FTaxiReservations::Forever);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanRefusedRetimeTest, "Airside.Model.TaxiPlan.RefusedRetimeKeepsItsGround",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanRefusedRetimeTest::RunTest(const FString& Parameters)
+{
+	// REVIEW OF #534 FINDING 6: a re-time that cannot be made left the late aircraft's window to LAPSE - ended while it was
+	// still there, the table read the ground free, and plans were made through it. Refused, it now keeps what it stands on
+	// as long as nothing booked behind it is overrun. Here the one behind is an arrival on final, which no re-time moves.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FTaxiResource R = FTaxiResource::Node(Net->AddGuidelineNode(FVector2D(0.0, 0.0)));
+	UTaxiPlanning* Planning = NewObject<UTaxiPlanning>(GetTransientPackage());
+	Planning->SetHeadway(5.0);
+	FTaxiPlan Late;
+	Late.Result = ETaxiPlanResult::Planned;
+	Late.Passes = { { R, { 1, 0.0, 20.0 } } };
+	FTaxiPlan Landing = Late;
+	Landing.Passes = { { R, { 2, 22.0, 30.0 } } };
+	TArray<int32> Revoked;
+	if (!TestTrue(TEXT("a late aircraft and an arrival behind it, booked"),
+		Planning->Book(*Net, 1, ETaxiClearanceKind::TaxiOut, Late, ETaxiClearanceStage::Moving)
+		&& Planning->BookArrival(*Net, 2, Landing, {}, 0.0, Revoked)))
+	{
+		return false;
+	}
+	TestFalse(TEXT("its re-time is refused - the landing cannot move"), Planning->Retime(1, 0.0, 15.0, 10.0));
+	double To = 0.0;
+	for (const FTaxiWindow& W : Planning->GetTable().WindowsOn(R))
+	{
+		To = W.Holder == 1 ? W.To : To;
+	}
+	TestEqual(TEXT("it keeps its ground up to the landing's window, not lapsing at 20 s"), To, 22.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanRebuildOrderTest, "Airside.Model.TaxiPlan.RebuildOrderIsTopological",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanRebuildOrderTest::RunTest(const FString& Parameters)
+{
+	// REVIEW OF #534 FINDING 8: a rebuild re-plans in the table's ORDER - each holder after everyone booked ahead of it on
+	// any resource - which is not the order of earliest windows: 3 starts first (on R5) yet is behind 4 on R4. And the
+	// pairs CAN form a cycle across resources (1 ahead of 2 on R1, 2 ahead of 1 on R2 - legal, one timeline), which the
+	// order breaks by earliest window rather than looping or dropping anyone.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	auto Node = [Net](double X) { return FTaxiResource::Node(Net->AddGuidelineNode(FVector2D(X, 0.0))); };
+	const FTaxiResource R1 = Node(0.0);
+	const FTaxiResource R2 = Node(10000.0);
+	const FTaxiResource R4 = Node(20000.0);
+	const FTaxiResource R5 = Node(30000.0);
+	UTaxiPlanning* Planning = NewObject<UTaxiPlanning>(GetTransientPackage());
+	auto BookOf = [Planning, Net](int32 Holder, TArray<FTaxiPass> Passes)
+	{
+		FTaxiPlan Plan;
+		Plan.Result = ETaxiPlanResult::Planned;
+		Plan.Passes = MoveTemp(Passes);
+		return Planning->Book(*Net, Holder, ETaxiClearanceKind::TaxiOut, Plan, ETaxiClearanceStage::Moving);
+	};
+	TestTrue(TEXT("booked"), BookOf(4, { { R4, { 4, 10.0, 20.0 } } })
+		&& BookOf(3, { { R4, { 3, 20.0, 30.0 } }, { R5, { 3, 0.0, 5.0 } } })
+		&& BookOf(1, { { R1, { 1, 0.0, 10.0 } }, { R2, { 1, 20.0, 30.0 } } })
+		&& BookOf(2, { { R1, { 2, 10.0, 20.0 } }, { R2, { 2, 5.0, 15.0 } } }));
+	TArray<int32> Order;
+	TMap<int32, FTaxiClearance> Cleared;
+	Planning->TakeAllForRebuild(Order, Cleared);
+	TestEqual(TEXT("every holder once"), Order.Num(), 4);
+	TestTrue(TEXT("4 before 3 - ahead of it on R4, though 3's first window is earlier"),
+		Order.IndexOfByKey(4) != INDEX_NONE && Order.IndexOfByKey(4) < Order.IndexOfByKey(3));
+	TestTrue(TEXT("the cycle between 1 and 2 broken, each placed once"), Order.Contains(1) && Order.Contains(2));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanUnplannedClockTest, "Airside.Model.TaxiPlan.UnplannedRetriedOnTheClock",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanUnplannedClockTest::RunTest(const FString& Parameters)
+{
+	// REVIEW OF #534 FINDING 10: an unplanned aircraft was retried only when the table MOVED. A window that simply runs out
+	// moves nothing - and the plan it blocked fits from then on. It is retried on the clock too, however still the table.
+	UTaxiPlanning* Planning = NewObject<UTaxiPlanning>(GetTransientPackage());
+	Planning->MarkUnplanned(7, ETaxiUnplanned::LayoutEdit, TEXT("a test"), ETaxiClearanceKind::TaxiIn, ERouteErrand::ArrivalTaxiIn);
+	Planning->NoteUnplannedTried(7, 0.0);
+	TestEqual(TEXT("not again at once, the table unmoved"), Planning->UnplannedDueRetry(1.5).Num(), 0);
+	TestTrue(TEXT("but again on the clock"), Planning->UnplannedDueRetry(10.5).Contains(7));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanUnplannedFrameTest, "Airside.Model.TaxiPlan.UnplannedChangeIsAnnouncedInItsFrame",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanUnplannedFrameTest::RunTest(const FString& Parameters)
+{
+	// REVIEW OF #534 FINDING 11: OnTaxiUnplannedChanged is DiffFreedom's - driven here through Advance, not broadcast by hand.
+	// And the retry ran AFTER the diff, so an aircraft that regained its plan was announced a frame late, in a second
+	// broadcast: the frame that saw it change says so.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FGuidelineNodeId A = TestGraph::Node(*Net, -30000.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 30000.0, 0.0);
+	TaxiLane(*Net, A, B);
+	const FAirframe Piper = TestAirframes::Piper();
+	FGroundTrafficTestAccess Access(*Traffic);
+	UTaxiPlanning* Planning = Access.TaxiPlanning();
+	const FTaxiPlan Plan = Planning != nullptr ? Planning->Plan(*Net, Piper, Traffic->Rules, TaxiRequest(A, B, 0.0)) : FTaxiPlan();
+	const int32 X = Plan.IsPlanned() ? Traffic->DispatchAgent(Net, Plan.Route, Piper, ETraversalClass::Aircraft, 0.0) : 0;
+	if (!TestTrue(TEXT("planned, dispatched, booked"), X > 0
+		&& Planning->Book(*Net, X, ETaxiClearanceKind::TaxiIn, Plan, ETaxiClearanceStage::Moving)))
+	{
+		return false;
+	}
+	for (int32 Tick = 0; Tick < 30 * 2; ++Tick)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+	}
+	int32 Heard = 0;
+	const FDelegateHandle Handle = Traffic->OnTaxiUnplannedChanged.AddLambda([&Heard]() { ++Heard; });
+	Planning->MarkUnplanned(X, ETaxiUnplanned::RouteChanged, TEXT("a test"), ETaxiClearanceKind::TaxiIn, ERouteErrand::ArrivalTaxiIn);
+	Traffic->Advance(1.0 / 30.0, Net);
+	TestNull(TEXT("retried in that frame, it holds a plan again"), Planning->FindUnplanned(X));
+	TestEqual(TEXT("one broadcast, in that frame"), Heard, 1);
+	Traffic->Advance(1.0 / 30.0, Net);
+	TestEqual(TEXT("and none a frame late"), Heard, 1);
+	Traffic->OnTaxiUnplannedChanged.Remove(Handle);
 	return true;
 }
 

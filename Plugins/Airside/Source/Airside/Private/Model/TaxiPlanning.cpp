@@ -706,7 +706,7 @@ bool UTaxiPlanning::Track(const FRoadAgent& Agent, const FTrafficOccupancy& Occu
 			// FROM THE MOMENT IT IS LATE FOR (Since just before Latest), not from now: the overdue leave and the windows
 			// that straddle it move with the rest, so the plan reads on time again after it (measured: from now, the overdue
 			// leave never moved and it was re-timed every second by a growing lag - 709 re-times at 40/h, the field jammed).
-			Retime(Agent.Id, Latest - 0.001, Now + Rest / Speed - Latest);
+			Retime(Agent.Id, Latest - 0.001, Now + Rest / Speed - Latest, Now);
 		}
 	}
 	return true;

@@ -207,10 +207,10 @@ bool UTaxiPlanning::TakeUnplannedChanged()
 	return bWas;
 }
 
-bool UTaxiPlanning::Retime(int32 Holder, double Since, double Lag)
+bool UTaxiPlanning::Retime(int32 Holder, double Since, double Lag, double Now)
 {
 	TArray<FTaxiShift> Shifts;
-	if (!(Lag > 0.0) || !Clearances.Contains(Holder) || !Table.ShiftLater(Holder, Since, Lag, Shifts))
+	if (!(Lag > 0.0) || !Clearances.Contains(Holder) || !Table.ShiftLater(Holder, Since, Lag, FTaxiReservations::Always, Shifts))
 	{
 		NoteRefused(Holder, FString::Printf(TEXT("agent %d's re-time"), Holder),
 			TEXT("the windows behind it cannot all move (one is held for ever)"));
