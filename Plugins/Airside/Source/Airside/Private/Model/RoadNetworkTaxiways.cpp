@@ -122,7 +122,11 @@ namespace
 		return Roots;
 	}
 
-	/** An end a connector may stop at: a named taxiway, a runway, or a dead end - nothing but Chain there (plan D2). */
+	/** An end a connector may stop at: a taxiway, a runway, or a dead end - nothing but Chain there (plan D2). A taxiway
+	 *  STILL UNNAMED counts: every taxiway segment is named by the end of the pass that meets it (AssignUnnamedTaxiways),
+	 *  so "named" alone made a backfill judge a link's first half against its second, unnamed yet - not anchored, a
+	 *  letter - where drawing the same halves click by click gave A1, A2 (PR #524 review). Once a pass ends the two
+	 *  readings agree, so RejudgeTaxiway and a draw-time click see no difference. */
 	bool TaxiwayNamesAnchored(const URoadNetwork& Net, FRoadNodeId Node, const FTaxiwayChain& Chain)
 	{
 		const FRoadNode* At = Net.GetNode(Node);
@@ -138,7 +142,7 @@ namespace
 				continue;
 			}
 			bDeadEnd = false;
-			if (Net.IsRunwaySegment(Other) || Net.TaxiwayOf(Other) != INDEX_NONE)
+			if (Net.IsRunwaySegment(Other) || Net.TaxiwayOf(Other) != INDEX_NONE || TaxiwayStrip::HasStrip(Net, Other))
 			{
 				return true;
 			}
@@ -442,9 +446,45 @@ int32 URoadNetwork::AssignUnnamedTaxiways(const FTaxiwayNamingRules& Rules)
 	{
 		return L.Length != R.Length ? L.Length > R.Length : L.LowestIndex < R.LowestIndex;
 	});
-	for (const FTaxiwayChain& Chain : Chains)
+	// TWO PASSES (PR #524 review). Longest-first alone named a CONNECTOR-SHAPED chain (short, both ends anchored) before
+	// the chains at its ends: a link of two halves round a corner backfilled as C + C1, where drawing it from A gave A1,
+	// A2. So everything else is named first, in that order; then each connector-shaped chain waits until no unnamed
+	// taxiway is left at its FIRST end - the end AssignTaxiway takes its parent from, as a click from that end would.
+	// Its last end may still be unnamed: anchored either way (TaxiwayNamesAnchored), and the parent is the first end's.
+	// A ring of them all waiting takes the first in order, so every pass ends. Not a different rule from a click: a
+	// click's normalise has one unnamed chain, which never waits on itself (the same AssignTaxiway, the same order).
+	// ENFORCED BY: Airside.Model.TaxiwayNames.BackfillCorneredLinkIsConnector (backfill == click by click, name by name).
+	const auto ConnectorShaped = [this, &Rules](const FTaxiwayChain& Chain)
 	{
-		AssignTaxiway(Chain, Rules);
+		return Chain.Length < Rules.ConnectorMaxLength && TaxiwayNamesAnchored(*this, Chain.First, Chain)
+			&& TaxiwayNamesAnchored(*this, Chain.Last, Chain);
+	};
+	const auto FirstEndWaits = [this, &Unnamed](const FTaxiwayChain& Chain)
+	{
+		const FRoadNode* At = GetNode(Chain.First);
+		return At != nullptr && At->Incident.ContainsByPredicate([&Chain, &Unnamed](const FRoadSegmentId& Other)
+			{ return !Chain.Segments.Contains(Other) && Unnamed(Other); });
+	};
+	TArray<int32> Waiting;
+	for (int32 Index = 0; Index < Chains.Num(); ++Index)
+	{
+		if (ConnectorShaped(Chains[Index]))
+		{
+			Waiting.Add(Index);
+		}
+		else
+		{
+			AssignTaxiway(Chains[Index], Rules);
+		}
+	}
+	// A LINEAR RESCAN per pick, so quadratic in the connector-shaped chains: 7 on the Gatwick fixture, a few dozen on a
+	// whole backfilled airport (2026-10-02), and a click's normalise has one.
+	while (Waiting.Num() > 0)
+	{
+		const int32 Ready = Waiting.IndexOfByPredicate([&Chains, &FirstEndWaits](int32 Index) { return !FirstEndWaits(Chains[Index]); });
+		const int32 Pick = Ready != INDEX_NONE ? Ready : 0;
+		AssignTaxiway(Chains[Waiting[Pick]], Rules);
+		Waiting.RemoveAt(Pick);
 	}
 	return Chains.Num();
 }

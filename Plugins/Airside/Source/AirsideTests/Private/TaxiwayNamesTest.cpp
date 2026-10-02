@@ -459,8 +459,22 @@ namespace TaxiwayNamesTest
 		return FString();
 	}
 
-	/** One seeded run: 300 random raw edits, normalised after each. Fills the per-slot names for the determinism check. */
-	FString RandomEditRun(int32 Seed, TArray<FString>& OutNames)
+	/** Everything a normalise may write: every taxiway entry and every segment's TaxiwayId, as one comparable string. */
+	FString NamingSnapshot(const URoadNetwork& Net)
+	{
+		FString Out;
+		for (const FTaxiway& T : Net.GetTaxiways())
+		{
+			Out += FString::Printf(TEXT("[%d %d '%s' p%d c%d n%d %d] "), T.Id, T.bAlive ? 1 : 0, *T.Name, T.ParentId,
+				T.ConnectorNumber, T.NextConnectorNumber, T.bPlayerNamed ? 1 : 0);
+		}
+		for (const FRoadSegment& S : Net.GetSegments()) { Out += FString::Printf(TEXT("%d,"), S.TaxiwayId); }
+		return Out;
+	}
+
+	/** One seeded run: 300 random raw edits, normalised after each. Fills the per-slot names for the determinism check.
+	 *  bCheckIdempotent normalises a SECOND time after each edit and reports any write or split it makes. */
+	FString RandomEditRun(int32 Seed, TArray<FString>& OutNames, bool bCheckIdempotent = false)
 	{
 		FTaxiwayNamesNet N;
 		FRandomStream Stream(Seed);
@@ -507,6 +521,16 @@ namespace TaxiwayNamesTest
 				if (A.IsSet()) { N.Net->RemoveNode(A); }
 			}
 			N.Normalise();
+			if (bCheckIdempotent)
+			{
+				const FString Before = NamingSnapshot(*N.Net);
+				const int32 Splits = N.Normalise().Num();
+				if (Splits != 0 || NamingSnapshot(*N.Net) != Before)
+				{
+					return FString::Printf(TEXT("seed %d step %d op %d: a second normalise announced %d split(s) / changed %s -> %s"),
+						Seed, Step, Op, Splits, *Before, *NamingSnapshot(*N.Net));
+				}
+			}
 			const FString Violation = InvariantViolation(*N.Net);
 			if (!Violation.IsEmpty()) { return FString::Printf(TEXT("seed %d step %d op %d: %s"), Seed, Step, Op, *Violation); }
 		}
@@ -603,6 +627,102 @@ bool FTaxiwayNamesBackfillTest::RunTest(const FString&)
 	{
 		const FRoadSegmentId Id = G.N.Net->SegmentIdAt(Index);
 		TestEqual(FString::Printf(TEXT("segment %d: same network, same name"), Index), G.N.NameOf(Id), Again.N.NameOf(Again.N.Net->SegmentIdAt(Index)));
+	}
+	return true;
+}
+
+namespace TaxiwayNamesTest
+{
+	/** Two 3 km parallels, A (y 0) and B below it, and a LINK from A's node at x 1 km down to B round a 90 degree
+	 *  corner: First m at 45 degrees below +x, then Second m at 90 degrees to that (so 200 m in all - a connector's
+	 *  length - but TWO chains, the corner being past BendDegrees). Laid A, B, first half, second half, each half from
+	 *  the A end, so segment indices match between a backfill and a click-by-click drawing. bClick normalises per lay. */
+	struct FCorneredLink
+	{
+		FTaxiwayNamesNet N;
+		TArray<FRoadSegmentId> ASegs, BSegs, Link;
+
+		FCorneredLink(double First, double Second, bool bClick)
+		{
+			const FVector2D Down1 = FVector2D(1.0, -1.0).GetSafeNormal();
+			const FVector2D Down2 = FVector2D(-1.0, -1.0).GetSafeNormal();
+			const FVector2D Start(100000.0, 0.0);
+			const FVector2D Corner = Start + Down1 * First;
+			const FVector2D End = Corner + Down2 * Second;
+			const auto Lay = [this, bClick](FRoadNodeId A, FRoadNodeId B) { return bClick ? N.Click(A, B) : N.Lay(A, B); };
+			const FRoadNodeId AMid = N.Node(Start.X, Start.Y);
+			ASegs = { Lay(N.Node(0.0, 0.0), AMid), Lay(AMid, N.Node(300000.0, 0.0)) };
+			const FRoadNodeId BMid = N.Node(End.X, End.Y);
+			BSegs = { Lay(N.Node(0.0, End.Y), BMid), Lay(BMid, N.Node(300000.0, End.Y)) };
+			const FRoadNodeId Bend = N.Node(Corner.X, Corner.Y);
+			Link = { Lay(AMid, Bend), Lay(Bend, BMid) };
+		}
+	};
+
+	/** The backfill of a cornered link against the same shape drawn click by click: both halves connectors, no third
+	 *  letter, and the same name on every segment. */
+	void CheckCorneredLink(FAutomationTestBase& Test, const TCHAR* Label, double First, double Second)
+	{
+		FCorneredLink Drawn(First, Second, true);
+		FCorneredLink Backfilled(First, Second, false);
+		Backfilled.N.Net->EnsureTaxiwayNames(Backfilled.N.Rules);
+		const URoadNetwork& Net = *Backfilled.N.Net;
+		for (const FRoadSegmentId& S : Backfilled.ASegs) { Test.TestEqual(FString::Printf(TEXT("%s: the first parallel is A"), Label), Backfilled.N.NameOf(S), FString(TEXT("A"))); }
+		for (const FRoadSegmentId& S : Backfilled.BSegs) { Test.TestEqual(FString::Printf(TEXT("%s: the second parallel is B"), Label), Backfilled.N.NameOf(S), FString(TEXT("B"))); }
+		int32 Letters = 0;
+		for (const FTaxiway& T : Net.GetTaxiways()) { Letters += T.bAlive && !T.IsConnector() ? 1 : 0; }
+		Test.TestEqual(FString::Printf(TEXT("%s: two letters - the link mints no third"), Label), Letters, 2);
+		for (const FRoadSegmentId& S : Backfilled.Link)
+		{
+			const FTaxiway* T = Net.GetTaxiway(Net.TaxiwayOf(S));
+			Test.TestTrue(FString::Printf(TEXT("%s: each half of the link is a connector (%s)"), Label, *Backfilled.N.NameOf(S)),
+				T != nullptr && T->IsConnector());
+		}
+		Test.TestEqual(FString::Printf(TEXT("%s: control - drawn click by click, the link is A1 then A2"), Label),
+			TArray<FString>{ Drawn.N.NameOf(Drawn.Link[0]), Drawn.N.NameOf(Drawn.Link[1]) }, TArray<FString>{ TEXT("A1"), TEXT("A2") });
+		for (int32 Index = 0; Index < Net.GetSegments().Num(); ++Index)
+		{
+			Test.TestEqual(FString::Printf(TEXT("%s: segment %d backfills to the name drawing gives it"), Label, Index),
+				Backfilled.N.NameOf(Net.SegmentIdAt(Index)), Drawn.N.NameOf(Drawn.N.Net->SegmentIdAt(Index)));
+		}
+	}
+}
+
+/** REVIEW FINDING (PR #524): backfill judged a link's first half against its still-unnamed second half - "not anchored",
+ *  so a letter - and the second half became that letter's connector. A link of two halves must name as it draws. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesBackfillCorneredTest, "Airside.Model.TaxiwayNames.BackfillCorneredLinkIsConnector",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesBackfillCorneredTest::RunTest(const FString&)
+{
+	using namespace TaxiwayNamesTest;
+	// Two equal 100 m halves: longest-first sorts them by index, the A half first.
+	CheckCorneredLink(*this, TEXT("equal halves"), 10000.0, 10000.0);
+	// A 50 m stub off A, then 150 m to B: longest-first meets the B half FIRST, whose first end is still unnamed.
+	CheckCorneredLink(*this, TEXT("starts at a short stub"), 5000.0, 15000.0);
+	return true;
+}
+
+/** Normalise is a FIXED POINT: once it has run, running it again writes nothing and announces no split - after every
+ *  step of the invariant test's seeded edits. Backfill that judged against unnamed neighbours could leave a rejudge for
+ *  the next pass; this is what would see it. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesIdempotentTest, "Airside.Model.TaxiwayNames.NormaliseIsIdempotent",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesIdempotentTest::RunTest(const FString&)
+{
+	using namespace TaxiwayNamesTest;
+	{
+		// CONTROL: the snapshot sees a write - a normalise of an unnamed taxiway changes it.
+		FTaxiwayNamesNet N;
+		N.Lay(N.Node(0.0, 0.0), N.Node(50000.0, 0.0));
+		const FString Before = NamingSnapshot(*N.Net);
+		N.Normalise();
+		TestNotEqual(TEXT("control: the snapshot sees a naming write"), NamingSnapshot(*N.Net), Before);
+	}
+	for (int32 Seed = 1; Seed <= 6; ++Seed)
+	{
+		TArray<FString> Names;
+		const FString Breach = RandomEditRun(Seed, Names, true);
+		if (!TestTrue(FString::Printf(TEXT("a second normalise changes nothing (%s)"), *Breach), Breach.IsEmpty())) { return false; }
 	}
 	return true;
 }

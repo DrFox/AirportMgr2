@@ -1287,8 +1287,8 @@ private:
 	 * Name ONE unnamed chain (spec "Assignment rules"), in order:
 	 *   inherit - it carries on (RoadGeom::IsInLine at a junction, FTaxiwayNamingRules::BendDegrees at a bend, plan D1)
 	 *             from a node where a named taxiway ENDS -> that taxiway, then RejudgeTaxiway (plan D3);
-	 *   connector - shorter than ConnectorMaxLength, both ends anchored (a named taxiway, a runway, or a dead end - plan
-	 *             D2) and a named taxiway at one end -> a connector of the lettered taxiway at its FIRST end, else its other;
+	 *   connector - shorter than ConnectorMaxLength, both ends anchored (a taxiway - named, or unnamed and so named in
+	 *             this same pass - a runway, or a dead end - plan D2) and a named taxiway at one end -> a connector of the lettered taxiway at its FIRST end, else its other;
 	 *   letter - anything else -> the next free letter.
 	 * ENFORCED BY: Airside.Model.TaxiwayNames.Assign / .ClickByClickDrawing / .Connector
 	 */
