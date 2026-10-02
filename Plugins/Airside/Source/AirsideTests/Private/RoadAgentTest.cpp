@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "AirsideTestsLog.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadAgent.h"
@@ -207,6 +208,57 @@ bool FRoadAgentDepartureHandoverTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Advance keeps declining once the agent is Gone"),
 		Agent.Advance(Step, Motion, Event));
 
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// THE INSPECTOR'S VERTICAL SPEED on the way up (2026-10-02): FTakeoffRun::VerticalSpeed through DescribeMotion, measured
+// against the motion's own Altitude tick to tick. See Airside.Model.Traffic.ArrivalVerticalSpeedIsTheDescent for the way down.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadAgentDepartureVerticalSpeedTest,
+	"Airside.Model.RoadAgent.DepartureVerticalSpeedIsTheClimb",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadAgentDepartureVerticalSpeedTest::RunTest(const FString& Parameters)
+{
+	FAirframe Airframe;
+	Airframe.Chassis.Ground = TestAirframes::Piper().Chassis.Ground;
+	Airframe.Climb = TestAirframes::Piper().Climb;
+
+	FRoadAgent Agent;
+	Agent.StartTaxi(StraightPlan(FVector2D(-20000.0, 0.0), FVector2D(0.0, 0.0)), Airframe);
+	FRunwayEnd End;
+	End.Threshold = FVector2D(0.0, 0.0);
+	End.Direction = FVector2D(1.0, 0.0);
+	End.Length = 100000.0;
+	Agent.ArmDeparture(End);
+
+	constexpr double Step = 1.0 / 60.0;
+	FAgentMotion Motion;
+	EAgentEvent Event = EAgentEvent::None;
+	double PrevAltitude = 0.0;
+	double WorstError = 0.0, Highest = 0.0, WorstOnGround = 0.0;
+	for (int32 Ticks = 0; Ticks < 25000 && Agent.Advance(Step, Motion, Event); ++Ticks)
+	{
+		if (Agent.Phase == EAgentPhase::Departing)
+		{
+			WorstError = FMath::Max(WorstError, FMath::Abs(Motion.VerticalSpeed - (Motion.Altitude - PrevAltitude) / Step));
+		}
+		if (Motion.Altitude == 0.0)
+		{
+			WorstOnGround = FMath::Max(WorstOnGround, FMath::Abs(Motion.VerticalSpeed));
+		}
+		Highest = FMath::Max(Highest, Motion.VerticalSpeed);
+		PrevAltitude = Motion.Altitude;
+	}
+	UE_LOG(LogAirsideTests, Log, TEXT("Departure vertical speed: highest %.1f uu/s, worst quotient error %.4f, worst on the wheels %.4f"),
+		Highest, WorstError, WorstOnGround);
+
+	TestTrue(FString::Printf(TEXT("a departure climbs: the figure goes positive (%.1f uu/s)"), Highest), Highest > 0.0);
+	TestTrue(FString::Printf(TEXT("the figure is the height the motion gained per second (worst error %.4f uu/s)"), WorstError),
+		WorstError < 1.0e-3);
+	TestTrue(FString::Printf(TEXT("zero on the wheels - taxi, line-up, roll and rotation (worst %.4f uu/s)"), WorstOnGround),
+		WorstOnGround == 0.0);
 	return true;
 }
 

@@ -104,6 +104,8 @@ FAircraftDisplay FAircraftCard::DisplayOf(const FAgentFacts& F, const FAircraftN
 	D.HeadingDegrees = FMath::RoundToInt(F.HeadingDegrees);
 	D.SpeedTenths = FMath::RoundToInt(Shown / 10.0);
 	D.SpeedKnots = FMath::RoundToInt(Shown / 100.0 * 1.94384);
+	D.VerticalTenths = FMath::RoundToInt(F.VerticalSpeed / 10.0);
+	D.VerticalFpm = FMath::RoundToInt(F.VerticalSpeed / 100.0 * 196.850);   // ft/min, as a VSI reads
 	D.AltitudeMetres = FMath::RoundToInt(F.Altitude / 100.0);
 	D.Destination = F.Destination;
 	D.bEngineRunning = F.bEngineRunning;
@@ -157,7 +159,7 @@ void FAircraftCard::Compose(const FAircraftDisplay& D, FInspectorCardView& Out)
 		: NSLOCTEXT("AirportMgr", "InspectorEngineOff", "off");
 	Out.Facts = FString::Format(
 		*NSLOCTEXT("AirportMgr", "InspectorAircraftFacts",
-			"Heading {0}\nSpeed {1} m/s ({2} kt)\nAltitude {3} m\nTo {4}\nEngine {5}").ToString(),
+			"Heading {0}\nSpeed {1} m/s ({2} kt)\nVertical speed {6} m/s ({7} ft/min)\nAltitude {3} m\nTo {4}\nEngine {5}").ToString(),
 		{
 			FString::Printf(TEXT("%03d"), D.HeadingDegrees),
 			FString::Printf(TEXT("%d.%d"), D.SpeedTenths / 10, D.SpeedTenths % 10),
@@ -165,6 +167,11 @@ void FAircraftCard::Compose(const FAircraftDisplay& D, FInspectorCardView& Out)
 			FString::FromInt(D.AltitudeMetres),
 			D.Destination,
 			EngineState.ToString(),
+			// SIGN BY HAND: speed's "%d.%d" would print -3.2 as "-3.-2", and a %.1f of the float reopens the round-half-even
+			// gap FAircraftDisplay's comment closed. {6} and {7} come last so the existing indices keep their meaning.
+			FString::Printf(TEXT("%s%d.%d"), D.VerticalTenths < 0 ? TEXT("-") : TEXT(""),
+				FMath::Abs(D.VerticalTenths) / 10, FMath::Abs(D.VerticalTenths) % 10),
+			FString::FromInt(D.VerticalFpm),
 		});
 	// THE DEMANDS BLOCK (2026-09-28): what the aircraft wants, one line each. The fuel
 	// line is AirportOps's whole sentence (it names itself "Fuel ..."); pushback is the

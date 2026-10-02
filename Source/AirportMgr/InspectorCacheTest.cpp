@@ -575,7 +575,7 @@ bool FInspectorKeyEqualMeansTextEqualTest::RunTest(const FString&)
 	{
 		// A FEW FACTS MOVE A LITTLE: the deltas a taxiing aircraft makes, plus a snap to a half-way value, where two
 		// roundings of one number can part company.
-		switch (Stream.RandRange(0, 6))
+		switch (Stream.RandRange(0, 7))
 		{
 		case 0: F.GroundSpeed += Stream.FRandRange(-6.0f, 6.0f); break;
 		case 1: F.GroundSpeed = Stream.RandRange(0, 600) * 5.0 + (Stream.RandRange(0, 1) == 0 ? 0.0 : 0.5); break;
@@ -583,6 +583,8 @@ bool FInspectorKeyEqualMeansTextEqualTest::RunTest(const FString&)
 		case 3: F.HeadingDegrees = Stream.RandRange(0, 719) * 0.5; break;
 		case 4: F.Altitude = FMath::Max(0.0, F.Altitude + Stream.FRandRange(-120.0f, 120.0f)); break;
 		case 5: F.Altitude = Stream.RandRange(0, 200) * 50.0; break;
+		// SIGNED, and snapped to halves on both sides of zero - the vertical line prints a sign by hand.
+		case 6: F.VerticalSpeed = Stream.RandRange(-400, 400) * 5.0 + (Stream.RandRange(0, 1) == 0 ? 0.0 : 0.5); break;
 		default:
 			F.bEngineRunning = !F.bEngineRunning;
 			F.Status = Statuses[Stream.RandRange(0, 2)];

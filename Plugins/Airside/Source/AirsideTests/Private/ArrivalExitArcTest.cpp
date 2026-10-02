@@ -166,6 +166,63 @@ bool FTrafficVacatedHandoverIsContinuousTest::RunTest(const FString& Parameters)
 }
 
 /**
+ * THE INSPECTOR'S VERTICAL SPEED (2026-10-02) is FLandingRun::VerticalSpeed carried through FRoadAgent::DescribeMotion. Measured
+ * against what the motion's own Altitude did tick to tick - the figure the player sees the aircraft do - so a phase missing from
+ * DescribeMotion's line (GroundSpeed's old defect) or a sink re-derived beside the integration reads red, and so does an approach
+ * that prints a climb.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficArrivalVerticalSpeedTest,
+	"Airside.Model.Traffic.ArrivalVerticalSpeedIsTheDescent",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficArrivalVerticalSpeedTest::RunTest(const FString& Parameters)
+{
+	FExitArcAirport A = ExitArcBuildAirport(GetTransientPackage(), /*bWithStand=*/true);
+	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Id = Traffic->DispatchArrival(*A.Net, A.Threshold - FVector2D(1000.0, 0.0), Airframe, 10.0);
+	if (!TestTrue(TEXT("the arrival is dispatched"), Id > 0)) { return false; }
+
+	constexpr double Dt = 1.0 / 60.0;
+	double PrevAltitude = -1.0;
+	double WorstError = 0.0, WorstAt = 0.0, Steepest = 0.0, WorstOnGround = 0.0;
+	int32 AirborneTicks = 0;
+	for (int32 Ticks = 0; Ticks < 300 * 60; ++Ticks)
+	{
+		Traffic->Advance(Dt, A.Net);
+		const FRoadAgent* Agent = Traffic->FindAgent(Id);
+		if (Agent == nullptr || Agent->Phase == EAgentPhase::Parked) { break; }
+		const FAgentMotion& M = Agent->LastMotion;
+		if (PrevAltitude >= 0.0 && Agent->Phase == EAgentPhase::Arriving)
+		{
+			const double Error = FMath::Abs(M.VerticalSpeed - (M.Altitude - PrevAltitude) / Dt);
+			if (Error > WorstError) { WorstError = Error; WorstAt = Ticks * Dt; }
+		}
+		if (M.Altitude > 0.0)
+		{
+			++AirborneTicks;
+			Steepest = FMath::Min(Steepest, M.VerticalSpeed);
+		}
+		else if (PrevAltitude == 0.0)
+		{
+			// ON THE WHEELS FOR A WHOLE TICK: the touchdown tick itself carries the last of the sink.
+			WorstOnGround = FMath::Max(WorstOnGround, FMath::Abs(M.VerticalSpeed));
+		}
+		PrevAltitude = M.Altitude;
+	}
+	UE_LOG(LogAirsideTests, Log, TEXT("Arrival vertical speed: %d airborne ticks, steepest %.1f uu/s, worst quotient error %.4f uu/s at %.2f s, worst on the wheels %.4f"),
+		AirborneTicks, Steepest, WorstError, WorstAt, WorstOnGround);
+
+	TestTrue(TEXT("the arrival was measured in the air"), AirborneTicks > 0);
+	TestTrue(FString::Printf(TEXT("an approach descends: the steepest figure is negative (%.1f uu/s)"), Steepest), Steepest < 0.0);
+	TestTrue(FString::Printf(TEXT("the figure is the height the motion lost per second (worst error %.4f uu/s at %.2f s)"), WorstError, WorstAt),
+		WorstError < 1.0e-3);
+	TestTrue(FString::Printf(TEXT("zero on the wheels (worst %.4f uu/s)"), WorstOnGround), WorstOnGround == 0.0);
+	return true;
+}
+
+/**
  * THE AIRCRAFT THAT ROLLED STRAIGHT PAST ITS EXIT (PIE, 2026-09-06, the first build with
  * arcs). The exit arc began between the distance the aircraft is actually slowed by and the
  * margined "needed" figure, so it was ruled unusable; the junction's own node-end, 6000 uu

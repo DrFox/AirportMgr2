@@ -107,6 +107,14 @@ struct AIRSIDE_API FAgentMotion
 	 */
 	UPROPERTY() double GroundSpeed = 0.0;
 
+	/**
+	 * Rate of climb, uu per second, up positive. Zero on the wheels. From the run that moves the height - FTakeoffRun /
+	 * FLandingRun::VerticalSpeed - never differenced here from two frames of Altitude, which would be a second evaluator.
+	 * Set beside GroundSpeed in DescribeMotion's switch, in the two phases that move the height; every other phase is on the
+	 * wheels, so the default zero is its answer, not a gap. The inspector reads it; the view does not yet.
+	 */
+	UPROPERTY() double VerticalSpeed = 0.0;
+
 	/** The propeller turns. True whenever the aircraft is under way at all. */
 	UPROPERTY() bool bEngineRunning = false;
 

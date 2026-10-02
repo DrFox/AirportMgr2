@@ -230,8 +230,8 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	// speed over radius - so a phase missing from this line is a phase with stopped wheels.
 	switch (Phase)
 	{
-	case EAgentPhase::Arriving:    Motion.GroundSpeed = Arrival.Speed;   break;
-	case EAgentPhase::Departing:   Motion.GroundSpeed = Departure.Speed; break;
+	case EAgentPhase::Arriving:    Motion.GroundSpeed = Arrival.Speed;   Motion.VerticalSpeed = Arrival.VerticalSpeed;   break;
+	case EAgentPhase::Departing:   Motion.GroundSpeed = Departure.Speed; Motion.VerticalSpeed = Departure.VerticalSpeed; break;
 	// A PUSH IS MOTION TOO, and the wheels turn under it - BACKWARDS, which this line used to
 	// discard. It read `= Pushback.Speed` and said so in its own comment: "the view has no
 	// signed wheel rate and a tyre rolling the other way at 1.5 m/s reads the same". It does

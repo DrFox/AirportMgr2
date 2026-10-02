@@ -67,6 +67,8 @@ struct FAgentFacts
 	double HeadingDegrees = 0.0;
 	/** uu per second; the panel formats. */
 	double GroundSpeed = 0.0;
+	/** uu per second, up positive - FAgentMotion::VerticalSpeed. Signed for the panel too: climbing and descending differ. */
+	double VerticalSpeed = 0.0;
 	/** uu above the surface. */
 	double Altitude = 0.0;
 	/** "Stand 3", "Runway 09", or "Node 41". */
