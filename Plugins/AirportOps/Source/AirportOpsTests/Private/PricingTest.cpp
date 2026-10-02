@@ -31,14 +31,16 @@ bool FPricingByCodeLetterTest::RunTest(const FString& Parameters)
 	const double CodeC = Pricing->LandingFee(AirframeOfSpan(28.0));
 	const double CodeA = Pricing->LandingFee(AirframeOfSpan(10.0));
 
-	TestEqual(TEXT("a code C landing is the authored code C fee"), CodeC, 1200.0, 1e-6);
-	TestEqual(TEXT("a code A landing is the authored code A fee"), CodeA, 150.0, 1e-6);
+	// THE AUTHORED TABLE, pinned here and only here: x5 on 2026-10-02 (spec 2026-10-02-progression-and-fuel-supply §9;
+	// was 1200 and 150). A rebalance is an edit to these two lines; every other fee test derives from the table.
+	TestEqual(TEXT("a code C landing is the authored code C fee"), CodeC, 6000.0, 1e-6);
+	TestEqual(TEXT("a code A landing is the authored code A fee"), CodeA, 750.0, 1e-6);
 	TestTrue(TEXT("a bigger aeroplane pays more, which is the whole reason the fee is keyed on "
 		"the code letter rather than being flat"), CodeC > CodeA);
 
 	TestEqual(TEXT("parking is a tenth of the landing fee per hour - ONE row per letter drives "
 		"all three fees, so there is no second table to drift"),
-		Pricing->ParkingFeePerHour(AirframeOfSpan(28.0)), 120.0, 1e-6);
+		Pricing->ParkingFeePerHour(AirframeOfSpan(28.0)), 0.1 * CodeC, 1e-6);
 	// PER LITRE since 2026-09-28 (spec fuel-litres): what the airport sold, not the size letter.
 	TestEqual(TEXT("fuel is sold by the litre"), Pricing->FuelFee(240.0), 240.0 * Pricing->FuelPricePerLitre, 1e-6);
 	return true;
@@ -54,11 +56,16 @@ bool FPricingMultiplierTest::RunTest(const FString& Parameters)
 	UPricing* Pricing = NewObject<UPricing>();
 	const FAirframe Airframe = AirframeOfSpan(28.0);
 
+	// THE LEVER'S EFFECT, NOT THE TABLE'S FIGURES (PricingByCodeLetter pins those): the fees at x1 are read first, so a
+	// rebalance of the table leaves this test asserting only what it is for - that x1.5 is x1.5 of both.
+	Pricing->LandingFeeMultiplier = 1.0;
+	const double Landing = Pricing->LandingFee(Airframe);
+	const double Parking = Pricing->ParkingFeePerHour(Airframe);
 	Pricing->LandingFeeMultiplier = 1.5;
 	TestEqual(TEXT("the player's lever scales what a landing earns"),
-		Pricing->LandingFee(Airframe), 1800.0, 1e-6);
+		Pricing->LandingFee(Airframe), 1.5 * Landing, 1e-6);
 	TestEqual(TEXT("and scales parking with it, so one lever cannot split the two fees apart"),
-		Pricing->ParkingFeePerHour(Airframe), 180.0, 1e-6);
+		Pricing->ParkingFeePerHour(Airframe), 1.5 * Parking, 1e-6);
 
 	// THE DELIBERATE EXCEPTION (spec D7 and the header): fuelling is a service performed, not
 	// permission to land, so the landing lever must not quietly reprice it.

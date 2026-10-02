@@ -10,17 +10,22 @@ double UPricing::BaseLandingFeeForLetter(const FString& Letter) const
 	// FIRST-PASS FIGURES, roughly doubling per letter (spec 2026-09-13 §7). The ORDERING is
 	// what to defend when these are tuned - a bigger aeroplane pays more, and by a widening
 	// margin; the magnitudes themselves are unplayed guesses and are expected to move.
-	if (Letter == TEXT("A")) { return 150.0; }
-	if (Letter == TEXT("B")) { return 400.0; }
-	if (Letter == TEXT("C")) { return 1200.0; }
-	if (Letter == TEXT("D")) { return 2600.0; }
-	if (Letter == TEXT("E")) { return 4500.0; }
-	if (Letter == TEXT("F")) { return 7000.0; }
+	//
+	// x5 ON 2026-10-02 (spec 2026-10-02-progression-and-fuel-supply §9): with research gone money is
+	// the pace, and the pacing model (Tools/pacing_model.py) put building at ~5x what earning paid
+	// for against a paved runway at ~2 real hours. Income was raised rather than build prices cut,
+	// by ruling: players do not know what a landing costs, but they do know a runway looks dear.
+	if (Letter == TEXT("A")) { return 750.0; }
+	if (Letter == TEXT("B")) { return 2000.0; }
+	if (Letter == TEXT("C")) { return 6000.0; }
+	if (Letter == TEXT("D")) { return 13000.0; }
+	if (Letter == TEXT("E")) { return 22500.0; }
+	if (Letter == TEXT("F")) { return 35000.0; }
 
 	// C, for the same reason IcaoCode::RadiusForLetter falls back to it: the commonest stand in
 	// the world. Erring here prices an unknown as an airliner rather than as a light aircraft,
 	// which is the safer way round for a fee.
-	return 1200.0;
+	return 6000.0;
 }
 
 double UPricing::LandingFee(const FAirframe& Airframe) const

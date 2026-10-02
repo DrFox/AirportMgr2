@@ -26,9 +26,14 @@ import unreal
 
 # Rate per SQUARE METRE. See the module docstring on why this, and not the per-metre figure,
 # is what is authored.
-TAXIWAY_RATE = 13.0
-RUNWAY_RATE = 25.0
-SERVICE_ROAD_RATE = 5.0
+#
+# x0.4 ON 2026-10-02 (were 13 / 25 / 5, stand 40,000, depot 120,000): the pacing model put
+# building at ~5x what earning paid for against a paved runway at ~2 real hours; landing fees went
+# x5 and builds x0.4 between them. Spec 2026-10-02-progression-and-fuel-supply section 9.
+BUILD_SCALE = 0.4
+TAXIWAY_RATE = 13.0 * BUILD_SCALE
+RUNWAY_RATE = 25.0 * BUILD_SCALE
+SERVICE_ROAD_RATE = 5.0 * BUILD_SCALE
 
 # A day of owning it, as a fraction of what it cost to lay.
 UPKEEP_FRACTION = 0.001
@@ -65,8 +70,8 @@ def shipped_profiles():
 # What placing one costs. A stand and a depot are single objects rather than lengths, so
 # these are authored directly - there is no width to derive them from.
 ENTITIES = [
-    ("/Game/Entities/DA_Stand_CodeC", 40000.0),
-    ("/Game/Entities/DA_FuelDepot", 120000.0),
+    ("/Game/Entities/DA_Stand_CodeC", 40000.0 * BUILD_SCALE),
+    ("/Game/Entities/DA_FuelDepot", 120000.0 * BUILD_SCALE),
 ]
 
 

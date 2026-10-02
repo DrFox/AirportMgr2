@@ -323,6 +323,41 @@ bool FOfferRateAirlineFactorTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferRateFleetShareTest, "AirportOps.Model.Offers.Rate.ScalesWithAdmissibleShare",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferRateFleetShareTest::RunTest(const FString& Parameters)
+{
+	// DEMAND SCALES WITH THE AIRPORT (spec 2026-10-02 §6): an airport that can take half an airline's
+	// fleet gets half its flights, not all of them drawn from the half it can take. Two candidates on
+	// a 45 m strip - one fits, one is twice too wide - so the share is exactly a half.
+	URoadNetwork* Field = FieldWith(4500.0, Needing(0.0, 3000.0));
+	const TArray<FAirlineOffers> Half = { Offering(MakeAirline(6.0),
+		{ Candidate(3000.0, TEXT("Fits")), Candidate(9000.0, TEXT("TooWide")) }) };
+
+	UOfferGenerator* Generator = SeededGenerator();
+	Generator->MaxPendingOffers = 100000;
+	TestEqual(TEXT("before any admission check the share is whole, so a fresh strip draws the full rate"),
+		Generator->FleetShare(*Half[0].Airline), 1.0, 1e-9);
+	const int32 Count = RunMinutes(*Generator, *Field, Half, *ClockAt(8.0), 600).Num();
+	TestTrue(FString::Printf(TEXT("six an hour at half the fleet is about thirty in ten hours (got %d)"), Count),
+		Count >= 24 && Count <= 36);
+	TestEqual(TEXT("the share is the admissible half"), Generator->FleetShare(*Half[0].Airline), 0.5, 1e-9);
+	TestEqual(TEXT("and every reader of the rate - strip, banner - sees it through AirlineFactor"),
+		Generator->AirlineFactor(*Half[0].Airline), 0.5, 1e-9);
+
+	// THE FLOOR IS NOT SCALED, for RateAt's reason: the club must never go quiet because the strip
+	// cannot take one of its types.
+	UAirlineDefinition* Club = MakeAirline(0.5, 1.0, true);
+	const TArray<FAirlineOffers> HalfClub = { Offering(Club,
+		{ Candidate(3000.0, TEXT("Fits")), Candidate(9000.0, TEXT("TooWide")) }) };
+	UOfferGenerator* ClubGenerator = SeededGenerator();
+	ClubGenerator->MaxPendingOffers = 100000;
+	const int32 Floor = RunMinutes(*ClubGenerator, *Field, HalfClub, *ClockAt(8.0), 600).Num();
+	TestTrue(FString::Printf(TEXT("the floor of one an hour holds at half the fleet: about ten (got %d)"), Floor),
+		Floor >= 7 && Floor <= 13);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferFlatRateTest, "AirportOps.Model.Offers.Generate.FlatRateOverTenHours",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FOfferFlatRateTest::RunTest(const FString& Parameters)

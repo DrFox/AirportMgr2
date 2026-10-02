@@ -209,8 +209,24 @@ public:
 	 */
 	TFunction<double(const UAirlineDefinition&)> AirlineFactorOf;
 
-	/** AirlineFactorOf(Airline), or 1.0 when it is unset. */
+	/**
+	 * AirlineFactorOf(Airline) (1.0 when it is unset) TIMES FleetShare(Airline) - the one factor every
+	 * reader of the rate goes through, so the demand strip and the day banner draw the share too.
+	 */
 	double AirlineFactor(const UAirlineDefinition& Airline) const;
+
+	/**
+	 * The share of the airline's fleet this airport can admit, 0-1, from the last admission check -
+	 * 1.0 before the first, when nothing has been judged yet.
+	 *
+	 * DEMAND SCALES WITH THE AIRPORT (ruled 2026-10-02, spec 2026-10-02-progression-and-fuel-supply §6).
+	 * The rate used to be the airline's whole rate whatever share of its fleet qualified, so paving
+	 * the runway changed WHICH aircraft Cumbria sent and not HOW MANY; the pacing model put the whole
+	 * grass-to-tarmac climb at +30% income, +65% with the share. A plain proportion is the first cut:
+	 * it scales the demand, NOT the floor (RateAt's rule), so the flying club still never goes quiet.
+	 * ENFORCED BY: AirportOps.Model.Offers.Rate.ScalesWithAdmissibleShare
+	 */
+	double FleetShare(const UAirlineDefinition& Airline) const;
 
 	/**
 	 * The airport whose status gates every offer - READ each minute, not subscribed to: a status is a value
