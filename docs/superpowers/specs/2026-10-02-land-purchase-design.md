@@ -116,6 +116,9 @@ by `build_diorama_prototype.py` to an 8x8 grid with the R3 start.
 - **Commit**: the mutators (`ConnectNodes`, `PlaceRunway`, `AddApron`, `PlaceEntity*`,
   `PlaceStandInPlot`, `PlaceNode`) refuse through one `OwnedOrRefuse` beside `AffordOrRefuse`,
   broadcasting `OnRefused(OutsideOwnedLand)` -> `FBuildRefusedEvent` -> toast.
+- **Known limit (ruled 2026-10-03, final review):** the footprint judged is each road's straight strip at its
+  profile's half-width, not the solver's junction polygons and bend widening. A junction one half-width from the
+  cut can overhang it by up to a fillet radius. Accepted for now: rare, a few metres, at the boundary only.
 - **Footprint, not centreline.** A taxiway whose centre is inside but whose shoulder crosses the cut
   would hang over the void. The test is on the surface polygon the solver produces, sampled at its
   vertices plus edge midpoints. Check-Architecture: extend rule 32 so a mutator calling

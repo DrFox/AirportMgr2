@@ -1952,6 +1952,14 @@ bool URoadEditFacade::MoveApronCorner(int32 ApronIndex, int32 CornerIndex, FVect
 			CornerIndex, ApronIndex);
 		return false;
 	}
+	// OWNED LAND: a drag is a build (final review 2026-10-03) - the apron tool's own evaluator, on the same copy.
+	// ENFORCED BY: Airside.Present.OwnedLand.DragsStayOnTheLand
+	const FString LandWhy = WhyApronRefused(Proposed);
+	if (!LandWhy.IsEmpty())
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("MoveApronCorner refused: corner %d of apron %d - %s"), CornerIndex, ApronIndex, *LandWhy);
+		return false;
+	}
 
 	// AN APRON CORNER IS NOT IN THE ROAD GRAPH AT ALL, so its notify never has a reason to
 	// change the graph's SHAPE - bChangesGraphShape stays at its default, false, the same as
@@ -2127,6 +2135,30 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 				const double T = FVector2D::DotProduct(To - LineFrom->Position, Line) / LengthSquared;
 				To = LineFrom->Position + Line * T;
 			}
+		}
+	}
+
+	// OWNED LAND: A DRAG IS A BUILD (final review 2026-10-03). The node, and every road it holds as a straight strip
+	// at its profile's half-width to the far end, must stay on owned land - PlaceNode refuses the same point, and
+	// without this one drag in the Select tool laid road over the void.
+	// ENFORCED BY: Airside.Present.OwnedLand.DragsStayOnTheLand
+	if (const FLandGrid& Land = Owner.Network->GetOwnedLand(); Land.IsValid())
+	{
+		bool bOwned = Land.IsOwned(To);
+		for (const FRoadSegmentId& Incident : Live->Incident)
+		{
+			const FRoadNode* Far = Owner.Network->GetNode(Owner.Network->GetOtherEnd(Incident, Node));
+			const FRoadSegment* Segment = Owner.Network->GetSegment(Incident);
+			const URoadProfile* Profile = Segment != nullptr ? Owner.Network->ProfileFor(*Segment) : nullptr;
+			if (Far != nullptr)
+			{
+				bOwned &= Land.IsStripOwned(Far->Position, To, Profile != nullptr ? Profile->GetMaxHalfWidth() : 0.0);
+			}
+		}
+		if (!bOwned)
+		{
+			UE_LOG(LogRoadMesh, Log, TEXT("MoveNode refused: node %d to (%.0f, %.0f) - %s"), NodeIndex, To.X, To.Y, *FLandGrid::OutsideText);
+			return false;
 		}
 	}
 
