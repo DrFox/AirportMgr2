@@ -190,6 +190,10 @@ struct AIRPORTOPS_API FServiceVehicle
 	/** What it is carrying now, in the role's unit. Starts full. */
 	UPROPERTY() double Cargo = 0.0;
 
+	/** Litres granted from the airport's stock when this refill began - what CargoAfterFacility adds when it ends. SAVED:
+	 *  a save mid-refill must not grant the litres twice. Zero outside AtFacility. */
+	UPROPERTY() double RefillLitres = 0.0;
+
 	/** The job it is driving to or serving (ToJob, Serving), else 0. Not in Queue. */
 	UPROPERTY() int32 CurrentJob = 0;
 

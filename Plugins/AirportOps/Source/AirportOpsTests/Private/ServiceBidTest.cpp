@@ -68,8 +68,8 @@ namespace ServiceBidTest
 		virtual double TripQuantity(double, const FServiceVehicleType& Type, double Owed) const override { return FMath::Min(Type.Capacity, Owed); }
 		virtual double ServeSeconds(const FServiceVehicleType&, double) const override { return 300.0; }
 		virtual double CargoAfterServe(double, double) const override { return 0.0; }
-		virtual double FacilitySeconds(double, const FServiceVehicleType&, int32) const override { return 60.0; }
-		virtual double CargoAfterFacility(double, const FServiceVehicleType& Type) const override { return Type.Capacity; }
+		virtual double FacilitySeconds(double, const FServiceVehicleType&, int32, double) const override { return 60.0; }
+		virtual double CargoAfterFacility(double, const FServiceVehicleType& Type, double) const override { return Type.Capacity; }
 	};
 
 	/** A role whose "done" has a wide slack (50 units) - what proves the bid reads the POLICY's DoneWithin, not a number
@@ -84,8 +84,8 @@ namespace ServiceBidTest
 		virtual double TripQuantity(double, const FServiceVehicleType& Type, double Owed) const override { return FMath::Min(Type.Capacity, Owed); }
 		virtual double ServeSeconds(const FServiceVehicleType&, double) const override { return 10.0; }
 		virtual double CargoAfterServe(double Cargo, double Quantity) const override { return FMath::Max(Cargo - Quantity, 0.0); }
-		virtual double FacilitySeconds(double, const FServiceVehicleType&, int32) const override { return 0.0; }
-		virtual double CargoAfterFacility(double, const FServiceVehicleType& Type) const override { return Type.Capacity; }
+		virtual double FacilitySeconds(double, const FServiceVehicleType&, int32, double) const override { return 0.0; }
+		virtual double CargoAfterFacility(double, const FServiceVehicleType& Type, double) const override { return Type.Capacity; }
 	};
 }
 
@@ -118,6 +118,36 @@ bool FServiceBidBusyBowserBeatsIdleTowTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the tow would need four trips"), TowBid.Trips, 4);
 	TestEqual(TEXT("and three refills between them - the cost the bid exists to see"), TowBid.FacilityVisits, 3);
 	TestEqual(TEXT("the bowser needs none"), BowserBid.FacilityVisits, 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FServiceBidStockSpentOnceTest, "AirportOps.Service.Bid.StockIsSpentOnceAcrossTrips",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FServiceBidStockSpentOnceTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceBidTest;
+	// A MULTI-TRIP BID SPENDS THE STOCK ONCE (spec 2026-10-02 §7): an empty tow, a 2,000 L job and 1,500 L in the airport.
+	// The first refill takes 1,000 and leaves 500; the second can take only that. A simulation that priced every refill
+	// against the whole snapshot would promise two full loads and finish the job in two trips - fuel the airport has not got.
+	FFuelRolePolicy Policy;
+	const FServiceVehicleType TowType = Tow();
+
+	ServiceBid::FInput Short = Input(TowType, Policy);
+	Short.CargoWhenFree = 0.0;
+	Short.FacilityAvailable = 1500.0;
+	Short.Appended = { StandA, 2000.0 };
+	const ServiceBid::FResult ShortBid = ServiceBid::Finish(Short);
+
+	ServiceBid::FInput Plenty = Short;
+	Plenty.FacilityAvailable = TNumericLimits<double>::Max();
+	const ServiceBid::FResult PlentyBid = ServiceBid::Finish(Plenty);
+
+	AddInfo(FString::Printf(TEXT("short: %d trips, %d refills, %.0f s; plenty: %d trips, %d refills, %.0f s"),
+		ShortBid.Trips, ShortBid.FacilityVisits, ShortBid.Finish, PlentyBid.Trips, PlentyBid.FacilityVisits, PlentyBid.Finish));
+	TestEqual(TEXT("CONTROL: with the stock unbounded two full loads finish it"), PlentyBid.Trips, 2);
+	TestEqual(TEXT("short: the second load was the 500 L left, so a third trip is attempted"), ShortBid.Trips, 3);
+	TestTrue(TEXT("and the bid does not pretend the second refill was a full one"), ShortBid.Finish != PlentyBid.Finish);
 	return true;
 }
 

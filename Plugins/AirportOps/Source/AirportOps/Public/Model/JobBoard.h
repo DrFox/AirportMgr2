@@ -32,6 +32,7 @@ class URoadNetwork;
 class ULedger;
 class FOpsEventBus;
 class UPricing;
+class UFuelSupply;
 struct FRoadAgent;
 enum class EAgentPhase : uint8;
 
@@ -195,6 +196,24 @@ public:
 	 * counts the owned pumps, not the seated ones)
 	 */
 	FModuleCeilingFn ModuleCeilingOf;
+
+	/**
+	 * The airport's fuel stock (spec 2026-10-02 §7). NULL means unlimited - every board built before fuel had a cost, and
+	 * every test that is not about stock. UOpsRuntime sets it (fuel-supply plan task 6; until then nothing in production
+	 * does, and fuel stays free there). A refill DRAWS from it as it begins (BeginFacility); a bid only READS it (BidFor).
+	 * ENFORCED BY: AirportOps.Fuel.RefillDrawsTheStock, AirportOps.Fuel.BidPricesTheBoardsStock
+	 */
+	UPROPERTY(Transient) TObjectPtr<UFuelSupply> FuelSupply;
+
+	/** What a refill may take now: the stock, or unbounded when there is no supply. */
+	double FuelAvailable() const;
+
+	/**
+	 * Seated tanks across every live depot, in litres (FDepotCapability::Tanks x LitresPerTank). UOpsRuntime wires
+	 * UFuelSupply::CapacityOf to this (task 6). LitresPerTank is a PARAMETER, not read here, because the figure lives on the
+	 * supply's Figures and the board does not own the supply's design.
+	 */
+	double FuelCapacityLitres(const URoadNetwork& Network, double LitresPerTank) const;
 
 	/**
 	 * What Depot's SEATED modules give it (#443, ruled 2026-09-30): its pumps and whether it can fuel at all. THE MODULES

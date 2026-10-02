@@ -42,6 +42,12 @@ namespace ServiceBid
 		int32 FacilityNode = 0;
 		int32 Pumps = 1;
 
+		/** What its facility can give right now (fuel: the airport's stock). A SNAPSHOT: two vehicles bidding at once
+		 *  are both priced against the whole stock, and the one that refills second may get less than it was priced for.
+		 *  Accepted - the bid is a ranking, re-run every decision, and the live draw (UJobBoard::BeginFacility) is exact.
+		 *  Unbounded by default: a role whose facility never runs out, and every board with no supply. */
+		double FacilityAvailable = TNumericLimits<double>::Max();
+
 		/** Jobs already on its queue, ONE TRIP EACH: a queue entry is a single commitment, and what a
 		 *  trip leaves owed goes back to the board (user's ruling 5). */
 		TArray<FTrip> Queued;

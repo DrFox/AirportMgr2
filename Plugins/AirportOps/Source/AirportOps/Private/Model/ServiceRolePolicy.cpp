@@ -33,16 +33,18 @@ double FFuelRolePolicy::CargoAfterServe(double Cargo, double Quantity) const
 	return FMath::Max(Cargo - Quantity, 0.0);
 }
 
-double FFuelRolePolicy::FacilitySeconds(double Cargo, const FServiceVehicleType& Type, int32 Pumps) const
+double FFuelRolePolicy::FacilitySeconds(double Cargo, const FServiceVehicleType& Type, int32 Pumps, double Available) const
 {
 	// WHAT IT PUMPED OUT, back in at the depot's pumps - the refill UFuelService used to size from
-	// RefillOnReturn. A full tank takes no time, which is what lets a vehicle that went home without
-	// serving (a recall) be free at once.
-	const double Missing = FMath::Max(CapacityOf(Type) - Cargo, 0.0);
-	return Missing / (FMath::Max(Pumps, 1) * FMath::Max(RefillLitresPerMinutePerPump, 1.0)) * 60.0;
+	// RefillOnReturn - and since 2026-10-02 no more than the airport holds. A full tank or a dry airport
+	// takes no time, which is what lets a vehicle that went home without serving (a recall) be free at once.
+	const double Pumped = FMath::Min(FMath::Max(CapacityOf(Type) - Cargo, 0.0), FMath::Max(Available, 0.0));
+	return Pumped / (FMath::Max(Pumps, 1) * FMath::Max(RefillLitresPerMinutePerPump, 1.0)) * 60.0;
 }
 
-double FFuelRolePolicy::CargoAfterFacility(double Cargo, const FServiceVehicleType& Type) const
+double FFuelRolePolicy::CargoAfterFacility(double Cargo, const FServiceVehicleType& Type, double Available) const
 {
-	return CapacityOf(Type);
+	// WAS CapacityOf(Type), unconditionally - the line that made fuel free (spec 2026-10-02 §7). Clamped to the tank so a
+	// vehicle arriving over it (a catalogue tank shrunk under a saved vehicle) leaves at the tank, as it always did.
+	return FMath::Min(CapacityOf(Type), Cargo + FMath::Max(Available, 0.0));
 }

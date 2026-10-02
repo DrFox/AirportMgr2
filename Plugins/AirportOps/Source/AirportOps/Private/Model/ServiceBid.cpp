@@ -15,6 +15,9 @@ ServiceBid::FResult ServiceBid::Finish(const FInput& In, int32 MaxTrips)
 
 	double Time = In.FreeAt;
 	double Cargo = In.CargoWhenFree;
+	// WHAT THE FACILITY STILL HOLDS for this simulation: each refill spends it, so a multi-trip bid does not draw the
+	// same litres twice. ENFORCED BY: AirportOps.Service.Bid.StockIsSpentOnceAcrossTrips
+	double Available = In.FacilityAvailable;
 	int32 Node = In.NodeWhenFree;
 
 	/** Drive to To, or report the way missing. The one place a leg's time is added. */
@@ -44,8 +47,10 @@ ServiceBid::FResult ServiceBid::Finish(const FInput& In, int32 MaxTrips)
 			{
 				return -1.0;
 			}
-			Time += Policy.FacilitySeconds(Cargo, Type, In.Pumps);
-			Cargo = Policy.CargoAfterFacility(Cargo, Type);
+			const double Before = Cargo;
+			Time += Policy.FacilitySeconds(Cargo, Type, In.Pumps, Available);
+			Cargo = Policy.CargoAfterFacility(Cargo, Type, Available);
+			Available = FMath::Max(Available - FMath::Max(Cargo - Before, 0.0), 0.0);
 			++Result.FacilityVisits;
 		}
 		if (!DriveTo(Trip.Node))

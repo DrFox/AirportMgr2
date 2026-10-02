@@ -1,6 +1,7 @@
 #include "Model/JobBoard.h"
 
 #include "AirportOpsLog.h"
+#include "Model/FuelSupply.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
@@ -291,6 +292,53 @@ double UJobBoard::DriveSeconds(const URoadNetwork& Network, FGuidelineNodeId Fro
 	return Length / FMath::Max(Type.Vehicle.Chassis.Ground.Taxi.SpeedCap, 1.0);
 }
 
+// THE REFILL, LIVE AND PRICED, IN ONE FILE (2026-10-02, spec §7): BeginFacility draws the airport's stock and BidFor
+// below prices the same limit through the same two policy calls. MOVED HERE FROM JobBoard.cpp with that change, which
+// also keeps JobBoard.cpp inside its Check-Architecture rule 77 figure - the stock is a new responsibility, and it
+// entered beside the bid that must agree with it rather than growing the orchestrator.
+
+double UJobBoard::FuelAvailable() const
+{
+	return FuelSupply != nullptr ? FuelSupply->Available() : TNumericLimits<double>::Max();
+}
+
+double UJobBoard::FuelCapacityLitres(const URoadNetwork& Network, double LitresPerTank) const
+{
+	// THE SAME LIVE-DEPOT WALK UFacilityPurchases makes for its seated modules (FacilityPurchases.cpp, the excess pass), so
+	// a tank counts here exactly when the plot seats it - an owned tank the plot cannot hold holds no fuel.
+	int32 Tanks = 0;
+	const TArray<FEntityInstance>& Entities = Network.GetEntities();
+	for (int32 Index = 0; Index < Entities.Num(); ++Index)
+	{
+		const FEntityInstance& Entity = Entities[Index];
+		if (Entity.bAlive && Entity.IsDepot())
+		{
+			Tanks += CapabilityOf(Network.EntityIdAt(Index), Entity).Tanks();
+		}
+	}
+	return Tanks * FMath::Max(LitresPerTank, 0.0);
+}
+
+void UJobBoard::BeginFacility(FServiceVehicle& Vehicle, const URoadNetwork& Network, const USimClock& Clock)
+{
+	const IServiceRolePolicy* Policy = PolicyFor(Vehicle.Role);
+	const FEntityInstance* Home = Network.GetEntity(Vehicle.Home);
+	// DRAWN NOW, not when the pumping ends: two trucks home together must not both be promised the last 500 L. What is
+	// granted is held on the vehicle (RefillLitres, saved) and added when the refill ends (Step's AtFacility branch).
+	const double Missing = Policy != nullptr ? FMath::Max(FFuelRolePolicy::CapacityOf(TypeFor(Vehicle.TypeCode)) - Vehicle.Cargo, 0.0) : 0.0;
+	Vehicle.RefillLitres = FuelSupply != nullptr ? FuelSupply->Draw(Missing) : Missing;
+	const double Seconds = Policy != nullptr && Home != nullptr
+		? Policy->FacilitySeconds(Vehicle.Cargo, TypeFor(Vehicle.TypeCode), PumpsAt(Vehicle.Home, *Home), Vehicle.RefillLitres) : 0.0;
+	Lifecycle(Vehicle).BeginFacility(Clock.Now() + Seconds);
+	if (Seconds > 0.0)
+	{
+		// REFILL BEFORE IT IS FREE (spec 2026-09-28-fuel-litres): what it pumped out, at the depot's
+		// pumps. Nothing pumped (a recall mid-leg, or a dry airport) makes this zero, and it is free on the next tick.
+		UE_LOG(LogAirportOps, Log, TEXT("Fuel: depot %d refilling vehicle %d (%.0f L, %.1f game min, stock left %.0f L)"),
+			Vehicle.Home.Index, Vehicle.Id, Vehicle.RefillLitres, Seconds / 60.0, FuelSupply != nullptr ? FuelSupply->Available() : -1.0);
+	}
+}
+
 ServiceBid::FResult UJobBoard::BidFor(const FServiceVehicle& Vehicle, const FServiceJob& Job, const UGroundTraffic& Traffic,
 	const URoadNetwork& Network, const USimClock& Clock, int32 QueueAhead) const
 {
@@ -319,6 +367,7 @@ ServiceBid::FResult UJobBoard::BidFor(const FServiceVehicle& Vehicle, const FSer
 	In.Type = &Type;
 	In.Policy = Policy;
 	In.Pumps = PumpsAt(Vehicle.Home, *Home);
+	In.FacilityAvailable = FuelAvailable();   // A SNAPSHOT - see FInput::FacilityAvailable for why that is accepted
 	In.FacilityNode = NodeIndex(Home->PoseNode);
 	In.DriveSeconds = [this, &Nodes, &Network, &Type, GamePerMovement](int32 From, int32 To)
 	{
@@ -349,11 +398,15 @@ ServiceBid::FResult UJobBoard::BidFor(const FServiceVehicle& Vehicle, const FSer
 	{
 	case EServiceVehicleState::AtFacility:
 		In.FreeAt = FMath::Max(Vehicle.StepEndsAt, Now);
-		In.CargoWhenFree = Policy->CargoAfterFacility(Vehicle.Cargo, Type);
+		// THE LITRES ALREADY GRANTED, not the stock: BeginFacility drew them, and the stock no longer holds them.
+		In.CargoWhenFree = Policy->CargoAfterFacility(Vehicle.Cargo, Type, Vehicle.RefillLitres);
 		break;
 	case EServiceVehicleState::ToFacility:
-		In.FreeAt = Now + RemainingDrive() + Policy->FacilitySeconds(Vehicle.Cargo, Type, In.Pumps);
-		In.CargoWhenFree = Policy->CargoAfterFacility(Vehicle.Cargo, Type);
+		In.FreeAt = Now + RemainingDrive() + Policy->FacilitySeconds(Vehicle.Cargo, Type, In.Pumps, In.FacilityAvailable);
+		In.CargoWhenFree = Policy->CargoAfterFacility(Vehicle.Cargo, Type, In.FacilityAvailable);
+		// THAT REFILL SPENDS THE SNAPSHOT TOO, so the simulation's own refills price only what it leaves - the rule
+		// ServiceBid::Finish applies between its trips, applied to the refill this vehicle is already driving to.
+		In.FacilityAvailable = FMath::Max(In.FacilityAvailable - FMath::Max(In.CargoWhenFree - Vehicle.Cargo, 0.0), 0.0);
 		break;
 	case EServiceVehicleState::ToJob:
 		if (Current != nullptr)

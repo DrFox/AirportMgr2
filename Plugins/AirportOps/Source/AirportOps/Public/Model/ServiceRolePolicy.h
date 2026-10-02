@@ -64,11 +64,14 @@ public:
 	/** What the vehicle carries after delivering Quantity. */
 	virtual double CargoAfterServe(double Cargo, double Quantity) const = 0;
 
-	/** GAME seconds at the facility, arriving with Cargo, at a facility with Pumps service points. */
-	virtual double FacilitySeconds(double Cargo, const FServiceVehicleType& Type, int32 Pumps) const = 0;
+	/** GAME seconds at the facility, arriving with Cargo, at a facility with Pumps service points that can give at most
+	 *  Available of what the role carries (fuel: the airport's stock, spec 2026-10-02 §7). */
+	virtual double FacilitySeconds(double Cargo, const FServiceVehicleType& Type, int32 Pumps, double Available) const = 0;
 
-	/** What the vehicle carries leaving the facility. */
-	virtual double CargoAfterFacility(double Cargo, const FServiceVehicleType& Type) const = 0;
+	/** What the vehicle carries leaving the facility, given at most Available. THE TRUCK AND THE BID BOTH ASK THESE TWO
+	 *  (UJobBoard::BeginFacility/Step, ServiceBid::Finish, UJobBoard::BidFor), so a bid cannot promise a refill the stock
+	 *  cannot give. ENFORCED BY: AirportOps.Service.Policy.FacilityHonoursAvailable */
+	virtual double CargoAfterFacility(double Cargo, const FServiceVehicleType& Type, double Available) const = 0;
 };
 
 /**
@@ -103,8 +106,8 @@ public:
 	virtual double TripQuantity(double Cargo, const FServiceVehicleType& Type, double Owed) const override;
 	virtual double ServeSeconds(const FServiceVehicleType& Type, double Quantity) const override;
 	virtual double CargoAfterServe(double Cargo, double Quantity) const override;
-	virtual double FacilitySeconds(double Cargo, const FServiceVehicleType& Type, int32 Pumps) const override;
-	virtual double CargoAfterFacility(double Cargo, const FServiceVehicleType& Type) const override;
+	virtual double FacilitySeconds(double Cargo, const FServiceVehicleType& Type, int32 Pumps, double Available) const override;
+	virtual double CargoAfterFacility(double Cargo, const FServiceVehicleType& Type, double Available) const override;
 
 	/**
 	 * The tank, FLOORED AT A LITRE: ClampMin guards only the editor, and a 0 L tank would make every
