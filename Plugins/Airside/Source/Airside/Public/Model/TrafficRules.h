@@ -79,6 +79,16 @@ struct AIRSIDE_API FTrafficRules
 	UPROPERTY(EditAnywhere, meta = (ClampMin = "0")) double TaxiPlanMargin = 5.0;
 
 	/**
+	 * The most edges one planner MOVE may run through nodes it may not stop at (FTaxiPlanner's chains). A junction's
+	 * turn path is one to three pieces (Chord, TaperS, BendArc), a crossing's split adds a piece per conflict; eight
+	 * covered the longest chain FRoadGuidelineBuilder lays, with room (2026-10-02). A longer chain is not explored -
+	 * the planner refuses (NoFreeWindow) rather than plan a stop inside a junction - and says so once, as a Warning
+	 * naming this knob. A KNOB, not a constant (review of #527), so a layout that hits it is one edit from working
+	 * rather than one build.
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "1")) int32 TaxiPlanMaxChainEdges = 8;
+
+	/**
 	 * How fast a push off a stand runs, uu/s. 1 uu is 1 cm - see UAircraftType::MainWheelRadius.
 	 *
 	 * ON THE RULES AND NOT THE AIRFRAME, unlike the braking figure the claim window reads:

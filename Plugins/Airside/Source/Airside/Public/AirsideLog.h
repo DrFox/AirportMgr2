@@ -20,6 +20,9 @@
  * landings, take-offs, taxi, parking and shutdown - the field's traffic, wherever in the
  * plugin it is logged from. LogRoadMesh (declared here too, for the same reason) stays the
  * surface/edit-facade category: solve, rebuild census, ghost preview, apron and node edits.
+ * LogAirsideTaxiPlan: space-time taxi planning (spec 2026-10-02) - a plan made, refused, released or
+ * revoked, once per event. Its own concern, not LogAirsideTraffic's: what the planner DECIDED, filterable
+ * apart from what the claim pass and the follower DID with it.
  *
  * ENFORCED BY: Check-Architecture.ps1 rule 2 (one DEFINE_LOG_CATEGORY(_STATIC) per name,
  * across each unity-build module).
@@ -27,6 +30,7 @@
 DECLARE_LOG_CATEGORY_EXTERN(LogAirside, Log, All);
 DECLARE_LOG_CATEGORY_EXTERN(LogAirsideTraffic, Log, All);
 DECLARE_LOG_CATEGORY_EXTERN(LogRoadMesh, Log, All);
+DECLARE_LOG_CATEGORY_EXTERN(LogAirsideTaxiPlan, Log, All);
 
 /**
  * ISSUE #216: DECLARE_LOG_CATEGORY_EXTERN's macro takes no module-API specifier, so

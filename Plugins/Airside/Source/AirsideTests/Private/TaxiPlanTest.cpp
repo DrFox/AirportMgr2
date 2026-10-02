@@ -66,6 +66,30 @@ namespace
 	{
 		return Plan.Holds.ContainsByPredicate([Node](const FTaxiHold& Hold) { return Hold.At == Node; });
 	}
+
+	/**
+	 * Whether Plan's passes book into a COPY of Table - the table it was planned against. A plan the planner says fits and
+	 * the table refuses is a plan nobody can fly (review of #527: search and booking computed one bound in two float
+	 * orders and could disagree on a boundary). Every successful plan in these tests is asked this.
+	 */
+	bool BooksInto(const FTaxiReservations& Table, const FTaxiPlan& Plan)
+	{
+		FTaxiReservations Copy = Table;
+		return Plan.IsPlanned() && Copy.BookPasses(Plan.Passes);
+	}
+
+	/** Whether any step drives straight back along the edge the step before it drove - a U-turn on a centreline. */
+	bool HasUTurn(const FTaxiPlan& Plan)
+	{
+		for (int32 Index = 1; Index < Plan.Route.Steps.Num(); ++Index)
+		{
+			if (Plan.Route.Steps[Index].Edge == Plan.Route.Steps[Index - 1].Edge)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanReservationsBookTest, "Airside.Model.TaxiPlan.ReservationsBookAndRelease",
@@ -244,6 +268,7 @@ bool FTaxiPlanEmptyNetworkTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the route is drivable - welded by RouteSearch"), Plan.Route.IsDrivable());
 	TestTrue(TEXT("the route is the polyline RouteSearch would give"),
 		Plan.Route.Polyline.Num() == Shortest.Polyline.Num() && FMath::IsNearlyEqual(Plan.Route.Length, Shortest.Length, 1e-6));
+	TestTrue(TEXT("and it books"), BooksInto(Empty, Plan));
 	return true;
 }
 
@@ -274,6 +299,7 @@ bool FTaxiPlanWholeRouteTest::RunTest(const FString& Parameters)
 	Whole.Build(Plan.Route.Polyline, Piper.Chassis);
 	const double Authority = Whole.SecondsToDrive(0.0);
 	TestTrue(TEXT("planned"), Plan.IsPlanned());
+	TestTrue(TEXT("and it books"), BooksInto(Empty, Plan));
 	// TWO BOUNDS, NOT ONE TOLERANCE, because the two errors are not alike. OPTIMISTIC is the dangerous one - a clock
 	// that runs fast books windows the aircraft will overrun - and the per-piece split can only be optimistic by the
 	// braking it skips across a smooth edge boundary: held to 5%. PESSIMISTIC is the price of timing an instant
@@ -303,6 +329,7 @@ bool FTaxiPlanWholeRouteTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("a smooth route's clock is within 1%% of the authority's (%.2f s vs %.2f s)"),
 		Straight.Arrival, StraightAuthority), Straight.IsPlanned()
 		&& FMath::Abs(Straight.Arrival - StraightAuthority) <= 0.01 * StraightAuthority);
+	TestTrue(TEXT("and the smooth one books"), BooksInto(Empty, Straight));
 	return true;
 }
 
@@ -380,6 +407,7 @@ bool FTaxiPlanParallelTest::RunTest(const FString& Parameters)
 		const FTaxiPlan Free = Planner.Plan(Request(X, Y));
 		TestTrue(TEXT("unobstructed, it takes the straight line"),
 			Free.IsPlanned() && Free.Route.Steps.Num() == 1 && Free.Route.Steps[0].Edge == Straight);
+		TestTrue(TEXT("and it books"), BooksInto(Table, Free));
 	}
 
 	Table.BookWindow(FTaxiResource::Edge(Straight), { TheirId, 0.0, 100.0 });
@@ -391,6 +419,7 @@ bool FTaxiPlanParallelTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("and arrives before the straight one would even free (%.1f s)"), Plan.Arrival),
 		Plan.IsPlanned() && Plan.Arrival < 100.0);
 	TestEqual(TEXT("no wait"), Plan.Holds.Num(), 0);
+	TestTrue(TEXT("and it books"), BooksInto(Table, Plan));
 	return true;
 }
 
@@ -480,6 +509,7 @@ bool FTaxiPlanRulesTest::RunTest(const FString& Parameters)
 		const FTaxiPlan Plan = Planner.Plan(Request(West, East));
 		TestTrue(TEXT("planned the long way"), Plan.IsPlanned() && Plan.Route.Steps.Num() == 2
 			&& Plan.Route.Steps[0].To == North);
+		TestTrue(TEXT("and it books"), BooksInto(Empty, Plan));
 	}
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
@@ -539,6 +569,147 @@ bool FTaxiPlanBooksTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("theirs planned"), Theirs.IsPlanned());
 	TestTrue(TEXT("theirs waits - we are through B first"), Theirs.Holds.Num() > 0);
 	TestTrue(TEXT("and books round ours, holds and all"), Table.BookPasses(Theirs.Passes));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanLaterIntervalTest, "Airside.Model.TaxiPlan.LaterIntervalSuccessor",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanLaterIntervalTest::RunTest(const FString& Parameters)
+{
+	//   S ===== A ===== B ===== G      every node a plain lane node - the aircraft may wait at any of them
+	// Another aircraft passes B at [100, 150) and holds B-G until 300. Reaching B EARLY (~40 s) is a dead end: B must
+	// be left by 95 and B-G is shut till 300. Waiting at A and reaching B in its LATER free interval [150, inf) works.
+	// Textbook SIPP makes one successor per reachable safe interval of the destination (review of #527): a planner
+	// that tries only the earliest departure per move never generates that later arrival and refuses.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId S = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(5000.0, 0.0));
+	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(10000.0, 0.0));
+	const FGuidelineNodeId G = Net->AddGuidelineNode(FVector2D(15000.0, 0.0));
+	Join(*Net, S, A);
+	Join(*Net, A, B);
+	const FGuidelineEdgeId BG = Join(*Net, B, G);
+
+	const FAirframe Piper = TestAirframes::Piper();
+	const FTrafficRules Rules;
+	FTaxiReservations Table;
+	Table.BookWindow(FTaxiResource::Node(B), { TheirId, 100.0, 150.0 });
+	Table.BookWindow(FTaxiResource::Edge(BG), { TheirId, 0.0, 300.0 });
+
+	FTaxiPlanner Planner(*Net, Table, Piper, Rules);
+	const FTaxiPlan Plan = Planner.Plan(Request(S, G));
+	TestEqual(TEXT("planned - via B's later free interval"), Plan.Result, ETaxiPlanResult::Planned);
+	TestTrue(FString::Printf(TEXT("arriving after B-G frees at 300 s (%.1f s)"), Plan.Arrival), Plan.Arrival > 300.0);
+	TestFalse(TEXT("without driving back on itself"), HasUTurn(Plan));
+	TestTrue(TEXT("and it books"), BooksInto(Table, Plan));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanNoUTurnTest, "Airside.Model.TaxiPlan.NoUTurnOnArrivingEdge",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanNoUTurnTest::RunTest(const FString& Parameters)
+{
+	//   S ===== A ===== B ===== G
+	// B is someone else's at [60, 100) and B-G until 200. An aircraft that reached B early must leave it by 55 with the
+	// way ahead shut: the edge filter admits A-B reversed from B, so "back to A, wait, come again" - a 180 on a
+	// centreline, booking A-B twice in overlapping windows (review of #527) - was a move the search could make.
+	// Waiting at A (or S) and going once is the plan.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId S = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(5000.0, 0.0));
+	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(10000.0, 0.0));
+	const FGuidelineNodeId G = Net->AddGuidelineNode(FVector2D(15000.0, 0.0));
+	Join(*Net, S, A);
+	Join(*Net, A, B);
+	const FGuidelineEdgeId BG = Join(*Net, B, G);
+
+	const FAirframe Piper = TestAirframes::Piper();
+	const FTrafficRules Rules;
+	FTaxiReservations Table;
+	Table.BookWindow(FTaxiResource::Node(B), { TheirId, 60.0, 100.0 });
+	Table.BookWindow(FTaxiResource::Edge(BG), { TheirId, 0.0, 200.0 });
+
+	FTaxiPlanner Planner(*Net, Table, Piper, Rules);
+	const FTaxiPlan Plan = Planner.Plan(Request(S, G));
+	TestTrue(TEXT("planned"), Plan.IsPlanned());
+	TestFalse(TEXT("never back along the edge it arrived on"), HasUTurn(Plan));
+	TestEqual(TEXT("S, A, B, G - each edge once"), Plan.Route.Steps.Num(), 3);
+	TestTrue(TEXT("and it books"), BooksInto(Table, Plan));
+
+	// WHERE THE U-TURN IS THE ONLY WAY, there is no plan. Timed off the unobstructed plan's own legs (A reached at a, B
+	// at b): S must be left at once, A is somebody's from just after a, B from 30 s after b and B-G until long after.
+	// So the aircraft reaches B with nowhere to wait and the way ahead shut; only "back to A (free again a moment
+	// later), wait, come again" fits the table - and an aircraft cannot turn on a centreline. Without the ban the
+	// search returns exactly that plan (the first version of this test passed with the ban removed; this half did not).
+	// On LONG lanes (20 km apart), so the way back to A takes far longer than A's brief busy spot plus the margins.
+	URoadNetwork* Long = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId S2 = Long->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId A2 = Long->AddGuidelineNode(FVector2D(20000.0, 0.0));
+	const FGuidelineNodeId B2 = Long->AddGuidelineNode(FVector2D(40000.0, 0.0));
+	const FGuidelineNodeId G2 = Long->AddGuidelineNode(FVector2D(60000.0, 0.0));
+	Join(*Long, S2, A2);
+	Join(*Long, A2, B2);
+	const FGuidelineEdgeId B2G2 = Join(*Long, B2, G2);
+	FTaxiReservations Empty;
+	FTaxiPlanner Clear(*Long, Empty, Piper, Rules);
+	const FTaxiPlan Free = Clear.Plan(Request(S2, G2));
+	if (!TestTrue(TEXT("unobstructed, it plans S-A-B-G"), Free.IsPlanned() && Free.Legs.Num() == 3))
+	{
+		return false;
+	}
+	const double M = Rules.TaxiPlanMargin;
+	const double ReachA = Free.Legs[0].Reach;
+	const double ReachB = Free.Legs[1].Reach;
+	FTaxiReservations Trap;
+	Trap.BookWindow(FTaxiResource::Node(S2), { TheirId, M + 0.5, FTaxiReservations::Forever });
+	Trap.BookWindow(FTaxiResource::Node(A2), { TheirId, ReachA + M + 1.0, ReachA + M + 2.0 });
+	// B's busy spot starts 30 s after reaching it - time enough to STOP there and turn, so the U-turn is a move the
+	// search can make (a rolling 180 is a sharp joint and never rolls), but not to wait out B-G.
+	Trap.BookWindow(FTaxiResource::Node(B2), { TheirId, ReachB + 30.0, ReachB + 100.0 });
+	Trap.BookWindow(FTaxiResource::Edge(B2G2), { TheirId, 0.0, ReachB + 300.0 });
+	FTaxiPlanner Trapped(*Long, Trap, Piper, Rules);
+	const FTaxiPlan Turned = Trapped.Plan(Request(S2, G2));
+	TestFalse(TEXT("no plan turns back on the edge it arrived on"), HasUTurn(Turned));
+	TestEqual(TEXT("so with the U-turn the only fit, it is refused"), Turned.Result, ETaxiPlanResult::NoFreeWindow);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanTouchingBoundaryTest, "Airside.Model.TaxiPlan.TouchingBoundaryFractionalReach",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanTouchingBoundaryTest::RunTest(const FString& Parameters)
+{
+	// THE SEARCH AND THE BOOKING MUST AGREE TO THE LAST BIT (review of #527). Another aircraft holds the middle node B
+	// until a fractional instant; the earliest plan reaches B just as that window closes, so its own window TOUCHES the
+	// other's - and a bound the search summed as Tau + (Reach - M) and the booking as (Tau + Reach) - M can land one
+	// ulp inside it: a plan Plan() calls fitting that BookPasses refuses. Swept over many fractional boundaries and
+	// departures; one of them hitting the rounding is enough to fail.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId S = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(5123.4567, 0.0));
+	const FGuidelineNodeId G = Net->AddGuidelineNode(FVector2D(10987.654, 0.0));
+	Join(*Net, S, B);
+	Join(*Net, B, G);
+
+	const FAirframe Piper = TestAirframes::Piper();
+	const FTrafficRules Rules;
+	int32 Planned = 0;
+	int32 Booked = 0;
+	constexpr int32 Sweeps = 200;
+	for (int32 Index = 0; Index < Sweeps; ++Index)
+	{
+		const double Boundary = 3.0 + Index * 0.731 + 0.0001234 * Index * Index;
+		FTaxiReservations Table;
+		Table.BookWindow(FTaxiResource::Node(B), { TheirId, 0.0, Boundary });
+		FTaxiPlanner Planner(*Net, Table, Piper, Rules);
+		const FTaxiPlan Plan = Planner.Plan(Request(S, G, 0.1 * Index));
+		Planned += Plan.IsPlanned() ? 1 : 0;
+		Booked += BooksInto(Table, Plan) ? 1 : 0;
+	}
+	TestEqual(TEXT("every sweep planned"), Planned, Sweeps);
+	TestEqual(TEXT("and every plan the planner called fitting books"), Booked, Planned);
 	return true;
 }
 
