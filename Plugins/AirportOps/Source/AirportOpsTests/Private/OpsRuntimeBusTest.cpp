@@ -9,6 +9,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/AirlineDefinition.h"
 #include "Model/AirlineRoster.h"
+#include "Model/AirlineHistory.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/Airport.h"
 #include "Model/JobBoard.h"
@@ -85,6 +86,29 @@ bool FOpsRuntimeBusSubscribedTest::RunTest(const FString&)
 		TestTrue(FString::Printf(TEXT("%s has a subscriber after WireBus"), Names[Index]),
 			Runtime->GetBus().SubscribersOf(Index).Num() > 0);
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeHistoryWiredTest, "AirportOps.Present.Bus.HistoryIsWired",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeHistoryWiredTest::RunTest(const FString&)
+{
+	// THE SEAM: UOpsRuntime::Attach hands the roster its history. Without that line the roster scores and the history stays
+	// empty - and every roster-level test still passes, because each wires its own.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	if (!TestNotNull(TEXT("the runtime owns a history"), Runtime->GetAirlineHistory())) { return false; }
+	const FName Airline = TEXT("HistoryWiredAir");
+	Runtime->GetAirlines()->Ensure(Airline);
+	Runtime->GetBus().Publish(FFlightOffBlocksEvent{ 1, Airline, -30.0 });
+	Runtime->GetBus().Drain();
+	const FAirlineDays* Row = Runtime->GetAirlineHistory()->Find(Airline);
+	if (!TestNotNull(TEXT("the airline has history after one flight"), Row)) { return false; }
+	TestTrue(TEXT("an OnTime tally is in today"), Row->Days.Last().Tallies.ContainsByPredicate(
+		[](const FAirlineCauseTally& T) { return T.Kind == EAirlineSatisfactionCause::OnTime; }));
+	Runtime->Detach();
+	TestNull(TEXT("Detach takes the roster's history back"), Runtime->GetAirlines()->History);
 	return true;
 }
 

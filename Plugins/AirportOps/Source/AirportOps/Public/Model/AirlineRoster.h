@@ -7,6 +7,7 @@
 #include "AirlineRoster.generated.h"
 
 class FOpsEventBus;
+class UAirlineHistory;
 class UFlightBoard;
 struct FDayEndedEvent;
 struct FFlightOffBlocksEvent;
@@ -124,6 +125,11 @@ public:
 	/** Where changes are announced. Set by UOpsRuntime::Attach; null in a bare NewObject, and every
 	 *  publish checks. Raw: the runtime owns both this and the bus. */
 	FOpsEventBus* Bus = nullptr;
+
+	/** Where each change that moved a standing is tallied by cause. Set by UOpsRuntime::Attach, cleared by Detach; null in a bare
+	 *  NewObject, and Apply checks. Raw: the runtime owns both. The roster FEEDS it rather than the history subscribing to the bus
+	 *  so the daily drift lands in the day it closes - see UAirlineHistory. */
+	UAirlineHistory* History = nullptr;
 
 	/** Add AirlineId at Tuning.Start if it has no row. The catalog's airlines, at attach and after a load. */
 	void Ensure(FName AirlineId);

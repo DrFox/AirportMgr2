@@ -1,5 +1,6 @@
 #include "Model/AirlineRoster.h"
 #include "AirportOpsLog.h"
+#include "Model/AirlineHistory.h"
 #include "Model/ExhaustiveSwitch.h"
 #include "Model/FlightBoard.h"
 #include "Model/OpsEventBus.h"
@@ -180,6 +181,12 @@ void UAirlineRoster::OnDayEnded(const FDayEndedEvent& Event)
 		// letting it replace "late off stand" would hide the one reason they could act on.
 		Apply(Row, Drift, EAirlineSatisfactionCause::DailyDrift, TEXT("a day's forgiveness"), /*bRemember=*/false);
 	}
+	// AFTER THE LOOP, never before: the drift is recorded into the day it forgives, and only then is that day closed.
+	// ENFORCED BY: AirportOps.Model.AirlineHistory.DriftBelongsToTheDayItCloses
+	if (History != nullptr)
+	{
+		History->CloseDay(Standings);
+	}
 }
 
 void UAirlineRoster::Apply(FAirlineStanding& Standing, double Delta, EAirlineSatisfactionCause Kind, const FString& Cause, bool bRemember)
@@ -193,6 +200,12 @@ void UAirlineRoster::Apply(FAirlineStanding& Standing, double Delta, EAirlineSat
 	if (FMath::IsNearlyZero(Moved, 1e-9))
 	{
 		return;
+	}
+	// THE HISTORY HEARS EVERY CHANGE, drift included: bRemember only decides what the inbox row says, and the history's
+	// tally is of what moved the number. Moved is the clamped delta, so it matches the published event.
+	if (History != nullptr)
+	{
+		History->Record(Standing.AirlineId, Kind, Moved, Standing.Satisfaction);
 	}
 	if (bRemember)
 	{

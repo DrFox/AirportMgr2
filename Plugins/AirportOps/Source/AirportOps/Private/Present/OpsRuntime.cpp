@@ -11,6 +11,7 @@
 #include "Model/OpsDefinition.h"
 #include "Entities/AircraftType.h"
 #include "Model/AirlineDefinition.h"
+#include "Model/AirlineHistory.h"
 #include "Model/AirlineRoster.h"
 #include "Model/Airport.h"
 #include "Model/OpsAlerts.h"
@@ -95,6 +96,7 @@ UOpsRuntime::UOpsRuntime()
 
 	// The airlines' mood - the bus's first Reaction (spec 2026-09-29 §3), forwarded like the rest.
 	Airlines = CreateDefaultSubobject<UAirlineRoster>(TEXT("Airlines"));
+	AirlineHistory = CreateDefaultSubobject<UAirlineHistory>(TEXT("AirlineHistory"));
 
 	// The standing alerts - derived from the boards, owned here like them (spec 2026-09-29-ops-alerts).
 	Alerts = CreateDefaultSubobject<UOpsAlerts>(TEXT("Alerts"));
@@ -1034,6 +1036,8 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		// A NEW GAME, like the ledger's Open below: an airport attached afresh starts every airline at
 		// the tuning's start. A load overwrites it from the snapshot moments later.
 		Airlines->ResetForNewGame();
+		// ITS DAY NUMBER IS THE CLOCK'S, read after StartAtHour above; CloseDay counts on from it.
+		AirlineHistory->ResetForNewGame(Clock->Day());
 
 		// THE BALANCE A NEW GAME OPENS AT. The comment that used to stand at the top of this
 		// block said this would happen "when the ledger exists (M3)"; this is that. A LOAD
@@ -1123,6 +1127,9 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	{
 		*Publisher.Slot = &Bus;
 	}
+	// THE ROSTER'S HISTORY, set where its bus is and cleared where that is (Detach). Not a Publisher: it holds no bus.
+	// ENFORCED BY: AirportOps.Present.Bus.HistoryIsWired
+	Airlines->History = AirlineHistory;
 	// A NEW AIRPORT, A NEW SET: the old actor's alerts name its flights and agents.
 	Alerts->Reset();
 	// A NEW GAME OPENS, beside the ledger's Open and the roster's reset above; a load overwrites the intent from its
@@ -1291,6 +1298,7 @@ void UOpsRuntime::Detach()
 	{
 		*Publisher.Slot = nullptr;
 	}
+	Airlines->History = nullptr;
 	// THE QUEUE IS THE OLD ACTOR'S. A new level's traffic numbers its agents from 1 again, so a
 	// stale Parked for agent k would land on the new level's agent k. Dropped, and the price is
 	// that a re-Attach to the SAME actor loses at most one step of its events.
@@ -1491,6 +1499,7 @@ TArray<IOpsPersistent*> UOpsRuntime::Persistents() const
 	Out.Add(Pricing);
 	Out.Add(OfferGenerator);
 	Out.Add(Airlines);
+	Out.Add(AirlineHistory);
 	Out.Add(Airport);
 	return Out;
 }
@@ -1703,6 +1712,8 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// A SNAPSHOT FROM BEFORE THE "Airlines" BLOB restores no rows (OnBeforeRestore cleared them);
 	// every catalog airline comes back at the tuning's start.
 	SeedAirlines();
+	// A SAVE WITH NO "AirlineHistory" BLOB left the history empty on the reset's day number; today is the loaded clock's.
+	AirlineHistory->AdoptDayIfEmpty(Clock->Day());
 
 	// THE STATUS RE-DERIVED FROM THE LOADED INTENT AND NETWORK, WITH NO EVENT (spec 2026-09-29-ops-batch3 §3): a
 	// published change would reach the flight board's handler and re-run the closure's cancellation - scored, and
