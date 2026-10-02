@@ -79,9 +79,14 @@ struct FTaxiwayChain
 	int32 LowestIndex = MAX_int32;
 };
 
-/** One "C split off from A" - URoadNetwork::NormaliseTaxiways' report, one per split. Plain. */
+/** One "C split off from A" - URoadNetwork::NormaliseTaxiways' report, one per split - or one connector a split took with
+ *  it, new display name then old ("C1", "A2"; owner ruling 2026-10-02). Plain. */
 struct FTaxiwayRename
 {
 	FString SplitOff;
 	FString From;
+
+	/** A connector re-parented by a split (URoadNetwork::ReparentSplitConnectors), not a piece split off. The event the
+	 *  player hears is the same two names; only the log words it differently. */
+	bool bReparented = false;
 };

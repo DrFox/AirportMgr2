@@ -5,11 +5,12 @@
 #include "Model/TaxiwayStrip.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RoadGeom.h"
-#include "Solve/TaxiwayLetters.h"
 
-// TAXIWAY NAMES (spec docs/superpowers/specs/2026-10-02-taxiway-naming-design.md): URoadNetwork's members for them, in a
-// file of their own. RoadNetwork.cpp is held to its line figure by Check-Architecture rule 77, and rule 103 holds every
-// write of FRoadSegment::TaxiwayId to THIS file - which a shared file could not be scoped to.
+// TAXIWAY NAMES (spec docs/superpowers/specs/2026-10-02-taxiway-naming-design.md): URoadNetwork's members that judge
+// geometry and name segments, in a file of their own. RoadNetwork.cpp is held to its line figure by Check-Architecture
+// rule 77, and rule 103 holds every write of FRoadSegment::TaxiwayId to THIS file - which a shared file could not be
+// scoped to. The table's lookups, display names, issuing and retirement are in RoadNetworkTaxiwayTable.cpp (rule 77's
+// 800-line default, reached 2026-10-02).
 
 namespace
 {
@@ -213,68 +214,6 @@ namespace
 	}
 }
 
-const FTaxiway* URoadNetwork::GetTaxiway(int32 TaxiwayId) const
-{
-	return Taxiways.IsValidIndex(TaxiwayId) && Taxiways[TaxiwayId].bAlive ? &Taxiways[TaxiwayId] : nullptr;
-}
-
-FTaxiway* URoadNetwork::FindTaxiwayMutable(int32 TaxiwayId)
-{
-	return Taxiways.IsValidIndex(TaxiwayId) && Taxiways[TaxiwayId].bAlive ? &Taxiways[TaxiwayId] : nullptr;
-}
-
-int32 URoadNetwork::TaxiwayOf(FRoadSegmentId Segment) const
-{
-	const FRoadSegment* Found = GetSegment(Segment);
-	return Found != nullptr && GetTaxiway(Found->TaxiwayId) != nullptr ? Found->TaxiwayId : INDEX_NONE;
-}
-
-FString URoadNetwork::TaxiwayDisplayName(int32 TaxiwayId) const
-{
-	const FTaxiway* Taxiway = GetTaxiway(TaxiwayId);
-	if (Taxiway == nullptr)
-	{
-		return FString();
-	}
-	if (!Taxiway->Name.IsEmpty())
-	{
-		return Taxiway->Name;
-	}
-	// ONE LEVEL: a connector's parent is always lettered - AssignTaxiway parents a connector on a ROOT, and only a
-	// taxiway with no connectors may become one (RejudgeTaxiway) - so this never recurses.
-	const FTaxiway* Parent = Taxiway->IsConnector() ? GetTaxiway(Taxiway->ParentId) : nullptr;
-	return Parent != nullptr && !Parent->Name.IsEmpty() ? Parent->Name + FString::FromInt(Taxiway->ConnectorNumber) : FString();
-}
-
-bool URoadNetwork::IsTaxiwayNameTaken(const FString& Name, int32 Except) const
-{
-	// A LINEAR SCAN per question: under 200 taxiways ever minted on a 40-stand airport (2026-10-02 estimate), and asked
-	// only while naming or renaming - a click, never a frame.
-	for (const FTaxiway& Each : Taxiways)
-	{
-		if (Each.bAlive && Each.Id != Except && TaxiwayDisplayName(Each.Id).Equals(Name, ESearchCase::IgnoreCase))
-		{
-			return true;
-		}
-	}
-	return false;
-}
-
-bool URoadNetwork::HasTaxiwayConnectors(int32 TaxiwayId) const
-{
-	return TaxiwayConnectorCount(TaxiwayId) > 0;
-}
-
-int32 URoadNetwork::TaxiwayConnectorCount(int32 TaxiwayId) const
-{
-	int32 Count = 0;
-	for (const FTaxiway& Each : Taxiways)
-	{
-		Count += Each.bAlive && Each.ParentId == TaxiwayId && TaxiwayId != INDEX_NONE ? 1 : 0;
-	}
-	return Count;
-}
-
 void URoadNetwork::WriteTaxiwayId(FRoadSegmentId Segment, int32 TaxiwayId)
 {
 	if (FRoadSegment* Found = GetSegmentMutable(Segment))
@@ -290,57 +229,6 @@ void FRoadNetworkTestAccess::ClearTaxiwayNamesForTest()
 		Segment.TaxiwayId = INDEX_NONE;
 	}
 	Network.Taxiways.Reset();
-}
-
-FString URoadNetwork::NextFreeTaxiwayLetter(int32 Except) const
-{
-	// A LETTER IS FREE ONLY WHEN NOTHING DISPLAYS IT (spec): an empty parent whose connectors survive is still alive, so
-	// its letter stays taken and a reused "A" can never mint a second "A1".
-	for (int32 Index = 0;; ++Index)
-	{
-		const FString Letter = TaxiwayLetters::LetterAt(Index);
-		if (!IsTaxiwayNameTaken(Letter, Except))
-		{
-			return Letter;
-		}
-	}
-}
-
-int32 URoadNetwork::IssueConnectorNumber(int32 ParentId)
-{
-	FTaxiway* Parent = FindTaxiwayMutable(ParentId);
-	if (Parent == nullptr)
-	{
-		return 0;
-	}
-	// NEVER REUSED while the parent lives (NextConnectorNumber only advances), and never a number a player's override
-	// already shows ("K7" renamed onto a connector of B would collide with K's seventh).
-	const FString Root = TaxiwayDisplayName(ParentId);
-	int32 Number = FMath::Max(Parent->NextConnectorNumber, 1);
-	while (IsTaxiwayNameTaken(Root + FString::FromInt(Number), INDEX_NONE))
-	{
-		++Number;
-	}
-	Parent->NextConnectorNumber = Number + 1;
-	return Number;
-}
-
-int32 URoadNetwork::MintTaxiway(int32 ParentId)
-{
-	FTaxiway Fresh;
-	Fresh.Id = Taxiways.Num();
-	Fresh.bAlive = true;
-	if (GetTaxiway(ParentId) != nullptr)
-	{
-		Fresh.ParentId = ParentId;
-		Fresh.ConnectorNumber = IssueConnectorNumber(ParentId);
-	}
-	else
-	{
-		Fresh.Name = NextFreeTaxiwayLetter(INDEX_NONE);
-	}
-	Taxiways.Add(MoveTemp(Fresh));
-	return Taxiways.Last().Id;
 }
 
 int32 URoadNetwork::AssignTaxiway(const FTaxiwayChain& Chain, const FTaxiwayNamingRules& Rules)
@@ -527,7 +415,11 @@ TArray<FTaxiwayRename> URoadNetwork::NormaliseTaxiways(const FTaxiwayNamingRules
 	Changes += Renames.Num();
 	for (const FTaxiwayRename& Rename : Renames)
 	{
-		UE_LOG(LogAirside, Log, TEXT("TaxiwayNames: %s split off from %s"), *Rename.SplitOff, *Rename.From);
+		// A RE-PARENTED CONNECTOR logged itself, in its own words ("C1 was A2"); the event below is shared.
+		if (!Rename.bReparented)
+		{
+			UE_LOG(LogAirside, Log, TEXT("TaxiwayNames: %s split off from %s"), *Rename.SplitOff, *Rename.From);
+		}
 	}
 	if (Changes > 0)
 	{
@@ -571,24 +463,6 @@ FTaxiwayChain URoadNetwork::TaxiwayChainOf(int32 TaxiwayId) const
 		const TArray<FRoadSegmentId> Own = TaxiwayNamesOwnAt(*this, Node, TaxiwayId);
 		return Own.Num() == 2 ? (Own[0] == From ? Own[1] : Own[0]) : FRoadSegmentId();
 	}, Taken);
-}
-
-FString URoadNetwork::JunctionName(FRoadNodeId Node) const
-{
-	TArray<FString> Names;
-	if (const FRoadNode* At = GetNode(Node))
-	{
-		for (const FRoadSegmentId& Each : At->Incident)
-		{
-			const FString Name = TaxiwayDisplayName(TaxiwayOf(Each));
-			if (!Name.IsEmpty())
-			{
-				Names.AddUnique(Name);
-			}
-		}
-	}
-	Names.Sort();
-	return FString::Join(Names, TEXT("/"));
 }
 
 void URoadNetwork::SplitTaxiwayBranches(int32 TaxiwayId, TArray<FTaxiwayRename>& OutRenames)
@@ -648,6 +522,7 @@ void URoadNetwork::SplitTaxiwayBranches(int32 TaxiwayId, TArray<FTaxiwayRename>&
 			WriteTaxiwayId(Segment, Fresh);
 		}
 		OutRenames.Add({ TaxiwayDisplayName(Fresh), TaxiwayDisplayName(TaxiwayId) });
+		ReparentSplitConnectors(TaxiwayId, Fresh, OutRenames);
 	}
 }
 
@@ -701,65 +576,52 @@ void URoadNetwork::SplitTaxiwayPieces(int32 TaxiwayId, TArray<FTaxiwayRename>& O
 			WriteTaxiwayId(Segment, Fresh);
 		}
 		OutRenames.Add({ TaxiwayDisplayName(Fresh), TaxiwayDisplayName(TaxiwayId) });
+		ReparentSplitConnectors(TaxiwayId, Fresh, OutRenames);
 	}
 }
 
-int32 URoadNetwork::RetireEmptyTaxiways()
+void URoadNetwork::ReparentSplitConnectors(int32 TaxiwayId, int32 Fresh, TArray<FTaxiwayRename>& OutRenames)
 {
-	TArray<int32> Held;
-	Held.Init(0, Taxiways.Num());
-	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	// OWNER RULING 2026-10-02 (PR #524): a connector of TaxiwayId that touches none of its segments now and some of
+	// Fresh's goes with Fresh - "A2" hanging off a piece that reads "C" would send a player looking for it on A. One that
+	// still touches TaxiwayId stays: it is still A's. "Touches" is ANY end of ANY of its segments, not its chain's two
+	// ends: a connector later in Taxiways is not split yet, and may be in pieces itself at this point of the pass.
+	// A LINEAR SCAN of every segment per connector, per split: a split is one player edit's worth, and under 200 taxiways
+	// and a few thousand segments on a 40-stand airport (2026-10-02 estimate).
+	const auto Touches = [this](int32 Connector, int32 Owner)
 	{
-		const int32 Owner = TaxiwayOf(SegmentIdAt(Index));
-		if (Owner != INDEX_NONE)
+		for (int32 Index = 0; Index < Segments.Num(); ++Index)
 		{
-			++Held[Owner];
-		}
-	}
-	// UNTIL NOTHING MOVES: retiring the last connector of an empty parent frees the parent in the next round.
-	int32 Retired = 0;
-	for (bool bChanged = true; bChanged;)
-	{
-		bChanged = false;
-		for (FTaxiway& Each : Taxiways)
-		{
-			if (!Each.bAlive || Held[Each.Id] > 0 || HasTaxiwayConnectors(Each.Id))
+			const FRoadSegmentId Id = SegmentIdAt(Index);
+			if (Id.IsSet() && TaxiwayOf(Id) == Connector
+				&& (TaxiwayNamesOwnAt(*this, Segments[Index].A, Owner).Num() > 0
+					|| TaxiwayNamesOwnAt(*this, Segments[Index].B, Owner).Num() > 0))
 			{
-				continue;
+				return true;
 			}
-			UE_LOG(LogAirside, Log, TEXT("TaxiwayNames: %s retired - no segment and no connector left"),
-				*TaxiwayDisplayName(Each.Id));
-			Each.bAlive = false;
-			++Retired;
-			bChanged = true;
 		}
-	}
-	return Retired;
-}
-
-int32 URoadNetwork::EnsureTaxiwayNames(const FTaxiwayNamingRules& Rules)
-{
-	int32 Unnamed = 0;
-	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+		return false;
+	};
+	for (int32 Connector = 0; Connector < Taxiways.Num(); ++Connector)
 	{
-		const FRoadSegmentId Id = SegmentIdAt(Index);
-		Unnamed += Id.IsSet() && TaxiwayStrip::HasStrip(*this, Id) && TaxiwayOf(Id) == INDEX_NONE ? 1 : 0;
-	}
-	if (Unnamed == 0)
-	{
-		return 0;
-	}
-	const int32 Before = Taxiways.Num();
-	NormaliseTaxiways(Rules);
-	int32 Lettered = 0;
-	int32 Connectors = 0;
-	for (int32 Index = Before; Index < Taxiways.Num(); ++Index)
-	{
-		if (Taxiways[Index].bAlive)
+		if (!Taxiways[Connector].bAlive || Taxiways[Connector].ParentId != TaxiwayId || Touches(Connector, TaxiwayId)
+			|| !Touches(Connector, Fresh))
 		{
-			(Taxiways[Index].IsConnector() ? Connectors : Lettered) += 1;
+			continue;
+		}
+		const FString Was = TaxiwayDisplayName(Connector);
+		// A NUMBER FROM THE NEW PARENT even under a player's override: the override keeps its text (the ruling), and the
+		// number is what it reads if the override is ever cleared - A's old number could collide with one C issues later.
+		const int32 Number = IssueConnectorNumber(Fresh);
+		FTaxiway& Moved = Taxiways[Connector];
+		Moved.ParentId = Fresh;
+		Moved.ConnectorNumber = Number;
+		const FString Now = TaxiwayDisplayName(Connector);
+		UE_LOG(LogAirside, Log, TEXT("TaxiwayNames: %s was %s - re-parented onto %s"), *Now, *Was, *TaxiwayDisplayName(Fresh));
+		// AN OVERRIDE READS THE SAME, so there is nothing to tell the player.
+		if (Now != Was)
+		{
+			OutRenames.Add({ Now, Was, true });
 		}
 	}
-	UE_LOG(LogAirside, Log, TEXT("TaxiwayNames: backfilled %d taxiway(s), %d connector(s)"), Lettered, Connectors);
-	return Lettered + Connectors;
 }

@@ -82,7 +82,16 @@ any node (a closed loop is allowed). Names (display) are unique.
   other piece gets the next free letter.
 - **Empty** (last segment collapsed/deleted): the taxiway is removed; its letter is freed per the
   rule above.
-- Each rename emits ONE event the game turns into a toast: "C split off from A".
+- **Connectors follow a split** (owner ruling 2026-10-02, PR #524): after a Branch or
+  Disconnected split, a connector of the original that now touches only the split-off piece
+  (none of the original's segments, some of the piece's) is RE-PARENTED to that piece and
+  renumbered from its NextConnectorNumber (A2 -> C1). One that still touches the original keeps
+  its parent. One with a player override name keeps its text; its ParentId follows, and since
+  its display does not change it is not announced. Only splits do this: RejudgeTaxiway turning
+  a connector into a letter, and auto-name re-judging while drawing (plan D3), stay silent.
+- Each rename emits ONE event the game turns into a toast: "C split off from A". A re-parented
+  connector reuses the same two-name event, new display name then old: "C1 split off from A2"
+  (the log says "TaxiwayNames: C1 was A2 - re-parented onto C").
   Deterministic: same network in, same names out.
 
 ## Backfill on load
