@@ -6,6 +6,13 @@
 #include "OpsRuntimeResolver.h"
 #include "ArrivalViewModels.h"
 #include "ArrivalsPanelWidget.h"
+#include "Content/AirsideSettings.h"
+#include "Model/GroundTraffic.h"
+#include "Model/RoadAgent.h"
+#include "Model/RoadNetwork.h"
+#include "Present/AirsideTraffic.h"
+#include "RoadBuildController.h"
+#include "Testing/AirsideTestGraph.h"
 #include "Blueprint/UserWidget.h"
 #include "Misc/AutomationTest.h"
 #include "Model/Flight.h"
@@ -445,6 +452,64 @@ bool FArrivalsRowNamesItsRunwayTest::RunTest(const FString& Parameters)
 	List->RefreshText(*Clock, RunwayOf);
 	TestEqual(TEXT("the runway changed: the two rows naming it recompose"), List->ComposeCountForTest(), Settled + 2);
 	TestEqual(TEXT("and say the new name"), StatusOf(Landing), FString(TEXT("LANDING 09R")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FArrivalsInspectSelectsTheAircraftTest, "AirportMgr.UI.Arrivals.InspectSelectsTheAircraft",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FArrivalsInspectSelectsTheAircraftTest::RunTest(const FString& Parameters)
+{
+	// A ROW'S INSPECT (2026-10-02, "once the aircraft has been spawned, open the inspection tab from there"): shown on a flight with a
+	// live aircraft and on no other, bound to its row's flight - not its slot - and it selects that aircraft and moves the camera to it,
+	// so the inspector opens on it. The flight's aircraft leaving takes the button away again.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	URoadNetwork& Net = *Actor->Network;
+	const FGuidelineNodeId A = TestGraph::Node(Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(Net, 200000.0, 0.0);
+	TestGraph::FJoinOptions Options;
+	Options.bDerived = false;
+	TestGraph::Join(Net, A, B, Options);
+	if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(TestGraph::Probe(Net, A, B, ETraversalClass::Aircraft),
+		UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
+	for (int32 Frame = 0; Frame < 30; ++Frame) { Actor->Tick(1.0f / 30.0f); }
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(Actor);
+
+	UArrivalsPanelWidget* Panel = CreateWidget<UArrivalsPanelWidget>(TestWorld.World, UArrivalsPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("an arrivals panel"), Panel)) { return false; }
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = NewObject<UFlightBoard>();
+	UFlight* Landed = Flight(TEXT("CU 1"), EFlightPhase::TaxiIn);
+	Landed->AgentId = Id;
+	UFlight* Inbound = Flight(TEXT("CU 2"), EFlightPhase::Accepted);
+	for (UFlight* Each : { Landed, Inbound }) { Board->AddOffer(*Clock, Each); }
+	Panel->GetArrivals()->Refresh(*Board, *Clock);
+	Panel->PaintRowsForTest();
+	if (!TestEqual(TEXT("a row each"), Panel->RowCountForTest(), 2)) { return false; }
+	const int32 LandedRow = Panel->InspectFlightForTest(0) == Landed ? 0 : 1;
+	TestEqual(TEXT("each row's button is bound to its own flight"), Panel->InspectFlightForTest(LandedRow), static_cast<const UFlight*>(Landed));
+	TestEqual(TEXT("and the other row's to the other"), Panel->InspectFlightForTest(1 - LandedRow), static_cast<const UFlight*>(Inbound));
+	TestTrue(TEXT("a flight with an aircraft can be inspected"), Panel->IsInspectShownForTest(LandedRow));
+	TestFalse(TEXT("one not yet spawned cannot"), Panel->IsInspectShownForTest(1 - LandedRow));
+
+	TestTrue(TEXT("Inspect goes"), Panel->Inspect(*Landed, *C));
+	const FRoadAgent* Agent = Actor->GetGroundTraffic()->FindAgent(Id);
+	if (!TestNotNull(TEXT("the aircraft"), Agent)) { return false; }
+	TestEqual(TEXT("the aircraft is selected, so the inspector opens on it"), C->GetSelection().Kind, ESelectionKind::Aircraft);
+	TestEqual(TEXT("that aircraft"), C->GetSelection().Id, Id);
+	TestEqual(TEXT("and the camera goes to it"), C->GetViewFocus(), Agent->GroundPosition());
+	TestFalse(TEXT("a flight with no aircraft goes nowhere"), Panel->Inspect(*Inbound, *C));
+
+	// GONE: the board clears AgentId, the row recomposes (bHasAircraft is in its key), the button goes.
+	Landed->AgentId = INDEX_NONE;
+	Panel->GetArrivals()->Refresh(*Board, *Clock);
+	Panel->PaintRowsForTest();
+	TestFalse(TEXT("an aircraft that has gone takes its Inspect with it"), Panel->IsInspectShownForTest(LandedRow));
 	return true;
 }
 

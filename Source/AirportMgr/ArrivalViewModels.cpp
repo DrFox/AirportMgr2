@@ -116,6 +116,7 @@ FArrivalRowKey UArrivalRowViewModel::KeyFor(const UFlight& Live, int32 QueuePosi
 	Out.Phase = Live.GetPhase();
 	Out.QueuePosition = QueuePosition;
 	Out.Runway = Runway;
+	Out.bHasAircraft = Live.AgentId != INDEX_NONE;
 	Out.StatusMinutes = Live.GetPhase() == EFlightPhase::Accepted ? GameTimeText::WholeMinutes(FMath::Max(Live.ArrivesAt - Now, 0.0)) : 0;
 	Out.bContract = Live.ContractSeconds > 0.0;
 	if (Out.bContract)
@@ -156,6 +157,7 @@ bool UArrivalRowViewModel::Refresh(const USimClock& Clock, const FString& Runway
 		: FText::FromString(Name);
 	Status = DescribeStatus(*Live, Clock.Now(), Runway);
 	bHolding = IsHoldingPhase(*Live);
+	bHasAircraft = Key.bHasAircraft;
 	Detail = DescribeDetail(*Live, Clock.Now(), bLate);
 	return true;
 }

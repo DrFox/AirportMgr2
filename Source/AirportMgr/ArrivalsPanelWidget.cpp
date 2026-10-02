@@ -10,15 +10,60 @@
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Present/OpsRuntime.h"
+#include "Model/Flight.h"
 #include "Model/FlightRunway.h"
+#include "Model/OpsAlerts.h"
 #include "Model/GroundTraffic.h"
 #include "Present/RoadNetworkActor.h"
+#include "RoadBuildController.h"
+#include "UI/UiButton.h"
 #include "UI/UiRow.h"
 #include "UIStyle.h"
 
 // Its own category, and its own NAME: the module is a unity build, and two
 // DEFINE_LOG_CATEGORY_STATIC of one name compile alone and collide together.
 DEFINE_LOG_CATEGORY_STATIC(LogArrivalsPanel, Log, All);
+
+void UArrivalRowEntry::HandleClick()
+{
+	UArrivalsPanelWidget* Panel = Owner.Get();
+	ARoadBuildController* Controller = Panel != nullptr ? Cast<ARoadBuildController>(Panel->GetOwningPlayer()) : nullptr;
+	const UFlight* Live = Flight.Get();
+	if (Panel == nullptr || Controller == nullptr || Live == nullptr)
+	{
+		UE_LOG(LogArrivalsPanel, Warning, TEXT("Arrivals Inspect ignored: %s"),
+			Live == nullptr ? TEXT("the flight has gone") : TEXT("no controller"));
+		return;
+	}
+	Panel->Inspect(*Live, *Controller);
+}
+
+bool UArrivalsPanelWidget::Inspect(const UFlight& Flight, ARoadBuildController& Controller)
+{
+	if (Flight.AgentId == INDEX_NONE)
+	{
+		UE_LOG(LogArrivalsPanel, Warning, TEXT("Arrivals Inspect: %s has no aircraft yet"), *Flight.Callsign);
+		return false;
+	}
+	// THE ROW'S OWN LINE FIRST, the inspector's Show reason: SelectAndFocus logs as "Alert Go".
+	UE_LOG(LogArrivalsPanel, Log, TEXT("Arrivals Inspect: %s -> agent %d"), *Flight.Callsign, Flight.AgentId);
+	FAlertFocus Focus;
+	Focus.Kind = EAlertFocusKind::Agent;
+	Focus.Id = Flight.AgentId;
+	return Controller.SelectAndFocus(Focus);
+}
+
+bool UArrivalsPanelWidget::IsInspectShownForTest(int32 Row) const
+{
+	const UArrivalRowEntry* Entry = Entries.IsValidIndex(Row) ? Entries[Row].Get() : nullptr;
+	return Entry != nullptr && Entry->Button != nullptr && Entry->Button->GetVisibility() != ESlateVisibility::Collapsed
+		&& Entry->Button->OnClicked.Contains(Entry, GET_FUNCTION_NAME_CHECKED(UArrivalRowEntry, HandleClick));
+}
+
+const UFlight* UArrivalsPanelWidget::InspectFlightForTest(int32 Row) const
+{
+	return Entries.IsValidIndex(Row) && Entries[Row] != nullptr ? Entries[Row]->Flight.Get() : nullptr;
+}
 
 void UArrivalsPanelWidget::BuildOnce(const UUIStyle& Style)
 {
@@ -124,6 +169,7 @@ void UArrivalsPanelWidget::PaintRows(const UUIStyle& Style)
 		Statuses.Reset();
 		Details.Reset();
 		PaintedRevisions.Reset();
+		Entries.Reset();
 		for (int32 Index = 0; Index < Rows.Num(); ++Index)
 		{
 			// A WELL ROW, the offer cards' own surface (UUiRow) - so the two windows read as one family.
@@ -143,6 +189,19 @@ void UArrivalsPanelWidget::PaintRows(const UUIStyle& Style)
 			UHorizontalBoxSlot* StatusSlot = Head->AddChildToHorizontalBox(Status);
 			StatusSlot->SetPadding(FMargin(12.0f, 0.0f, 0.0f, 0.0f));
 			StatusSlot->SetVerticalAlignment(VAlign_Center);
+			// INSPECT, at the head's end: shown only while the flight has an aircraft (PaintRows' loop below).
+			UUiButton* InspectButton = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass());
+			InspectButton->SetLabel(NSLOCTEXT("AirportMgr", "ArrivalsInspect", "Inspect"));
+			InspectButton->Build(Style, EUiButtonKind::Secondary);
+			InspectButton->SetToolTipText(NSLOCTEXT("AirportMgr", "ArrivalsInspectTip", "Select the aircraft and move the camera to it"));
+			InspectButton->SetVisibility(ESlateVisibility::Collapsed);
+			UArrivalRowEntry* Entry = NewObject<UArrivalRowEntry>(this);
+			Entry->Owner = this;
+			Entry->Button = InspectButton;
+			InspectButton->OnClicked.AddDynamic(Entry, &UArrivalRowEntry::HandleClick);
+			UHorizontalBoxSlot* InspectSlot = Head->AddChildToHorizontalBox(InspectButton);
+			InspectSlot->SetPadding(FMargin(8.0f, 0.0f, 0.0f, 0.0f));
+			InspectSlot->SetVerticalAlignment(VAlign_Center);
 			Lines->AddChildToVerticalBox(Head)->SetHorizontalAlignment(HAlign_Fill);
 
 			UTextBlock* Detail = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
@@ -154,6 +213,7 @@ void UArrivalsPanelWidget::PaintRows(const UUIStyle& Style)
 			Titles.Add(Title);
 			Statuses.Add(Status);
 			Details.Add(Detail);
+			Entries.Add(Entry);
 			PaintedRevisions.Add(0);
 		}
 	}
@@ -177,5 +237,11 @@ void UArrivalsPanelWidget::PaintRows(const UUIStyle& Style)
 		Details[Index]->SetText(Row->GetDetail());
 		Details[Index]->SetColorAndOpacity(FSlateColor(Row->IsLate() ? Style.Warning : Style.InkMuted));
 		Details[Index]->SetVisibility(Row->GetDetail().IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::Visible);
+		// THE ENTRY FOLLOWS THE ROW into its slot - a stamp that moved is also a different row landing here (see the gate above).
+		if (UArrivalRowEntry* Entry = Entries[Index])
+		{
+			Entry->Flight = Row->Flight;
+			Entry->Button->SetVisibility(Row->HasAircraft() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		}
 	}
 }

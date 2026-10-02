@@ -35,13 +35,16 @@ struct FArrivalRowKey
 	int32 DetailMinutes = -1;
 	/** Holding only: whole minutes waited. 0 otherwise. */
 	int32 WaitedMinutes = -1;
+	/** The flight has a live aircraft (UFlight::AgentId) - what shows the row's Inspect button, so its arrival repaints the row. */
+	bool bHasAircraft = false;
 
 	bool operator==(const FArrivalRowKey& Other) const = default;
 };
 
 /**
  * One row of the ARRIVALS section (spec 2026-09-28-arrival-queue section 3): a flight from its
- * accept until it is airborne. Display only - no buttons, so nothing here reaches the board.
+ * accept until it is airborne. Nothing here reaches the board: the row's one button, Inspect (2026-10-02), selects the flight's aircraft
+ * through the controller, as an alert's Go does - see UArrivalsPanelWidget::Inspect.
  *
  * A VIEWMODEL for the same reason UOfferViewModel is one: UFlight is AirportOps Model/ and must
  * not learn about the UI. Plain UObject, polled by OfferInboxWidget::PaintRows - see
@@ -79,6 +82,8 @@ public:
 	FText GetStatus() const { return Status; }
 	FText GetDetail() const { return Detail; }
 	bool IsLate() const { return bLate; }
+	/** The flight has an aircraft in the world to inspect - set by Refresh from FArrivalRowKey::bHasAircraft. */
+	bool HasAircraft() const { return bHasAircraft; }
 
 	/**
 	 * The flight is holding for a runway (the phase DescribeStatus words "HOLDING"): the one state the player can do something about, so
@@ -116,6 +121,7 @@ private:
 	UPROPERTY(Transient) FText Detail;
 	UPROPERTY(Transient) bool bLate = false;
 	UPROPERTY(Transient) bool bHolding = false;
+	UPROPERTY(Transient) bool bHasAircraft = false;
 
 	/** What the sentences above were composed from - see FArrivalRowKey. Not saved. */
 	FArrivalRowKey Key;

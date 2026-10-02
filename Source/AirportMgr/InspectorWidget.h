@@ -79,6 +79,11 @@ public:
 	 * Unstick popup's lines' reason. It reuses the alert Go's selection path instead.
 	 */
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> WaitingForButton;
+	/**
+	 * "Locate" - the camera to the card's subject (FInspectorCardView::Locate), on every card that says where its subject is. Not a
+	 * BuildActions row, for WaitingForButton's reason: the bar already has the camera, and only the card knows the subject's place.
+	 */
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UUiButton> LocateButton;
 
 	/**
 	 * THE DEPOT CARD'S PURCHASE ROWS (facility-upgrades spec §4) - a sub-widget of their own since issue #441, filled from the
@@ -151,6 +156,16 @@ public:
 	 * ENFORCED BY: AirportMgr.Inspector.HoldAndDeadlockLines
 	 */
 	bool ShowWaitedFor(ARoadBuildController& InController);
+
+	/**
+	 * The Locate button's action: the camera to the shown card's subject, through SelectAndFocus (Show's reason) - which re-selects
+	 * an aircraft, stand or depot the card already shows, a no-op, and only moves the camera for a runway or taxiway. False when the
+	 * card has no place to go or its subject has gone. Public, taking the controller, for ShowWaitedFor's reason.
+	 * ENFORCED BY: AirportMgr.Inspector.LocateMovesTheCamera
+	 */
+	bool Locate(ARoadBuildController& InController);
+	/** Whether the Locate button is showing - what AirportMgr.Inspector.EveryCardLocatesItsSubject reads. */
+	bool IsLocateShownForTest() const;
 
 	/**
 	 * The flight board registrations are read from, in place of the ops runtime's - a headless world
@@ -291,6 +306,9 @@ private:
 	/** The agent the shown card waits for, 0 for none - what ShowWaitedFor selects. */
 	int32 WaitedForId = 0;
 
+	/** Where the shown card's subject is - what Locate goes to. Kind None for no card. */
+	FAlertFocus LocateFocus;
+
 	/** See UseFlightBoardForTest. */
 	TWeakObjectPtr<const UFlightBoard> FlightBoardForTest;
 
@@ -326,4 +344,5 @@ private:
 	UFUNCTION() void HandleRunwayUse();
 	UFUNCTION() void HandleUnstickChosen(int32 Index);
 	UFUNCTION() void HandleWaitingFor();
+	UFUNCTION() void HandleLocate();
 };
