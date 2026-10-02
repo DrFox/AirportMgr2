@@ -1321,6 +1321,19 @@ $AllowedCallers = @(
         ProdAllowed = @('Public\Model\RunwayFacts.h')
         TestExempt  = $true
         ProdReason  = 'ask FRunwayEnd::PointAt(Along) - the one spelling of a point along the strip (#444)'
+    },
+    @{
+        # RULE 103 (taxiway naming, spec 2026-10-02): A SEGMENT'S TAXIWAY IS WRITTEN IN ONE FILE. FRoadSegment::TaxiwayId is
+        # named by URoadNetwork::NormaliseTaxiways / EnsureTaxiwayNames (and copied to both halves by SplitSegment) through
+        # their one writer, WriteTaxiwayId, in RoadNetworkTaxiways.cpp. A write anywhere else is a second naming the
+        # single-chain invariant never sees - the "fix at a site" #255 says regresses. FILE-GRANULAR (rule 4 scopes by
+        # file), which is why the writers live in a file of their own. A member write only (`.TaxiwayId =`, `->TaxiwayId =`):
+        # a local of that name is not a segment's field. DOES NOT SEE a write through a memcpy or a reflection walk.
+        Name        = 'FRoadSegment::TaxiwayId write (rule 103)'
+        Pattern     = '(?:\.|->)\s*TaxiwayId\s*=(?!=)'
+        ProdAllowed = @('Private\Model\RoadNetworkTaxiways.cpp')
+        TestExempt  = $true
+        ProdReason  = 'name a segment through URoadNetwork::NormaliseTaxiways / EnsureTaxiwayNames (their one writer, WriteTaxiwayId, is in RoadNetworkTaxiways.cpp) - a second writer is a second naming the invariant never sees (spec 2026-10-02-taxiway-naming)'
     }
 )
 # EACH FILE'S COMMENT-STRIPPED LINES, made once and only for a file some row's raw pattern hits (Strip-ArchComments, with the helpers at the top).

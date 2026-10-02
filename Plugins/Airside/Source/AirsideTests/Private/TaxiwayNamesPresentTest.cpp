@@ -45,7 +45,7 @@ bool FTaxiwayNamesLoadTest::RunTest(const FString&)
 }
 
 /**
- * THE ONE DOOR (plan D9) AND REVIEW FOCUS 3: a taxiway drawn click by click through the actor is ONE name because the
+ * THE FACADE NOTIFY NAMES (plan D9) AND REVIEW FOCUS 3: a taxiway drawn click by click through the actor is ONE name because the
  * facade normalises on every Topology notify; deleting its middle announces "B split off from A" ONCE; undo brings A
  * back whole and says nothing; redo splits it again.
  */
