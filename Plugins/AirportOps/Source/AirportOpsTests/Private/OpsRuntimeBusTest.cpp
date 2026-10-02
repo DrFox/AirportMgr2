@@ -168,6 +168,8 @@ bool FOpsRuntimeBusReattachTest::RunTest(const FString&)
 			[&]() { return Bus.DispatchedCountOfForTest<FNetworkChangedEvent>(); } },
 		{ TEXT("BuildRefused"), [&]() { Facade->OnRefused.Broadcast(FBuildQuote(), EBuildRefusal::CannotAfford); },
 			[&]() { return Bus.DispatchedCountOfForTest<FBuildRefusedEvent>(); } },
+		{ TEXT("LandBought"), [&]() { Facade->OnLandBought.Broadcast(FIntPoint(1, 3), FBuildQuote()); },
+			[&]() { return Bus.DispatchedCountOfForTest<FLandPurchasedEvent>(); } },
 	};
 	TArray<FName> Probed;
 	for (const FBridgeProbe& Probe : Probes) { Probed.Add(Probe.Name); }
