@@ -1255,6 +1255,7 @@ bool UGroundTraffic::RetireAgent(int32 AgentId)
 	// The table outlives the agent unless somebody says so: a retired vehicle's reservations
 	// would block the junction it was standing in for the rest of the session.
 	Occupancy.ReleaseAll(AgentId);
+	TaxiPlanning->Drop(AgentId, nullptr);   // and its taxi plan, now: the queue asks between ticks (RetireFreesWithoutAdvance)
 	bStandsMayHaveFreed = true;
 
 	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d retired"), AgentId);
@@ -1288,6 +1289,7 @@ void UGroundTraffic::ClearAgents()
 	Agents.Reset();
 	RebuildAgentIndex();
 	Occupancy.Clear();
+	TaxiPlanning->DropAll(TEXT("every agent was cleared"));
 	// #169: AFTER Clear(), not folded into the loop above - the loop only announces; this is
 	// the point every claim actually goes.
 	++OccupancyRevisionCount;

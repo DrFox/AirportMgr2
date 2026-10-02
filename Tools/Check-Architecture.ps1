@@ -4982,11 +4982,11 @@ $modelLineBudget = [ordered]@{
     # took route changes and transitions to one door each; the rebuild half already lives in GroundTrafficRebuild.cpp.
     # LOWERED 2121 -> 1954 the same day by #444: the retry pass and its two arms went to GroundTrafficWaiters.cpp (one
     # responsibility). RAISED 1954 -> 1955 the same day by #497: the refusal's sentence handed to OnArrivalRefused (#471).
-    # RAISED 1955 -> 1960 by taxi planning PR 2 (2026-10-02): the arrival's taxi-in plan asked and booked in DispatchArrival
+    # RAISED 1955 -> 1962 by taxi planning PR 2 (2026-10-02): the arrival's taxi-in plan asked and booked in DispatchArrival
     # (refused NoTaxiPlan otherwise), the departure's asked in AskDeparture, the push watch keyed on the taxi table, the
-    # OnTaxiPlansFreed diff, Track/StartDuePushes called from AdvanceOnce and ExtendQueuedDepartures from Advance - hooks only: the planning itself, the push
+    # OnTaxiPlansFreed diff, Track/StartDuePushes called from AdvanceOnce ExtendQueuedDepartures from Advance, and a retire's and a clear's plans dropped at once - hooks only: the planning itself, the push
     # start (moved out of DepartAgent) and the clearance bodies went to GroundTrafficPlanning.cpp, FDepartureAsk to DepartureAsk.h.
-    'Plugins\Airside\Source\Airside\Private\Model\GroundTraffic.cpp'          = 1960
+    'Plugins\Airside\Source\Airside\Private\Model\GroundTraffic.cpp'          = 1962
     # 2026-10-01: the claim arbiter, one algorithm (Run and its windows, crossings and ranking - 13 functions, long ones);
     # splitting it would scatter one invariant across files. RAISED 1898 -> 1963 by #502 (2026-10-01): a push held on a dead
     # plan claims the ground its body stands on (HoldBodyFootprint, a geometric claim for a body on no route) - what a body
