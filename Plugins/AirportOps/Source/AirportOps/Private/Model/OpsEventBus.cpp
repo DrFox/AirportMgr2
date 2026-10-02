@@ -118,6 +118,11 @@ FString FLandRefusedEvent::Describe() const
 	return Sentence.IsEmpty() ? UEnum::GetValueAsString(Why) : FString::Printf(TEXT("%s: %s"), *UEnum::GetValueAsString(Why), *Sentence);
 }
 
+FString FLandPurchasedEvent::Describe() const
+{
+	return FString::Printf(TEXT("tile (%d,%d) for %.0f"), Tile.X, Tile.Y, Amount);
+}
+
 FString FFacilityUpgradedEvent::Describe() const
 {
 	return FString::Printf(TEXT("depot %d, %s, %.0f"), Entity, *UEnum::GetValueAsString(Module), Amount);
