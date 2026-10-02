@@ -5001,7 +5001,9 @@ $modelLineBudget = [ordered]@{
     # place of the arms' hand re-points - each with its reason and pin).
     'Plugins\Airside\Source\Airside\Private\Model\GroundTrafficRebuild.cpp'   = 1490
     # 2026-10-01: the route search (A* over the guideline graph, plan building, run description) - one algorithm.
-    'Plugins\Airside\Source\Airside\Private\Model\RouteSearch.cpp'            = 1191
+    # LOWERED 1191 -> 1031 on 2026-10-02 (taxi planning PR 1): the edge-admissibility filter moved whole to
+    # RouteEdgeFilter.cpp (held by the default) so FTaxiPlanner shares it rather than copying it.
+    'Plugins\Airside\Source\Airside\Private\Model\RouteSearch.cpp'            = 1031
     # 2026-10-01: what #427 left of UJobBoard - the jobs, the vehicles' lifecycle and Step's one sequence; bidding and
     # driving are already JobBoardBid.cpp and JobBoardDrive.cpp.
     'Plugins\AirportOps\Source\AirportOps\Private\Model\JobBoard.cpp'         = 1048
