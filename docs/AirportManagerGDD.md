@@ -44,11 +44,12 @@ every model is built to. **Audio:** undecided.
 ## 2. Core loop
 
 An aircraft arrives with demands. The airport meets them with buildings, vehicles and
-infrastructure. The player is paid per demand met. The money buys more infrastructure and
-research, which admits bigger aircraft with bigger demands.
+infrastructure. The player is paid per demand met. The money buys more infrastructure,
+which admits bigger aircraft with bigger demands. There is no research: what you build is
+the unlock (§13).
 
 ```
-demands → infrastructure + services → fees → research + building → bigger demands
+demands → infrastructure + services → fees → building → bigger demands
 ```
 
 The pressure that makes it a management game: every flight has a scheduled off-block time.
@@ -57,7 +58,8 @@ many offers arrive and how good they are. Let it fall far enough and an airline 
 coming.
 
 There is no win screen. Growing from regional airfield to international airport is the
-arc; milestones along it are soft, marked by the aircraft classes the airport can admit.
+arc; milestones along it are soft, marked by the aircraft classes the airport is certified
+for (§13).
 
 ---
 
@@ -87,7 +89,7 @@ one or more **jobs**, which are concrete ("deliver 500 litres to stand 5 before 
 
 A compressed 24-hour game day with a day/night cycle. Speeds: pause, ×1, ×2, ×4, ×8. Real
 minutes per game day is a tunable. Everything in the simulation — turnarounds, contracts,
-upkeep, research — runs on game time, never wall time.
+upkeep, fuel deliveries — runs on game time, never wall time.
 
 ---
 
@@ -112,7 +114,7 @@ aircraft, its demands and the fee. Accept one and:
 3. The truck brings outbound cargo; the aircraft is loaded.
 4. At its off-block time the aircraft taxis out and departs. Fees post to the ledger.
 
-Add a stand and two aircraft can be handled at once. Research the fuel depot and longer
+Add a stand and two aircraft can be handled at once. Build the fuel depot and longer
 range flights start being offered. That is the whole game in miniature.
 
 ---
@@ -138,7 +140,8 @@ floor: it offers in daylight whatever the fee and never stops coming, so the air
 shunned outright - the per-airline floor above applies to every other airline. Declining is
 free; an offer left to lapse records why, for reputation to weigh.
 
-Once research unlocks it, an **airline contract** replaces the inbox for that airline: a
+Once the airline's reputation and a traffic milestone are both met (§13), an **airline
+contract** replaces the inbox for that airline: a
 fixed number of flights per day, a fixed service set, fixed fees and a fine per late
 departure. Contracted flights go into the **schedule grid**, a stand-by-time-slot view of
 one game day. Ad-hoc offers keep arriving and use whatever stands the grid leaves free.
@@ -252,34 +255,45 @@ An append-only ledger; balance is the sum.
 
 **Income:** landing fees, parking fees, per-service fees (goods, fuel, passengers,
 pushback), contract payments, retail and car parking (later).
-**Outgoings:** placement, building upkeep, vehicle maintenance, research, fuel purchase,
+**Outgoings:** placement, land, building upkeep, vehicle maintenance, fuel purchase,
 contract payments, fines, contract cancellation charges.
 
-Fees per service are fixed until research unlocks editable fees. A negative balance locks
-placement and research until it recovers; operations continue. Bankruptcy is undecided.
+Fees per service are fixed until the revenue milestone unlocks editing them. A negative
+balance locks placement until it recovers; operations continue. Bankruptcy is undecided.
 
 ---
 
 ## 12. Contracts
 
 **Inbound** contracts deliver a resource at an interval for a duration at a unit price.
-Fuel is the first. A **top-up** is a one-shot delivery at a premium for when the player has
-miscalculated. **Outbound** contracts are the airline contracts of §6. All contracts expire,
-can be renegotiated at expiry, and can be cancelled for a charge. Negotiation is a price
-multiplier from research and the other party's reputation; there is no minigame.
+Fuel is the first: take-or-pay, so litres that do not fit the tanks are paid for and lost,
+and larger contract tiers need more tank capacity. A **spot** order is a one-shot delivery
+at a premium, after a delay, for when the player has miscalculated. A depot that runs dry
+sends flights away without fuel. **Outbound** contracts are the airline contracts of §6.
+All contracts expire, can be renegotiated at expiry, and can be cancelled for a charge.
+Negotiation is a price multiplier from the other party's reputation; there is no minigame.
+Detail: spec `2026-10-02-progression-and-fuel-supply-design.md` §7.
 
 ---
 
-## 13. Research
+## 13. Progression
 
-A tree of nodes costing money and game time. Branches:
+*Revised 2026-10-02* (spec `2026-10-02-progression-and-fuel-supply-design.md`). There is no
+research tree; money is the pace of the game. Progression runs on four axes:
 
-- **Ground services:** fuel depot, pushback, faster pumps, faster loading, vehicle speed.
-- **Terminal:** passenger handling, international travel, baggage scanning, automated
-  baggage.
-- **Airfield:** asphalt, concrete, PAPI, ILS, windsock.
-- **Operations:** Control tiers, radar, scheduling, negotiation.
-- **Commercial:** editable fees, retail, car parking.
+- **Size - certification.** The airport is licensed for a category named by the largest
+  aircraft class it may take. Each category is a checklist of infrastructure; the player
+  requests an audit, which passes or names what fails. A failed audit blocks the next
+  category only.
+- **Scale - traffic milestones.** Four tracks (passengers, movements, cargo, revenue)
+  unlock the tiers of the buildings that serve them, so an airport can specialise.
+- **Direction - the airline ladder.** Ad-hoc offers, then a contract, then a focus, then a
+  **base**: one airline keeping aircraft at the airport overnight. A rival airline may
+  counter-offer to replace it.
+- **Room - land.** Adjacent plots are bought with money.
+
+Demand scales with the airport: admitting more of an airline's fleet brings more of its
+flights, not just different ones. Eras (technology arriving by calendar) are rejected.
 
 ---
 
@@ -323,5 +337,6 @@ the off-map road.
 
 - Real minutes per game day; whether schedule slots span midnight.
 - Whether the airport's capability is shown as a number or only as an overlay.
-- Research cost: money and time, or time only.
+- Real-time targets per progression step after the first paved runway (~2 real hours).
+- The certification checklist per category; milestone thresholds per track.
 - Stand size: strict ICAO A–F or a coarser three-class abstraction over it.
