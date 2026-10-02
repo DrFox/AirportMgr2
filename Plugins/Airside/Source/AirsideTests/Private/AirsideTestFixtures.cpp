@@ -227,6 +227,10 @@ bool TestTool::ConnectUnjudged(ARoadNetworkActor& Actor, int32 FromIndex, int32 
 		return false;
 	}
 	const bool bLaid = Actor.Network->AddStraightSegment(From, To, Profile).IsSet();
+	// NAMED AS A PLAYER'S LAYOUT IS (taxiway names, 2026-10-02): past the strip judge, not past the facade's normalise -
+	// an unnamed taxiway is a state no player reaches, and a test that snapshots here and compares after a facade notify
+	// would otherwise read the names that notify writes as a change (Airside.Present.MergeCornerRefusalInEditorWorld).
+	Actor.Network->NormaliseTaxiways(Actor.TaxiwayNaming);
 	Actor.RebuildMesh();
 	return bLaid;
 }

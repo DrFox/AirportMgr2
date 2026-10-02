@@ -44,4 +44,53 @@ bool FTaxiwayNamesLoadTest::RunTest(const FString&)
 	return true;
 }
 
+/**
+ * THE ONE DOOR (plan D9) AND REVIEW FOCUS 3: a taxiway drawn click by click through the actor is ONE name because the
+ * facade normalises on every Topology notify; deleting its middle announces "B split off from A" ONCE; undo brings A
+ * back whole and says nothing; redo splits it again.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesFacadeTest, "Airside.Present.TaxiwayNames.SplitIsAnnouncedAndUndone",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesFacadeTest::RunTest(const FString&)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	if (!TestNotNull(TEXT("its facade"), Facade)) { return false; }
+	TArray<FString> Heard;
+	const FDelegateHandle Handle = Facade->OnTaxiwaySplit.AddLambda([&Heard](const FString& SplitOff, const FString& From)
+		{ Heard.Add(SplitOff + TEXT("<") + From); });
+
+	const int32 N0 = Actor->PlaceNode({ 0.0, 0.0 });
+	const int32 N1 = Actor->PlaceNode({ 40000.0, 0.0 });
+	const int32 N2 = Actor->PlaceNode({ 50000.0, 0.0 });
+	const int32 N3 = Actor->PlaceNode({ 70000.0, 0.0 });
+	TestTrue(TEXT("click 1"), Actor->ConnectNodes(N0, N1, ERoadKind::Taxiway, INDEX_NONE, EPavement::Tarmac));
+	const int32 Long = Actor->Network->GetSegments().Num() - 1;
+	TestTrue(TEXT("click 2"), Actor->ConnectNodes(N1, N2, ERoadKind::Taxiway, INDEX_NONE, EPavement::Tarmac));
+	const int32 Middle = Actor->Network->GetSegments().Num() - 1;
+	TestTrue(TEXT("click 3"), Actor->ConnectNodes(N2, N3, ERoadKind::Taxiway, INDEX_NONE, EPavement::Tarmac));
+	const int32 Short = Actor->Network->GetSegments().Num() - 1;
+	const auto NameAt = [Actor](int32 Index) { return Actor->Network->TaxiwayDisplayName(Actor->Network->TaxiwayOf(Actor->Network->SegmentIdAt(Index))); };
+	TestEqual(TEXT("three clicks through the actor are one taxiway, named with no explicit call"), NameAt(Short), FString(TEXT("A")));
+
+	TestTrue(TEXT("the middle is deleted"), Actor->DeleteSegment(Middle));
+	TestEqual(TEXT("the split is announced once"), Heard, TArray<FString>{ TEXT("B<A") });
+	TestEqual(TEXT("the long piece keeps A"), NameAt(Long), FString(TEXT("A")));
+	TestEqual(TEXT("the short piece is B"), NameAt(Short), FString(TEXT("B")));
+
+	TestTrue(TEXT("undo"), Facade->Undo());
+	TestEqual(TEXT("undo brings A back whole"), NameAt(Short), FString(TEXT("A")));
+	TestEqual(TEXT("and announces nothing - the Memento carried the names"), Heard.Num(), 1);
+	int32 Alive = 0;
+	for (const FTaxiway& T : Actor->Network->GetTaxiways()) { Alive += T.bAlive ? 1 : 0; }
+	TestEqual(TEXT("one live taxiway after the undo"), Alive, 1);
+
+	TestTrue(TEXT("redo"), Facade->Redo());
+	TestEqual(TEXT("redo splits again"), NameAt(Short), FString(TEXT("B")));
+	Facade->OnTaxiwaySplit.Remove(Handle);
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

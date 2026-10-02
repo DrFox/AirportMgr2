@@ -49,8 +49,8 @@ namespace TestTool
 
 	/**
 	 * A straight segment between two live nodes STRAIGHT INTO THE MODEL, at the kind's default
-	 * profile, then one rebuild - past ConnectNodes and so past the clearance-strip judge
-	 * (strip stage 3, 2026-09-29).
+	 * profile, named (URoadNetwork::NormaliseTaxiways, as the facade's notify would), then one
+	 * rebuild - past ConnectNodes and so past the clearance-strip judge (strip stage 3, 2026-09-29).
 	 *
 	 * FOR LAYOUTS THAT PREDATE THE STRIP, which the game still has to answer over (plan ruling
 	 * 4: M_Test's roads inside strips stay until stage 6 restricts their taxiway). Snap-guide,
