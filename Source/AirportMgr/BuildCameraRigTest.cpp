@@ -284,43 +284,42 @@ bool FBuildCameraRigCloseZoomTest::RunTest(const FString& Parameters)
 }
 
 /**
- * THE FOCUS STAYS ON THE OWNED LAND (2026-10-02): past the diorama's cut edge there is only sky,
- * and a view that wandered out there was the other half of what broke the effect. Per axis, so a
- * pan held into a wall slides along it rather than stopping dead; invalid bounds - every map with
- * no owned land, and the watch rig - clamp nothing.
+ * THE FOCUS STAYS ON THE OWNED LAND (land purchase spec 4): past the diorama's cut there is only sky. Clamped to
+ * the nearest OWNED point, tile by tile - an L-shaped plot's bounding box would let the view sit over its notch,
+ * which is void. An invalid grid - every map with no land, and the watch rig - clamps nothing.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FBuildCameraRigFocusBoundsTest,
+	FBuildCameraRigFocusLandTest,
 	"Airside.View.BuildCameraRig.FocusStaysOnTheLand",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FBuildCameraRigFocusBoundsTest::RunTest(const FString& Parameters)
+bool FBuildCameraRigFocusLandTest::RunTest(const FString& Parameters)
 {
 	FCameraRigLimits Limits;
 	FBuildCameraRig Free;
 	Free.Reset(Limits);
 	Free.Yaw = 0.0;
 	Free.Pan(0.0, 1.0, 1.0, 100.0);
-	TestTrue(TEXT("with no bounds a long pan goes as far as it likes"), Free.Focus.X > 100000.0);
+	TestTrue(TEXT("with no land a long pan goes as far as it likes"), Free.Focus.X > 100000.0);
+
+	// The L: (0,3), (0,4), (1,3) of 600 m tiles from the origin. (1,4) is the notch.
+	const FIntPoint Tiles[] = { FIntPoint(0, 3), FIntPoint(0, 4), FIntPoint(1, 3) };
+	const FLandGrid L = FLandGrid::Make(FVector2D::ZeroVector, 60000.0, 8, 8, Tiles);
 
 	FBuildCameraRig Rig;
-	Rig.FocusBounds = FBox2D(FVector2D(-5000.0, -2000.0), FVector2D(5000.0, 2000.0));
-	Limits.StartFocus = FVector2D(9000.0, 0.0);
+	Rig.FocusLand = L;
+	Limits.StartFocus = FVector2D(-9000.0, 200000.0);
 	Rig.Reset(Limits);
-	TestEqual(TEXT("a StartFocus off the land starts on its edge"), Rig.Focus.X, 5000.0, 1e-9);
+	TestEqual(TEXT("a StartFocus off the land starts on its edge"), Rig.Focus, FVector2D(0.0, 200000.0));
 
-	Rig.Yaw = 45.0; // a diagonal pan, into the east edge and along it
-	Rig.Focus = FVector2D(4000.0, 0.0);
-	Rig.Pan(0.0, 1.0, 1.0, 0.25);
-	TestEqual(TEXT("the pan stops at the east edge"), Rig.Focus.X, 5000.0, 1e-9);
-	TestTrue(TEXT("but slides along it rather than stopping dead"), Rig.Focus.Y > 0.0);
+	Rig.Yaw = 90.0;   // forward is +Y: from (1,3) north toward the notch
+	Rig.Focus = FVector2D(100000.0, 200000.0);
 	Rig.Pan(0.0, 1.0, 1.0, 10.0);
-	TestEqual(TEXT("and stops in the corner"), Rig.Focus, FVector2D(5000.0, 2000.0));
+	TestEqual(TEXT("the pan stops at the notch's edge, not the bounding box's north edge"), Rig.Focus, FVector2D(100000.0, 240000.0));
 
 	FBuildCameraRig Copy = Rig;
 	Copy.ApplyLimits(Limits);
-	TestTrue(TEXT("ApplyLimits leaves the bounds alone - they are the level's, not the mode's"),
-		Copy.FocusBounds.bIsValid);
+	TestTrue(TEXT("ApplyLimits leaves the land alone - it is the level's, not the mode's"), Copy.FocusLand.IsValid());
 	return true;
 }
 

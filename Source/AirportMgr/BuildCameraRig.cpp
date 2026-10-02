@@ -21,12 +21,7 @@ void FBuildCameraRig::Reset(const FCameraRigLimits& Limits)
 
 void FBuildCameraRig::ClampFocus()
 {
-	if (FocusBounds.bIsValid)
-	{
-		Focus = FVector2D(
-			FMath::Clamp(Focus.X, FocusBounds.Min.X, FocusBounds.Max.X),
-			FMath::Clamp(Focus.Y, FocusBounds.Min.Y, FocusBounds.Max.Y));
-	}
+	Focus = FocusLand.ClampToOwned(Focus);   // an invalid grid returns the point unchanged
 }
 
 double FBuildCameraRig::PitchDegrees() const
@@ -116,7 +111,7 @@ void FBuildCameraRig::Pan(double Right, double Forward, double Rate, double Delt
 
 	const double Step = Rate * Distance * DeltaTime;
 	Focus += (ForwardAxis * Forward + RightAxis * Right) * Step;
-	// Clamped per axis, so holding a key into a wall slides the view along it rather than stopping it dead.
+	// Clamped to the nearest owned point, so holding a key into the edge slides the view along it rather than stopping it dead.
 	ClampFocus();
 }
 

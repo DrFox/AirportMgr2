@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/LandGrid.h"
 #include "BuildCameraRig.generated.h"
 
 /**
@@ -160,17 +161,19 @@ struct FBuildCameraRig
 	double CloseZoomStepScale = 2.5;
 
 	/**
-	 * Where Focus may go, on the road plane - the owned land (AAirsideOwnedLandActor). INVALID
-	 * MEANS UNBOUNDED, which is the default, so a map with no owned land and the watch rig (whose
-	 * Focus is an offset from an aircraft, not a road-plane point) are never clamped.
+	 * Where Focus may go, on the road plane - the airport's owned land (FLandGrid, land purchase spec 4). AN INVALID
+	 * GRID MEANS UNBOUNDED, which is the default, so a map with no owned land and the watch rig (whose Focus is an
+	 * offset from an aircraft, not a road-plane point) are never clamped.
 	 *
-	 * The FOCUS, not the camera: the camera stands back from it and may hang over the void, which
-	 * is how the player sees the diorama's cut edge at all (2026-10-02). Not in FCameraRigLimits
-	 * because it is a fact about the level, not a tunable of the mode; ApplyLimits leaves it alone.
+	 * The FOCUS, not the camera: the camera stands back from it and may hang over the void, which is how the player
+	 * sees the diorama's cut edge at all (2026-10-02). Clamped TILE BY TILE, not to a bounding box: an L-shaped plot's
+	 * box would let the view sit over its notch. Not in FCameraRigLimits because it is a fact about the level, not a
+	 * tunable of the mode; ApplyLimits leaves it alone.
+	 * ENFORCED BY: Airside.View.BuildCameraRig.FocusStaysOnTheLand
 	 */
-	FBox2D FocusBounds = FBox2D(ForceInit);
+	FLandGrid FocusLand;
 
-	/** Pull Focus inside FocusBounds; nothing when they are invalid. */
+	/** Pull Focus onto FocusLand's nearest owned point; nothing when the grid is invalid. */
 	void ClampFocus();
 
 	/** Copy Min/MaxDistance, Min/MaxPitch and the close-zoom pair from Limits onto this rig, so a details-panel

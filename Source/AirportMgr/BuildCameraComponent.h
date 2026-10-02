@@ -290,13 +290,15 @@ public:
 	}
 
 	/**
-	 * Keep the build view's focus inside Bounds - the owned land. Invalid unbounds. The WATCH rig
-	 * is never bounded: an aircraft on approach is over the void, and the camera rides it there.
-	 * Clamps at once, so a view already outside comes back on the next frame's ease.
+	 * Keep the build view's focus on Land - the airport's owned land; bound to URoadEditFacade::OnOwnedLandChanged by
+	 * CreateBuildCamera, so a purchase moves the bound at once. Invalid unbounds. The WATCH rig is never bounded: an
+	 * aircraft on approach is over the void, and the camera rides it there. Clamps at once, so a view already outside
+	 * comes back on the next frame's ease.
+	 * ENFORCED BY: Airside.View.BuildCameraComponent.FocusLandHoldsTheBuildView
 	 */
-	void SetFocusBounds(const FBox2D& Bounds)
+	void SetFocusLand(const FLandGrid& Land)
 	{
-		TargetView.FocusBounds = Bounds;
+		TargetView.FocusLand = Land;
 		TargetView.ClampFocus();
 	}
 
