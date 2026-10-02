@@ -136,7 +136,7 @@ by `build_diorama_prototype.py` to an 8x8 grid with the R3 start.
 
 `UScenario::LandTileBase` and `LandTileGrowth` (K), resolved in the one Ops resolver.
 `TilePrice = Base x (1 + K x NumOwned())`. Starting guesses, to tune in play: Base ¤150,000,
-K 0.5 - the first purchase ¤450,000 with 2 owned (StartingBalance is ¤500,000), the 10th ¤750,000.
+K 0.5 - the first purchase ¤300,000 with 2 owned (StartingBalance is ¤500,000), the 10th (11 owned) ¤975,000. Corrected 2026-10-02: the first draft said ¤450,000, an arithmetic slip.
 `FLandPurchasedEvent { Tile, Price, Balance }`; the ledger posts it under a new `Land` category.
 
 ## 8. The off-map road link (R9) - deferred, recommendation
