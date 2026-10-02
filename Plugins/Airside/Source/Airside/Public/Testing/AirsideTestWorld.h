@@ -238,6 +238,8 @@ struct FNullEditTarget : IRoadEditTarget
 	 *  refused site is never priced), the money half has nothing to say about ground it will not
 	 *  take. A constant epoch, because a null target has no model to edit. */
 	virtual FString WhyStandSiteRefused(TArrayView<const FVector2D>) const override { return TEXT("no target"); }
+	virtual FString WhyRunwayRefused(FVector2D, FVector2D, const URoadProfile*) const override { return FString(); }
+	virtual FString WhyApronRefused(TArrayView<const FVector2D>) const override { return FString(); }
 	virtual FString WhyStandUnaffordable(TArrayView<const FVector2D>, EPavement) const override { return FString(); }
 	virtual uint32 GetEditEpoch() const override { return 0; }
 	/** ALLOWED, unlike WhyStandRefused above: a null target has no network, so no strip to be

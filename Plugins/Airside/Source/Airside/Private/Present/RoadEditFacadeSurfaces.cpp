@@ -171,6 +171,14 @@ int32 URoadEditFacade::AddApron(const TArray<FVector2D>& Outline)
 		return INDEX_NONE;
 	}
 
+	// THE APRON TOOL'S OWN EVALUATOR, at the click - see IRoadEditTarget::WhyApronRefused.
+	const FString LandWhy = WhyApronRefused(Outline);
+	if (!LandWhy.IsEmpty())
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("AddApron refused: %s"), *LandWhy);
+		return INDEX_NONE;
+	}
+
 	FApronSurface Surface;
 	Surface.Outline = Outline;
 
@@ -267,9 +275,19 @@ int32 URoadEditFacade::FindApronAt(FVector2D Where) const
 	return INDEX_NONE;
 }
 
+FString URoadEditFacade::WhyApronRefused(TArrayView<const FVector2D> Outline) const
+{
+	return LandRefusal(Outline);
+}
+
 int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEntity Kind)
 {
 	ARoadNetworkActor& Owner = Actor();
+	if (!IsLandOwned(Where))
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("PlaceEntity refused at (%.0f, %.0f): %s"), Where.X, Where.Y, *FLandGrid::OutsideText);
+		return INDEX_NONE;
+	}
 
 	// RESOLVED BY KIND, in one place - see ARoadNetworkActor::ResolveEntityDefinition, which
 	// the tool's preview goes through too so the two cannot pick different objects.
@@ -370,6 +388,13 @@ FString URoadEditFacade::WhyPlotRefused(TArrayView<const FVector2D> Outline) con
 	if (!RoadGeom::IsSimplePolygon(Outline))
 	{
 		return TEXT("the outline crosses itself");
+	}
+
+	// OWNED LAND (land purchase spec R7) - PlaceEntityInPlot asks this function at the click.
+	const FString LandWhy = LandRefusal(Outline);
+	if (!LandWhy.IsEmpty())
+	{
+		return LandWhy;
 	}
 
 	const URoadNetwork* Network = GetNetwork();
@@ -701,6 +726,13 @@ FString URoadEditFacade::WhyStandSiteRefused(TArrayView<const FVector2D> Outline
 	if (Outline.Num() < 4 || !RoadGeom::IsSimplePolygon(Outline))
 	{
 		return TEXT("the outline crosses itself");
+	}
+
+	// OWNED LAND (land purchase spec R7) - WhyStandRefused, and through it PlaceStandInPlot, ask this half first.
+	const FString LandWhy = LandRefusal(Outline);
+	if (!LandWhy.IsEmpty())
+	{
+		return LandWhy;
 	}
 
 	// SIZE, MEASURED AGAINST THE SMALLEST STAND LETTER'S OWN FLOOR (IcaoCode::SmallestStandLetter

@@ -551,6 +551,12 @@ bool URoadEditFacade::ApplyInteractiveMutation(const TCHAR* Label,
 
 int32 URoadEditFacade::PlaceNode(FVector2D Where)
 {
+	// A CHAIN CANNOT START IN THE VOID (land purchase spec R7). Before the scope, like every guard that writes nothing.
+	if (!IsLandOwned(Where))
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("PlaceNode refused at (%.0f, %.0f): %s"), Where.X, Where.Y, *FLandGrid::OutsideText);
+		return INDEX_NONE;
+	}
 	// The network is made BEFORE the scope, so the snapshot is of an empty graph rather
 	// than of nothing at all - otherwise the first node of a session is the one edit that
 	// cannot be undone.
@@ -702,6 +708,28 @@ FBuildQuote URoadEditFacade::QuoteForConnect(int32 FromIndex, FVector2D To, ERoa
 		FVector2D::Distance(Network->GetNodes()[FromIndex].Position, To), Surface);
 }
 
+FString URoadEditFacade::LandRefusal(TConstArrayView<FVector2D> Footprint) const
+{
+	const URoadNetwork* Network = Actor().Network;
+	return Network != nullptr && !Network->GetOwnedLand().IsAreaOwned(Footprint) ? FLandGrid::OutsideText : FString();
+}
+
+bool URoadEditFacade::IsLandOwned(FVector2D Where) const
+{
+	const URoadNetwork* Network = Actor().Network;
+	return Network == nullptr || Network->GetOwnedLand().IsOwned(Where);
+}
+
+FString URoadEditFacade::WhyRunwayRefused(FVector2D From, FVector2D To, const URoadProfile* Profile) const
+{
+	const URoadNetwork* Network = Actor().Network;
+	if (Network == nullptr || Profile == nullptr)
+	{
+		return FString();   // PlaceRunway refuses a missing profile itself, with its own message
+	}
+	return Network->GetOwnedLand().IsStripOwned(From, To, Profile->GetMaxHalfWidth()) ? FString() : FLandGrid::OutsideText;
+}
+
 FString URoadEditFacade::WhySegmentRefused(int32 FromIndex, const FRoadSnapResult& To, ERoadKind Kind, int32 WidthIndex) const
 {
 	const URoadNetwork* Network = Actor().Network;
@@ -724,6 +752,13 @@ FString URoadEditFacade::WhySegmentRefused(int32 FromIndex, const FRoadSnapResul
 	Shape.B = To.Position;
 	Shape.Control = (Shape.A + Shape.B) * 0.5;   // straight - AddStraightSegment's own control
 	Shape.HalfWidth = Profile->GetMaxHalfWidth();
+
+	// OWNED LAND FIRST (land purchase spec R7): the FOOTPRINT, not the centreline - a shoulder over the cut would hang
+	// over the void. ConnectNodes asks this at commit too.
+	if (!Network->GetOwnedLand().IsStripOwned(Shape.A, Shape.B, Shape.HalfWidth))
+	{
+		return FLandGrid::OutsideText;
+	}
 
 	TaxiwayStrip::FSegmentEnd AtA;
 	AtA.Node = From;
@@ -893,6 +928,14 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 		UE_LOG(LogRoadMesh, Warning,
 			TEXT("PlaceRunway refused: %.0f uu is under the %.0f uu minimum"),
 			Length, Owner.MinimumRunwayLength);
+		return false;
+	}
+
+	// THE RUNWAY TOOL'S OWN EVALUATOR, at the click - see IRoadEditTarget::WhyRunwayRefused.
+	const FString LandWhy = WhyRunwayRefused(From, To, RunwayProfile);
+	if (!LandWhy.IsEmpty())
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("PlaceRunway refused: %s"), *LandWhy);
 		return false;
 	}
 
@@ -1090,6 +1133,17 @@ FString URoadEditFacade::WhyUpgradeSiteRefused(int32 SegmentIndex, ERoadKind Kin
 	if (New == Old && Surface == Segment.Surface)
 	{
 		return FString();   // already so - UpgradeSegment answers true with no edit
+	}
+
+	// OWNED LAND: the widened strip, on both halves of the (possibly curved) segment through its control point.
+	{
+		const FVector2D SA = Network->GetNodes()[Segment.A.Index].Position;
+		const FVector2D SB = Network->GetNodes()[Segment.B.Index].Position;
+		const double Half = New->GetMaxHalfWidth();
+		if (!Network->GetOwnedLand().IsStripOwned(SA, Segment.Control, Half) || !Network->GetOwnedLand().IsStripOwned(Segment.Control, SB, Half))
+		{
+			return FLandGrid::OutsideText;
+		}
 	}
 
 	// NO PRICE GATE HERE - WhyUpgradeUnaffordable's, asked fresh (issue #439): this function is the

@@ -263,6 +263,19 @@ public:
 	 */
 	virtual FString WhySegmentRefused(int32 FromIndex, const FRoadSnapResult& To, ERoadKind Kind, int32 WidthIndex) const = 0;
 
+	/**
+	 * Why a runway from From to To at Profile may not be laid - today only that it leaves owned land (land purchase
+	 * spec R7). Empty = allowed. THE ONE EVALUATOR, WhySegmentRefused's pattern: the runway tool's ghost and
+	 * PlaceRunway both ask it, so the preview cannot approve what the click refuses. Length and money keep their own
+	 * gates (GetMinimumRunwayLength, QuoteForRunway).
+	 * ENFORCED BY: Airside.Present.OwnedLand.EveryBuildAsksTheLand
+	 */
+	virtual FString WhyRunwayRefused(FVector2D From, FVector2D To, const URoadProfile* Profile) const = 0;
+
+	/** Why an apron with this outline may not be laid - today only owned land. Empty = allowed. The apron tool's
+	 *  ghost and AddApron both ask it. ENFORCED BY: Airside.Present.OwnedLand.EveryBuildAsksTheLand */
+	virtual FString WhyApronRefused(TArrayView<const FVector2D> Outline) const = 0;
+
 	/** Tarmac - what every caller before the surface row meant. */
 	bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex)
 	{
