@@ -1,6 +1,6 @@
 # Land purchase: owned tiles, the Land tool, and an edge that grows
 
-Date: 2026-10-02. Status: draft for review. Builds on #529 (the diorama edge, main 28b96d99),
+Date: 2026-10-02. Status: agreed 2026-10-02. Builds on #529 (the diorama edge, main 28b96d99),
 which made one rectangle - `AAirsideOwnedLandActor` - clip the ground, lay the strata walls,
 bound the build camera and keep grass off the void. This replaces the rectangle with owned TILES
 the player buys.
@@ -167,8 +167,8 @@ or stay put as an inner road).
 Selling land; non-rectangular maps; terrain under the void; the off-map link (§8); land the player
 starts NOT at bottom centre (scenario choice later).
 
-## 11. Open questions
+## 11. Resolved (user, 2026-10-02)
 
-1. **§8 deferral of the off-map link** - agree, or build the node now with nothing using it?
-2. Tool key `T` and name "Buy land" - fine?
-3. Price guesses (Base ¤150k, K 0.5) - fine to start?
+1. Off-map link deferred to the deliveries feature (section 8).
+2. Tool "Buy land", key `T`.
+3. Price starts at Base 150,000, K 0.5.
