@@ -470,6 +470,20 @@ TArray<FTaxiwayRename> URoadNetwork::NormaliseTaxiways(const FTaxiwayNamingRules
 	// 1. EVERY NEW CHAIN NAMED - first, so a heal that rejoins two pieces of A inherits A before step 3 would split them.
 	Changes += AssignUnnamedTaxiways(Rules);
 
+	// 2-3. ONE CHAIN PER TAXIWAY. Indices, not a range-for: a split mints into Taxiways while this walks it, and a
+	// split-off is a simple path that the same two steps then leave alone.
+	for (int32 TaxiwayId = 0; TaxiwayId < Taxiways.Num(); ++TaxiwayId)
+	{
+		if (Taxiways[TaxiwayId].bAlive)
+		{
+			SplitTaxiwayBranches(TaxiwayId, Renames);
+			SplitTaxiwayPieces(TaxiwayId, Renames);
+		}
+	}
+
+	// 4. EMPTY - after the splits, so a taxiway emptied by step 1's inheritance is seen too.
+	Changes += RetireEmptyTaxiways();
+
 	Changes += Renames.Num();
 	for (const FTaxiwayRename& Rename : Renames)
 	{
@@ -535,4 +549,150 @@ FString URoadNetwork::JunctionName(FRoadNodeId Node) const
 	}
 	Names.Sort();
 	return FString::Join(Names, TEXT("/"));
+}
+
+void URoadNetwork::SplitTaxiwayBranches(int32 TaxiwayId, TArray<FTaxiwayRename>& OutRenames)
+{
+	// EACH ROUND takes one arm off one node, so it ends within the taxiway's segment count; the guard only says so.
+	for (int32 Guard = 0; Guard <= Segments.Num(); ++Guard)
+	{
+		FRoadNodeId At;
+		TArray<FRoadSegmentId> Arms;
+		for (int32 Index = 0; Index < Nodes.Num() && !At.IsSet(); ++Index)
+		{
+			const FRoadNodeId Node = NodeIdAt(Index);
+			TArray<FRoadSegmentId> Own = Node.IsSet() ? TaxiwayNamesOwnAt(*this, Node, TaxiwayId) : TArray<FRoadSegmentId>();
+			if (Own.Num() >= 3)
+			{
+				At = Node;
+				Arms = MoveTemp(Own);
+			}
+		}
+		if (!At.IsSet())
+		{
+			return;
+		}
+		TArray<FRoadSegmentId> Shortest;
+		double ShortestLength = TNumericLimits<double>::Max();
+		int32 ShortestFirst = MAX_int32;
+		for (const FRoadSegmentId& Arm : Arms)
+		{
+			// THE BRANCH: from At along Arm, through every node that is a plain pass-through of this taxiway, stopping at
+			// a fork, an end, or back at At (a loop's two arms walk the same loop).
+			TArray<FRoadSegmentId> Branch;
+			double Length = 0.0;
+			FRoadSegmentId Through = Arm;
+			FRoadNodeId Node = At;
+			while (Through.IsSet() && !Branch.Contains(Through))
+			{
+				Branch.Add(Through);
+				Length += TaxiwayNamesLength(*this, Through);
+				Node = GetOtherEnd(Through, Node);
+				if (Node == At)
+				{
+					break;
+				}
+				const TArray<FRoadSegmentId> Own = TaxiwayNamesOwnAt(*this, Node, TaxiwayId);
+				Through = Own.Num() == 2 ? (Own[0] == Through ? Own[1] : Own[0]) : FRoadSegmentId();
+			}
+			if (Length < ShortestLength || (Length == ShortestLength && Arm.Index < ShortestFirst))
+			{
+				Shortest = MoveTemp(Branch);
+				ShortestLength = Length;
+				ShortestFirst = Arm.Index;
+			}
+		}
+		const int32 Fresh = MintTaxiway(INDEX_NONE);
+		for (const FRoadSegmentId& Segment : Shortest)
+		{
+			WriteTaxiwayId(Segment, Fresh);
+		}
+		OutRenames.Add({ TaxiwayDisplayName(Fresh), TaxiwayDisplayName(TaxiwayId) });
+	}
+}
+
+void URoadNetwork::SplitTaxiwayPieces(int32 TaxiwayId, TArray<FTaxiwayRename>& OutRenames)
+{
+	TArray<FTaxiwayChain> Pieces;
+	TSet<FRoadSegmentId> Seen;
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const FRoadSegmentId Seed = SegmentIdAt(Index);
+		if (!Seed.IsSet() || Seen.Contains(Seed) || TaxiwayOf(Seed) != TaxiwayId)
+		{
+			continue;
+		}
+		FTaxiwayChain& Piece = Pieces.AddDefaulted_GetRef();
+		TArray<FRoadSegmentId> Frontier = { Seed };
+		Seen.Add(Seed);
+		while (Frontier.Num() > 0)
+		{
+			const FRoadSegmentId Each = Frontier.Pop();
+			Piece.Segments.Add(Each);
+			Piece.Length += TaxiwayNamesLength(*this, Each);
+			Piece.LowestIndex = FMath::Min(Piece.LowestIndex, Each.Index);
+			const FRoadSegment* Segment = GetSegment(Each);
+			for (const FRoadNodeId& End : { Segment->A, Segment->B })
+			{
+				for (const FRoadSegmentId& Next : TaxiwayNamesOwnAt(*this, End, TaxiwayId))
+				{
+					if (!Seen.Contains(Next))
+					{
+						Seen.Add(Next);
+						Frontier.Add(Next);
+					}
+				}
+			}
+		}
+	}
+	if (Pieces.Num() <= 1)
+	{
+		return;
+	}
+	Pieces.Sort([](const FTaxiwayChain& L, const FTaxiwayChain& R)
+	{
+		return L.Length != R.Length ? L.Length > R.Length : L.LowestIndex < R.LowestIndex;
+	});
+	for (int32 Piece = 1; Piece < Pieces.Num(); ++Piece)
+	{
+		const int32 Fresh = MintTaxiway(INDEX_NONE);
+		for (const FRoadSegmentId& Segment : Pieces[Piece].Segments)
+		{
+			WriteTaxiwayId(Segment, Fresh);
+		}
+		OutRenames.Add({ TaxiwayDisplayName(Fresh), TaxiwayDisplayName(TaxiwayId) });
+	}
+}
+
+int32 URoadNetwork::RetireEmptyTaxiways()
+{
+	TArray<int32> Held;
+	Held.Init(0, Taxiways.Num());
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const int32 Owner = TaxiwayOf(SegmentIdAt(Index));
+		if (Owner != INDEX_NONE)
+		{
+			++Held[Owner];
+		}
+	}
+	// UNTIL NOTHING MOVES: retiring the last connector of an empty parent frees the parent in the next round.
+	int32 Retired = 0;
+	for (bool bChanged = true; bChanged;)
+	{
+		bChanged = false;
+		for (FTaxiway& Each : Taxiways)
+		{
+			if (!Each.bAlive || Held[Each.Id] > 0 || HasTaxiwayConnectors(Each.Id))
+			{
+				continue;
+			}
+			UE_LOG(LogAirside, Log, TEXT("TaxiwayNames: %s retired - no segment and no connector left"),
+				*TaxiwayDisplayName(Each.Id));
+			Each.bAlive = false;
+			++Retired;
+			bChanged = true;
+		}
+	}
+	return Retired;
 }

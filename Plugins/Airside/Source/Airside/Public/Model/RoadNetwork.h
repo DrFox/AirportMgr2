@@ -1287,6 +1287,14 @@ private:
 	int32 MintTaxiway(int32 ParentId);
 	int32 IssueConnectorNumber(int32 ParentId);
 	FString NextFreeTaxiwayLetter(int32 Except) const;
+	/** Invariant step 2 (spec "Branch"): while a node holds 3+ of the taxiway's segments, the shortest branch from it
+	 *  (by length, ties by lowest first-segment index) becomes the next free letter. */
+	void SplitTaxiwayBranches(int32 TaxiwayId, TArray<FTaxiwayRename>& OutRenames);
+	/** Invariant step 3 (spec "Disconnected"): the longest piece keeps it (ties by lowest index); each other piece is a new letter. */
+	void SplitTaxiwayPieces(int32 TaxiwayId, TArray<FTaxiwayRename>& OutRenames);
+	/** Invariant step 4 (spec "Empty"): a taxiway with no segment and no live connector is retired; one with a
+	 *  connector stays, its letter reserved. Returns how many it retired. */
+	int32 RetireEmptyTaxiways();
 
 	friend struct FRoadNetworkTestAccess;
 

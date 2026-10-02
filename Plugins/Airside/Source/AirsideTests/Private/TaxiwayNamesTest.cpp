@@ -238,4 +238,156 @@ bool FTaxiwayNamesInLineMeetTest::RunTest(const FString&)
 	return true;
 }
 
+/** Disconnected: the longer piece keeps the taxiway, the other gets the next free letter, and says so once. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesDisconnectTest, "Airside.Model.TaxiwayNames.DisconnectedPieceSplitsOff",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesDisconnectTest::RunTest(const FString&)
+{
+	using namespace TaxiwayNamesTest;
+	FTaxiwayNamesNet N;
+	const FRoadNodeId N0 = N.Node(0.0, 0.0);
+	const FRoadNodeId N1 = N.Node(40000.0, 0.0);
+	const FRoadNodeId N2 = N.Node(50000.0, 0.0);
+	const FRoadNodeId N3 = N.Node(70000.0, 0.0);
+	const FRoadSegmentId Long = N.Click(N0, N1);
+	const FRoadSegmentId Middle = N.Click(N1, N2);
+	const FRoadSegmentId Short = N.Click(N2, N3);
+	TestEqual(TEXT("setup: one taxiway A"), N.NameOf(Short), FString(TEXT("A")));
+	TestTrue(TEXT("the middle goes"), N.Net->RemoveSegment(Middle));
+	const TArray<FTaxiwayRename> Renames = N.Normalise();
+	if (!TestEqual(TEXT("one split, one report"), Renames.Num(), 1)) { return false; }
+	TestEqual(TEXT("B split off"), Renames[0].SplitOff, FString(TEXT("B")));
+	TestEqual(TEXT("from A"), Renames[0].From, FString(TEXT("A")));
+	TestEqual(TEXT("the 400 m piece keeps A"), N.NameOf(Long), FString(TEXT("A")));
+	TestEqual(TEXT("the 200 m piece is B"), N.NameOf(Short), FString(TEXT("B")));
+	return true;
+}
+
+/** Branch: A's end merged onto A's middle - the shortest branch at the node splits off as the next letter. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesBranchTest, "Airside.Model.TaxiwayNames.BranchSplitsOff",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesBranchTest::RunTest(const FString&)
+{
+	using namespace TaxiwayNamesTest;
+	FTaxiwayNamesNet N;
+	TArray<FRoadNodeId> P;
+	for (int32 Index = 0; Index <= 4; ++Index) { P.Add(N.Node(30000.0 * Index, 0.0)); }
+	const FRoadSegmentId Tail = N.Click(P[0], P[1]);
+	const FRoadSegmentId Loop = N.Click(P[1], P[2]);
+	N.Click(P[2], P[3]);
+	N.Click(P[3], P[4]);
+	TestEqual(TEXT("setup: one taxiway"), N.Alive(), 1);
+	TestTrue(TEXT("A's far end merged onto its second node"), N.Net->MergeNodes(P[1], P[4]));
+	const TArray<FTaxiwayRename> Renames = N.Normalise();
+	if (!TestEqual(TEXT("one branch split off"), Renames.Num(), 1)) { return false; }
+	TestEqual(TEXT("the 300 m tail is the shortest branch: B"), N.NameOf(Tail), FString(TEXT("B")));
+	TestEqual(TEXT("the loop keeps A"), N.NameOf(Loop), FString(TEXT("A")));
+	return true;
+}
+
+/** Empty: a parent with surviving connectors keeps its letter reserved; with none it is retired and A returns to the pool. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesReservationTest, "Airside.Model.TaxiwayNames.CollapseAndLetterReservation",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesReservationTest::RunTest(const FString&)
+{
+	using namespace TaxiwayNamesTest;
+	FTaxiwayNamesNet N;
+	const FRoadNodeId A0 = N.Node(0.0, 0.0);
+	const FRoadNodeId A1 = N.Node(50000.0, 0.0);
+	const FRoadNodeId A2 = N.Node(100000.0, 0.0);
+	const FRoadSegmentId First = N.Click(A0, A1);
+	const FRoadSegmentId Second = N.Click(A1, A2);
+	const FRoadSegmentId Stub = N.Click(A1, N.Node(50000.0, -20000.0));
+	const int32 AId = N.Net->TaxiwayOf(First);
+	TestEqual(TEXT("setup: A1"), N.NameOf(Stub), FString(TEXT("A1")));
+	N.Net->RemoveSegment(First);
+	N.Net->RemoveSegment(Second);
+	N.Normalise();
+	TestNotNull(TEXT("A is kept with no segment: A1 still reads from it"), N.Net->GetTaxiway(AId));
+	TestEqual(TEXT("A1 still reads A1"), N.NameOf(Stub), FString(TEXT("A1")));
+	const FRoadSegmentId Fresh = N.Click(N.Node(0.0, 200000.0), N.Node(60000.0, 200000.0));
+	TestEqual(TEXT("a new taxiway is B - A is reserved, or a second A1 could be minted"), N.NameOf(Fresh), FString(TEXT("B")));
+	N.Net->RemoveSegment(Stub);
+	N.Normalise();
+	TestNull(TEXT("A goes with its last connector"), N.Net->GetTaxiway(AId));
+	const FRoadSegmentId Again = N.Click(N.Node(0.0, 300000.0), N.Node(60000.0, 300000.0));
+	TestEqual(TEXT("and A is back in the pool"), N.NameOf(Again), FString(TEXT("A")));
+	return true;
+}
+
+/** A connector number is never reissued while its parent lives. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesNumbersTest, "Airside.Model.TaxiwayNames.ConnectorNumbersNeverReused",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesNumbersTest::RunTest(const FString&)
+{
+	using namespace TaxiwayNamesTest;
+	FTaxiwayNamesNet N;
+	TArray<FRoadNodeId> A;
+	for (int32 Index = 0; Index <= 3; ++Index) { A.Add(N.Node(50000.0 * Index, 0.0)); }
+	for (int32 Index = 0; Index < 3; ++Index) { N.Click(A[Index], A[Index + 1]); }
+	const FRoadSegmentId One = N.Click(A[1], N.Node(50000.0, -20000.0));
+	const FRoadSegmentId Two = N.Click(A[2], N.Node(100000.0, -20000.0));
+	TestEqual(TEXT("A1"), N.NameOf(One), FString(TEXT("A1")));
+	TestEqual(TEXT("A2"), N.NameOf(Two), FString(TEXT("A2")));
+	N.Net->RemoveSegment(One);
+	N.Normalise();
+	const FRoadSegmentId Three = N.Click(A[1], N.Node(50000.0, 20000.0));
+	TestEqual(TEXT("the next is A3, never the retired A1"), N.NameOf(Three), FString(TEXT("A3")));
+	return true;
+}
+
+/** REVIEW FOCUS 2 - a gesture is many commits: names are judged "as drawn so far" (plan D3). */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesRejudgeTest, "Airside.Model.TaxiwayNames.DrawnSoFarIsRejudged",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesRejudgeTest::RunTest(const FString&)
+{
+	using namespace TaxiwayNamesTest;
+	{
+		// A TWO-CLICK CONNECTOR: a stub off A's middle, then on to the runway 250 m away, in line.
+		FTaxiwayNamesNet N;
+		const FRoadNodeId Mid = N.Node(50000.0, 0.0);
+		N.Click(N.Node(0.0, 0.0), Mid);
+		N.Click(Mid, N.Node(100000.0, 0.0));
+		const FRoadNodeId R = N.Node(50000.0, 25000.0);
+		N.Lay(N.Node(0.0, 25000.0), R, N.Runway);
+		N.Lay(R, N.Node(100000.0, 25000.0), N.Runway);
+		N.Normalise();
+		const FRoadNodeId Free = N.Node(50000.0, 15000.0);
+		const FRoadSegmentId Click1 = N.Click(Mid, Free);
+		const FRoadSegmentId Click2 = N.Click(Free, R);
+		TestEqual(TEXT("click 1 is A1"), N.NameOf(Click1), FString(TEXT("A1")));
+		TestEqual(TEXT("click 2 carries A1 on to the runway"), N.NameOf(Click2), FString(TEXT("A1")));
+	}
+	{
+		// A STUB GROWN LONG: 200 m off A (A1), then straight on to 600 m - no connector any more.
+		FTaxiwayNamesNet N;
+		const FRoadNodeId Mid = N.Node(50000.0, 0.0);
+		N.Click(N.Node(0.0, 0.0), Mid);
+		N.Click(Mid, N.Node(100000.0, 0.0));
+		const FRoadNodeId Free = N.Node(50000.0, -20000.0);
+		const FRoadSegmentId Stub = N.Click(Mid, Free);
+		TestEqual(TEXT("setup: A1"), N.NameOf(Stub), FString(TEXT("A1")));
+		const FRoadSegmentId On = N.Lay(Free, N.Node(50000.0, -60000.0));
+		const TArray<FTaxiwayRename> Renames = N.Normalise();
+		TestEqual(TEXT("600 m is a letter now: B"), N.NameOf(On), FString(TEXT("B")));
+		TestEqual(TEXT("the stub went with it"), N.NameOf(Stub), FString(TEXT("B")));
+		TestEqual(TEXT("re-judging is not a split: no toast"), Renames.Num(), 0);
+	}
+	{
+		// A LETTER FROM OPEN GROUND THAT LANDS ON A: 100 m alone is B (no taxiway at either end), and once it reaches
+		// A's end, 250 m in all, it is A's connector - and B goes back in the pool.
+		FTaxiwayNamesNet N;
+		const FRoadNodeId End = N.Node(200000.0, 0.0);
+		N.Click(N.Node(100000.0, 0.0), End);
+		const FRoadNodeId Free = N.Node(200000.0, -15000.0);
+		const FRoadSegmentId Click1 = N.Click(N.Node(200000.0, -25000.0), Free);
+		TestEqual(TEXT("click 1 has no taxiway at either end: B"), N.NameOf(Click1), FString(TEXT("B")));
+		N.Click(Free, End);
+		TestEqual(TEXT("it reached A: A1"), N.NameOf(Click1), FString(TEXT("A1")));
+		const FRoadSegmentId Next = N.Click(N.Node(0.0, 100000.0), N.Node(60000.0, 100000.0));
+		TestEqual(TEXT("B is free again"), N.NameOf(Next), FString(TEXT("B")));
+	}
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS
