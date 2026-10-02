@@ -66,6 +66,17 @@ FORCEINLINE uint32 GetTypeHash(const FTaxiResource& Resource)
 }
 
 /**
+ * Which way a window drives along its EDGE - A to B, B to A - or Any: a node, a push, or a window that
+ * is both ways at once (a push and the taxi back over the same line, merged). Any shares with nothing.
+ */
+enum class ETaxiWay : uint8
+{
+	Any,
+	AToB,
+	BToA,
+};
+
+/**
  * Who holds a resource, and when: [From, To) in seconds on the caller's clock.
  *
  * HALF-OPEN, so a window that ends at 20 and one that starts at 20 do not conflict - the second
@@ -79,6 +90,9 @@ struct FTaxiWindow
 	int32 Holder = 0;
 	double From = 0.0;
 	double To = 0.0;
+
+	/** Which way it drives - see ETaxiWay, and FTaxiReservations::MayShare for what it buys. */
+	ETaxiWay Way = ETaxiWay::Any;
 };
 
 /** A stretch of time when a resource is free: [Start, End). End == FTaxiReservations::Forever is open-ended. */
@@ -98,12 +112,13 @@ struct FTaxiPass
 /**
  * The space-time reservation table: per resource, the ordered windows during which someone holds
  * it (spec 2026-10-02 §1). PLAIN DATA - book, release, ask what is free - with no idea what a
- * plan, an aircraft or a priority is; FTaxiPlanner reads it, the planning owner (UTaxiPlanning,
- * PR 2 of the spec's four) writes it.
+ * plan, an aircraft or a priority is; FTaxiPlanner reads it, UTaxiPlanning alone writes it.
  *
- * WINDOWS ON ONE RESOURCE NEVER OVERLAP, whoever holds them, the holder's own included: the table
- * is what order enforcement is derived from (FPassingOrder, PR 2), and two windows of one
- * resource that overlap have no order. A refused booking leaves the table untouched.
+ * WINDOWS ON ONE RESOURCE NEVER CONFLICT (MayShare), whoever holds them, the holder's own included:
+ * the table is what order enforcement is derived from (FPassingOrder), and two windows that may not
+ * share have no order. Two windows OVERLAP only when they drive one edge the same way in FIFO order
+ * (PR 2's correction: PR 1 made an edge one aircraft's at a time, so nobody could follow anybody
+ * along a taxiway). A refused booking leaves the table untouched.
  *
  * A LINEAR SCAN PER RESOURCE, not an interval tree: a resource carries one window per aircraft
  * due through it, and on M_ScaleGatwick at 80 mov/h the spike saw at most a few dozen aircraft
@@ -119,8 +134,25 @@ public:
 	static constexpr double Always = TNumericLimits<double>::Lowest();
 
 	/**
+	 * Whether B may hold its resource while A does. Always when they do not overlap in time. When they do, only
+	 * when both drive the edge the SAME WAY (neither Any) and in FIFO order - one enters at least Headway after
+	 * the other AND leaves at least Headway after it: entry order is exit order, so a follower never has to pass
+	 * its leader, and the gap between them in time is at least Headway at both ends. Opposite ways, or Any, never
+	 * share - that is the head-on the table exists to prevent.
+	 */
+	static bool MayShare(const FTaxiWindow& A, const FTaxiWindow& B, double Headway);
+
+	/**
+	 * The headway MayShare asks of two windows following each other along one edge, seconds. Set by the owner from
+	 * FTrafficRules::TaxiPlanMargin - the time twin of the gap, as the margin is. Floored at a millisecond: with no
+	 * headway two identical windows would be "FIFO" and two aircraft would be booked onto one spot.
+	 */
+	void SetHeadway(double InHeadway) { Headway = FMath::Max(InHeadway, 0.001); }
+	double GetHeadway() const { return Headway; }
+
+	/**
 	 * Books Window on Resource. False, and nothing changed, when the window has no length
-	 * (From >= To) or overlaps any window already there.
+	 * (From >= To) or may not share (MayShare) with any window already there.
 	 */
 	bool BookWindow(const FTaxiResource& Resource, const FTaxiWindow& Window);
 
@@ -142,17 +174,52 @@ public:
 	 * Resource's free intervals, earliest first, treating IgnoreHolder's own windows as free -
 	 * so a holder re-planning is not blocked by the plan it is replacing. Never empty: a
 	 * resource nobody holds is one interval [Always, Forever). Touching windows leave no
-	 * zero-length gap between them.
+	 * zero-length gap between them. BLIND TO WAY: every window blocks - the conservative answer,
+	 * for a reader that does not drive anywhere (the planner asks EarliestFit).
 	 */
 	void FreeIntervals(const FTaxiResource& Resource, int32 IgnoreHolder, TArray<FTaxiInterval>& Out) const;
 
-	/** Whether no window other than IgnoreHolder's overlaps [From, To). */
+	/** Whether no window other than IgnoreHolder's overlaps [From, To). Blind to way, as FreeIntervals is. */
 	bool IsFree(const FTaxiResource& Resource, double From, double To, int32 IgnoreHolder) const;
+
+	/**
+	 * The least Shift >= 0 such that a window [From + Shift, To + Shift) going Way may share (MayShare) with every
+	 * window on Resource but IgnoreHolder's. To == Forever stays Forever. False when no shift will do - something
+	 * that may not share holds the resource for ever after From. THE PLANNER'S ONE QUESTION of the table: it
+	 * shifts its departure by the answer and asks again, until every resource of a move answers 0.
+	 */
+	bool EarliestFit(const FTaxiResource& Resource, ETaxiWay Way, double From, double To, int32 IgnoreHolder,
+		double& OutShift) const;
+
+	/**
+	 * How late a window that starts at From going Way may END and still share with every window on Resource but
+	 * IgnoreHolder's: the start of the next one that may not overlap it, or the end (less Headway) of the next one
+	 * following it the same way, which it must leave before. Forever when nothing lies ahead. How long an aircraft
+	 * may wait on a node, with its tail on the edge behind it.
+	 */
+	double LatestEnd(const FTaxiResource& Resource, ETaxiWay Way, double From, int32 IgnoreHolder) const;
+
+	/**
+	 * How many of Resource's windows (IgnoreHolder's excepted) start before At - the place a window starting at At
+	 * takes in the resource's order. SIPP keys a search state on it, as textbook SIPP keys on a free interval's
+	 * index: two arrivals in one place have the same aircraft ahead and behind.
+	 */
+	int32 PlaceAt(const FTaxiResource& Resource, double At, int32 IgnoreHolder) const;
+
+	/**
+	 * The least start after From at which a window going Way would take a LATER place: past the first window that
+	 * starts at or after From - after its end, or, the same way along an edge, a headway after its start. Forever
+	 * when no window starts at or after From. The planner's "next safe interval".
+	 */
+	double NextPlaceAfter(const FTaxiResource& Resource, ETaxiWay Way, double From, int32 IgnoreHolder) const;
 
 	/** Resource's windows, sorted by From. Empty when nobody holds it. */
 	TConstArrayView<FTaxiWindow> WindowsOn(const FTaxiResource& Resource) const;
 
 private:
-	/** Per resource, sorted by From, never overlapping. A resource with no windows has no entry. */
+	/** Per resource, sorted by From, never conflicting. A resource with no windows has no entry. */
 	TMap<FTaxiResource, TArray<FTaxiWindow>> Windows;
+
+	/** See SetHeadway. 5 s by default: FTrafficRules::TaxiPlanMargin's default, so a table nobody configured agrees with one that was. */
+	double Headway = 5.0;
 };

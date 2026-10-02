@@ -166,6 +166,7 @@ bool FOfferGeneratorTransientRefusalTest::RunTest(const FString& Parameters)
 		{ EArrivalRefusal::NoStandClearOfStrip, true },
 		{ EArrivalRefusal::TaxiwayTooNarrow, true },
 		{ EArrivalRefusal::NoArrivalRunway, true },
+		{ EArrivalRefusal::NoTaxiPlan, false },
 	};
 	const UEnum* Enum = StaticEnum<EArrivalRefusal>();
 	if (TestNotNull(TEXT("the refusal enum reflects"), Enum))

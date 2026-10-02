@@ -5012,7 +5012,10 @@ $modelLineBudget = [ordered]@{
     # hitch) and the wording helpers asked reach without occupancy, each with its reason. RAISED 957 -> 963 by the #497 re-review
     # (#442 item 4's PR): six comment lines, the ENFORCED BY the review asked for on OtherEndServes (re-pointed at the test that
     # holds the other end's stand) and on the early-out's "ChooseStand only routes to admitted stands" - no code.
-    'Plugins\Airside\Source\Airside\Private\Model\ArrivalPlanner.cpp'         = 963
+    # RAISED 963 -> 978 by taxi planning PR 2 (2026-10-02): ArrivalPlanner::TaxiInRequest - the taxi-in as a taxi plan
+    # request, built beside TaxiInQuery because rule 4's 'taxi-in query built' allows the errand here only - and the
+    # NoTaxiPlan refusal's classification and sentence.
+    'Plugins\Airside\Source\Airside\Private\Model\ArrivalPlanner.cpp'         = 978
 }
 $modelLineFiles = @()
 foreach ($pluginDir in (Get-ChildItem -LiteralPath (Join-Path $Root 'Plugins') -Directory)) {

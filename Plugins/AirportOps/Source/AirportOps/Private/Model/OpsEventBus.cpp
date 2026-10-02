@@ -182,6 +182,11 @@ FString FPushGroundFreedEvent::Describe() const
 	return FString::Printf(TEXT("aircraft %d"), AgentId);
 }
 
+FString FTaxiPlansFreedEvent::Describe() const
+{
+	return TEXT("a taxi plan window released");
+}
+
 FString FTaxiwaySplitEvent::Describe() const
 {
 	return FString::Printf(TEXT("%s split off from %s"), *SplitOff, *From);

@@ -156,3 +156,31 @@ TConstArrayView<FTaxiWindow> FTaxiReservations::WindowsOn(const FTaxiResource& R
 	const TArray<FTaxiWindow>* On = Windows.Find(Resource);
 	return On != nullptr ? TConstArrayView<FTaxiWindow>(*On) : TConstArrayView<FTaxiWindow>();
 }
+
+// ---- PR 2 STUBS (red batch) ----
+bool FTaxiReservations::MayShare(const FTaxiWindow& A, const FTaxiWindow& B, double InHeadway)
+{
+	return !(A.From < B.To && B.From < A.To);
+}
+
+bool FTaxiReservations::EarliestFit(const FTaxiResource& Resource, ETaxiWay Way, double From, double To, int32 IgnoreHolder,
+	double& OutShift) const
+{
+	OutShift = 0.0;
+	return false;
+}
+
+double FTaxiReservations::LatestEnd(const FTaxiResource& Resource, ETaxiWay Way, double From, int32 IgnoreHolder) const
+{
+	return Forever;
+}
+
+int32 FTaxiReservations::PlaceAt(const FTaxiResource& Resource, double At, int32 IgnoreHolder) const
+{
+	return 0;
+}
+
+double FTaxiReservations::NextPlaceAfter(const FTaxiResource& Resource, ETaxiWay Way, double From, int32 IgnoreHolder) const
+{
+	return Forever;
+}
