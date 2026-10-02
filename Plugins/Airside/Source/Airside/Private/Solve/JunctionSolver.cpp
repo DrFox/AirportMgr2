@@ -86,7 +86,8 @@ FJunctionResult FJunctionSolver::SolveCuts(const FJunctionInput& Input)
 				? Input.Arms[Index].FilletRadiusToNext
 				: FMath::Min(Input.Arms[Index].FilletRadius, Input.Arms[NextIndex].FilletRadius);
 
-			Result.Corners[Index] = RoadGeom::SolveFillet(LeftEdge, RightEdge, Radius);
+			Result.Corners[Index] = RoadGeom::SolveFillet(LeftEdge, RightEdge, Radius,
+				FMath::Max(Input.Arms[Index].HalfWidthLeft, 0.0), FMath::Max(Input.Arms[NextIndex].HalfWidthRight, 0.0));
 			if (!Result.Corners[Index].bValid)
 			{
 				return Result; // bValid stays false: this node cannot be solved
@@ -221,9 +222,9 @@ void FJunctionSolver::SolveBoundary(const FJunctionInput& Input, FJunctionResult
 		}
 
 		const RoadGeom::FFillet& Corner = InOutResult.Corners[Index];
-		if (Corner.bStraightThrough)
+		if (Corner.bStraightThrough || Corner.bStep)
 		{
-			continue;  // collinear: the next arm's cut vertex joins directly
+			continue;  // collinear, or a width step: the next arm's cut vertex joins directly
 		}
 
 		ArcSamples.Reset();

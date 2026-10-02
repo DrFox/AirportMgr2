@@ -91,6 +91,20 @@ bool RoadGeom::IsStraightThrough(double Theta)
 	return FMath::Abs(Theta - UE_DOUBLE_PI) < StraightThroughTolerance;
 }
 
+bool RoadGeom::IsWidthStep(double Theta, double ReachA, double ReachB)
+{
+	// OPPOSITE SIGNS, not "one is huge": the size of the far reach is dHalf / delta and any
+	// threshold on it would be a second epsilon. The sign says where the lines meet - ahead on
+	// one edge, behind the other's node - which no rounding of a hand-drawn angle moves.
+	return FMath::Abs(Theta - UE_DOUBLE_PI) <= FMath::DegreesToRadians(WidthStepDegrees)
+		&& ((ReachA < 0.0 && ReachB > 0.0) || (ReachA > 0.0 && ReachB < 0.0));
+}
+
+double RoadGeom::StepReach(double HalfWidthA, double HalfWidthB, double Theta)
+{
+	return FMath::Max3(HalfWidthA, HalfWidthB, 0.0) * FMath::Tan(FMath::Abs(Theta - UE_DOUBLE_PI) * 0.5);
+}
+
 bool RoadGeom::LineIntersect(const FRay2D& A, const FRay2D& B, FVector2D& OutPoint)
 {
 	const double Denominator = A.Dir.X * B.Dir.Y - A.Dir.Y * B.Dir.X;
@@ -192,7 +206,8 @@ bool RoadGeom::IsSimplePolygon(TArrayView<const FVector2D> Points)
 	return true;
 }
 
-RoadGeom::FFillet RoadGeom::SolveFillet(const FRay2D& A, const FRay2D& B, double Radius)
+RoadGeom::FFillet RoadGeom::SolveFillet(const FRay2D& A, const FRay2D& B, double Radius,
+	double HalfWidthA, double HalfWidthB)
 {
 	FFillet Result;
 	Result.Theta = CcwAngleBetween(A.Dir, B.Dir);
@@ -242,6 +257,23 @@ RoadGeom::FFillet RoadGeom::SolveFillet(const FRay2D& A, const FRay2D& B, double
 	const double ReachA = FVector2D::DotProduct(Corner - A.Origin, A.Dir);
 	const double ReachB = FVector2D::DotProduct(Corner - B.Origin, B.Dir);
 
+	// A WIDTH STEP A FEW DEGREES OFF STRAIGHT IS NOT A CORNER (2026-10-02, M_ScaleGatwick: a 12 m
+	// taxiway drawn on by hand from a 25 m one, a third of a degree off its line, "needed" 1.15 km
+	// of cut). The two lines meet dHalf / delta away, behind one arm's node, where nothing is paved:
+	// cut both arms as a bend at the wider width (StepReach, a few uu), joined straight. At delta 0
+	// that is bStraightThrough's zero above, so the step is continuous with it. NOT a wider
+	// StraightThroughTolerance, which would zero real corners as well.
+	// ENFORCED BY: Airside.Solve.WidthStepNearStraight.JunctionIsAStep, Airside.Build.WidthStepNearStraight.Solves
+	if (IsWidthStep(Result.Theta, ReachA, ReachB))
+	{
+		Result.bValid = true;
+		Result.bStep = true;
+		Result.ParamA = Result.ParamB = StepReach(HalfWidthA, HalfWidthB, Result.Theta);
+		Result.TangentA = A.Origin + A.Dir * Result.ParamA;
+		Result.TangentB = B.Origin + B.Dir * Result.ParamB;
+		return Result;
+	}
+
 	// The tangent points sit OUTWARD from the corner along both edges, never inward.
 	// Rounding a junction corner cannot carve material out of the corner itself -
 	// that would make the two arms overlap through the node - so the fillet instead
@@ -267,7 +299,7 @@ RoadGeom::FFillet RoadGeom::SolveFillet(const FRay2D& A, const FRay2D& B, double
 
 void RoadGeom::SampleArc(const FFillet& Fillet, int32 SegmentCount, TArray<FVector2D>& OutPoints)
 {
-	if (!Fillet.bValid || Fillet.bStraightThrough || SegmentCount < 1)
+	if (!Fillet.bValid || Fillet.bStraightThrough || Fillet.bStep || SegmentCount < 1)
 	{
 		return;
 	}
@@ -474,7 +506,19 @@ bool RoadGeom::CornerReachAtZeroRadius(double HalfWidthA, double HalfWidthB, dou
 		return false;
 	}
 
-	OutAlongA = FMath::Max(0.0, (HalfWidthB + HalfWidthA * CosTheta) / SinTheta);
-	OutAlongB = FMath::Max(0.0, (HalfWidthA + HalfWidthB * CosTheta) / SinTheta);
+	const double ReachA = (HalfWidthB + HalfWidthA * CosTheta) / SinTheta;
+	const double ReachB = (HalfWidthA + HalfWidthB * CosTheta) / SinTheta;
+
+	// THE WIDTH STEP, as SolveFillet reads it - the same IsWidthStep on the same signed reaches,
+	// the same StepReach. One rule, so the validator cannot refuse a step the solver draws: the gap
+	// #172 and 2026-09-24 each closed at exactly pi, and this one a few degrees off it.
+	if (IsWidthStep(Theta, ReachA, ReachB))
+	{
+		OutAlongA = OutAlongB = StepReach(HalfWidthA, HalfWidthB, Theta);
+		return true;
+	}
+
+	OutAlongA = FMath::Max(0.0, ReachA);
+	OutAlongB = FMath::Max(0.0, ReachB);
 	return true;
 }

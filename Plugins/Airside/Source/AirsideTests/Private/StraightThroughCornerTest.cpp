@@ -386,10 +386,13 @@ bool FTJunctionFitsBothWaysTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and both are valid, since a same-width road a hair off straight has no corner to speak of"),
 			static_cast<int32>(Out), static_cast<int32>(ERoadPlacement::Valid));
 
-		// At the taxiway width a tenth of a degree is a genuine width-step corner the solver
-		// would fail too, so no verdict is asserted - only that direction cannot change it.
-		TestEqual(TEXT("and at a mismatched width the two directions still agree, whatever they say"),
+		// At the taxiway width a tenth of a degree is a width STEP, not a corner (2026-10-02,
+		// RoadGeom::IsWidthStep): this said "a genuine width-step corner the solver would fail too"
+		// until a hand-drawn taxiway on M_ScaleGatwick was refused for it. Both ways valid now.
+		TestEqual(TEXT("and at a mismatched width the two directions still agree"),
 			static_cast<int32>(Outward(L, Far, Limits)), static_cast<int32>(Inward(L, Far, Limits)));
+		TestEqual(TEXT("and agree that a width step a tenth of a degree off the line is valid"),
+			static_cast<int32>(Outward(L, Far, Limits)), static_cast<int32>(ERoadPlacement::Valid));
 	}
 
 	// 3. GENUINELY TOO SHORT STILL REFUSES, both ways. The right-angle arm reaches its own

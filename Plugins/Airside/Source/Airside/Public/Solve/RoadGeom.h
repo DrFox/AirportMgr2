@@ -56,6 +56,39 @@ namespace RoadGeom
 	AIRSIDE_API bool IsStraightThrough(double Theta);
 
 	/**
+	 * How far off straight through a corner between two arms of DIFFERENT widths is read as a
+	 * width STEP rather than a corner - see IsWidthStep. 10 degrees, the window
+	 * ExitGeometry::InLineEndDegrees already gives a taxiway carrying on from a runway's end, for
+	 * the same disease: two nearly parallel edges a width step apart, whose lines meet kilometres
+	 * away. Past it a width change at a bend keeps the fillet it has always had (a flare from the
+	 * wide edge into the narrow one); inside it that fillet's tangent point runs off to dHalf / delta
+	 * - 1.24 km at a third of a degree, 12 m against 25 m (2026-10-02, M_ScaleGatwick).
+	 */
+	inline constexpr double WidthStepDegrees = 10.0;
+
+	/**
+	 * Whether the corner between two edges is a width STEP: Theta (unsigned or CCW, as
+	 * IsStraightThrough takes) within WidthStepDegrees of pi, and the two edge LINES crossing
+	 * ahead on one edge but BEHIND the other's node (ReachA, ReachB of opposite sign). That second
+	 * condition is the whole geometric content: an edge whose line meets the other only behind its
+	 * own node never runs into the other arm at all, so the intersection is no corner of the
+	 * pavement. Equal widths never satisfy it - their two reaches share a sign on both sides of a
+	 * bend - so every chained road's near-straight node keeps the corner it always had.
+	 */
+	AIRSIDE_API bool IsWidthStep(double Theta, double ReachA, double ReachB);
+
+	/**
+	 * Both arms' cut at a width step: the zero-radius corner of the same angle between two arms of
+	 * the WIDER half-width, max(A, B) * tan(delta / 2), delta = |Theta - pi|. The narrowest cut that
+	 * still leaves the junction a convex quad round its node: at it the wide arm's inner cut vertex
+	 * lies exactly on the narrow arm's cut line, and any less folds the rim back along that line
+	 * (no apex can fan it, measured 2026-10-02). The same "a bend runs at the wider width" ruling
+	 * FRoadNetworkSolver applies to a two-arm road bend, here with no fillet: at delta <= 10 degrees
+	 * an arc's tangent length, R * tan(delta / 2), is under the 1.4 m a taxiway's 16 m radius gives.
+	 */
+	AIRSIDE_API double StepReach(double HalfWidthA, double HalfWidthB, double Theta);
+
+	/**
 	 * Current slewed toward Target by at most MaxStep radians, the short way round the
 	 * +/-PI seam, clamped by the REMAINING error so the last step lands exactly on Target
 	 * rather than overshooting it. The turn-rate idiom FTakeoffRun's line-up and
@@ -184,6 +217,14 @@ namespace RoadGeom
 		/** True when the edges are collinear: no arc, join the cuts with a straight line. */
 		bool bStraightThrough = false;
 
+		/**
+		 * True at a width step a few degrees off straight (IsWidthStep): no arc either, the cuts
+		 * joined straight. Unlike bStraightThrough, ParamA/ParamB are MEANINGFUL - StepReach on both
+		 * edges, a hair - and are the cuts. Radius stays 0 and TangentA/B sit at those params; Corner
+		 * and Centre are not set.
+		 */
+		bool bStep = false;
+
 		FVector2D Corner   = FVector2D::ZeroVector;  // X: where the two edge lines cross
 		FVector2D Centre   = FVector2D::ZeroVector;  // C: centre of the tangent arc
 		FVector2D TangentA = FVector2D::ZeroVector;  // T_A: arc touches edge A here
@@ -217,7 +258,7 @@ namespace RoadGeom
 		 * corner of a two-arm bend; see FJunctionResult::InnerCornerOfBend for the corner
 		 * that owns it.
 		 */
-		bool IsRoundedCorner() const { return bValid && !bStraightThrough && Theta < UE_DOUBLE_PI && Radius > 0.0; }
+		bool IsRoundedCorner() const { return bValid && !bStraightThrough && !bStep && Theta < UE_DOUBLE_PI && Radius > 0.0; }
 	};
 
 	/**
@@ -229,14 +270,20 @@ namespace RoadGeom
 	 * fillet pushes each arm's cut back rather than carving into the corner. The only
 	 * difference between the inside and the outside of a bend is which side of edge A
 	 * the arc centre falls on, which flips as Theta passes PI.
+	 *
+	 * HalfWidthA/B are the two edges' offsets from the node, read only at a width step
+	 * (IsWidthStep -> StepReach). Zero, the default, gives a zero step reach - which is all a
+	 * caller with no widths can mean, and a step needs two widths to happen at all.
 	 */
-	AIRSIDE_API FFillet SolveFillet(const FRay2D& A, const FRay2D& B, double Radius);
+	AIRSIDE_API FFillet SolveFillet(const FRay2D& A, const FRay2D& B, double Radius,
+		double HalfWidthA = 0.0, double HalfWidthB = 0.0);
 
 	/**
 	 * How far along each arm the inner corner between two arms sits with NO fillet at all -
 	 * the floor no radius can go below. Theta is the angle between the two outgoing tangents
 	 * (0 = coincident, PI = straight through: within StraightThroughTolerance - the same test
-	 * SolveFillet makes - both reaches are zero). Returns false, with both reaches infinite,
+	 * SolveFillet makes - both reaches are zero; a width step within WidthStepDegrees of PI gives
+	 * StepReach on both, as SolveFillet does). Returns false, with both reaches infinite,
 	 * when the arms are so nearly coincident that the offset edges never meet.
 	 *
 	 * Closed form of the same intersection SolveFillet finds at Radius 0, kept here so the
