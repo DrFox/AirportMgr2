@@ -645,4 +645,74 @@ bool FTaxiwayNamesWhereIsTest::RunTest(const FString&)
 	return true;
 }
 
+/** Rename propagation (spec): A -> K makes its connectors K1..; a connector's own override survives its parent's rename;
+ *  a renamed taxiway is never re-judged (plan D3); the old letter is free again (plan D15). */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesRenameTest, "Airside.Model.TaxiwayNames.RenamePropagatesToConnectors",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesRenameTest::RunTest(const FString&)
+{
+	using namespace TaxiwayNamesTest;
+	FTaxiwayNamesNet N;
+	TArray<FRoadNodeId> A;
+	for (int32 Index = 0; Index <= 3; ++Index) { A.Add(N.Node(50000.0 * Index, 0.0)); }
+	FRoadSegmentId Main;
+	for (int32 Index = 0; Index < 3; ++Index) { Main = N.Click(A[Index], A[Index + 1]); }
+	const FRoadSegmentId One = N.Click(A[1], N.Node(50000.0, -20000.0));
+	const FRoadSegmentId Two = N.Click(A[2], N.Node(100000.0, -20000.0));
+	const int32 AId = N.Net->TaxiwayOf(Main);
+	const uint32 Revision = N.Net->GetGuidelineRevision();
+	TestTrue(TEXT("A renamed k"), N.Net->RenameTaxiway(AId, TEXT(" k ")));
+	TestTrue(TEXT("a rename moves the revision the card and caches key on (plan D11)"), N.Net->GetGuidelineRevision() != Revision);
+	TestEqual(TEXT("trimmed and upper-cased"), N.NameOf(Main), FString(TEXT("K")));
+	TestEqual(TEXT("A1 reads K1"), N.NameOf(One), FString(TEXT("K1")));
+	TestEqual(TEXT("A2 reads K2"), N.NameOf(Two), FString(TEXT("K2")));
+	TestTrue(TEXT("K2 overridden Q7"), N.Net->RenameTaxiway(N.Net->TaxiwayOf(Two), TEXT("Q7")));
+	TestTrue(TEXT("K renamed M"), N.Net->RenameTaxiway(AId, TEXT("M")));
+	TestEqual(TEXT("the derived one follows"), N.NameOf(One), FString(TEXT("M1")));
+	TestEqual(TEXT("the override stays"), N.NameOf(Two), FString(TEXT("Q7")));
+	const FRoadSegmentId Fresh = N.Click(N.Node(0.0, 200000.0), N.Node(60000.0, 200000.0));
+	TestEqual(TEXT("A is free again: nothing displays it"), N.NameOf(Fresh), FString(TEXT("A")));
+	// A PLAYER'S NAME IS NEVER RE-JUDGED: rename a stub, then grow it past 300 m.
+	const FRoadNodeId Free = N.Node(150000.0, -20000.0);
+	const FRoadSegmentId Stub = N.Click(A[3], Free);
+	TestTrue(TEXT("the stub renamed Z9"), N.Net->RenameTaxiway(N.Net->TaxiwayOf(Stub), TEXT("Z9")));
+	N.Click(Free, N.Node(150000.0, -60000.0));
+	TestEqual(TEXT("grown past 300 m it keeps the player's name"), N.NameOf(Stub), FString(TEXT("Z9")));
+	return true;
+}
+
+/** REVIEW FOCUS 5: what a player types. Each refusal says why, in the spec's words; a refused rename changes nothing. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesRenameRefusalsTest, "Airside.Model.TaxiwayNames.RenameRefusals",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesRenameRefusalsTest::RunTest(const FString&)
+{
+	using namespace TaxiwayNamesTest;
+	FTaxiwayNamesNet N;
+	const FRoadNodeId A1 = N.Node(50000.0, 0.0);
+	const FRoadSegmentId A = N.Click(N.Node(0.0, 0.0), A1);
+	N.Click(A1, N.Node(100000.0, 0.0));
+	const FRoadSegmentId B = N.Click(N.Node(0.0, 100000.0), N.Node(60000.0, 100000.0));
+	const FRoadSegmentId Stub = N.Click(A1, N.Node(50000.0, -20000.0));
+	const int32 AId = N.Net->TaxiwayOf(A);
+	TestTrue(TEXT("setup: the stub overridden K2"), N.Net->RenameTaxiway(N.Net->TaxiwayOf(Stub), TEXT("K2")));
+	TestEqual(TEXT("taken"), N.Net->WhyTaxiwayNameRefused(AId, TEXT("b")), FString(TEXT("B is taken")));
+	TestEqual(TEXT("I"), N.Net->WhyTaxiwayNameRefused(AId, TEXT("I")), FString(TEXT("I, O and X are avoided: they read as 1, 0 and closed")));
+	TestEqual(TEXT("O inside"), N.Net->WhyTaxiwayNameRefused(AId, TEXT("GO")), FString(TEXT("I, O and X are avoided: they read as 1, 0 and closed")));
+	TestEqual(TEXT("four characters"), N.Net->WhyTaxiwayNameRefused(AId, TEXT("ABCD")), FString(TEXT("A taxiway name is 1 to 3 letters or digits")));
+	TestEqual(TEXT("empty"), N.Net->WhyTaxiwayNameRefused(AId, TEXT("  ")), FString(TEXT("A taxiway name is 1 to 3 letters or digits")));
+	TestEqual(TEXT("punctuation"), N.Net->WhyTaxiwayNameRefused(AId, TEXT("A-1")), FString(TEXT("A taxiway name is 1 to 3 letters or digits")));
+	// A COLLISION ONLY THROUGH A DERIVED NAME: the stub took A1 and now shows K2, so A's next connector is A2 - and
+	// renaming A to K would make it read K2 as well.
+	const FRoadSegmentId Second = N.Click(N.Net->GetSegment(A)->A, N.Node(0.0, -20000.0));
+	TestEqual(TEXT("setup: A's next connector is A2"), N.NameOf(Second), FString(TEXT("A2")));
+	TestEqual(TEXT("K would make A2 read K2, which the stub shows"), N.Net->WhyTaxiwayNameRefused(AId, TEXT("K")), FString(TEXT("K2 is taken")));
+	TestFalse(TEXT("a refused rename changes nothing"), N.Net->RenameTaxiway(AId, TEXT("K")));
+	TestEqual(TEXT("A is still A"), N.NameOf(A), FString(TEXT("A")));
+	TestEqual(TEXT("renaming to its own name is no refusal"), N.Net->WhyTaxiwayNameRefused(AId, TEXT("a")), FString());
+	TestEqual(TEXT("digits are fine"), N.Net->WhyTaxiwayNameRefused(AId, TEXT("10")), FString());
+	TestEqual(TEXT("a dead taxiway"), N.Net->WhyTaxiwayNameRefused(999, TEXT("Q")), FString(TEXT("That taxiway is gone")));
+	TestEqual(TEXT("B untouched"), N.NameOf(B), FString(TEXT("B")));
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

@@ -26,10 +26,13 @@
 #include "Model/TrafficOccupancy.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/OpsRuntime.h"
+#include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestGraph.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Tool/RoadEditTarget.h"
+#include "Tool/RoadBuildTool.h"
+#include "Tool/SelectTool.h"
 #include "Tool/Selection.h"
 #include "UI/UiButton.h"
 
@@ -1051,6 +1054,71 @@ bool FInspectorAircraftOnTest::RunTest(const FString&)
 	Facts.On.Reset();
 	FAircraftCard::Compose(FAircraftCard::DisplayOf(Facts, FAircraftNames()), View);
 	TestFalse(TEXT("and says nothing when it does not know"), View.Facts.Contains(TEXT("On:")));
+	return true;
+}
+
+/** Spec seam test: Select-pick a taxiway and the card's title is its name; the card says its length and connectors and
+ *  offers Rename. A raw-built (unnamed) network keeps the old title (plan D14) - AirportMgr.Inspector.Card.Taxiway. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorTaxiwayNamedTest, "AirportMgr.Inspector.Card.TaxiwayNamed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FInspectorTaxiwayNamedTest::RunTest(const FString&)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	const int32 Mid = Actor->PlaceNode({ 30000.0, 0.0 });
+	TestTrue(TEXT("a taxiway"), Actor->ConnectNodes(Actor->PlaceNode({ -20000.0, 0.0 }), Mid, ERoadKind::Taxiway, INDEX_NONE, EPavement::Tarmac));
+	TestTrue(TEXT("a stub"), Actor->ConnectNodes(Mid, Actor->PlaceNode({ 30000.0, -20000.0 }), ERoadKind::Taxiway, INDEX_NONE, EPavement::Tarmac));
+
+	FSelectTool Tool;
+	FSelection Selection;
+	FToolContext Context;
+	Context.Target = Actor;
+	Context.SnapRadius = 400.0;
+	FRoadSnapResult NoSnap;
+	NoSnap.Position = FVector2D(5000.0, 500.0);
+	Context.SetCursor(NoSnap.Position, NoSnap);
+	Context.BindSelection(Selection);
+	Tool.OnClick(Context);
+	if (!TestTrue(TEXT("the click picked the taxiway"), Selection.Kind == ESelectionKind::Taxiway)) { return false; }
+
+	FTaxiwayCard Card;
+	FInspectorCardInput In;
+	In.Target = Actor;
+	In.Selection = Selection;
+	const FInspectorCardView* View = Card.Describe(In);
+	if (!TestNotNull(TEXT("a view"), View)) { return false; }
+	TestEqual(TEXT("titled by its name"), View->Title, FString(TEXT("Taxiway A")));
+	TestTrue(FString::Printf(TEXT("its length and connectors ('%s')"), *View->Facts),
+		View->Facts.StartsWith(TEXT("Length 500 m, 1 connector")));
+	TestEqual(TEXT("and it can be renamed"), View->RenameTaxiwayId, Actor->Network->TaxiwayOf(Actor->Network->SegmentIdAt(Selection.Id)));
+	return true;
+}
+
+/** The card's Rename field, through the widget: a refusal is shown under it, a rename reaches the title, Undo puts it back. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorRenameTest, "AirportMgr.Inspector.RenameFromTheCard",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FInspectorRenameTest::RunTest(const FString&)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	TestTrue(TEXT("a taxiway"), Actor->ConnectNodes(Actor->PlaceNode({ 0.0, 0.0 }), Actor->PlaceNode({ 60000.0, 0.0 }),
+		ERoadKind::Taxiway, INDEX_NONE, EPavement::Tarmac));
+	FSelection Selection;
+	Selection.Kind = ESelectionKind::Taxiway;
+	Selection.Id = Actor->Network->GetSegments().Num() - 1;
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+	Panel->Refresh(Actor, Selection, nullptr);
+	TestEqual(TEXT("titled A"), Panel->TitleForTest(), FString(TEXT("Taxiway A")));
+	TestEqual(TEXT("a refusal is said"), Panel->SubmitRename(TEXT("O")), FString(TEXT("I, O and X are avoided: they read as 1, 0 and closed")));
+	TestEqual(TEXT("a rename is not refused"), Panel->SubmitRename(TEXT("k")), FString());
+	Panel->Refresh(Actor, Selection, nullptr);
+	TestEqual(TEXT("the title follows"), Panel->TitleForTest(), FString(TEXT("Taxiway K")));
+	TestTrue(TEXT("undo"), Actor->GetEditFacade()->Undo());
+	Panel->Refresh(Actor, Selection, nullptr);
+	TestEqual(TEXT("and undo puts A back"), Panel->TitleForTest(), FString(TEXT("Taxiway A")));
 	return true;
 }
 
