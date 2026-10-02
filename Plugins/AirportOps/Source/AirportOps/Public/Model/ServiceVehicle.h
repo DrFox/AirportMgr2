@@ -190,8 +190,10 @@ struct AIRPORTOPS_API FServiceVehicle
 	/** What it is carrying now, in the role's unit. Starts full. */
 	UPROPERTY() double Cargo = 0.0;
 
-	/** Litres granted from the airport's stock when this refill began - what CargoAfterFacility adds when it ends. SAVED:
-	 *  a save mid-refill must not grant the litres twice. Zero outside AtFacility. */
+	/** Litres granted from the airport's stock when this refill began - what CargoAfterFacility adds when it ends. SAVED,
+	 *  and a load settles it into Cargo (UJobBoard::Serialize): the saved stock no longer holds them, so dropping them
+	 *  would lose them and re-drawing would take them twice. Zero outside AtFacility - Step's refill end and the load
+	 *  both zero it. ENFORCED BY: AirportOps.Fuel.SaveMidRefillKeepsTheGrant, AirportOps.Fuel.RefillDrawsTheStock */
 	UPROPERTY() double RefillLitres = 0.0;
 
 	/** The job it is driving to or serving (ToJob, Serving), else 0. Not in Queue. */

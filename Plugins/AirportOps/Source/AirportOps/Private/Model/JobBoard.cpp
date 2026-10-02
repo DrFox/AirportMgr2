@@ -48,6 +48,15 @@ void UJobBoard::Serialize(FArchive& Ar)
 	++RevisionCount;
 	for (FServiceVehicle& Vehicle : Vehicles)
 	{
+		// A REFILL CUT SHORT BY THE SAVE IS SETTLED, not dropped: its litres left the stock at BeginFacility and the saved
+		// stock does not hold them, so the vehicle takes them now. Anywhere else RefillLitres is zero, and stays so.
+		// ENFORCED BY: AirportOps.Fuel.SaveMidRefillKeepsTheGrant
+		const IServiceRolePolicy* Policy = PolicyFor(Vehicle.Role);
+		if (Vehicle.State == EServiceVehicleState::AtFacility && Policy != nullptr)
+		{
+			Vehicle.Cargo = Policy->CargoAfterFacility(Vehicle.Cargo, TypeFor(Vehicle.TypeCode), Vehicle.RefillLitres);
+		}
+		Vehicle.RefillLitres = 0.0;
 		// EVERY VEHICLE IDLE AT HOME with nothing held - agents, and the jobs of aircraft that are not restored,
 		// are things a load clears. The lifecycle moves FleetRevision (once per vehicle).
 		Lifecycle(Vehicle).ResetForRestore();
@@ -544,7 +553,7 @@ void UJobBoard::StartNext(FServiceVehicle& Vehicle, UGroundTraffic& Traffic, con
 		}
 
 		// THE POLICY'S RULE, the one the bid priced: straight there, or the facility first.
-		if (Policy->NextStep(Vehicle.Cargo, Type, Job.QuantityOwed) == EServiceStep::ViaFacility)
+		if (Policy->NextStep(Vehicle.Cargo, Type, Job.QuantityOwed, FuelAvailable()) == EServiceStep::ViaFacility)
 		{
 			if (bAtHome)
 			{

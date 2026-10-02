@@ -325,6 +325,8 @@ void UJobBoard::BeginFacility(FServiceVehicle& Vehicle, const URoadNetwork& Netw
 	const FEntityInstance* Home = Network.GetEntity(Vehicle.Home);
 	// DRAWN NOW, not when the pumping ends: two trucks home together must not both be promised the last 500 L. What is
 	// granted is held on the vehicle (RefillLitres, saved) and added when the refill ends (Step's AtFacility branch).
+	// FUEL'S STOCK, drawn for whatever role this is: the board is fuel's until a second role is scheduled (see JobBoard.h),
+	// and a second role's facility would need its own supply here.
 	const double Missing = Policy != nullptr ? FMath::Max(FFuelRolePolicy::CapacityOf(TypeFor(Vehicle.TypeCode)) - Vehicle.Cargo, 0.0) : 0.0;
 	Vehicle.RefillLitres = FuelSupply != nullptr ? FuelSupply->Draw(Missing) : Missing;
 	const double Seconds = Policy != nullptr && Home != nullptr

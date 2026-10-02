@@ -39,6 +39,9 @@ namespace ServiceBidTest
 	/** THREE GAME MINUTES between any two places - the figure the user's worked example assumed. */
 	constexpr double Drive = 180.0;
 
+	/** A facility that never runs out - every test here written before fuel had a stock (spec 2026-10-02 §7). */
+	constexpr double Unbounded = TNumericLimits<double>::Max();
+
 	ServiceBid::FInput Input(const FServiceVehicleType& Type, const IServiceRolePolicy& Policy)
 	{
 		ServiceBid::FInput In;
@@ -64,7 +67,7 @@ namespace ServiceBidTest
 		// THE FUEL FIGURE, so this test's arithmetic reads as it always did: a count of bags has no slack of its own to
 		// argue, and the tolerance test below is the one that varies it.
 		virtual double DoneWithin() const override { return 0.5; }
-		virtual EServiceStep NextStep(double, const FServiceVehicleType&, double) const override { return EServiceStep::ViaFacility; }
+		virtual EServiceStep NextStep(double, const FServiceVehicleType&, double, double) const override { return EServiceStep::ViaFacility; }
 		virtual double TripQuantity(double, const FServiceVehicleType& Type, double Owed) const override { return FMath::Min(Type.Capacity, Owed); }
 		virtual double ServeSeconds(const FServiceVehicleType&, double) const override { return 300.0; }
 		virtual double CargoAfterServe(double, double) const override { return 0.0; }
@@ -80,7 +83,7 @@ namespace ServiceBidTest
 		virtual EServiceRole Role() const override { return EServiceRole::Baggage; }
 		virtual bool NeedsPumpAtHome() const override { return false; }
 		virtual double DoneWithin() const override { return 50.0; }
-		virtual EServiceStep NextStep(double, const FServiceVehicleType&, double) const override { return EServiceStep::Direct; }
+		virtual EServiceStep NextStep(double, const FServiceVehicleType&, double, double) const override { return EServiceStep::Direct; }
 		virtual double TripQuantity(double, const FServiceVehicleType& Type, double Owed) const override { return FMath::Min(Type.Capacity, Owed); }
 		virtual double ServeSeconds(const FServiceVehicleType&, double) const override { return 10.0; }
 		virtual double CargoAfterServe(double Cargo, double Quantity) const override { return FMath::Max(Cargo - Quantity, 0.0); }
@@ -127,27 +130,32 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FServiceBidStockSpentOnceTest, "AirportOps.Serv
 bool FServiceBidStockSpentOnceTest::RunTest(const FString& Parameters)
 {
 	using namespace ServiceBidTest;
-	// A MULTI-TRIP BID SPENDS THE STOCK ONCE (spec 2026-10-02 §7): an empty tow, a 2,000 L job and 1,500 L in the airport.
-	// The first refill takes 1,000 and leaves 500; the second can take only that. A simulation that priced every refill
-	// against the whole snapshot would promise two full loads and finish the job in two trips - fuel the airport has not got.
+	// A MULTI-TRIP BID SPENDS THE STOCK ONCE (spec 2026-10-02 §7): an empty tow, a 1,500 L job and exactly 1,500 L in the
+	// airport. The first refill takes 1,000 and leaves 500; the second can take only that - which is all the job still
+	// owes, so the stock never runs dry and nothing here turns on what a dry refill does (Task 4's). Against the unbounded
+	// control the only difference is the second refill's size: 500 L where the control pumps a full 1,000, so the bid
+	// finishes exactly 500 L of pumping sooner. A simulation that priced every refill against the whole snapshot would
+	// pump 1,000 twice and match the control.
 	FFuelRolePolicy Policy;
 	const FServiceVehicleType TowType = Tow();
 
 	ServiceBid::FInput Short = Input(TowType, Policy);
 	Short.CargoWhenFree = 0.0;
 	Short.FacilityAvailable = 1500.0;
-	Short.Appended = { StandA, 2000.0 };
+	Short.Appended = { StandA, 1500.0 };
 	const ServiceBid::FResult ShortBid = ServiceBid::Finish(Short);
 
 	ServiceBid::FInput Plenty = Short;
-	Plenty.FacilityAvailable = TNumericLimits<double>::Max();
+	Plenty.FacilityAvailable = Unbounded;
 	const ServiceBid::FResult PlentyBid = ServiceBid::Finish(Plenty);
 
 	AddInfo(FString::Printf(TEXT("short: %d trips, %d refills, %.0f s; plenty: %d trips, %d refills, %.0f s"),
 		ShortBid.Trips, ShortBid.FacilityVisits, ShortBid.Finish, PlentyBid.Trips, PlentyBid.FacilityVisits, PlentyBid.Finish));
-	TestEqual(TEXT("CONTROL: with the stock unbounded two full loads finish it"), PlentyBid.Trips, 2);
-	TestEqual(TEXT("short: the second load was the 500 L left, so a third trip is attempted"), ShortBid.Trips, 3);
-	TestTrue(TEXT("and the bid does not pretend the second refill was a full one"), ShortBid.Finish != PlentyBid.Finish);
+	TestEqual(TEXT("both finish the job in two trips"), ShortBid.Trips, PlentyBid.Trips);
+	TestEqual(TEXT("each with two refills"), ShortBid.FacilityVisits, PlentyBid.FacilityVisits);
+	const double FiveHundredLitresOfPumping = 500.0 / Policy.RefillLitresPerMinutePerPump * 60.0;
+	TestEqual(TEXT("the second refill was the 500 L left, not a full 1,000 - priced exactly 500 L of pumping shorter"),
+		PlentyBid.Finish - ShortBid.Finish, FiveHundredLitresOfPumping, 1e-6);
 	return true;
 }
 
@@ -203,11 +211,11 @@ bool FServiceBidFullTankIsDirectTest::RunTest(const FString& Parameters)
 	const FServiceVehicleType TowType = Tow();
 
 	TestEqual(TEXT("a full tank short of the job still goes direct"),
-		static_cast<int32>(Policy.NextStep(1000.0, TowType, 4000.0)), static_cast<int32>(EServiceStep::Direct));
+		static_cast<int32>(Policy.NextStep(1000.0, TowType, 4000.0, Unbounded)), static_cast<int32>(EServiceStep::Direct));
 	TestEqual(TEXT("a part tank short of the job refills first"),
-		static_cast<int32>(Policy.NextStep(400.0, TowType, 600.0)), static_cast<int32>(EServiceStep::ViaFacility));
+		static_cast<int32>(Policy.NextStep(400.0, TowType, 600.0, Unbounded)), static_cast<int32>(EServiceStep::ViaFacility));
 	TestEqual(TEXT("a part tank that covers it goes direct"),
-		static_cast<int32>(Policy.NextStep(700.0, TowType, 600.0)), static_cast<int32>(EServiceStep::Direct));
+		static_cast<int32>(Policy.NextStep(700.0, TowType, 600.0, Unbounded)), static_cast<int32>(EServiceStep::Direct));
 
 	ServiceBid::FInput In = Input(TowType, Policy);
 	In.Appended = { StandA, 4000.0 };
@@ -266,13 +274,13 @@ bool FServiceBidToleranceTest::RunTest(const FString& Parameters)
 	// THE VEHICLE: a tank within the slack of covering the job goes direct, one beyond it refills first; a tank within the
 	// slack of full is full.
 	TestEqual(TEXT("a tank exactly the slack short of the job covers it"),
-		static_cast<int32>(Policy.NextStep(600.0 - Slack, TowType, 600.0)), static_cast<int32>(EServiceStep::Direct));
+		static_cast<int32>(Policy.NextStep(600.0 - Slack, TowType, 600.0, Unbounded)), static_cast<int32>(EServiceStep::Direct));
 	TestEqual(TEXT("a tank a hair more short of it refills first"),
-		static_cast<int32>(Policy.NextStep(600.0 - Slack - 0.01, TowType, 600.0)), static_cast<int32>(EServiceStep::ViaFacility));
+		static_cast<int32>(Policy.NextStep(600.0 - Slack - 0.01, TowType, 600.0, Unbounded)), static_cast<int32>(EServiceStep::ViaFacility));
 	TestEqual(TEXT("a tank exactly the slack short of full is full: direct even for a job no tank covers"),
-		static_cast<int32>(Policy.NextStep(1000.0 - Slack, TowType, 4000.0)), static_cast<int32>(EServiceStep::Direct));
+		static_cast<int32>(Policy.NextStep(1000.0 - Slack, TowType, 4000.0, Unbounded)), static_cast<int32>(EServiceStep::Direct));
 	TestEqual(TEXT("a hair less is not"),
-		static_cast<int32>(Policy.NextStep(1000.0 - Slack - 0.01, TowType, 4000.0)), static_cast<int32>(EServiceStep::ViaFacility));
+		static_cast<int32>(Policy.NextStep(1000.0 - Slack - 0.01, TowType, 4000.0, Unbounded)), static_cast<int32>(EServiceStep::ViaFacility));
 
 	// THE JOB'S OUTCOME, decided by the same figure with no policy in hand (a departing aircraft).
 	TestEqual(TEXT("delivered exactly the slack short of wanted is fuelled"),

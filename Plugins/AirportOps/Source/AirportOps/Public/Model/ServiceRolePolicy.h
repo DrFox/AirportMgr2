@@ -52,8 +52,11 @@ public:
 	 */
 	virtual double DoneWithin() const = 0;
 
-	/** Straight to a job still owed Owed, carrying Cargo - or via the facility first. */
-	virtual EServiceStep NextStep(double Cargo, const FServiceVehicleType& Type, double Owed) const = 0;
+	/** Straight to a job still owed Owed, carrying Cargo - or via the facility first, which can give at most Available
+	 *  (fuel: the airport's stock). THE TRUCK AND THE BID BOTH ASK IT (UJobBoard::StartNext with FuelAvailable,
+	 *  ServiceBid::Finish with its own running Available), so the trip one prices is the trip the other makes.
+	 *  ENFORCED BY: AirportOps.Fuel.DryStockDeliversWhatItCarries */
+	virtual EServiceStep NextStep(double Cargo, const FServiceVehicleType& Type, double Owed, double Available) const = 0;
 
 	/** How much one trip delivers, arriving with Cargo at a job still owed Owed. */
 	virtual double TripQuantity(double Cargo, const FServiceVehicleType& Type, double Owed) const = 0;
@@ -70,7 +73,8 @@ public:
 
 	/** What the vehicle carries leaving the facility, given at most Available. THE TRUCK AND THE BID BOTH ASK THESE TWO
 	 *  (UJobBoard::BeginFacility/Step, ServiceBid::Finish, UJobBoard::BidFor), so a bid cannot promise a refill the stock
-	 *  cannot give. ENFORCED BY: AirportOps.Service.Policy.FacilityHonoursAvailable */
+	 *  cannot give. ENFORCED BY: AirportOps.Fuel.RefillDrawsTheStock (the truck), AirportOps.Fuel.BidPricesTheBoardsStock
+	 *  (the bid) - AirportOps.Service.Policy.FacilityHonoursAvailable pins only the arithmetic */
 	virtual double CargoAfterFacility(double Cargo, const FServiceVehicleType& Type, double Available) const = 0;
 };
 
@@ -101,8 +105,13 @@ public:
 	 * than one trip whatever happens, and a full tank cannot do better by refilling first, so the
 	 * vehicle goes and delivers what it has (user's ruling 4: back to the depot only when it does not
 	 * have enough - and "enough" for a job no tank covers is a full one).
+	 *
+	 * AND DIRECT WHEN THE AIRPORT IS DRY BUT THE TANK IS NOT (spec 2026-10-02 §7): the depot has nothing to give, so a
+	 * part-full truck that went there would refill nothing in no time, go Idle, and be sent there again - for ever, with
+	 * the litres it carries never delivered. A tank as empty as a done job (below DoneWithin) still goes via the
+	 * facility: that is the dry depot Task 4's NoFuelStock releases, not a trip with anything to deliver.
 	 */
-	virtual EServiceStep NextStep(double Cargo, const FServiceVehicleType& Type, double Owed) const override;
+	virtual EServiceStep NextStep(double Cargo, const FServiceVehicleType& Type, double Owed, double Available) const override;
 	virtual double TripQuantity(double Cargo, const FServiceVehicleType& Type, double Owed) const override;
 	virtual double ServeSeconds(const FServiceVehicleType& Type, double Quantity) const override;
 	virtual double CargoAfterServe(double Cargo, double Quantity) const override;

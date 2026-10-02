@@ -7,13 +7,15 @@ double FFuelRolePolicy::CapacityOf(const FServiceVehicleType& Type)
 	return FMath::Max(Type.Capacity, 1.0);
 }
 
-EServiceStep FFuelRolePolicy::NextStep(double Cargo, const FServiceVehicleType& Type, double Owed) const
+EServiceStep FFuelRolePolicy::NextStep(double Cargo, const FServiceVehicleType& Type, double Owed, double Available) const
 {
 	// THE SLACK THE JOB ITSELF IS JUDGED DONE BY (DoneWithin): a tank 0.2 L short of the job is not worth a trip to the
 	// depot, and a tank that reads 999.8 of 1000 is full.
 	const bool bCovers = Cargo >= Owed - DoneWithin();
 	const bool bFull = Cargo >= CapacityOf(Type) - DoneWithin();
-	return (bCovers || bFull) ? EServiceStep::Direct : EServiceStep::ViaFacility;
+	// NOTHING TO GAIN AT THE DEPOT: a dry airport refills nothing, so a tank with something in it delivers that instead.
+	const bool bDepotDry = Available < DoneWithin() && Cargo >= DoneWithin();
+	return (bCovers || bFull || bDepotDry) ? EServiceStep::Direct : EServiceStep::ViaFacility;
 }
 
 double FFuelRolePolicy::TripQuantity(double Cargo, const FServiceVehicleType& Type, double Owed) const

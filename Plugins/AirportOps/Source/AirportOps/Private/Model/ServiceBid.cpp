@@ -40,7 +40,7 @@ ServiceBid::FResult ServiceBid::Finish(const FInput& In, int32 MaxTrips)
 	 */
 	auto OneTrip = [&](const FTrip& Trip, double Owed) -> double
 	{
-		if (Policy.NextStep(Cargo, Type, Owed) == EServiceStep::ViaFacility)
+		if (Policy.NextStep(Cargo, Type, Owed, Available) == EServiceStep::ViaFacility)
 		{
 			// AT THE FACILITY ALREADY (an idle vehicle at home): the visit, with no drive to it.
 			if (Node != In.FacilityNode && !DriveTo(In.FacilityNode))
