@@ -67,7 +67,24 @@ double UOfferGenerator::FleetShare(const UAirlineDefinition& Airline) const
 	{
 		return 1.0;
 	}
-	return static_cast<double>(Cache->Admissible.Num()) / Cache->FleetSize;
+	return static_cast<double>(Cache->AdmittedCount()) / Cache->FleetSize;
+}
+
+TArray<FFleetAdmission> UOfferGenerator::GetFleetAdmission(FName AirlineId) const
+{
+	const FAdmissionCache* Cache = AdmissionCache.Find(AirlineId);
+	return Cache != nullptr ? Cache->Verdicts : TArray<FFleetAdmission>();
+}
+
+double UOfferGenerator::MoodFactor(const UAirlineDefinition& Airline) const
+{
+	return AirlineFactorOf ? AirlineFactorOf(Airline) : 1.0;
+}
+
+double UOfferGenerator::CurrentRate(const UAirlineDefinition& Airline, const USimClock& Clock) const
+{
+	// THE ONE EXPRESSION: TickMinute accrues exactly this each minute, and the panel shows it - see the declaration.
+	return RateAt(Airline, Clock.TimeOfDay(), Clock.IsDaylight(), DemandFactor(), AirlineFactor(Airline));
 }
 
 TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const FVector2D& Focus,
@@ -109,8 +126,7 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 		// WITHOUT THE FLEET SHARE, deliberately: the share comes from the admission check below, and
 		// an airline whose last share was 0 would read a zero rate here, skip the check, and never
 		// be judged again - an airport that paved its runway would wait for ever for the King Air.
-		const double MoodFactor = AirlineFactorOf ? AirlineFactorOf(Airline) : 1.0;
-		if (RateAt(Airline, TimeOfDay, bDaylight, Factor, MoodFactor) <= 0.0)
+		if (RateAt(Airline, TimeOfDay, bDaylight, Factor, MoodFactor(Airline)) <= 0.0)
 		{
 			continue;
 		}
@@ -124,38 +140,38 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 			Cache.GuidelineRevision = Revision;
 			Cache.Focus = Focus;
 			Cache.FleetSize = Each.Fleet.Num();
-			Cache.Admissible.Reset();
-			Cache.FirstRefusal = EArrivalRefusal::None;
-			Cache.FirstRefusalSentence.Reset();
-			Cache.FirstRefused = INDEX_NONE;
+			// ONE SEARCH PER TYPE, ONE VERDICT PER SEARCH: this loop is the only place a verdict is made, and everything
+			// below (the pick, the share, the log line, the event text) reads Verdicts - see GetFleetAdmission.
+			Cache.Verdicts.Reset();
 			for (int32 Index = 0; Index < Each.Fleet.Num(); ++Index)
 			{
 				++AdmissionChecks;
-				EArrivalRefusal Why = EArrivalRefusal::None;
+				FFleetAdmission Verdict;
+				Verdict.TypeName = Each.Fleet[Index].TypeName;
 				FString Sentence;
-				if (CouldEverAdmit(Network, Focus, Each.Fleet[Index].Airframe, Why, Sentence))
+				Verdict.bAdmitted = CouldEverAdmit(Network, Focus, Each.Fleet[Index].Airframe, Verdict.Why, Sentence);
+				if (!Verdict.bAdmitted)
 				{
-					Cache.Admissible.Add(Index);
+					// THE PLAN'S SENTENCE, with its figures, when there is one (#396); the reason's own wording
+					// otherwise.
+					Verdict.Sentence = Sentence.IsEmpty() ? ArrivalPlanner::DescribeRefusal(Verdict.Why) : MoveTemp(Sentence);
 				}
-				else if (Cache.FirstRefused == INDEX_NONE)
-				{
-					Cache.FirstRefusal = Why;
-					Cache.FirstRefusalSentence = MoveTemp(Sentence);
-					Cache.FirstRefused = Index;
-				}
+				Cache.Verdicts.Add(MoveTemp(Verdict));
 			}
 		}
 		TArray<const FOfferCandidate*> Admissible;
-		for (const int32 Index : Cache.Admissible)
+		for (int32 Index = 0; Index < Cache.Verdicts.Num(); ++Index)
 		{
-			Admissible.Add(&Each.Fleet[Index]);
+			if (Cache.Verdicts[Index].bAdmitted)
+			{
+				Admissible.Add(&Each.Fleet[Index]);
+			}
 		}
-		const EArrivalRefusal FirstRefusal = Cache.FirstRefusal;
-		// THE PLAN'S SENTENCE, with its figures, when there is one (#396); the reason's own wording
-		// otherwise.
-		const FString FirstRefusalText = Cache.FirstRefusalSentence.IsEmpty()
-			? ArrivalPlanner::DescribeRefusal(FirstRefusal) : Cache.FirstRefusalSentence;
-		const FOfferCandidate* FirstRefused = Cache.FirstRefused != INDEX_NONE ? &Each.Fleet[Cache.FirstRefused] : nullptr;
+		const int32 FirstRefusedIndex = Cache.FirstRefusedIndex();
+		const FFleetAdmission* FirstVerdict = FirstRefusedIndex != INDEX_NONE ? &Cache.Verdicts[FirstRefusedIndex] : nullptr;
+		const FString FirstRefusalText = FirstVerdict != nullptr ? FirstVerdict->Sentence
+			: ArrivalPlanner::DescribeRefusal(EArrivalRefusal::None);
+		const FOfferCandidate* FirstRefused = FirstRefusedIndex != INDEX_NONE ? &Each.Fleet[FirstRefusedIndex] : nullptr;
 
 		if (Admissible.Num() == 0)
 		{
@@ -203,8 +219,8 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 			}
 		}
 
-		// THE SHARE NOW, from the check just made - see FleetShare.
-		const double Rate = RateAt(Airline, TimeOfDay, bDaylight, Factor, MoodFactor * FleetShare(Airline));
+		// THE SHARE NOW, from the check just made - see FleetShare. CurrentRate IS this expression: the panel shows what accrues.
+		const double Rate = CurrentRate(Airline, Clock);
 		State.Accumulated += Rate * (TickSeconds / 3600.0);
 		while (State.Accumulated >= State.Threshold)
 		{
@@ -303,10 +319,11 @@ void UOfferGenerator::ForgetAirlineVerdicts()
 FString UOfferGenerator::DescribeWhyNot(FName AirlineId) const
 {
 	const FAdmissionCache* Cache = AdmissionCache.Find(AirlineId);
-	if (Cache == nullptr || Cache->FirstRefused == INDEX_NONE)
+	const int32 First = Cache != nullptr ? Cache->FirstRefusedIndex() : INDEX_NONE;
+	if (First == INDEX_NONE)
 	{
 		return FString();
 	}
-	// THE SAME FALLBACK TickMinute's log line uses: the plan's sentence with its figures, else the reason.
-	return Cache->FirstRefusalSentence.IsEmpty() ? ArrivalPlanner::DescribeRefusal(Cache->FirstRefusal) : Cache->FirstRefusalSentence;
+	// THE SAME VERDICT TickMinute's log line prints: the plan's sentence with its figures, else the reason (resolved when the verdict was made).
+	return Cache->Verdicts[First].Sentence;
 }

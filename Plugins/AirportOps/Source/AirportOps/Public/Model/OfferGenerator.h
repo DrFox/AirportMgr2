@@ -48,6 +48,21 @@ struct FAirlineOffers
 	TArray<FOfferCandidate> Fleet;
 };
 
+/**
+ * What this airport says to ONE type of an airline's fleet: can it ever come, and if not, why.
+ *
+ * NOT A USTRUCT: it is a query result, never saved or reflected (controller ruling 2026-10-02, airlines panel Task 3).
+ * TypeName is FText, as FOfferCandidate's is - it is the display name, already localised by whoever flattened the fleet.
+ */
+struct FFleetAdmission
+{
+	FText TypeName;
+	bool bAdmitted = false;
+	EArrivalRefusal Why = EArrivalRefusal::None;
+	/** Empty when admitted; else the plan's own sentence with its figures (#396), else the reason's wording. */
+	FString Sentence;
+};
+
 /** One airline's running total toward its next offer. Saved, so a reload continues it. */
 USTRUCT()
 struct AIRPORTOPS_API FAirlineOfferState
@@ -229,6 +244,27 @@ public:
 	double FleetShare(const UAirlineDefinition& Airline) const;
 
 	/**
+	 * A verdict for EVERY type in the airline's fleet, in fleet order, from the last admission check - empty
+	 * before the first (nothing judged yet, which a reader must not show as "all crossed").
+	 *
+	 * ONE LIST: the offer pick, FleetShare, DescribeWhyNot, the cannot-come event's text and the airlines panel's
+	 * tick/cross rows all read FAdmissionCache::Verdicts, so a row cannot disagree with what the generator does.
+	 * ENFORCED BY: AirportOps.Model.Offers.FleetAdmission.EveryTypeHasAVerdict
+	 */
+	TArray<FFleetAdmission> GetFleetAdmission(FName AirlineId) const;
+
+	/**
+	 * Offers per GAME hour this airline accrues right now: RateAt at the clock's time, with DemandFactor and
+	 * AirlineFactor (mood x fleet share). THE EXPRESSION TickMinute accrues, extracted - both call it, so the
+	 * panel's "~N offers/h now" is the number that is actually accruing.
+	 * ENFORCED BY: AirportOps.Model.Offers.Rate.CurrentRateIsWhatAccrues
+	 */
+	double CurrentRate(const UAirlineDefinition& Airline, const USimClock& Clock) const;
+
+	/** AirlineFactorOf(Airline), or 1.0 when it is unset - the satisfaction half of AirlineFactor, without the fleet share. */
+	double MoodFactor(const UAirlineDefinition& Airline) const;
+
+	/**
 	 * The airport whose status gates every offer - READ each minute, not subscribed to: a status is a value
 	 * asked for when it is needed (spec 2026-09-29-ops-batch3 §3), like AirlineFactorOf. Set by UOpsRuntime's
 	 * constructor; null in a bare NewObject, which reads as open. TRANSIENT, so the "Offers" blob never
@@ -306,11 +342,28 @@ private:
 		uint32 GuidelineRevision = 0;
 		FVector2D Focus = FVector2D::ZeroVector;
 		int32 FleetSize = INDEX_NONE;
-		TArray<int32> Admissible;
-		EArrivalRefusal FirstRefusal = EArrivalRefusal::None;
-		/** FirstRefusal as the plan described it, figures and all - see CouldEverAdmit. */
-		FString FirstRefusalSentence;
-		int32 FirstRefused = INDEX_NONE;
+		/**
+		 * One verdict per fleet type, in fleet order - THE list. What used to be Admissible (indices) and
+		 * FirstRefusal/FirstRefusalSentence/FirstRefused are queries over it, so the pick, the share, the
+		 * "why not" text and the panel cannot drift apart. The sentence is the plan's own, figures and all - see CouldEverAdmit.
+		 */
+		TArray<FFleetAdmission> Verdicts;
+
+		int32 AdmittedCount() const
+		{
+			int32 Count = 0;
+			for (const FFleetAdmission& Each : Verdicts)
+			{
+				Count += Each.bAdmitted ? 1 : 0;
+			}
+			return Count;
+		}
+
+		/** Fleet index of the first type refused, or INDEX_NONE when every type is admitted. */
+		int32 FirstRefusedIndex() const
+		{
+			return Verdicts.IndexOfByPredicate([](const FFleetAdmission& Each) { return !Each.bAdmitted; });
+		}
 		/**
 		 * The reason last ANNOUNCED for this airline (FAirlineAdmissionChangedEvent), empty while it could come. Not reset with the cache: it
 		 * is what a rebuilt cache is compared with, so a change of reason is one event and a repeat of it is none.
