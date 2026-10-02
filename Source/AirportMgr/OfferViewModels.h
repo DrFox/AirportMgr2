@@ -131,6 +131,19 @@ public:
 	 */
 	static FText DescribeContract(double LeadTimeSeconds, double ContractSeconds);
 
+	/**
+	 * REAL seconds left to answer Flight's offer, rounded up - what GetSecondsLeft holds after a Refresh. PUBLIC AND STATIC (airlines
+	 * panel, 2026-10-02) so the panel's read-only "offering now" rows count the same second the inbox does without a row object of their own.
+	 */
+	static int32 SecondsLeftOf(const UFlight& Flight);
+
+	/**
+	 * "42 s" - the inbox countdown's words. It was composed inline in UOfferInboxWidget::PaintRows; lifted here, public and static
+	 * (airlines panel, 2026-10-02), so the panel's offering-now rows print the inbox's own text rather than a second formatter.
+	 * ENFORCED BY: AirportMgr.Airlines.Detail.OffersAndFlightsFilteredByAirline (the panel's countdown is this function's output)
+	 */
+	static FText DescribeSecondsLeft(int32 Seconds);
+
 private:
 	UPROPERTY(Transient) FText Callsign;
 	UPROPERTY(Transient) FText Airline;

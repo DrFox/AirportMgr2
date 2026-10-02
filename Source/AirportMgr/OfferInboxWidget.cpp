@@ -417,7 +417,8 @@ void UOfferInboxWidget::PaintRows()
 			{
 				Entry->PaintedSeconds = Left;
 				++Composes;
-				Entry->CountdownText->SetText(FText::Format(NSLOCTEXT("AirportMgr", "OfferSecondsLeft", "{0} s"), FText::AsNumber(Left)));
+				// THE ROW'S OWN WORDS (UOfferViewModel::DescribeSecondsLeft), which the airlines panel's offer rows print too.
+				Entry->CountdownText->SetText(UOfferViewModel::DescribeSecondsLeft(Left));
 			}
 			Entry->CountdownText->SetColorAndOpacity(FSlateColor(TimeColour));
 		}

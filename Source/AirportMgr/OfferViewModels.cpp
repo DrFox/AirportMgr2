@@ -25,6 +25,17 @@ FText UOfferViewModel::DescribeContract(double LeadTimeSeconds, double ContractS
 		GameTimeText::Duration(LeadTimeSeconds), GameTimeText::Duration(ContractSeconds));
 }
 
+int32 UOfferViewModel::SecondsLeftOf(const UFlight& Offer)
+{
+	// ROUNDED UP: "0 s" while there is still time to click reads as a lie.
+	return FMath::CeilToInt(FMath::Max(Offer.OfferSecondsLeft, 0.0));
+}
+
+FText UOfferViewModel::DescribeSecondsLeft(int32 Seconds)
+{
+	return FText::Format(NSLOCTEXT("AirportMgr", "OfferSecondsLeft", "{0} s"), FText::AsNumber(Seconds));
+}
+
 FOfferMoodKey UOfferViewModel::MoodKeyOf(const FAirlineStanding* Standing)
 {
 	FOfferMoodKey Out;
@@ -112,8 +123,8 @@ bool UOfferViewModel::Refresh(const UFlightBoard& Board, const UGroundTraffic& T
 		bChanged = true;
 	}
 
-	// ROUNDED UP: "0 s" while there is still time to click reads as a lie.
-	SecondsLeft = FMath::CeilToInt(FMath::Max(Live->OfferSecondsLeft, 0.0));
+	// ROUNDED UP, in SecondsLeftOf - the one rounding, which the airlines panel's offer rows read too.
+	SecondsLeft = SecondsLeftOf(*Live);
 	TimeLeftFraction = Live->OfferWindowSeconds > 0.0
 		? static_cast<float>(FMath::Clamp(Live->OfferSecondsLeft / Live->OfferWindowSeconds, 0.0, 1.0))
 		: 0.0f;
