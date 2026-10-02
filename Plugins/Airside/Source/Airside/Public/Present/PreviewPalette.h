@@ -47,6 +47,11 @@ struct FPreviewLook
 	 */
 	UPROPERTY(EditAnywhere)
 	bool bTranslucentLine = false;
+
+	/** Text on a filled black tile, centred on its point, at a fixed pixel size - a NAME to read at any zoom
+	 *  (EPreviewStyle::TaxiwayName). Both drivers honour it: ARoadBuildHUD::Label, URoadBuildEditorTool::DrawHUD. */
+	UPROPERTY(EditAnywhere)
+	bool bTag = false;
 };
 
 /**

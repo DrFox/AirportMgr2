@@ -5,6 +5,7 @@
 #include "AirsideEditorLog.h"
 #include "BaseBehaviors/ClickDragBehavior.h"
 #include "BaseBehaviors/MouseHoverBehavior.h"
+#include "CanvasItem.h"
 #include "CanvasTypes.h"
 #include "Engine/Engine.h"
 #include "Engine/Font.h"
@@ -21,6 +22,7 @@
 #include "Tool/GridOverlay.h"
 #include "Tool/GraphOverlay.h"
 #include "Tool/GuidelineOverlay.h"
+#include "Tool/TaxiwayNameOverlay.h"
 #include "Present/PreviewPalette.h"
 #include "ToolContextInterfaces.h"
 
@@ -583,11 +585,11 @@ bool URoadBuildEditorTool::OnUpdateHover(const FInputDeviceRay& DevicePos)
 	return true;
 }
 
-void URoadBuildEditorTool::DrawPersistentState(IToolPreviewSink& Sink) const
+int32 URoadBuildEditorTool::DrawPersistentState(IToolPreviewSink& Sink) const
 {
 	if (Target == nullptr || Target->Network == nullptr)
 	{
-		return;
+		return 0;
 	}
 
 	// The routing graph is committed state, so it belongs here beside the nodes and stands
@@ -598,6 +600,12 @@ void URoadBuildEditorTool::DrawPersistentState(IToolPreviewSink& Sink) const
 	// this module has already shipped three separate "the list nothing reads" defects. A
 	// visibility change is not the place to take that on.
 	GuidelineOverlay::Draw(*Target->Network, Sink);
+
+	// TAXIWAY NAMES - the session's answer, with the editor's guidelines-always-on standing in for PIE's G (plan D12).
+	// They reach the screen only while hovering: DescribeFrame keeps the sink's labels under bHoverValid alone.
+	const int32 NamesDescribed = Sess().WantsTaxiwayNamesDrawn(true)
+		? TaxiwayNameOverlay::Describe(*Target->Network, Target->TaxiwayNaming.LabelRepeatDistance, Sink)
+		: 0;
 
 	// Placed entities are always drawn - they are the airport, not scaffolding.
 	GraphOverlay::DescribeStands(*Target->Network, Sink);
@@ -611,6 +619,7 @@ void URoadBuildEditorTool::DrawPersistentState(IToolPreviewSink& Sink) const
 	{
 		GraphOverlay::DescribeNodes(*Target->Network, Sink);
 	}
+	return NamesDescribed;
 }
 
 void URoadBuildEditorTool::CancelGesture()
@@ -806,7 +815,7 @@ void URoadBuildEditorTool::DescribeFrame(IBuildTool& Tool, FPrimitiveDrawInterfa
 	// The COMMITTED graph first, then the tool's intent on top. The runtime HUD does this
 	// in ARoadBuildHUD::DrawNodes/DrawStands; in the editor nothing did, so existing nodes
 	// and stands were invisible and there was no way to see what a snap would attach to.
-	DrawPersistentState(Sink);
+	const int32 NamesDescribed = DrawPersistentState(Sink);
 
 	// Gated on a real hover. Before the first mouse move the session's LastPlaneHit is
 	// (0,0), and the idle marker was drawing a corner at the world origin.
@@ -833,6 +842,17 @@ void URoadBuildEditorTool::DescribeFrame(IBuildTool& Tool, FPrimitiveDrawInterfa
 	else
 	{
 		PendingLabels.Reset();
+	}
+
+	// ONCE PER CHANGE, never per frame (ARoadBuildHUD logs the same words on LogRoadBuild): a label is a visual the
+	// suite cannot see, so a look in the viewport is checked against this line. Zero while not hovering - DrawHUD
+	// draws no label then (plan D12).
+	const int32 NamesDrawn = bHoverValid ? NamesDescribed : 0;
+	if (NamesDrawn != LoggedTaxiwayNameCount)
+	{
+		LoggedTaxiwayNameCount = NamesDrawn;
+		UE_LOG(LogAirsideEditor, Log, TEXT("TaxiwayNames: %d label(s) drawn (%s)"), NamesDrawn,
+			bHoverValid ? TEXT("shown") : TEXT("hidden"));
 	}
 }
 
@@ -969,9 +989,19 @@ void URoadBuildEditorTool::DrawHUD(FCanvas* Canvas, IToolsContextRenderAPI* Rend
 		{
 			continue;
 		}
-		Canvas->DrawShadowedString(static_cast<float>(LabelPixelPos.X) / DPIScale,
-			static_cast<float>(LabelPixelPos.Y) / DPIScale, *Label.Text, Font,
-			PreviewPalette::Default(Label.Style));
+		float X = static_cast<float>(LabelPixelPos.X) / DPIScale;
+		float Y = static_cast<float>(LabelPixelPos.Y) / DPIScale;
+		if (PreviewPalette::DefaultLook(Label.Style).bTag)
+		{
+			// THE SAME TAG ARoadBuildHUD::Label draws: centred on its point, on a black tile, in pixels.
+			const float Width = static_cast<float>(Font->GetStringSize(*Label.Text));
+			const float Height = static_cast<float>(Font->GetStringHeightSize(*Label.Text));
+			X -= Width * 0.5f;
+			Y -= Height * 0.5f;
+			FCanvasTileItem Tile(FVector2D(X - 4.0f, Y - 2.0f), FVector2D(Width + 8.0f, Height + 4.0f), FLinearColor::Black);
+			Canvas->DrawItem(Tile);
+		}
+		Canvas->DrawShadowedString(X, Y, *Label.Text, Font, PreviewPalette::Default(Label.Style));
 	}
 }
 

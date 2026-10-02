@@ -3,9 +3,13 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
 #include "Model/TaxiwayStrip.h"
+#include "Present/PreviewPalette.h"
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestWorld.h"
+#include "Tool/BuildSession.h"
+#include "Tool/RoadBuildTool.h"
+#include "Tool/TaxiwayNameOverlay.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -90,6 +94,55 @@ bool FTaxiwayNamesFacadeTest::RunTest(const FString&)
 	TestTrue(TEXT("redo"), Facade->Redo());
 	TestEqual(TEXT("redo splits again"), NameAt(Short), FString(TEXT("B")));
 	Facade->OnTaxiwaySplit.Remove(Handle);
+	return true;
+}
+
+namespace TaxiwayNamesPresentTest
+{
+	/** Records Label calls only. Prefixed against the UNITY build. */
+	struct FTaxiwayNamesLabelSink : IToolPreviewSink
+	{
+		TArray<FString> Names;
+		virtual void Marker(const FVector2D&, EPreviewStyle) override {}
+		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void Label(const FVector2D&, const FString& Text, EPreviewStyle Style) override
+		{
+			if (Style == EPreviewStyle::TaxiwayName) { Names.AddUnique(Text); }
+		}
+	};
+}
+
+/** Spawn the actor, draw, and the labels the drivers are handed are exactly the names (spec "Seam tests"). */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesLabelsTest, "Airside.Present.TaxiwayNames.LabelsMatchNames",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesLabelsTest::RunTest(const FString&)
+{
+	using namespace TaxiwayNamesPresentTest;
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	TestTrue(TEXT("a taxiway"), Actor->ConnectNodes(Actor->PlaceNode({ 0.0, 0.0 }), Actor->PlaceNode({ 60000.0, 0.0 }),
+		ERoadKind::Taxiway, INDEX_NONE, EPavement::Tarmac));
+	TestTrue(TEXT("another"), Actor->ConnectNodes(Actor->PlaceNode({ 0.0, 100000.0 }), Actor->PlaceNode({ 60000.0, 100000.0 }),
+		ERoadKind::Taxiway, INDEX_NONE, EPavement::Tarmac));
+	if (!TestNotNull(TEXT("the edits made a network"), Actor->Network.Get())) { return false; }
+	FTaxiwayNamesLabelSink Sink;
+	const int32 Described = TaxiwayNameOverlay::Describe(*Actor->Network, Actor->TaxiwayNaming.LabelRepeatDistance, Sink);
+	Sink.Names.Sort();
+	TestEqual(TEXT("the labels are the names"), Sink.Names, TArray<FString>{ TEXT("A"), TEXT("B") });
+	TestEqual(TEXT("the count the drivers log is the count described (one 600 m taxiway, one label each)"), Described, 2);
+	TestTrue(TEXT("a name is drawn as a tag"), PreviewPalette::DefaultLook(EPreviewStyle::TaxiwayName).bTag);
+	TestFalse(TEXT("and nothing else is"), PreviewPalette::DefaultLook(EPreviewStyle::Pending).bTag);
+
+	// WHEN (spec): shown while a build tool is lit; while watching, the G toggle decides. The session answers for both drivers.
+	FBuildSession Session;
+	Session.SelectTool(FBuildSession::SelectToolIndex);
+	TestTrue(TEXT("watching, G on: names shown"), Session.WantsTaxiwayNamesDrawn(true));
+	TestFalse(TEXT("watching, G off: hidden"), Session.WantsTaxiwayNamesDrawn(false));
+	Session.SelectTool(1);   // Taxiway - a build tool whose rings are lit (Airside.Tool.RoadNodesStandDownOutsideTheRoadTools)
+	TestTrue(TEXT("control: the taxiway tool lights the rings"), Session.WantsRoadNodesDrawn());
+	TestTrue(TEXT("a lit build tool shows them with G off"), Session.WantsTaxiwayNamesDrawn(false));
 	return true;
 }
 

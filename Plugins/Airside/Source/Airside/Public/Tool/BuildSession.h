@@ -425,6 +425,17 @@ public:
 	}
 
 	/**
+	 * Whether taxiway names belong on screen (spec "Labels"): while a build tool is lit (the rings' own answer), and
+	 * otherwise - watching - when the driver's Guidelines toggle is on (G in PIE; the editor, which has no toggle, passes
+	 * true - plan D12). No new key. ON THE SESSION, WantsRoadNodesDrawn's reason: both drivers ask here.
+	 * ENFORCED BY: Airside.Present.TaxiwayNames.LabelsMatchNames, Check-Architecture rule 26 (both drivers call it)
+	 */
+	bool WantsTaxiwayNamesDrawn(bool bOverlayToggle) const
+	{
+		return WantsRoadNodesDrawn() || bOverlayToggle;
+	}
+
+	/**
 	 * Whether placed plots' ghost bays belong on screen right now - the lit tool's
 	 * FToolRegistration::bShowsPlotGhosts, whatever the mode. ON THE SESSION for
 	 * WantsRoadNodesDrawn's reason: both drivers ask here, so they cannot disagree.

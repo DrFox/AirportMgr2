@@ -8,9 +8,11 @@
 #include "Present/RoadNetworkActor.h"
 #include "BuildActions.h"
 #include "RoadBuildController.h"
+#include "RoadBuildLog.h"
 #include "Tool/GridOverlay.h"
 #include "Tool/GraphOverlay.h"
 #include "Tool/GuidelineOverlay.h"
+#include "Tool/TaxiwayNameOverlay.h"
 #include "Present/PreviewPalette.h"
 #include "UIStyle.h"
 
@@ -31,7 +33,7 @@ ARoadBuildHUD::ARoadBuildHUD()
 		EPreviewStyle::ServiceAnchor, EPreviewStyle::Pinned, EPreviewStyle::Provisional,
 		EPreviewStyle::Guide, EPreviewStyle::Handle, EPreviewStyle::ReverseRoute,
 		EPreviewStyle::ReverseGuideline, EPreviewStyle::ServiceEdge,
-		EPreviewStyle::GridMinor, EPreviewStyle::GridMajor })
+		EPreviewStyle::GridMinor, EPreviewStyle::GridMajor, EPreviewStyle::TaxiwayName })
 	{
 		Looks.Add(Style, PreviewPalette::DefaultLook(Style));
 	}
@@ -113,6 +115,22 @@ void ARoadBuildHUD::DrawHUD()
 	if (Controller->IsGuidelineOverlayOn() && Target->Network != nullptr)
 	{
 		GuidelineOverlay::Draw(*Target->Network, *this);
+	}
+
+	// TAXIWAY NAMES (spec 2026-10-02), after the routing graph and before the tool's intent: context, read at any zoom.
+	// THE SESSION decides when, with G standing in while watching - asked through GetSession() rather than a new
+	// controller forwarder, because rule 54 holds the controller's public surface to a closed list.
+	const bool bNamesWanted = Target->Network != nullptr
+		&& Controller->GetSession().WantsTaxiwayNamesDrawn(Controller->IsGuidelineOverlayOn());
+	const int32 NamesDrawn = bNamesWanted
+		? TaxiwayNameOverlay::Describe(*Target->Network, Target->TaxiwayNaming.LabelRepeatDistance, *this)
+		: 0;
+	// ONCE PER CHANGE, never per frame: a label is a visual the suite cannot see, so PIE verification reads this line.
+	if (NamesDrawn != LoggedTaxiwayNameCount)
+	{
+		LoggedTaxiwayNameCount = NamesDrawn;
+		UE_LOG(LogRoadBuild, Log, TEXT("TaxiwayNames: %d label(s) drawn (%s)"), NamesDrawn,
+			bNamesWanted ? TEXT("shown") : TEXT("hidden"));
 	}
 
 	// The tool describes what it would do; this class decides what that looks like. The
@@ -417,7 +435,23 @@ void ARoadBuildHUD::Label(const FVector2D& At, const FString& Text, EPreviewStyl
 		return;
 	}
 
-	DrawText(Text, LookFor(Style).Colour,
+	const FPreviewLook& Look = LookFor(Style);
+	if (Look.bTag)
+	{
+		// A TAG: centred on its point on a black tile, in pixels - a name must read the same at every zoom.
+		// URoadBuildEditorTool::DrawHUD draws the same tile, for PreviewPalette's both-drivers-agree reason.
+		constexpr float Pad = 4.0f;
+		UFont* Font = GEngine->GetMediumFont();
+		float Width = 0.0f;
+		float Height = 0.0f;
+		GetTextSize(Text, Width, Height, Font);
+		const float X = static_cast<float>(Screen.X) - Width * 0.5f;
+		const float Y = static_cast<float>(Screen.Y) - Height * 0.5f;
+		DrawRect(FLinearColor::Black, X - Pad, Y - Pad * 0.5f, Width + Pad * 2.0f, Height + Pad);
+		DrawText(Text, Look.Colour, X, Y, Font);
+		return;
+	}
+	DrawText(Text, Look.Colour,
 		static_cast<float>(Screen.X) + NodeRingRadius * 1.8f,
 		static_cast<float>(Screen.Y) + NodeRingRadius,
 		GEngine->GetSmallFont());
