@@ -36,6 +36,17 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FChassis& Chass
 void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FChassis& Chassis,
 	TConstArrayView<EDriveDirection> SpanDirections)
 {
+	BuildLimits(Points, Chassis, SpanDirections, EPieceEnd::Stops, /*bWholeRoute*/ true);
+}
+
+void FSpeedProfile::BuildPiece(const TArray<FVector2D>& Points, const FChassis& Chassis, EPieceEnd End)
+{
+	BuildLimits(Points, Chassis, TConstArrayView<EDriveDirection>(), End, /*bWholeRoute*/ false);
+}
+
+void FSpeedProfile::BuildLimits(const TArray<FVector2D>& Points, const FChassis& Chassis,
+	TConstArrayView<EDriveDirection> SpanDirections, EPieceEnd End, bool bWholeRoute)
+{
 	const FGroundPerformance& Ground = Chassis.Ground;
 
 	Distances.Reset();
@@ -54,6 +65,7 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FChassis& Chass
 	SharpestTurnAt = 0.0;
 
 	Decel = Ground.Taxi.Decel;
+	Accel = Ground.Taxi.Accel;
 	Fallback = Ground.Taxi.SpeedCap;
 
 	if (Points.Num() < 2 || !Ground.IsSet())
@@ -169,16 +181,21 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FChassis& Chass
 				// be read by a human and by nothing else, so every test wrote its own.
 				bTighterThanLock = true;
 
-				UE_LOG(LogAirsideTraffic, Warning,
-					TEXT("Route asks for R=%.0f uu at %.0f, but the steering lock allows only "
-					     "R>=%.0f going %s (wheelbase %.0f, lock %.0f deg). The body will crab "
-					     "through it. Widen the corner that laid this line."),
-					Radius, Distances[Span],
-					DirectionOf(Span) == EDriveDirection::Reverse
-						? ReversibleRadius : FollowableRadius,
-					DirectionOf(Span) == EDriveDirection::Reverse
-						? TEXT("backwards") : TEXT("forwards"),
-					Chassis.Wheelbase(), Ground.MaxSteerDegrees);
+				// A PIECE IS QUIET (BuildPiece): the planner builds one per edge it expands, and this warning is
+				// about a DRIVEN route - the verdict above is kept either way.
+				if (bWholeRoute)
+				{
+					UE_LOG(LogAirsideTraffic, Warning,
+						TEXT("Route asks for R=%.0f uu at %.0f, but the steering lock allows only "
+						     "R>=%.0f going %s (wheelbase %.0f, lock %.0f deg). The body will crab "
+						     "through it. Widen the corner that laid this line."),
+						Radius, Distances[Span],
+						DirectionOf(Span) == EDriveDirection::Reverse
+							? ReversibleRadius : FollowableRadius,
+						DirectionOf(Span) == EDriveDirection::Reverse
+							? TEXT("backwards") : TEXT("forwards"),
+						Chassis.Wheelbase(), Ground.MaxSteerDegrees);
+				}
 			}
 			else
 			{
@@ -267,7 +284,13 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FChassis& Chass
 
 	// An aircraft arriving at its destination stops. Not floored at MinSteeringSpeed, because
 	// that floor is about steering and there is nothing left to steer.
-	VertexLimits[Count - 1] = 0.0;
+	//
+	// A PIECE THAT ROLLS (BuildPiece) is not a destination: its last vertex keeps the limit its own spans
+	// gave it, so the planner can time an edge the aircraft drives straight on from.
+	if (End == EPieceEnd::Stops)
+	{
+		VertexLimits[Count - 1] = 0.0;
+	}
 
 	// THE BACKWARD PASS. Each cap is raised to the fastest the aircraft could be here and
 	// still meet the next one by braking - v^2 = u^2 + 2as, rearranged. After this the array
@@ -300,21 +323,25 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FChassis& Chass
 	TightestRadiusUu = TightestRadius == TNumericLimits<double>::Max() ? 0.0 : TightestRadius;
 	TightestRadiusAt = TightestAt;
 
-	UE_LOG(LogAirsideTraffic, Log,
-		TEXT("Speed profile: %.0f uu, %d point(s). Tightest R=%.0f uu at %.0f -> %.0f uu/s "
-		     "(%s). %d sharp vertex/vertices%s. Steering floor %.0f, taxi cap %.0f, lock allows "
-		     "R>=%.0f there%s (wheelbase %.0f, lock %.0f deg)."),
-		Distances.Last(), Count,
-		TightestRadius == TNumericLimits<double>::Max() ? 0.0 : TightestRadius,
-		TightestAt, TightestCap, TightestRule,
-		SharpVertices,
-		SharpVertices > 0
-			? *FString::Printf(TEXT(", first %.0f deg at %.0f"), SharpestDegrees, SharpestAt)
-			: TEXT(""),
-		Ground.MinSteeringSpeed, Ground.Taxi.SpeedCap, TightestLimit,
-		bMixed ? TEXT(" (this route is driven partly backwards, so the limit is per span)")
-		       : TEXT(""),
-		Chassis.Wheelbase(), Ground.MaxSteerDegrees);
+	// One line per DRIVEN route - a piece (BuildPiece) is not one.
+	if (bWholeRoute)
+	{
+		UE_LOG(LogAirsideTraffic, Log,
+			TEXT("Speed profile: %.0f uu, %d point(s). Tightest R=%.0f uu at %.0f -> %.0f uu/s "
+			     "(%s). %d sharp vertex/vertices%s. Steering floor %.0f, taxi cap %.0f, lock allows "
+			     "R>=%.0f there%s (wheelbase %.0f, lock %.0f deg)."),
+			Distances.Last(), Count,
+			TightestRadius == TNumericLimits<double>::Max() ? 0.0 : TightestRadius,
+			TightestAt, TightestCap, TightestRule,
+			SharpVertices,
+			SharpVertices > 0
+				? *FString::Printf(TEXT(", first %.0f deg at %.0f"), SharpestDegrees, SharpestAt)
+				: TEXT(""),
+			Ground.MinSteeringSpeed, Ground.Taxi.SpeedCap, TightestLimit,
+			bMixed ? TEXT(" (this route is driven partly backwards, so the limit is per span)")
+			       : TEXT(""),
+			Chassis.Wheelbase(), Ground.MaxSteerDegrees);
+	}
 }
 
 double FSpeedProfile::LimitAt(double Distance) const
@@ -347,4 +374,40 @@ double FSpeedProfile::LimitAt(double Distance) const
 	}
 
 	return VertexLimits.Last();
+}
+
+double FSpeedProfile::SecondsToDrive(double EntrySpeed) const
+{
+	if (IsEmpty())
+	{
+		return 0.0;
+	}
+
+	// A FORWARD PASS, the follower's speed law integrated: approach the cap at Accel, never above LimitAt (which
+	// already brakes for everything ahead - the back-pass in Build). Trapezoidal per step, which is exact for
+	// constant acceleration, so the only error is where a step straddles a change of regime.
+	//
+	// 100 uu A STEP: a metre. Under the follower's own per-frame advance at taxi speed, and on a 3 km route 3000
+	// LimitAt calls - cheap beside the search that asks (the planner memoises per edge).
+	constexpr double StepUu = 100.0;
+	const double Length = Distances.Last();
+	const int32 Steps = FMath::Max(1, FMath::CeilToInt32(Length / StepUu));
+	const double Ds = Length / Steps;
+
+	double Speed = FMath::Clamp(EntrySpeed, 0.0, LimitAt(0.0));
+	double Seconds = 0.0;
+	for (int32 Step = 0; Step < Steps; ++Step)
+	{
+		const double Reachable = FMath::Sqrt(FMath::Square(Speed) + 2.0 * FMath::Max(0.0, Accel) * Ds);
+		const double Next = FMath::Min(LimitAt((Step + 1) * Ds), Reachable);
+
+		// FLOORED AT THE FOLLOWER'S PROGRESS EPSILON: a stop-to-stop step with no acceleration would divide by
+		// zero, and the follower itself never runs slower than this while it has line left (FRouteFollower::
+		// ProgressEpsilon) - so neither does its clock.
+		// ENFORCED BY: Airside.Model.SteeringFloorZeroStillTaxis, Airside.Model.SteeringFloorSharpVertexStillCreeps
+		const double Mean = FMath::Max(0.5 * (Speed + Next), FRouteFollower::ProgressEpsilon);
+		Seconds += Ds / Mean;
+		Speed = Next;
+	}
+	return Seconds;
 }

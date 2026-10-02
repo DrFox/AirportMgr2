@@ -1192,7 +1192,7 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 
 		// A BOX: an edge too short to stand on without still blocking the node behind it,
 		// which is what every junction turn path is. Spec §3.1.
-		const bool bBox = Length < F + G;
+		const bool bBox = Rules.IsBox(Length, Agent.Class);
 
 		// ENTRY ONLY, AND THE FIRST BOX ONLY.
 		//

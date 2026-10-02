@@ -285,7 +285,7 @@ struct AIRSIDE_API FRouteQuery
 	 *
 	 * RUNWAYS ARE NOT JUDGED HERE: a strip's surface is RunwayAdmission's, which also knows
 	 * length and approach. This gates taxiing only - and CLAMPED to the strongest pavement a
-	 * taxiway may offer (tarmac; RouteSearch.cpp's TaxiwayPavementCeiling), so a jet needing
+	 * taxiway may offer (tarmac; RouteEdgeFilter.cpp's TaxiwayPavementCeiling), so a jet needing
 	 * concrete taxis on tarmac rather than reaching no stand at all. Set the full need; the
 	 * gate clamps it.
 	 */
@@ -506,6 +506,21 @@ struct AIRSIDE_API FMultiGoalSearch
  */
 namespace RouteSearch
 {
+	/**
+	 * Whether Query can be answered at all - an errand, and occupancy supplied exactly when its policy
+	 * requires it. Logs an Error and refuses otherwise. Find and FindToGoals guard with it; so does
+	 * FTaxiPlanner, which asks the same question of the same query without running either search.
+	 */
+	AIRSIDE_API bool IsQueryAnswerable(const FRouteQuery& Query);
+
+	/**
+	 * A plan from Start along Steps (each step's Edge, To and bReversed set), welded into the one polyline
+	 * the overlay draws and the follower walks, EndVertex/EndDistance filled - exactly as Find welds its own.
+	 * For a search whose steps are not Find's (FTaxiPlanner's space-time search), so its route is not a
+	 * second evaluation of the curve. NoStart for a dead Start, SameNode for no steps.
+	 */
+	AIRSIDE_API FRoutePlan PlanFromSteps(const URoadNetwork& Network, FGuidelineNodeId Start, TArray<FRouteStep> Steps);
+
 	AIRSIDE_API FRoutePlan Find(const URoadNetwork& Network, const FRouteQuery& Query);
 
 	/**
