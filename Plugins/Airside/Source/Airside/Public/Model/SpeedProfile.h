@@ -197,6 +197,14 @@ struct AIRSIDE_API FSpeedProfile
 	double GetSharpestAt() const { return SharpestTurnAt; }
 
 private:
+	/**
+	 * Build and BuildPiece's one body - so a piece and a route are judged by ONE set of rules. bWholeRoute is
+	 * a route the follower will drive: it logs its census and warnings; a piece does not. End decides whether
+	 * the last vertex is a stop (a route always is).
+	 */
+	void BuildLimits(const TArray<FVector2D>& Points, const FChassis& Chassis,
+		TConstArrayView<EDriveDirection> SpanDirections, EPieceEnd End, bool bWholeRoute);
+
 	/** Cumulative distance to each vertex. Distances[0] is 0. */
 	UPROPERTY() TArray<double> Distances;
 
