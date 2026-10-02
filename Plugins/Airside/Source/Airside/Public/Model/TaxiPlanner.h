@@ -138,8 +138,8 @@ public:
 
 	/**
 	 * How long Route takes on an empty airport by this planner's clock: from rest on its first
-	 * node, rolling through every node between, to rest on its last. The figure an unobstructed
-	 * plan's Arrival - DepartAt equals.
+	 * node, rolling through every node between - stopping only at a sharp joint (IsSharpJoint) -
+	 * to rest on its last. The figure an unobstructed plan's Arrival - DepartAt equals.
 	 */
 	double RouteSeconds(const FRoutePlan& Route);
 
@@ -155,11 +155,24 @@ public:
 	static bool CanHoldAt(const URoadNetwork& Network, const FTrafficRules& Rules, FGuidelineEdgeId Arrived,
 		FGuidelineNodeId At);
 
+	/**
+	 * Whether driving from In onto Out turns INSTANTLY at the node between them - a corner with no curve in it,
+	 * which the follower crawls through. FSpeedProfile's own sharp-vertex verdict (HasSharpVertex), asked of the
+	 * two spans either side of the joint, so a joint is judged by the rule the whole-route profile will apply.
+	 * The planner times such a joint as a stop: In driven to rest, Out from rest. Memoised.
+	 */
+	bool IsSharpJoint(FGuidelineEdgeId In, bool bInReversed, FGuidelineEdgeId Out, bool bOutReversed);
+
 private:
+	/** Edge's samples walked A to B (or B to A), memoised - the array SecondsFor and IsSharpJoint both read. */
+	const TArray<FVector2D>& SamplesOf(FGuidelineEdgeId Edge, bool bReversed);
+
 	const URoadNetwork& Network;
 	const FTaxiReservations& Table;
 	const FAirframe& Airframe;
 	const FTrafficRules& Rules;
 
 	TMap<TPair<FGuidelineEdgeId, bool>, FTaxiEdgeSeconds> EdgeSeconds;
+	TMap<TPair<FGuidelineEdgeId, bool>, TArray<FVector2D>> EdgeSamples;
+	TMap<TTuple<FGuidelineEdgeId, bool, FGuidelineEdgeId, bool>, bool> SharpJoints;
 };
