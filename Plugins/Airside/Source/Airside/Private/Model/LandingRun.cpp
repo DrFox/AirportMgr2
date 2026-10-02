@@ -148,6 +148,7 @@ bool FLandingRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 	{
 		return false;
 	}
+	const double AltitudeBefore = Altitude;
 
 	const FGroundPerformance& Ground = InAirframe.Chassis.Ground;
 	const FApproachPerformance& Approach = InAirframe.Approach;
@@ -283,6 +284,13 @@ bool FLandingRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 
 	default:
 		break;
+	}
+
+	// THE QUOTIENT, after the phase has moved Altitude (touchdown clamp included) - see VerticalSpeed. A zero step (the arming
+	// probe, FRoadAgent's Advance(0.0, ...)) keeps the last figure rather than dividing by it.
+	if (DeltaSeconds > 0.0)
+	{
+		VerticalSpeed = (Altitude - AltitudeBefore) / DeltaSeconds;
 	}
 
 	OutPosition = End.PointAt(Travelled);

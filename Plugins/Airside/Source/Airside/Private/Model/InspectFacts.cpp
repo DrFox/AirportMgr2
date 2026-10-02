@@ -196,6 +196,7 @@ namespace InspectFacts
 		const double Yaw = FMath::RadiansToDegrees(Agent->LastMotion.Heading);
 		Out.HeadingDegrees = FMath::Fmod(FMath::Fmod(90.0 - Yaw, 360.0) + 360.0, 360.0);
 		Out.GroundSpeed = Agent->LastMotion.GroundSpeed;
+		Out.VerticalSpeed = Agent->LastMotion.VerticalSpeed;
 		Out.Altitude = Agent->LastMotion.Altitude;
 		Out.Destination = DestinationOf(*Agent, Network);
 		Out.Hold = HoldOf(*Agent, Network);

@@ -65,6 +65,12 @@ struct AIRSIDE_API FTakeoffRun
 	/** Above the runway surface, uu. */
 	UPROPERTY() double Altitude = 0.0;
 
+	/**
+	 * Climb rate over the last Advance, uu/s, up positive. The DIFFERENCE QUOTIENT of Altitude, not the Climb case's Rate
+	 * re-read: one figure for every phase, and it cannot disagree with the height the aircraft actually gained.
+	 */
+	UPROPERTY() double VerticalSpeed = 0.0;
+
 	/** Nose-up, degrees. */
 	UPROPERTY() double Pitch = 0.0;
 

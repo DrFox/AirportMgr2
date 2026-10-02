@@ -84,6 +84,13 @@ struct AIRSIDE_API FLandingRun
 	/** Above the runway surface, uu. */
 	UPROPERTY() double Altitude = 0.0;
 
+	/**
+	 * Height change over the last Advance, uu/s, up positive - so a descent is negative. The DIFFERENCE QUOTIENT of Altitude,
+	 * not the approach's or the flare's sink re-derived: each phase integrates its own, and the touchdown clamp moves Altitude
+	 * by more than the integral did, so only the quotient is the height the aircraft actually lost.
+	 */
+	UPROPERTY() double VerticalSpeed = 0.0;
+
 	/** Nose-up, degrees. */
 	UPROPERTY() double Pitch = 0.0;
 

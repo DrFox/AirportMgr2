@@ -109,6 +109,7 @@ bool FTakeoffRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 	{
 		return false;
 	}
+	const double AltitudeBefore = Altitude;
 
 	const FGroundPerformance& Ground = InAirframe.Chassis.Ground;
 	const FClimbPerformance& Climb = InAirframe.Climb;
@@ -203,6 +204,13 @@ bool FTakeoffRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 
 	default:
 		break;
+	}
+
+	// THE QUOTIENT, after the phase has moved Altitude - see VerticalSpeed. A zero step keeps the last figure rather than
+	// dividing by it.
+	if (DeltaSeconds > 0.0)
+	{
+		VerticalSpeed = (Altitude - AltitudeBefore) / DeltaSeconds;
 	}
 
 	OutPosition = End.PointAt(Travelled);

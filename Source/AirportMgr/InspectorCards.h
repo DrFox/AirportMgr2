@@ -343,6 +343,10 @@ struct FAircraftDisplay
 	 *  reversing vehicle's wheels backwards; a pushback reading "-1.5 m/s" reads as a fault - the Status line says which way). */
 	int32 SpeedTenths = 0;
 	int32 SpeedKnots = 0;
+	/** Tenths of m/s and whole ft/s of the climb, SIGNED unlike speed: a descent is not a fault, it is the other half of the
+	 *  answer. Both roundings held, for SpeedKnots' reason above. */
+	int32 VerticalTenths = 0;
+	int32 VerticalFeet = 0;
 	int32 AltitudeMetres = 0;
 	FString Destination;
 	bool bEngineRunning = false;
