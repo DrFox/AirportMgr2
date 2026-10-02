@@ -205,26 +205,10 @@ public:
 	 * moved up to ABUT it. A start moved later left a gap ahead of an aircraft that could not stop, and a plan was booked
 	 * into it ahead of that aircraft.
 	 *
-	 * AN IMMOVABLE HOLDER'S WINDOWS DO NOT MOVE AT ALL (finding 6 - an arrival on final: its landing is flown): one that
-	 * would be overrun stays, and the late window ahead of it goes behind it instead.
-	 *
 	 * All or nothing: false, and the table untouched, when a window would have to move behind one held for ever that it may
-	 * not share with, or a late one already there would overrun an immovable one. OutShifts: every move made, the first
-	 * Holder's, for the plans that carry the times (UTaxiPlanning::Retime).
+	 * not share with. OutShifts: every move made, the first Holder's, for the plans that carry the times (UTaxiPlanning::Retime).
 	 */
-	bool ShiftLater(int32 Holder, double Since, double Delta, double Now, TFunctionRef<bool(int32 Holder)> Immovable,
-		TArray<FTaxiShift>& OutShifts);
-
-	/** ShiftLater with no holder immovable. */
 	bool ShiftLater(int32 Holder, double Since, double Delta, double Now, TArray<FTaxiShift>& OutShifts);
-
-	/**
-	 * Holder's windows that have started (From at or before Now) and end before Until stretched towards Until - each only as
-	 * far as the next window behind it allows (LatestEnd): no cascade, nobody moved. A RE-TIME'S FALLBACK (review of #534
-	 * finding 6): refused, the late aircraft's windows would LAPSE while it was still on the ground they hold, and plans be
-	 * made through it. True when anything was stretched.
-	 */
-	bool StretchHeld(int32 Holder, double Now, double Until);
 
 	/**
 	 * The ORDER the table holds, as (ahead, behind) holder pairs - consecutive windows of two holders on one resource.

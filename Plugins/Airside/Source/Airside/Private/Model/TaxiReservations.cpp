@@ -260,12 +260,6 @@ namespace
 
 bool FTaxiReservations::ShiftLater(int32 Holder, double Since, double Delta, double Now, TArray<FTaxiShift>& OutShifts)
 {
-	return ShiftLater(Holder, Since, Delta, Now, [](int32) { return false; }, OutShifts);
-}
-
-bool FTaxiReservations::ShiftLater(int32 Holder, double Since, double Delta, double Now, TFunctionRef<bool(int32 Holder)> Immovable,
-	TArray<FTaxiShift>& OutShifts)
-{
 	OutShifts.Reset();
 	if (!(Delta > 0.0))
 	{
@@ -274,7 +268,7 @@ bool FTaxiReservations::ShiftLater(int32 Holder, double Since, double Delta, dou
 	const double H = FMath::Max(Headway, 0.001);
 
 	// ON A COPY, ALL OR NOTHING: a cascade that meets a window it cannot move - one behind a for-ever window it may not share
-	// with, or an immovable one ahead of a late one already there - leaves the table as it was.
+	// with - leaves the table as it was.
 	TMap<FTaxiResource, TArray<FTaxiWindow>> Trial = Windows;
 	TArray<FTaxiShift> Shifts;
 	ShiftOne(Trial, Holder, Since, Delta, Now);
@@ -312,29 +306,6 @@ bool FTaxiReservations::ShiftLater(int32 Holder, double Since, double Delta, dou
 					{
 						return false;
 					}
-					if (Immovable(On[B].Holder))
-					{
-						// AN ARRIVAL ON FINAL CANNOT BE MADE LATER (review of #534 finding 6): its landing is flown, not planned,
-						// and it may not wait at its exit. The late one goes BEHIND it instead - if it is not there yet. Already
-						// there (started), nothing can be made of it: refused.
-						if (On[A].From <= Now || Immovable(On[A].Holder))
-						{
-							return false;
-						}
-						const double Behind = NeedBehind(On[B], On[A], H);
-						if (Behind >= Forever)
-						{
-							return false;
-						}
-						const FTaxiShift Swap{ On[A].Holder, std::nextafter(On[A].From, Always), FMath::Max(Behind, 0.0) };
-						ShiftOne(Trial, Swap.Holder, Swap.Since, Swap.Delta, Now);
-						const FTaxiWindow Moved = On[A];
-						On.RemoveAt(A);
-						On.Insert(Moved, B);
-						Shifts.Add(Swap);
-						bMoved = true;
-						continue;
-					}
 					const bool bStarted = On[B].From <= Now;
 					const FTaxiShift Cascade{ On[B].Holder, std::nextafter(On[B].From, Always), Need };
 					ShiftOne(Trial, Cascade.Holder, Cascade.Since, Cascade.Delta, Now);
@@ -369,29 +340,6 @@ bool FTaxiReservations::ShiftLater(int32 Holder, double Since, double Delta, dou
 	Windows = MoveTemp(Trial);
 	OutShifts = MoveTemp(Shifts);
 	return true;
-}
-
-bool FTaxiReservations::StretchHeld(int32 Holder, double Now, double Until)
-{
-	bool bStretched = false;
-	for (TPair<FTaxiResource, TArray<FTaxiWindow>>& Each : Windows)
-	{
-		for (FTaxiWindow& Window : Each.Value)
-		{
-			if (Window.Holder != Holder || Window.From > Now || !(Window.To < Until))
-			{
-				continue;
-			}
-			// AS FAR AS THE NEXT ONE BEHIND ALLOWS (LatestEnd), never past it: this is no cascade.
-			const double To = FMath::Min(Until, LatestEnd(Each.Key, Window.Way, Window.From, Holder));
-			if (To > Window.To)
-			{
-				Window.To = To;
-				bStretched = true;
-			}
-		}
-	}
-	return bStretched;
 }
 
 void FTaxiReservations::OrderPairs(TArray<TPair<int32, int32>>& Out) const

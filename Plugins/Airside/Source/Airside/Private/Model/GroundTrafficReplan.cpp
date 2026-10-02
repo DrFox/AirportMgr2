@@ -104,14 +104,15 @@ bool UGroundTraffic::ReplanTaxi(const FRoadAgent& Agent, const URoadNetwork& Net
 	case EAgentPhase::Taxiing:
 		return ReplanTaxiing(Agent, Network, *Aircraft, Kind, Request, Old, EntryHold, Depth, Fail);
 	case EAgentPhase::Arriving:
-		// ON FINAL: from its exit, rolling, at the vacate time its first plan had - the landing is flown, not re-estimated,
-		// and no re-time moves an arrival on final (FTaxiClearance::bOnFinal), so that time is still the flown one.
+		// ON FINAL: from its exit, rolling, at the vacate time its first plan had - the landing is flown, not re-estimated.
+		// VacateAt, not the plan's PushAt: a re-time cascade may have moved the plan later, never the landing (review of #534
+		// finding 6). ENFORCED BY: Airside.Model.TaxiPlan.RetimeKeepsAnArrivalsVacateTime
 		if (Old == nullptr || !Agent.TaxiInPlan.IsValid())
 		{
 			return Fail();
 		}
 		Live = Agent.TaxiInPlan;
-		Request.DepartAt = Old->Plan.PushAt;
+		Request.DepartAt = Old->VacateAt >= 0.0 ? Old->VacateAt : Old->Plan.PushAt;
 		Request.bMayWaitAtStart = false;
 		Request.bStartsRolling = true;
 		bFromExit = true;

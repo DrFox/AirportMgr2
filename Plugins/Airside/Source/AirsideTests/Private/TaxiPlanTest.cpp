@@ -1181,36 +1181,4 @@ bool FTaxiPlanShiftStartedTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanShiftLandingTest, "Airside.Model.TaxiPlan.ShiftLaterNeverMovesALanding",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FTaxiPlanShiftLandingTest::RunTest(const FString& Parameters)
-{
-	// REVIEW OF #534 FINDING 6: an arrival on final cannot be late to order - the landing is flown, not planned, and it may
-	// not wait at its exit. A re-time cascade shifted its windows behind a late aircraft anyway. Now an immovable holder's
-	// window stays; the late one, not yet there, goes BEHIND it instead. Already there (started): no re-time can be made,
-	// and the table is left as it was (finding 11: the refusal branch).
-	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	const FTaxiResource R = FTaxiResource::Node(Net->AddGuidelineNode(FVector2D(0.0, 0.0)));
-	auto Landing = [](int32 Holder) { return Holder == 2; };
-
-	FTaxiReservations Table;
-	Table.SetHeadway(5.0);
-	TestTrue(TEXT("booked"), Table.BookWindow(R, { 1, 10.0, 20.0 }) && Table.BookWindow(R, { 2, 22.0, 30.0 }));
-	TArray<FTaxiShift> Shifts;
-	TestTrue(TEXT("X, not yet there, re-timed 15 s"), Table.ShiftLater(1, 0.0, 15.0, 5.0, Landing, Shifts));
-	const TConstArrayView<FTaxiWindow> On = Table.WindowsOn(R);
-	TestTrue(TEXT("the landing's window did not move"), On.Num() == 2 && On[0].Holder == 2 && On[0].From == 22.0 && On[0].To == 30.0);
-	TestTrue(TEXT("X goes after it"), On.Num() == 2 && On[1].Holder == 1 && On[1].From >= 30.0);
-
-	FTaxiReservations Started;
-	Started.SetHeadway(5.0);
-	TestTrue(TEXT("booked"), Started.BookWindow(R, { 1, 0.0, 20.0 }) && Started.BookWindow(R, { 2, 22.0, 30.0 }));
-	TestFalse(TEXT("X already there: refused"), Started.ShiftLater(1, 0.0, 15.0, 10.0, Landing, Shifts));
-	const TConstArrayView<FTaxiWindow> Kept = Started.WindowsOn(R);
-	TestTrue(TEXT("and nothing changed"), Kept.Num() == 2 && Kept[0].Holder == 1 && Kept[0].To == 20.0
-		&& Kept[1].Holder == 2 && Kept[1].From == 22.0);
-	return true;
-}
-
 #endif // WITH_DEV_AUTOMATION_TESTS

@@ -1340,11 +1340,11 @@ $AllowedCallers = @(
         # table's order is what FPassingOrder enforces, and it is deadlock-free only while every window is booked on ONE
         # timeline by one owner (spec section 2: "all orders come from ONE timeline"). A second writer - a dispatch booking its
         # own windows, a test hook in production - is a second timeline the order cannot see. The mutators were named to be
-        # grepped (PR 1's plan, Task 5): BookWindow, BookPasses, ReleaseHolder, ReleaseHolderOn (and PR 2's ReleaseFirstOn, #528 review's PullForward, PR 3's ShiftLater, #534 review's StretchHeld; TaxiPlanningReplan.cpp is UTaxiPlanning's own second file), called on a table (`.` or
+        # grepped (PR 1's plan, Task 5): BookWindow, BookPasses, ReleaseHolder, ReleaseHolderOn (and PR 2's ReleaseFirstOn, #528 review's PullForward, PR 3's ShiftLater; TaxiPlanningReplan.cpp is UTaxiPlanning's own second file), called on a table (`.` or
         # `->`). TaxiReservations.cpp's own calls (BookPasses' verify(BookWindow(...))) carry no receiver and are not seen.
         # DOES NOT SEE a write through a reference renamed to hide it, or a table copied, written and assigned back elsewhere.
         Name        = 'taxi reservation table written (rule 104)'
-        Pattern     = '(?:\.|->)\s*(?:BookWindow|BookPasses|ReleaseHolder|ReleaseHolderOn|ReleaseFirstOn|PullForward|ShiftLater|StretchHeld)\s*\('
+        Pattern     = '(?:\.|->)\s*(?:BookWindow|BookPasses|ReleaseHolder|ReleaseHolderOn|ReleaseFirstOn|PullForward|ShiftLater)\s*\('
         ProdAllowed = @('Private\Model\TaxiPlanning.cpp', 'Private\Model\TaxiPlanningReplan.cpp', 'Private\Model\TaxiReservations.cpp')
         TestExempt  = $true
         ProdReason  = 'book or release through UTaxiPlanning (Book, Revoke, Drop, Track) - the table has one writer so its order is one timeline (spec 2026-10-02 section 2)'

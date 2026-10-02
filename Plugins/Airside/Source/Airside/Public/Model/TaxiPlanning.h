@@ -118,8 +118,12 @@ struct FTaxiClearance
 	 */
 	bool bFromExit = false;
 
-	/** Whether the aircraft is still ON FINAL (Arriving): its landing is flown, so no re-time may move its windows (finding 6). */
-	bool bOnFinal = false;
+	/**
+	 * For a plan from a runway exit, when the aircraft vacates onto it - the FLOWN time it was booked with, never re-timed: a
+	 * cascade may move the plan's windows and PushAt later, but not the landing (review of #534 finding 6). A re-plan on final
+	 * starts from this (UGroundTraffic::ReplanTaxi). -1: not set.
+	 */
+	double VacateAt = -1.0;
 
 	/** When the rest was last asked for, and the table's revision then - asked again only once both have moved on. */
 	double ExtendAskedAt = -1.0;
@@ -299,9 +303,7 @@ public:
 	 * RE-TIME (spec §2): Holder's windows still held after Since moved Lag later, everyone booked behind them with them,
 	 * same order (FTaxiReservations::ShiftLater); every shifted plan's legs, holds, arrival and push time moved alike.
 	 * Since is the moment it is late FOR, so that overdue moment moves too; Now is the clock, and nothing started by it has its
-	 * start moved (ShiftLater). An arrival still on final is immovable (bOnFinal). Logged "re-timed +X s". Wakes waiters.
-	 * False when the cascade cannot be made: then the late one's started windows are stretched as far as nobody behind is
-	 * overrun (StretchHeld, review of #534 finding 6), so they do not lapse under it.
+	 * start moved (ShiftLater). Logged "re-timed +X s". Wakes waiters. False, nothing changed, when the cascade cannot be made.
 	 */
 	bool Retime(int32 Holder, double Since, double Lag, double Now);
 

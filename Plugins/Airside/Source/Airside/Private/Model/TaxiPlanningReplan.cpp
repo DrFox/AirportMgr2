@@ -146,7 +146,7 @@ bool UTaxiPlanning::BookAlong(const URoadNetwork& Network, int32 Holder, ETaxiCl
 	Clearance.ReleasedThrough = FMath::Max<int32>(INDEX_NONE, Prefix - 2);
 	Clearance.bStartReleased = Prefix > 0;
 	Clearance.bFromExit = bFromExit;
-	Clearance.bOnFinal = bFromExit && Prefix == 0;
+	Clearance.VacateAt = bFromExit && Prefix == 0 ? Tail.PushAt : -1.0;
 	if (Prefix > 0)
 	{
 		Clearance.Entered.Add(FTaxiResource::Edge(Live.Steps[Prefix - 1].Edge));
@@ -265,21 +265,10 @@ bool UTaxiPlanning::TakeUnplannedChanged()
 bool UTaxiPlanning::Retime(int32 Holder, double Since, double Lag, double Now)
 {
 	TArray<FTaxiShift> Shifts;
-	auto OnFinal = [this](int32 Other)
-	{
-		const FTaxiClearance* Clearance = Clearances.Find(Other);
-		return Clearance != nullptr && Clearance->bOnFinal;
-	};
-	if (!(Lag > 0.0) || !Clearances.Contains(Holder) || !Table.ShiftLater(Holder, Since, Lag, Now, OnFinal, Shifts))
+	if (!(Lag > 0.0) || !Clearances.Contains(Holder) || !Table.ShiftLater(Holder, Since, Lag, Now, Shifts))
 	{
 		NoteRefused(Holder, FString::Printf(TEXT("agent %d's re-time"), Holder),
-			TEXT("the windows behind it cannot all move (one is held for ever, or an arrival on final is)"));
-		// NOT LEFT TO LAPSE (review of #534 finding 6): what it is on stays held as far as nobody behind is overrun, so no plan
-		// is made through ground it still stands on.
-		if (Lag > 0.0 && Clearances.Contains(Holder) && Table.StretchHeld(Holder, Now, Now + Lag))
-		{
-			Bump(false);
-		}
+			TEXT("the windows behind it cannot all move (one is held for ever)"));
 		return false;
 	}
 	// THE PLANS CARRY THE TIMES TOO: legs, holds, arrival, push - moved exactly as their windows were, in the same order.

@@ -188,10 +188,11 @@ bool UTaxiPlanning::BookArrival(const URoadNetwork& Network, int32 Holder, const
 		OutRevoked.Reset();
 		return false;
 	}
-	// FROM ITS RUNWAY EXIT, ON FINAL: its first move is not the order's to refuse (OrderHold), and no re-time moves it.
+	// FROM ITS RUNWAY EXIT: its first move is not the order's to refuse (OrderHold); its vacate time is flown, kept apart from
+	// the plan's times a re-time moves (ReplanTaxi on final starts from it).
 	FTaxiClearance& Cleared = Clearances[Holder];
 	Cleared.bFromExit = true;
-	Cleared.bOnFinal = true;
+	Cleared.VacateAt = Cleared.Plan.PushAt;
 	for (const int32 Departure : OutRevoked)
 	{
 		UE_LOG(LogAirsideTaxiPlan, Log, TEXT("TaxiPlan: agent %d revoked by arrival %d"), Departure, Holder);
@@ -637,8 +638,6 @@ bool UTaxiPlanning::Track(const FRoadAgent& Agent, const FTrafficOccupancy& Occu
 	switch (Agent.Phase)
 	{
 	case EAgentPhase::Arriving:
-		// ON FINAL: its landing is flown, so no re-time may move its windows (FTaxiReservations::ShiftLater's Immovable).
-		Clearance->bOnFinal = true;
 		return true;
 	case EAgentPhase::Manoeuvring:
 		Clearance->Stage = ETaxiClearanceStage::Moving;
@@ -673,7 +672,6 @@ bool UTaxiPlanning::Track(const FRoadAgent& Agent, const FTrafficOccupancy& Occu
 		return false;
 	}
 	Clearance->Stage = ETaxiClearanceStage::Moving;
-	Clearance->bOnFinal = false;
 
 	bool bReleased = false;
 	for (const FTaxiResource& Resource : Clearance->PushOnly)

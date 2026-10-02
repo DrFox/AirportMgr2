@@ -1011,14 +1011,16 @@ bool FTaxiPlanReplannedEntryTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanRefusedRetimeTest, "Airside.Model.TaxiPlan.RefusedRetimeKeepsItsGround",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanVacateTimeTest, "Airside.Model.TaxiPlan.RetimeKeepsAnArrivalsVacateTime",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FTaxiPlanRefusedRetimeTest::RunTest(const FString& Parameters)
+bool FTaxiPlanVacateTimeTest::RunTest(const FString& Parameters)
 {
-	// REVIEW OF #534 FINDING 6: a re-time that cannot be made left the late aircraft's window to LAPSE - ended while it was
-	// still there, the table read the ground free, and plans were made through it. Refused, it now keeps what it stands on
-	// as long as nothing booked behind it is overrun. Here the one behind is an arrival on final, which no re-time moves.
+	// REVIEW OF #534 FINDING 6: a re-time cascade moves an arrival's plan later with everyone behind the late one - its
+	// windows and its PushAt (when it leaves the exit). Its LANDING does not move: a re-plan while it is still on final
+	// planned the exit from the shifted PushAt, a time it would not be there. The flown vacate time is kept apart.
+	// (Making the arrival's windows immovable instead - the late one swapped behind it, or the re-time refused - was
+	// measured on the headline test and jammed at 80/h either way, 2026-10-03.)
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	const FTaxiResource R = FTaxiResource::Node(Net->AddGuidelineNode(FVector2D(0.0, 0.0)));
 	UTaxiPlanning* Planning = NewObject<UTaxiPlanning>(GetTransientPackage());
@@ -1028,6 +1030,7 @@ bool FTaxiPlanRefusedRetimeTest::RunTest(const FString& Parameters)
 	Late.Passes = { { R, { 1, 0.0, 20.0 } } };
 	FTaxiPlan Landing = Late;
 	Landing.Passes = { { R, { 2, 22.0, 30.0 } } };
+	Landing.PushAt = 22.0;
 	TArray<int32> Revoked;
 	if (!TestTrue(TEXT("a late aircraft and an arrival behind it, booked"),
 		Planning->Book(*Net, 1, ETaxiClearanceKind::TaxiOut, Late, ETaxiClearanceStage::Moving)
@@ -1035,13 +1038,10 @@ bool FTaxiPlanRefusedRetimeTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	TestFalse(TEXT("its re-time is refused - the landing cannot move"), Planning->Retime(1, 0.0, 15.0, 10.0));
-	double To = 0.0;
-	for (const FTaxiWindow& W : Planning->GetTable().WindowsOn(R))
-	{
-		To = W.Holder == 1 ? W.To : To;
-	}
-	TestEqual(TEXT("it keeps its ground up to the landing's window, not lapsing at 20 s"), To, 22.0);
+	TestTrue(TEXT("the late one re-timed, the arrival moved behind it"), Planning->Retime(1, 0.0, 15.0, 10.0));
+	const FTaxiClearance* Arrival = Planning->Find(2);
+	TestTrue(TEXT("its plan moved later"), Arrival != nullptr && Arrival->Plan.PushAt > 22.0);
+	TestTrue(TEXT("its vacate time did not"), Arrival != nullptr && Arrival->VacateAt == 22.0);
 	return true;
 }
 
