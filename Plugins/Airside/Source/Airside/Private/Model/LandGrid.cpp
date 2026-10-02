@@ -1,5 +1,50 @@
 #include "Model/LandGrid.h"
 
+#include "Solve/RoadGeom.h"
+
+const FString FLandGrid::OutsideText = TEXT("Outside your land");
+
+namespace
+{
+	/**
+	 * Interior overlap of a polygon (any winding, may be concave) and a box. The box is INSET 1 uu, so touching
+	 * along an edge or at a corner is not overlap - and a diagonal through exactly the box's corners properly crosses
+	 * the inset edges rather than grazing endpoints, where RoadGeom::SegmentsCross is undefined.
+	 */
+	bool PolygonEntersBox(TConstArrayView<FVector2D> Polygon, const FBox2D& Box)
+	{
+		const FBox2D In(Box.Min + FVector2D(1.0, 1.0), Box.Max - FVector2D(1.0, 1.0));
+		const FVector2D Corners[4] = { In.Min, FVector2D(In.Max.X, In.Min.Y), In.Max, FVector2D(In.Min.X, In.Max.Y) };
+		for (const FVector2D& P : Polygon)
+		{
+			if (In.IsInside(P))
+			{
+				return true;
+			}
+		}
+		for (const FVector2D& C : Corners)
+		{
+			if (RoadGeom::PointInPolygon(Polygon, C))
+			{
+				return true;
+			}
+		}
+		for (int32 I = 0; I < Polygon.Num(); ++I)
+		{
+			const FVector2D& P0 = Polygon[I];
+			const FVector2D& P1 = Polygon[(I + 1) % Polygon.Num()];
+			for (int32 K = 0; K < 4; ++K)
+			{
+				if (RoadGeom::SegmentsCross(P0, P1, Corners[K], Corners[(K + 1) % 4]))
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+}
+
 FLandGrid FLandGrid::Make(FVector2D InOrigin, double InTileSize, int32 InColumns, int32 InRows, TConstArrayView<FIntPoint> Start)
 {
 	FLandGrid Grid;
@@ -173,4 +218,41 @@ TArray<FLandEdgeRun> FLandGrid::Outline() const
 		I = J;
 	}
 	return Runs;
+}
+
+bool FLandGrid::IsAreaOwned(TConstArrayView<FVector2D> Polygon) const
+{
+	if (!IsValid() || Polygon.Num() == 0)
+	{
+		return true;
+	}
+	FBox2D Bounds(ForceInit);
+	for (const FVector2D& P : Polygon)
+	{
+		Bounds += P;
+	}
+	// Every tile the footprint's box touches - a linear walk bounded by the 64-tile grid plus a ring past it
+	// (2026-10-02). Off-grid tiles are never owned, so a footprint reaching past the grid fails here too.
+	const FIntPoint Lo = TileAt(Bounds.Min);
+	const FIntPoint Hi = TileAt(Bounds.Max);
+	for (int32 Y = Lo.Y; Y <= Hi.Y; ++Y)
+	{
+		for (int32 X = Lo.X; X <= Hi.X; ++X)
+		{
+			const FIntPoint Tile(X, Y);
+			if (!IsTileOwned(Tile) && PolygonEntersBox(Polygon, TileBox(Tile)))
+			{
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+bool FLandGrid::IsStripOwned(FVector2D A, FVector2D B, double HalfWidth) const
+{
+	const FVector2D Dir = (B - A).GetSafeNormal();
+	const FVector2D Side = FVector2D(-Dir.Y, Dir.X) * HalfWidth;
+	const FVector2D Quad[4] = { A + Side, B + Side, B - Side, A - Side };
+	return IsAreaOwned(Quad);
 }
