@@ -248,6 +248,15 @@ public:
 	/** Set the owned land outright - the level authoring script and tests. Not a purchase: charges nothing. */
 	void AuthorOwnedLand(const FLandGrid& Land);
 
+	/**
+	 * A tile was BOUGHT - after the charge, with the quote it was charged at. The layer that owns the purse bridges it
+	 * onto its own announcements (the toast); OnOwnedLandChanged has already fired for the land itself, and is what
+	 * this plugin's presentation hears.
+	 * ENFORCED BY: Airside.Present.OwnedLand.BuyRefusals
+	 */
+	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnLandBought, FIntPoint /*Tile*/, const FBuildQuote& /*Quote*/);
+	FOnLandBought OnLandBought;
+
 	// --- IRoadEditTarget ---------------------------------------------------------------
 
 	virtual const URoadNetwork* GetNetwork() const override;
@@ -369,6 +378,11 @@ public:
 
 	/** See IRoadEditTarget::WhyApronRefused. */
 	virtual FString WhyApronRefused(TArrayView<const FVector2D> Outline) const override;
+
+	/** See IRoadEditTarget::QuoteLandTile / WhyLandTileRefused / BuyLandTile. */
+	virtual FBuildQuote QuoteLandTile(FIntPoint Tile) const override;
+	virtual FString WhyLandTileRefused(FIntPoint Tile) const override;
+	virtual bool BuyLandTile(FIntPoint Tile) override;
 
 	/** See IRoadEditTarget::WhyPlotRefused. PlaceEntityInPlot's own outline refusals, moved here
 	 *  whole (same order, same wording), plus the clearance strip in the stand's words. */

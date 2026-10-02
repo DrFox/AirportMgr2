@@ -459,6 +459,84 @@ bool URoadEditFacade::RestoreInPlace(TFunctionRef<bool(URoadNetwork&)> Deseriali
 	return bRestored;
 }
 
+FBuildQuote URoadEditFacade::QuoteLandTile(FIntPoint Tile) const
+{
+	const URoadNetwork* Network = Actor().Network;
+	FBuildQuote Quote;
+	if (Network == nullptr || !Network->GetOwnedLand().IsValid())
+	{
+		return Quote;
+	}
+	const FLandGrid& Land = Network->GetOwnedLand();
+	FBuildLine Line;
+	Line.Unit = EBuildUnit::Each;
+	Line.Quantity = 1.0;
+	Line.RatePerUnit = UAirsideSettings::ResolveLandPrice().For(Land.NumOwned());
+	Quote.Lines.Add(Line);
+	Quote.What = FText::Format(NSLOCTEXT("OwnedLand", "LandTile", "Land, {0} m tile"),
+		FText::AsNumber(FMath::RoundToInt(Land.TileSize / 100.0)));
+	return Quote;
+}
+
+FString URoadEditFacade::WhyLandTileRefused(FIntPoint Tile) const
+{
+	const URoadNetwork* Network = Actor().Network;
+	if (Network == nullptr || !Network->GetOwnedLand().IsValid())
+	{
+		return TEXT("No land here");
+	}
+	const FLandGrid& Land = Network->GetOwnedLand();
+	if (!Land.IsOnGrid(Tile))
+	{
+		return TEXT("Off the map");
+	}
+	if (Land.IsTileOwned(Tile))
+	{
+		return TEXT("Already yours");
+	}
+	if (!Land.IsBuyable(Tile))
+	{
+		return TEXT("Not next to your land");
+	}
+	const FBuildQuote Quote = QuoteLandTile(Tile);
+	if (Purse != nullptr && !Purse->CanAfford(Quote)) // preview: the purchase announces through AffordOrRefuse
+	{
+		return FString::Printf(TEXT("Can't afford %s"), *Purse->Describe(Quote).ToString());
+	}
+	return FString();
+}
+
+bool URoadEditFacade::BuyLandTile(FIntPoint Tile)
+{
+	URoadNetwork* Network = Actor().Network;
+	const FString Why = WhyLandTileRefused(Tile);
+	// "Can't afford" goes on to AffordOrRefuse, which ANNOUNCES it (rule 32) - the one refusal no ghost explains to a
+	// player whose balance moved since the frame they looked.
+	if (Network == nullptr || (!Why.IsEmpty() && !Why.StartsWith(TEXT("Can't afford"))))
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("BuyLandTile (%d,%d) refused: %s"), Tile.X, Tile.Y, *Why);
+		return false;
+	}
+	const FBuildQuote Quote = QuoteLandTile(Tile);
+	if (!AffordOrRefuse(Quote))
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("BuyLandTile (%d,%d) refused: cannot afford %.0f"), Tile.X, Tile.Y, Quote.BaseAmount());
+		return false;
+	}
+	FLandGrid Land = Network->GetOwnedLand();
+	Land.SetTileOwned(Tile, true);
+	Network->SetOwnedLand(Land);
+	// NOT ON THE UNDO STACK (land purchase spec 3.1): land is not undone, so its charge has no step to be reversed by.
+	if (Purse != nullptr)
+	{
+		Purse->Charge(Quote);
+	}
+	UE_LOG(LogRoadMesh, Log, TEXT("OwnedLand: bought tile (%d,%d) for %.0f - %d owned"), Tile.X, Tile.Y, Quote.BaseAmount(), Land.NumOwned());
+	OnOwnedLandChanged.Broadcast(Land);
+	OnLandBought.Broadcast(Tile, Quote);
+	return true;
+}
+
 void URoadEditFacade::AuthorOwnedLand(const FLandGrid& Land)
 {
 	// ENSURED, like every edit: a fresh airport has no network until its first edit, and land is authored first.

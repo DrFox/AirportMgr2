@@ -443,6 +443,9 @@ public:
 	/** The owned land's collection and plinth wall - the content defaults, each null if unset. */
 	static FOwnedLandKit ResolveOwnedLandKit();
 
+	/** The land tile price figures - the content set's, or FLandPrice's defaults with none configured. */
+	static FLandPrice ResolveLandPrice();
+
 	/**
 	 * The ground-cover grass: its tuft meshes (any that fail to load are skipped), its density
 	 * layers converted from metres to uu, and its cell size. Not usable (IsUsable false) when the
