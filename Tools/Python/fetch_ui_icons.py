@@ -62,6 +62,7 @@ ICONS = {
     "tool.holding point":  ("delapouite", "stop-sign"),
     "tool.road":           ("delapouite", "road"),
     "tool.fuel depot":     ("delapouite", "fuel-tank"),
+    "tool.buy land":       ("delapouite", "house-keys"),
 
     # lorc, not delapouite: "delapouite/hammer-nails" is one of the names that returns an
     # HTML 404 under HTTP 200, checked the way this file's docstring says to.

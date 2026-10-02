@@ -6,6 +6,7 @@
 #include "Model/RoadNetwork.h"
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
+#include "Tool/LandBuyTool.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -85,6 +86,63 @@ bool FLandPurchaseBuyRefusals::RunTest(const FString&)
 	TestEqual(TEXT("without a second charge"), Purse.Charges.Num(), 1);
 	TestEqual(TEXT("the next tile costs more: three owned"), Facade->QuoteLandTile(FIntPoint(2, 3)).BaseAmount(), 375000.0, 1e-6);
 	Facade->SetPurse(nullptr);
+	return true;
+}
+
+
+namespace
+{
+	/** Records the labels and line styles a tool drew. LandBuy-prefixed: unity build. */
+	struct FLandBuySink : public IToolPreviewSink
+	{
+		TArray<FString> Labels;
+		TArray<FVector2D> LabelAt;
+		TArray<EPreviewStyle> LineStyles;
+		virtual void Marker(const FVector2D&, EPreviewStyle) override {}
+		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle Style) override { LineStyles.Add(Style); }
+		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void Label(const FVector2D& At, const FString& Text, EPreviewStyle) override
+		{
+			Labels.Add(Text);
+			LabelAt.Add(At);
+		}
+	};
+}
+
+/**
+ * THE BUY LAND TOOL (land purchase spec R6): a priced ghost on every buyable tile - and only those; the void beyond stays
+ * void - the hovered one lit, and a click buying the tile under the cursor through the target.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLandBuyToolGhostsAndClick, "Airside.Tool.BuyLand.GhostsAndClick",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FLandBuyToolGhostsAndClick::RunTest(const FString&)
+{
+	FAirsideTestWorld Fixture;
+	ARoadNetworkActor* Actor = Fixture.Actor;
+	FLandRecordingPurse Purse;
+	Actor->GetEditFacade()->SetPurse(&Purse);
+	const FLandGrid Land = LandBuyStart();
+	Actor->GetEditFacade()->AuthorOwnedLand(Land);
+
+	FLandBuyTool Tool;
+	TestEqual(TEXT("named as the registry names it"), Tool.GetDisplayName().ToString(), FString(TEXT("Buy land")));
+	const FVector2D OverTile13 = Land.TileBox(FIntPoint(1, 3)).GetCenter();
+	FLandBuySink Sink;
+	Tool.BuildPreview(TestTool::ContextAt(*Actor, OverTile13), Sink);
+	TestEqual(TEXT("four buyable tiles, four price labels"), Sink.Labels.Num(), 4);
+	for (const FVector2D& At : Sink.LabelAt)
+	{
+		TestTrue(TEXT("each label sits on a buyable tile's centre"), Land.IsBuyable(Land.TileAt(At)) && At.Equals(Land.TileBox(Land.TileAt(At)).GetCenter(), 1e-6));
+	}
+	TestTrue(TEXT("each is priced"), Sink.Labels.Num() > 0 && Sink.Labels[0] == FText::AsNumber(300000.0).ToString());
+	TestTrue(TEXT("the hovered tile is lit"), Sink.LineStyles.Contains(EPreviewStyle::Hover));
+
+	Tool.OnClick(TestTool::ContextAt(*Actor, Land.TileBox(FIntPoint(5, 5)).GetCenter()));
+	TestEqual(TEXT("a click on an unbuyable tile buys nothing"), Actor->Network->GetOwnedLand().NumOwned(), 2);
+	Tool.OnClick(TestTool::ContextAt(*Actor, OverTile13));
+	TestTrue(TEXT("a click on a buyable tile buys it"), Actor->Network->GetOwnedLand().IsTileOwned(FIntPoint(1, 3)));
+	TestEqual(TEXT("charged once"), Purse.Charges.Num(), 1);
+	Actor->GetEditFacade()->SetPurse(nullptr);
 	return true;
 }
 

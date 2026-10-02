@@ -32,6 +32,7 @@ drives the downloads, so it cannot drift from what was fetched.
 | `selection.runway_use` | cycle | lorc |
 | `selection.unstick` | life-buoy | delapouite |
 | `tool.apron` | stone-path | delapouite |
+| `tool.buy land` | house-keys | delapouite |
 | `tool.fuel depot` | fuel-tank | delapouite |
 | `tool.guidelines` | path-distance | delapouite |
 | `tool.holding point` | stop-sign | delapouite |
