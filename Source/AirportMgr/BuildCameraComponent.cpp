@@ -4,6 +4,7 @@
 #include "Camera/CameraComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "MiniatureFocus.h"
+#include "Present/AirsideOwnedLandActor.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadAgentActor.h"
 #include "Present/RoadNetworkActor.h"
@@ -46,6 +47,16 @@ void UBuildCameraComponent::CreateBuildCamera(APlayerController& Owner, double S
 		return;
 	}
 
+	// THE OWNED LAND BOUNDS THE FOCUS, set before Reset so a StartFocus outside it starts inside.
+	// Looked up once here: the land is fixed for a session until land purchase exists, and that
+	// feature calls SetFocusBounds when it grows the plot rather than this polling for it.
+	if (const AAirsideOwnedLandActor* Land = AAirsideOwnedLandActor::Find(World))
+	{
+		const FBox2D Bounds = Land->GetOwnedLand();
+		TargetView.FocusBounds = Bounds;
+		UE_LOG(LogRoadBuild, Log, TEXT("Build camera: focus held inside the owned land (%.0f, %.0f)-(%.0f, %.0f)."),
+			Bounds.Min.X, Bounds.Min.Y, Bounds.Max.X, Bounds.Max.Y);
+	}
 	TargetView.Reset(ViewLimits);
 
 	// The view starts settled rather than easing in from wherever a default-constructed rig

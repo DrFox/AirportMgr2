@@ -108,4 +108,36 @@ bool FBuildCameraFocusOnLeavesWatchTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * THE COMPONENT'S DOORS HONOUR THE LAND: an alert's Go to a point past the edge lands on the edge,
+ * and setting the bounds pulls a view already outside back in. The rig test pins the clamp; this
+ * pins that the build view's own writers go through it. The watch rig is never bounded - an
+ * aircraft on approach is over the void and the camera rides it there.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildCameraFocusBoundsTest,
+	"Airside.View.BuildCameraComponent.FocusBoundsHoldTheBuildView",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildCameraFocusBoundsTest::RunTest(const FString& Parameters)
+{
+	UBuildCameraComponent* Camera = NewObject<UBuildCameraComponent>(GetTransientPackage());
+	if (!TestNotNull(TEXT("component constructed"), Camera))
+	{
+		return false;
+	}
+	Camera->FocusOn(FVector2D(90000.0, -90000.0));
+	Camera->SetFocusBounds(FBox2D(FVector2D(-1000.0, -1000.0), FVector2D(1000.0, 1000.0)));
+	TestEqual(TEXT("setting the bounds pulls a view already outside back to the edge"),
+		Camera->ViewFocus(), FVector2D(1000.0, -1000.0));
+
+	Camera->FocusOn(FVector2D(-50000.0, 500.0));
+	TestEqual(TEXT("a Go past the edge lands on the edge"), Camera->ViewFocus(), FVector2D(-1000.0, 500.0));
+
+	Camera->SetFocusBounds(FBox2D(ForceInit));
+	Camera->FocusOn(FVector2D(-50000.0, 500.0));
+	TestEqual(TEXT("invalid bounds release it"), Camera->ViewFocus(), FVector2D(-50000.0, 500.0));
+	return true;
+}
+
 #endif

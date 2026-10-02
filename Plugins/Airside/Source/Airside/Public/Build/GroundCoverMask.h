@@ -28,6 +28,14 @@ public:
 	/** A covered outline (a plot), closed implicitly. Fewer than three points covers nothing. */
 	void AddPolygon(TArray<FVector2D> Outline);
 
+	/**
+	 * The owned land (AAirsideOwnedLandActor): everything OUTSIDE it counts as covered, so no tuft
+	 * grows over the void past the diorama's cut edge - where a tuft stands on nothing and gives
+	 * the edge away (2026-10-02). Invalid, the default, owns everything. A point ON the edge is
+	 * covered, the same inclusive rule as a slab's: a tuft centred there would lean over the cut.
+	 */
+	void SetLand(const FBox2D& InLand) { Land = InLand; }
+
 	bool IsCovered(const FVector2D& Point) const;
 
 	int32 NumTriangles() const { return Triangles.Num(); }
@@ -49,6 +57,7 @@ private:
 	FIntPoint BucketOf(const FVector2D& Point) const;
 
 	double BucketSizeUu;
+	FBox2D Land = FBox2D(ForceInit);
 	TArray<FTriangle> Triangles;
 	TArray<TArray<FVector2D>> Polygons;
 	TMap<FIntPoint, FBucket> Buckets;

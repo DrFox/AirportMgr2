@@ -14,8 +14,19 @@ void FBuildCameraRig::Reset(const FCameraRigLimits& Limits)
 {
 	ApplyLimits(Limits);
 	Focus = Limits.StartFocus;
+	ClampFocus();
 	Distance = FMath::Clamp(Limits.StartDistance, MinDistance, MaxDistance);
 	Yaw = Limits.StartYaw;
+}
+
+void FBuildCameraRig::ClampFocus()
+{
+	if (FocusBounds.bIsValid)
+	{
+		Focus = FVector2D(
+			FMath::Clamp(Focus.X, FocusBounds.Min.X, FocusBounds.Max.X),
+			FMath::Clamp(Focus.Y, FocusBounds.Min.Y, FocusBounds.Max.Y));
+	}
 }
 
 double FBuildCameraRig::PitchDegrees() const
@@ -105,6 +116,8 @@ void FBuildCameraRig::Pan(double Right, double Forward, double Rate, double Delt
 
 	const double Step = Rate * Distance * DeltaTime;
 	Focus += (ForwardAxis * Forward + RightAxis * Right) * Step;
+	// Clamped per axis, so holding a key into a wall slides the view along it rather than stopping it dead.
+	ClampFocus();
 }
 
 void FBuildCameraRig::Rotate(double Degrees)

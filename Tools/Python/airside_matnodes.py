@@ -215,3 +215,74 @@ def clear_graph(lib, mat, on_fail=None):
     if left and on_fail:
         on_fail("graph not empty after clear: %d expressions remain" % left)
     return left == 0
+
+
+
+# Owned land, in centimetres, in MPC_OwnedLand. THE NAMES ARE AAirsideOwnedLandActor::CollectionParams',
+# which writes them; the defaults are "everything" (its `Everything`), so with no owned-land actor in
+# the level - or before one has written the collection - nothing is clipped.
+OWNED_LAND_MPC = "/Game/Environment/MPC_OwnedLand"
+OWNED_RECT_PARAMS = ("OwnedMinX", "OwnedMinY", "OwnedMaxX", "OwnedMaxY")
+OWNED_RECT_EVERYTHING = (-1.0e9, -1.0e9, 1.0e9, 1.0e9)
+
+
+def owned_land_collection(on_fail=None):
+    """MPC_OwnedLand, created or updated IN PLACE keeping each parameter's Id: a CollectionParameter
+    node resolves its parameter by that Guid, and rebuilding the array would orphan every node that
+    reads it (build_fence_content.collection's rule)."""
+    folder, name = OWNED_LAND_MPC.rsplit("/", 1)
+    if unreal.EditorAssetLibrary.does_asset_exist(OWNED_LAND_MPC):
+        mpc = unreal.EditorAssetLibrary.load_asset(OWNED_LAND_MPC)
+    else:
+        mpc = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+            name, folder, unreal.MaterialParameterCollection, unreal.MaterialParameterCollectionFactoryNew())
+    if mpc is None:
+        if on_fail:
+            on_fail("could not load or create %s" % OWNED_LAND_MPC)
+        return None
+    params = list(mpc.get_editor_property("scalar_parameters"))
+    by_name = {str(p.get_editor_property("parameter_name")): p for p in params}
+    for pname, value in zip(OWNED_RECT_PARAMS, OWNED_RECT_EVERYTHING):
+        p = by_name.get(pname)
+        if p is None:
+            p = unreal.CollectionScalarParameter()
+            p.set_editor_property("parameter_name", pname)
+            params.append(p)
+        p.set_editor_property("default_value", value)
+    mpc.set_editor_property("scalar_parameters", params)
+    unreal.EditorAssetLibrary.save_asset(OWNED_LAND_MPC, only_if_is_dirty=False)
+    return mpc
+
+
+def owned_rect_clip(lib, mat, mpc, x, y):
+    """1 inside the owned land, 0 outside - for Opacity Mask. The diorama edge (2026-10-02).
+
+    Wired into an OPAQUE material it does nothing: Opacity Mask is ignored until the blend mode
+    is Masked. That is deliberate. Only an instance that overrides the blend mode to Masked pays
+    for the clip, so every map that does not opt in renders exactly as before. The rectangle comes
+    from `mpc` (MPC_OwnedLand), written at runtime by AAirsideOwnedLandActor - one source of truth
+    with the walls, camera and grass, rather than numbers typed on an instance. Returns the Custom
+    node, or None if a pin did not connect (connect_material_expressions reports a misnamed pin
+    only through its bool, and the material still compiles)."""
+    custom = lib.create_material_expression(mat, unreal.MaterialExpressionCustom, x, y)
+    custom.set_editor_property("description", "OwnedRectClip")
+    custom.set_editor_property(
+        "code",
+        "return (WP.x >= MinX && WP.x <= MaxX && WP.y >= MinY && WP.y <= MaxY) ? 1.0 : 0.0;")
+    custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT1)
+    pins = []
+    for n in ("WP", "MinX", "MinY", "MaxX", "MaxY"):
+        pin = unreal.CustomInput()
+        pin.set_editor_property("input_name", n)
+        pins.append(pin)
+    custom.set_editor_property("inputs", pins)
+
+    world = lib.create_material_expression(mat, unreal.MaterialExpressionWorldPosition, x - 300, y)
+    ok = lib.connect_material_expressions(world, "", custom, "WP")
+    for i, (param, pin) in enumerate(zip(OWNED_RECT_PARAMS, ("MinX", "MinY", "MaxX", "MaxY"))):
+        node = lib.create_material_expression(
+            mat, unreal.MaterialExpressionCollectionParameter, x - 300, y + 60 * (i + 1))
+        node.set_editor_property("collection", mpc)
+        node.set_editor_property("parameter_name", param)
+        ok &= lib.connect_material_expressions(node, "", custom, pin)
+    return custom if ok else None

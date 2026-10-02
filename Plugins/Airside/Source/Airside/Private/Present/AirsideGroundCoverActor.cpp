@@ -10,6 +10,7 @@
 #include "Model/ExhaustiveSwitch.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Present/AirsideOwnedLandActor.h"
 #include "Present/GroundCoverPresenter.h"
 #include "Present/RoadNetworkActor.h"
 #include "Present/RoadSurfacePresenter.h"
@@ -133,6 +134,12 @@ void AAirsideGroundCoverActor::RebuildMask()
 				Mask.AddPolygon(Entity.Outline);
 			}
 		}
+	}
+	// THE OWNED LAND, read at every rebuild rather than cached: one actor lookup beside a rebuild
+	// that already reads every surface triangle. No land actor owns everything.
+	if (const AAirsideOwnedLandActor* Land = AAirsideOwnedLandActor::Find(GetWorld()))
+	{
+		Mask.SetLand(Land->GetOwnedLand());
 	}
 	const int32 Triangles = Mask.NumTriangles();
 	const int32 Outlines = Mask.NumPolygons();

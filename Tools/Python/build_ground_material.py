@@ -577,6 +577,18 @@ def build_material():
     lib.connect_material_expressions(scaled_offset, "", rough_sum, "B")
     lib.connect_material_property(rough_sum, "", unreal.MaterialProperty.MP_ROUGHNESS)
 
+    # --- Diorama edge clip (2026-10-02) ------------------------------------------------
+    # Owned land only. Inert here: M_Ground stays Opaque, which ignores Opacity Mask, so every
+    # map renders as before. A map opts in with an instance that overrides the blend mode to
+    # Masked (MI_Ground_Diorama, build_diorama_prototype.py); the rectangle itself is
+    # MPC_OwnedLand's, which AAirsideOwnedLandActor writes.
+    mpc = nodes.owned_land_collection(on_fail=fail)
+    clip = nodes.owned_rect_clip(lib, mat, mpc, -400, 2100) if mpc else None
+    if clip is None:
+        fail("owned-rect clip did not wire")
+        return None
+    lib.connect_material_property(clip, "", unreal.MaterialProperty.MP_OPACITY_MASK)
+
     lib.recompile_material(mat)
     unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
     say("built %s" % path)

@@ -79,6 +79,11 @@ void FGroundCoverMask::AddPolygon(TArray<FVector2D> Outline)
 
 bool FGroundCoverMask::IsCovered(const FVector2D& Point) const
 {
+	// FBox2D::IsInside is strict, so the edge itself falls on the covered side - see SetLand.
+	if (Land.bIsValid && !Land.IsInside(Point))
+	{
+		return true;
+	}
 	const FBucket* Bucket = Buckets.Find(BucketOf(Point));
 	if (Bucket == nullptr)
 	{
