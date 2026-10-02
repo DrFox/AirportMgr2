@@ -2431,3 +2431,43 @@ void URoadEditFacade::NormaliseTaxiwayNames()
 		OnTaxiwaySplit.Broadcast(Rename.SplitOff, Rename.From);
 	}
 }
+
+bool URoadEditFacade::RenameTaxiway(int32 TaxiwayId, const FString& Requested, FString& OutWhy)
+{
+	URoadNetwork* Network = Actor().Network;
+	if (Network == nullptr)
+	{
+		OutWhy = TEXT("No airport");
+		UE_LOG(LogRoadMesh, Warning, TEXT("TaxiwayNames: rename taxiway %d to '%s' refused: no network"), TaxiwayId, *Requested);
+		return false;
+	}
+	// REFUSED BEFORE THE SNAPSHOT, SetRunwayFacts' reason: a refusal known first costs no snapshot and no restore.
+	OutWhy = Network->WhyTaxiwayNameRefused(TaxiwayId, Requested);
+	const FString Was = Network->TaxiwayDisplayName(TaxiwayId);
+	if (!OutWhy.IsEmpty())
+	{
+		// THE PIE CHECK'S LINE for a refusal: the card shows the same sentence under the field.
+		UE_LOG(LogRoadMesh, Log, TEXT("TaxiwayNames: rename %s (taxiway %d) to '%s' refused: %s"), *Was, TaxiwayId, *Requested, *OutWhy);
+		return false;
+	}
+	if (Was.Equals(Requested.TrimStartAndEnd(), ESearchCase::IgnoreCase))
+	{
+		// Already so (any case): true, but no undo step - a Ctrl+Z that changes nothing is one the player presses twice.
+		UE_LOG(LogRoadMesh, Log, TEXT("TaxiwayNames: rename %s to '%s' - already so, no edit"), *Was, *Requested);
+		return true;
+	}
+	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("rename taxiway"));
+	if (!Network->RenameTaxiway(TaxiwayId, Requested))
+	{
+		// UNREACHABLE while WhyTaxiwayNameRefused is RenameTaxiway's only gate, but an open scope that is not committed
+		// must be rolled back explicitly (rule 40), never left to its destructor.
+		Edit.Rollback();
+		OutWhy = TEXT("Refused");
+		UE_LOG(LogRoadMesh, Warning, TEXT("TaxiwayNames: rename %s to '%s' refused by the model after the guard passed"), *Was, *Requested);
+		return false;
+	}
+	// FACTS, NOT TOPOLOGY: a name re-derives no guideline; the card and caches hear the GuidelineRevision the model moved.
+	CommitAndNotify(Edit, EChangeKind::Facts);
+	UE_LOG(LogRoadMesh, Log, TEXT("TaxiwayNames: %s renamed %s (taxiway %d)"), *Was, *Network->TaxiwayDisplayName(TaxiwayId), TaxiwayId);
+	return true;
+}

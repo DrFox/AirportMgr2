@@ -723,3 +723,66 @@ int32 URoadNetwork::EnsureTaxiwayNames(const FTaxiwayNamingRules& Rules)
 	UE_LOG(LogAirside, Log, TEXT("TaxiwayNames: backfilled %d taxiway(s), %d connector(s)"), Lettered, Connectors);
 	return Lettered + Connectors;
 }
+
+FString URoadNetwork::WhyTaxiwayNameRefused(int32 TaxiwayId, const FString& Requested) const
+{
+	const FTaxiway* Taxiway = GetTaxiway(TaxiwayId);
+	if (Taxiway == nullptr)
+	{
+		return TEXT("That taxiway is gone");
+	}
+	const FString Name = Requested.TrimStartAndEnd().ToUpper();
+	if (Name.Len() < 1 || Name.Len() > 3)
+	{
+		return TEXT("A taxiway name is 1 to 3 letters or digits");
+	}
+	for (const TCHAR Character : Name)
+	{
+		if (!FChar::IsAlnum(Character))
+		{
+			return TEXT("A taxiway name is 1 to 3 letters or digits");
+		}
+		if (TaxiwayLetters::IsAvoided(Character))
+		{
+			return TEXT("I, O and X are avoided: they read as 1, 0 and closed");
+		}
+	}
+	if (Name.Equals(TaxiwayDisplayName(TaxiwayId), ESearchCase::IgnoreCase))
+	{
+		return FString();
+	}
+	if (IsTaxiwayNameTaken(Name, TaxiwayId))
+	{
+		return FString::Printf(TEXT("%s is taken"), *Name);
+	}
+	// A LETTERED TAXIWAY'S RENAME RENAMES EVERY CONNECTOR THAT DERIVES FROM IT (spec: "renaming A to K makes A1..A4 read
+	// K1..K4") - so each derived name must be free too, or the rename would show one name twice.
+	if (!Taxiway->IsConnector())
+	{
+		for (const FTaxiway& Each : Taxiways)
+		{
+			if (Each.bAlive && Each.ParentId == TaxiwayId && Each.Name.IsEmpty())
+			{
+				const FString Derived = Name + FString::FromInt(Each.ConnectorNumber);
+				if (IsTaxiwayNameTaken(Derived, Each.Id))
+				{
+					return FString::Printf(TEXT("%s is taken"), *Derived);
+				}
+			}
+		}
+	}
+	return FString();
+}
+
+bool URoadNetwork::RenameTaxiway(int32 TaxiwayId, const FString& Requested)
+{
+	FTaxiway* Taxiway = FindTaxiwayMutable(TaxiwayId);
+	if (Taxiway == nullptr || !WhyTaxiwayNameRefused(TaxiwayId, Requested).IsEmpty())
+	{
+		return false;
+	}
+	Taxiway->Name = Requested.TrimStartAndEnd().ToUpper();
+	Taxiway->bPlayerNamed = true;
+	NoteFactChanged();
+	return true;
+}

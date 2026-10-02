@@ -958,6 +958,22 @@ public:
 	int32 EnsureTaxiwayNames(const FTaxiwayNamingRules& Rules);
 
 	/**
+	 * Why Requested cannot name TaxiwayId, or empty when it can (spec "Rename"): 1-3 letters or digits after trimming,
+	 * none of I/O/X, and unique - counting every connector name the rename would DERIVE ("K" refused while "K2" shows).
+	 * Renaming to its own display name is no refusal. Case-insensitive; RenameTaxiway stores it upper-cased.
+	 * ENFORCED BY: Airside.Model.TaxiwayNames.RenameRefusals
+	 */
+	FString WhyTaxiwayNameRefused(int32 TaxiwayId, const FString& Requested) const;
+
+	/**
+	 * Store Requested (trimmed, upper-cased) as TaxiwayId's Name and mark it the player's (never re-judged). False,
+	 * nothing written, when WhyTaxiwayNameRefused objects. Moves GuidelineRevision (plan D11). URoadEditFacade::
+	 * RenameTaxiway is the edit (undo step); this is the write.
+	 * ENFORCED BY: Airside.Model.TaxiwayNames.RenamePropagatesToConnectors
+	 */
+	bool RenameTaxiway(int32 TaxiwayId, const FString& Requested);
+
+	/**
 	 * Removes the entity, the anchor nodes it owns, and every guideline edge incident to
 	 * them - RemoveGuidelineNode cascades. So deleting a stand also deletes the taxi line
 	 * drawn into it, which is intended (a lead-in to a deleted stand leads nowhere) but is
