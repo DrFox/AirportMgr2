@@ -23,6 +23,7 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Model/LandGrid.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
 #include "UObject/UnrealType.h"
@@ -123,6 +124,11 @@ namespace NetworkIdentity
 				{
 					NoRule.Add(Property->GetName());
 				}
+			}
+			else if (FStructProperty* Struct = CastField<FStructProperty>(Property); Struct != nullptr && Struct->Struct == FLandGrid::StaticStruct())
+			{
+				// Owned land (2026-10-02): one more tile is a value no default grid has.
+				static_cast<FLandGrid*>(Value)->Owned ^= 1ull;
 			}
 			else
 			{

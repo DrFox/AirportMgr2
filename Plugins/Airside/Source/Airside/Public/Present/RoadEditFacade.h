@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/BuildPurse.h"
+#include "Model/LandGrid.h"
 #include "Tool/BuildSession.h"
 #include "Tool/RoadEditTarget.h"
 #include "RoadEditFacade.generated.h"
@@ -233,6 +234,19 @@ public:
 	 */
 	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnBuildRefused, const FBuildQuote& /*Quote*/, EBuildRefusal /*Why*/);
 	FOnBuildRefused OnRefused;
+
+	/**
+	 * The owned land changed - authored, bought, or a load brought different land. Airside's presentation
+	 * (AAirsideOwnedLandActor, AAirsideGroundCoverActor) and the game module's camera listen; ops hears a
+	 * PURCHASE through OnLandBought, not this. Not fired by undo, redo or clear: land is not undone (AdoptNetwork).
+	 * NATIVE, NOT DYNAMIC: FLandGrid carries a uint64, and nothing in Blueprint binds here.
+	 * ENFORCED BY: Airside.Present.OwnedLand.UndoKeepsLand
+	 */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnOwnedLandChanged, const FLandGrid& /*Land*/);
+	FOnOwnedLandChanged OnOwnedLandChanged;
+
+	/** Set the owned land outright - the level authoring script and tests. Not a purchase: charges nothing. */
+	void AuthorOwnedLand(const FLandGrid& Land);
 
 	// --- IRoadEditTarget ---------------------------------------------------------------
 

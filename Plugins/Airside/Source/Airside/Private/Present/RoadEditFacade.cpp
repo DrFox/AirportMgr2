@@ -369,6 +369,15 @@ void URoadEditFacade::CommitAndNotify(FRoadEditScope& Edit, EChangeKind Kind)
 
 void URoadEditFacade::AdoptNetwork(URoadNetwork& NewNetwork)
 {
+	// LAND IS NOT UNDONE (land purchase spec 3.1): an undo, redo or clear adopts a network that is not the live one -
+	// a snapshot taken before the latest purchase, or a fresh one - and taking its mask would hand back paid-for land.
+	// The live mask travels onto whatever is adopted. RollBackOpenEdit adopts the live object itself, so this is a
+	// no-op there; a load goes through RestoreInPlace, whose deserialised mask is the save's and stands.
+	// ENFORCED BY: Airside.Present.OwnedLand.UndoKeepsLand
+	if (Actor().Network != nullptr && Actor().Network != &NewNetwork)
+	{
+		NewNetwork.SetOwnedLand(Actor().Network->GetOwnedLand());
+	}
 	Actor().Network = &NewNetwork;
 
 	// The preview may be describing a node that no longer exists in the replacement, and its
@@ -444,8 +453,19 @@ bool URoadEditFacade::RestoreInPlace(TFunctionRef<bool(URoadNetwork&)> Deseriali
 		UE_LOG(LogRoadMesh, Warning, TEXT("RestoreInPlace: the restore failed - rebuilding what the network holds, history kept"));
 	}
 	AdoptNetwork(*Owner.Network);
+	// A LOAD MAY BRING DIFFERENT LAND - the one replacement that does; undo and clear carry it (AdoptNetwork).
+	OnOwnedLandChanged.Broadcast(Owner.Network->GetOwnedLand());
 	AnnounceReplaced(ENetworkReplace::Adopted);
 	return bRestored;
+}
+
+void URoadEditFacade::AuthorOwnedLand(const FLandGrid& Land)
+{
+	// ENSURED, like every edit: a fresh airport has no network until its first edit, and land is authored first.
+	URoadNetwork& Network = EnsureNetwork();
+	Network.SetOwnedLand(Land);
+	UE_LOG(LogRoadMesh, Log, TEXT("OwnedLand: authored - %d tile(s) of %dx%d"), Land.NumOwned(), Land.Columns, Land.Rows);
+	OnOwnedLandChanged.Broadcast(Land);
 }
 
 bool URoadEditFacade::ApplyInteractiveMutation(const TCHAR* Label,
