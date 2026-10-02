@@ -17,7 +17,8 @@ enum class EAirlineSatisfactionCause : uint8;
 /** Which way an airline's satisfaction has gone today against yesterday's close. */
 enum class EAirlineTrend : uint8 { Up, Down, Flat };
 
-/** One row of the airlines list. */
+/** One row of the airlines list. Built only from roster standings (UAirlineListViewModel::BuildRows), so every row HAS one - no
+ *  bHasStanding here, unlike FAirlineDetail, which is asked for an id. */
 struct FAirlineListRow
 {
 	FName AirlineId;
@@ -67,10 +68,15 @@ struct FAirlineFlightRow
 struct FAirlineDetail
 {
 	FText Name;
+	/** The roster has a standing for this airline. FALSE: SatisfactionPct is meaningless (0) and the widget prints "—", never "0%"
+	 *  (review focus 1) - an id the roster was never seeded with, or a detail built before the seed. */
+	bool bHasStanding = false;
+	/** Meaningful only when bHasStanding. */
 	int32 SatisfactionPct = 0;
-	/** "~3.1 offers/h now"; empty with no generator or clock. */
+	/** "~3.1 offers/h now"; empty with no generator or clock, or when the airline has no catalog definition. */
 	FText RateLine;
-	/** "mood x0.9 · 3 of 5 types can come", or "mood x1.0 · fleet not judged yet". */
+	/** "mood x0.9 · 3 of 5 types can come", or "mood x1.0 · fleet not judged yet"; empty with no generator, or when the airline has
+	 *  no catalog definition. */
 	FText FactorLine;
 	/** Each kept day's close (today's running value last), 0..1, oldest first - missing days omitted. Empty when !bHasHistory. */
 	TArray<double> Trend;
@@ -128,7 +134,7 @@ public:
 	 */
 	static EAirlineTrend TrendOf(const FAirlineDays* Days);
 
-	/** Half a percentage point: a move that prints as the same whole percent is no direction (spec 2026-10-02 section 2). */
+	/** The rule: a change of at most half a percentage point (0.005) is Flat - no direction (spec 2026-10-02 section 2). */
 	static constexpr double FlatWithin = 0.005;
 };
 

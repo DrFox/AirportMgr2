@@ -168,6 +168,7 @@ bool FAirlinesDetailNoHistoryYetTest::RunTest(const FString&)
 
 	const FAirlineDetail Fresh = UAirlineDetailViewModel::Build(Sources, Alpha, Sources.Clock->Now());
 	TestEqual(TEXT("the name"), Fresh.Name.ToString(), FString(TEXT("Alpha Air")));
+	TestTrue(TEXT("a seeded airline has a standing"), Fresh.bHasStanding);
 	TestEqual(TEXT("the percentage is the start, not 0"), Fresh.SatisfactionPct, static_cast<int32>(FMath::RoundToInt(F.Roster->Tuning.Start * 100.0)));
 	TestFalse(TEXT("no history yet"), Fresh.bHasHistory);
 	TestEqual(TEXT("so no trend points"), Fresh.Trend.Num(), 0);
@@ -193,6 +194,7 @@ bool FAirlinesDetailNoHistoryYetTest::RunTest(const FString&)
 	TestFalse(TEXT("a ghost has no history"), Ghost.bHasHistory);
 	TestFalse(TEXT("and is not judged"), Ghost.bJudged);
 	TestEqual(TEXT("and has no causes"), Ghost.Tallies.Num(), 0);
+	TestFalse(TEXT("and SAYS it has no standing, so the pane prints a dash and not 0%"), Ghost.bHasStanding);
 	return true;
 }
 

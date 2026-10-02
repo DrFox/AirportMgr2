@@ -130,6 +130,8 @@ FAirlineDetail UAirlineDetailViewModel::Build(const FAirlinePanelSources& Source
 	const UAirlineDefinition* Airline = AirlineVmDefinitionOf(Sources.Airlines, AirlineId);
 	Out.Name = AirlineVmNameOf(Airline, AirlineId);
 	const FAirlineStanding* Standing = Sources.Roster != nullptr ? Sources.Roster->Find(AirlineId) : nullptr;
+	// NO STANDING IS SAID, not shown as 0%: bHasStanding false and the widget prints a dash (review focus 1).
+	Out.bHasStanding = Standing != nullptr;
 	Out.SatisfactionPct = Standing != nullptr ? AirlineVmPercent(Standing->Satisfaction) : 0;
 
 	// THE FLEET FIRST: the factor line counts its ticks. Empty before the generator's first admission check - "not judged yet", which
