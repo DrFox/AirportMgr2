@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Build/ExitGeometry.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
 #include "Profiles/RoadProfile.h"
@@ -415,6 +416,34 @@ bool FTJunctionFitsBothWaysTest::RunTest(const FString& Parameters)
 			static_cast<int32>(Inward(L, Far, Own)), static_cast<int32>(ERoadPlacement::TooShortForCorner));
 	}
 
+	return true;
+}
+
+/**
+ * TAXIWAY NAMES (spec 2026-10-02) READ THE RUNWAY END'S WINDOW: "continue in line (within ExitGeometry::InLineEndDegrees,
+ * 10 deg)". Model/ may not include Build/ (Check-Architecture rule 1), so the window moved to RoadGeom and the runway end
+ * forwards to it - one definition, measured here on both sides of the edge and through both callers.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInLineIsOneDefinitionTest,
+	"Airside.Solve.InLineIsOneDefinition",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInLineIsOneDefinitionTest::RunTest(const FString& Parameters)
+{
+	static_assert(ExitGeometry::InLineEndDegrees == RoadGeom::InLineDegrees, "the runway end's window IS the naming window");
+	const FVector2D Back(-1.0, 0.0);
+	for (double Off = 0.0; Off <= 20.0; Off += 0.5)
+	{
+		const double Radians = FMath::DegreesToRadians(Off);
+		const FVector2D On(FMath::Cos(Radians), FMath::Sin(Radians));
+		const bool bExpected = Off < RoadGeom::InLineDegrees - 0.01;
+		if (Off > RoadGeom::InLineDegrees - 0.01 && Off < RoadGeom::InLineDegrees + 0.01) { continue; }   // the edge itself
+		TestEqual(FString::Printf(TEXT("%.1f deg off straight: in line is %d"), Off, bExpected ? 1 : 0),
+			RoadGeom::IsInLine(Back, On), bExpected);
+		TestEqual(FString::Printf(TEXT("%.1f deg: the runway end agrees"), Off),
+			ExitGeometry::IsInLineAtRunwayEnd(Back, On), RoadGeom::IsInLine(Back, On));
+	}
 	return true;
 }
 
