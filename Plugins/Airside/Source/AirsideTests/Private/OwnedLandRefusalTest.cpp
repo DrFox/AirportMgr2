@@ -5,6 +5,8 @@
 #include "Model/RoadNetwork.h"
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
+#include "Tool/ApronDrawTool.h"
+#include "Tool/RunwayTool.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -83,6 +85,68 @@ bool FOwnedLandNoGridRefusesNothing::RunTest(const FString&)
 		Actor->WhyApronRefused(RefusalSquare(FVector2D(9.0e5, 9.0e5), 10000.0)).IsEmpty());
 	TestTrue(TEXT("a runway anywhere is not refused for land"),
 		Actor->WhyRunwayRefused(FVector2D(9.0e5, 0.0), FVector2D(9.0e5, 2.0e5), TestProfiles::Runway()).IsEmpty());
+	return true;
+}
+
+
+namespace
+{
+	/** Records the labels a tool asked to have drawn, and with which style. Refusal-prefixed: unity build. */
+	struct FRefusalLabelSink : public IToolPreviewSink
+	{
+		TArray<FString> Labels;
+		TArray<EPreviewStyle> Styles;
+		virtual void Marker(const FVector2D&, EPreviewStyle) override {}
+		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void Label(const FVector2D&, const FString& Text, EPreviewStyle Style) override
+		{
+			Labels.Add(Text);
+			Styles.Add(Style);
+		}
+		bool SaysOutside() const
+		{
+			for (int32 I = 0; I < Labels.Num(); ++I)
+			{
+				if (Labels[I] == FLandGrid::OutsideText && Styles[I] == EPreviewStyle::Refused) { return true; }
+			}
+			return false;
+		}
+	};
+}
+
+/**
+ * THE GHOSTS GO RED BEFORE THE CLICK (land purchase spec R7): runways and aprons had no Why* until land purchase, so
+ * their ghost drew a strip into the void exactly like one on owned land, and only the click refused - with a log line.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOwnedLandPreviewsSayOutside, "Airside.Tool.OwnedLand.PreviewsSayOutside",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOwnedLandPreviewsSayOutside::RunTest(const FString&)
+{
+	FAirsideTestWorld Fixture;
+	ARoadNetworkActor* Actor = Fixture.Actor;
+	Actor->GetEditFacade()->AuthorOwnedLand(RefusalStart());
+	Actor->MinimumRunwayLength = 100.0;
+
+	FRunwayTool Runway;
+	Runway.OnClick(TestTool::ContextAt(*Actor, FVector2D(0.0, -50000.0)));
+	FRefusalLabelSink RunwayIn;
+	Runway.BuildPreview(TestTool::ContextAt(*Actor, FVector2D(0.0, 50000.0)), RunwayIn);
+	TestFalse(TEXT("a runway ghost on owned land does not say Outside"), RunwayIn.SaysOutside());
+	FRefusalLabelSink RunwayOut;
+	Runway.BuildPreview(TestTool::ContextAt(*Actor, FVector2D(0.0, 150000.0)), RunwayOut);
+	TestTrue(TEXT("a runway ghost past the north cut says Outside your land, in Refused"), RunwayOut.SaysOutside());
+
+	FApronDrawTool Apron;
+	Apron.OnClick(TestTool::ContextAt(*Actor, FVector2D(5000.0, 10000.0)));
+	Apron.OnClick(TestTool::ContextAt(*Actor, FVector2D(25000.0, 10000.0)));
+	Apron.OnClick(TestTool::ContextAt(*Actor, FVector2D(25000.0, 20000.0)));
+	FRefusalLabelSink ApronIn;
+	Apron.BuildPreview(TestTool::ContextAt(*Actor, FVector2D(5000.0, 20000.0)), ApronIn);
+	TestFalse(TEXT("an apron ghost on owned land does not say Outside"), ApronIn.SaysOutside());
+	FRefusalLabelSink ApronOut;
+	Apron.BuildPreview(TestTool::ContextAt(*Actor, FVector2D(40000.0, 20000.0)), ApronOut);
+	TestTrue(TEXT("an apron ghost whose next corner is past the east cut says Outside your land"), ApronOut.SaysOutside());
 	return true;
 }
 

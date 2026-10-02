@@ -15,6 +15,8 @@ struct AIRSIDE_API FApronOutlineTarget final : public IOutlineTarget
 	virtual bool Commit(const FToolContext& Context, const TArray<FVector2D>& Corners) const override;
 	virtual bool RemoveUnderCursor(const FToolContext& Context) const override;
 	virtual void PreviewRemoval(const FToolContext& Context, IToolPreviewSink& Sink) const override;
+	/** IRoadEditTarget::WhyApronRefused - AddApron asks the same at the click. */
+	virtual FString WhyRefused(const FToolContext& Context, TArrayView<const FVector2D> Corners) const override;
 };
 
 /**

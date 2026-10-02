@@ -48,6 +48,11 @@ void FApronOutlineTarget::PreviewRemoval(const FToolContext& Context,
 	}
 }
 
+FString FApronOutlineTarget::WhyRefused(const FToolContext& Context, TArrayView<const FVector2D> Corners) const
+{
+	return Context.Target != nullptr ? Context.Target->WhyApronRefused(Corners) : FString();
+}
+
 FText FApronDrawTool::GetDisplayName() const
 {
 	return LOCTEXT("ApronTool", "Apron");
