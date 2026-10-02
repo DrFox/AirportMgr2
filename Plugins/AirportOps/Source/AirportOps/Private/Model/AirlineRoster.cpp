@@ -47,7 +47,7 @@ void UAirlineRoster::OnFlightOffBlocks(const FFlightOffBlocksEvent& Event)
 	}
 	if (Event.LateBySeconds <= 0.0)
 	{
-		Apply(*Row, Tuning.OnTimeBonus, TEXT("on time"));
+		Apply(*Row, Tuning.OnTimeBonus, EAirlineSatisfactionCause::OnTime, TEXT("on time"));
 		return;
 	}
 	// PER TEN GAME MINUTES, CAPPED: a flight two hours late is not twelve times worse to an airline
@@ -57,7 +57,7 @@ void UAirlineRoster::OnFlightOffBlocks(const FFlightOffBlocksEvent& Event)
 	// spent holding for the runway, taxiing in and taxiing out is NOT scored - out of scope for the ruling of 2026-10-02, and a
 	// candidate for its own penalty later; if one comes, it is a second line here with its own cause, not a change to this one.
 	const double Penalty = FMath::Min(Tuning.LatePenaltyCap, Tuning.LatePenaltyPerTenMinutes * (Event.LateBySeconds / 600.0));
-	Apply(*Row, -Penalty, FString::Printf(TEXT("late off stand (%d min)"), FMath::CeilToInt(Event.LateBySeconds / 60.0)));
+	Apply(*Row, -Penalty, EAirlineSatisfactionCause::LateOffStand, FString::Printf(TEXT("late off stand (%d min)"), FMath::CeilToInt(Event.LateBySeconds / 60.0)));
 }
 
 void UAirlineRoster::OnOfferExpired(const FOfferExpiredEvent& Event)
@@ -83,11 +83,11 @@ void UAirlineRoster::OnOfferExpired(const FOfferExpiredEvent& Event)
 	// the airline still minds, but less.
 	if (Event.Reason == ELapseReason::NeverAcceptable)
 	{
-		Apply(*Row, -Tuning.NeverAcceptablePenalty, TEXT("offer never acceptable"));
+		Apply(*Row, -Tuning.NeverAcceptablePenalty, EAirlineSatisfactionCause::OfferNeverAcceptable, TEXT("offer never acceptable"));
 	}
 	else
 	{
-		Apply(*Row, -Tuning.IgnoredPenalty, TEXT("offer ignored"));
+		Apply(*Row, -Tuning.IgnoredPenalty, EAirlineSatisfactionCause::OfferIgnored, TEXT("offer ignored"));
 	}
 }
 
@@ -122,7 +122,7 @@ void UAirlineRoster::OnTurnaroundEnded(const FTurnaroundEndedEvent& Event, const
 	// PROPORTIONAL, ONE KNOB (user ruling 2026-09-29): the fraction NOT delivered, so a truck that got most of
 	// the way there costs less than one that never came, and unfuelled is simply the whole of it.
 	const double Short = 1.0 - FMath::Clamp(Event.Delivered / Event.Wanted, 0.0, 1.0);
-	Apply(*Row, -Tuning.ShortfallPenalty * Short,
+	Apply(*Row, -Tuning.ShortfallPenalty * Short, EAirlineSatisfactionCause::LeftShortOfFuel,
 		Event.Outcome == EFuelOutcome::PartFuelled ? TEXT("left part-fuelled") : TEXT("left unfuelled"));
 }
 
@@ -136,13 +136,16 @@ void UAirlineRoster::OnFlightCancelled(const FFlightCancelledEvent& Event)
 	// CLOSURE costs, and since #442 so does the player's CANCEL of a flight that had not arrived - at the SAME rate, the
 	// closure's per-flight ClosureCancelPenalty: each lost the airline the flight to the player's own hand.
 	const TCHAR* Cause = nullptr;
+	EAirlineSatisfactionCause Kind = EAirlineSatisfactionCause::CancelledAirportClosed;
 	switch (Event.Reason)
 	{
 	case ECancelReason::AirportClosed:
 		Cause = TEXT("cancelled: airport closed");
+		Kind = EAirlineSatisfactionCause::CancelledAirportClosed;
 		break;
 	case ECancelReason::PlayerCancelled:
 		Cause = TEXT("cancelled by the player");
+		Kind = EAirlineSatisfactionCause::CancelledByPlayer;
 		break;
 	case ECancelReason::NoRunway:
 	case ECancelReason::Unstuck:
@@ -161,7 +164,7 @@ void UAirlineRoster::OnFlightCancelled(const FFlightCancelledEvent& Event)
 			*Event.AirlineId.ToString(), Event.FlightId);
 		return;
 	}
-	Apply(*Row, -Tuning.ClosureCancelPenalty, Cause);
+	Apply(*Row, -Tuning.ClosureCancelPenalty, Kind, Cause);
 }
 AIRSIDE_EXHAUSTIVE_SWITCH_END
 
@@ -175,11 +178,11 @@ void UAirlineRoster::OnDayEnded(const FDayEndedEvent& Event)
 		const double Drift = FMath::Abs(Gap) < DriftSnap ? Gap : Gap * FMath::Clamp(Tuning.DailyDriftFraction, 0.0, 1.0);
 		// NOT REMEMBERED as the row's cause: a day's forgiveness is not something the player did, and
 		// letting it replace "late off stand" would hide the one reason they could act on.
-		Apply(Row, Drift, TEXT("a day's forgiveness"), /*bRemember=*/false);
+		Apply(Row, Drift, EAirlineSatisfactionCause::DailyDrift, TEXT("a day's forgiveness"), /*bRemember=*/false);
 	}
 }
 
-void UAirlineRoster::Apply(FAirlineStanding& Standing, double Delta, const FString& Cause, bool bRemember)
+void UAirlineRoster::Apply(FAirlineStanding& Standing, double Delta, EAirlineSatisfactionCause Kind, const FString& Cause, bool bRemember)
 {
 	const double Old = Standing.Satisfaction;
 	Standing.Satisfaction = FMath::Clamp(Old + Delta, 0.0, 1.0);
@@ -193,7 +196,7 @@ void UAirlineRoster::Apply(FAirlineStanding& Standing, double Delta, const FStri
 	}
 	if (bRemember)
 	{
-		Standing.Recent.Add({ Moved, Cause });
+		Standing.Recent.Add({ Moved, Cause, Kind });
 		if (Standing.Recent.Num() > RecentCap)
 		{
 			Standing.Recent.RemoveAt(0, Standing.Recent.Num() - RecentCap);
@@ -205,6 +208,6 @@ void UAirlineRoster::Apply(FAirlineStanding& Standing, double Delta, const FStri
 		*Standing.AirlineId.ToString(), Old, Standing.Satisfaction, *Cause);
 	if (Bus != nullptr)
 	{
-		Bus->Publish(FAirlineSatisfactionEvent{ Standing.AirlineId, Old, Standing.Satisfaction, Cause });
+		Bus->Publish(FAirlineSatisfactionEvent{ Standing.AirlineId, Old, Standing.Satisfaction, Cause, Kind });
 	}
 }

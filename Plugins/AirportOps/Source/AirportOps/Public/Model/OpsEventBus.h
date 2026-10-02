@@ -4,6 +4,7 @@
 #include "AirportOpsLog.h"
 #include "Misc/TVariant.h"
 #include "Model/Airport.h"
+#include "Model/AirlineRoster.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/BuildPurse.h"
 #include "Model/Flight.h"
@@ -187,6 +188,8 @@ struct AIRPORTOPS_API FAirlineSatisfactionEvent
 	double Old = 0.0;
 	double New = 0.0;
 	FString Cause;
+	/** The cause as a kind; Cause is the text with its figures. */
+	EAirlineSatisfactionCause Kind = EAirlineSatisfactionCause::OnTime;
 	static const TCHAR* EventName() { return TEXT("AirlineSatisfaction"); }
 	FString Describe() const;
 };

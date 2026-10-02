@@ -15,6 +15,25 @@ struct FOfferDeclinedEvent;
 struct FOfferExpiredEvent;
 struct FTurnaroundEndedEvent;
 
+/**
+ * WHY an airline's satisfaction moved, as a kind rather than a sentence. The text in FAirlineSatisfactionChange::Cause carries
+ * figures ("late off stand (25 min)") and is for the player to read; anything that COUNTS causes (the airline history's tally) or
+ * LABELS them (the panel's exhaustive switch) keys on this, because a string match breaks the day someone rewords the text.
+ * UENUM so UHT sees it - the change struct below is a saved USTRUCT.
+ */
+UENUM()
+enum class EAirlineSatisfactionCause : uint8
+{
+	OnTime,
+	LateOffStand,
+	OfferIgnored,
+	OfferNeverAcceptable,
+	LeftShortOfFuel,
+	CancelledAirportClosed,
+	CancelledByPlayer,
+	DailyDrift,
+};
+
 /** One change to an airline's satisfaction and what caused it - the "why" the inbox row shows. */
 USTRUCT()
 struct AIRPORTOPS_API FAirlineSatisfactionChange
@@ -26,6 +45,10 @@ struct AIRPORTOPS_API FAirlineSatisfactionChange
 
 	/** "on time", "late off stand (25 min)", "offer ignored", ... */
 	UPROPERTY() FString Cause;
+
+	/** The same cause as a kind. A save written before it existed loads OnTime (the zero value) - harmless, as no save carries
+	 *  these yet (memory: no player saves) and Recent is display only. */
+	UPROPERTY() EAirlineSatisfactionCause Kind = EAirlineSatisfactionCause::OnTime;
 };
 
 /**
@@ -157,5 +180,5 @@ private:
 
 	/** Clamp to 0..1; if it moved, log and publish it - and, bRemember, record it as the row's latest
 	 *  cause (trimming Recent). */
-	void Apply(FAirlineStanding& Standing, double Delta, const FString& Cause, bool bRemember = true);
+	void Apply(FAirlineStanding& Standing, double Delta, EAirlineSatisfactionCause Kind, const FString& Cause, bool bRemember = true);
 };
