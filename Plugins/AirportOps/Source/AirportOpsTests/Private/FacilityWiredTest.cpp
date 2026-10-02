@@ -56,6 +56,17 @@ namespace
 		Net.AddGuidelineEdge(MoveTemp(Edge));
 	}
 
+	/**
+	 * THE SHED'S ROW OF A QUOTE, by kind. The quote holds one row per offer in map order (the tank joined the shed on
+	 * 2026-10-02), so a test that read Modules[0] as "the shed" was reading whichever row the map listed first.
+	 */
+	const FModuleOfferQuote& FacilityWiredShedRow(const FFacilityQuote& Quote)
+	{
+		static const FModuleOfferQuote None;
+		const FModuleOfferQuote* Row = Quote.Modules.FindByPredicate([](const FModuleOfferQuote& Each) { return Each.Module == EDepotModule::Shed; });
+		return Row ? *Row : None;
+	}
+
 	struct FFacilityFuelField
 	{
 		FEntityInstanceId Stand;
@@ -233,14 +244,14 @@ bool FFacilityShedRelightsTest::RunTest(const FString&)
 
 	const FFacilityQuote Before = Runtime->QuoteFacility(Depot);
 	if (!TestTrue(TEXT("setup: the runtime's ceiling hook sees a second shed slot"),
-		Before.Modules.Num() == 1 && Before.Modules[0].Reserved >= 2)) { return false; }
+		FacilityWiredShedRow(Before).Reserved >= 2)) { return false; }
 	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
 	const int32 Lit = Plots->GetModuleCount();
 
 	const FPurchaseResult Shed = Runtime->BuyModule(Depot, EDepotModule::Shed);
 	TestTrue(TEXT("the shed is bought through the runtime's hooks"), Shed.Succeeded());
 	TestEqual(TEXT("and one more bay is lit - the module hook reached the facade and the rebuild"), Plots->GetModuleCount(), Lit + 1);
-	TestEqual(TEXT("the quote now owns two"), Runtime->QuoteFacility(Depot).Modules[0].Owned, 2);
+	TestEqual(TEXT("the quote now owns two"), FacilityWiredShedRow(Runtime->QuoteFacility(Depot)).Owned, 2);
 	TestEqual(TEXT("and has two bays"), Runtime->QuoteFacility(Depot).Bays, 2);
 	return true;
 }
@@ -358,7 +369,7 @@ bool FFacilityDragRefusesTest::RunTest(const FString&)
 	TestEqual(TEXT("the shed is refused while the drag is open"),
 		static_cast<int32>(Shed.Refusal), static_cast<int32>(EPurchaseRefusal::NotAFacility));
 	TestEqual(TEXT("and nothing is charged"), Runtime->GetLedger()->Balance(), Balance);
-	TestEqual(TEXT("nor built"), Runtime->QuoteFacility(Depot).Modules[0].Owned, 1);
+	TestEqual(TEXT("nor built"), FacilityWiredShedRow(Runtime->QuoteFacility(Depot)).Owned, 1);
 	Facade->EndInteractiveEdit(false);
 	TestTrue(TEXT("the depot's placement is still undoable - the history was not cleared"), Facade->CanUndo());
 	TestTrue(TEXT("with the drag closed, the same shed is bought"), Runtime->BuyModule(Depot, EDepotModule::Shed).Succeeded());
@@ -378,7 +389,7 @@ bool FFacilityMemoInvalidatesTest::RunTest(const FString&)
 	UOpsRuntime* Runtime = nullptr;
 	const FEntityInstanceId Wide = FacilityWiredDepot(TestWorld, Runtime);
 	if (!TestTrue(TEXT("setup: the wide depot is placed"), Wide.IsSet())) { return false; }
-	const int32 WideSheds = Runtime->QuoteFacility(Wide).Modules[0].Reserved;
+	const int32 WideSheds = FacilityWiredShedRow(Runtime->QuoteFacility(Wide)).Reserved;
 	if (!TestTrue(TEXT("setup: the wide plot reserves a second shed"), WideSheds >= 2)) { return false; }
 	const int32 Solves = Runtime->ReservationSolvesForTest();
 
@@ -393,7 +404,7 @@ bool FFacilityMemoInvalidatesTest::RunTest(const FString&)
 
 	const FFacilityQuote Q = Runtime->QuoteFacility(NarrowId);
 	TestTrue(TEXT("the narrow plot's ceiling is solved afresh"), Runtime->ReservationSolvesForTest() > Solves);
-	TestTrue(TEXT("and it holds fewer sheds than the wide one"), Q.Modules.Num() == 1 && Q.Modules[0].Reserved < WideSheds);
+	TestTrue(TEXT("and it holds fewer sheds than the wide one"), FacilityWiredShedRow(Q).Reserved < WideSheds);
 	return true;
 }
 
@@ -418,7 +429,7 @@ bool FFacilityRollbackResolvesTest::RunTest(const FString&)
 	if (!TestTrue(TEXT("setup: the second depot is placed"), SecondIndex != INDEX_NONE)) { return false; }
 	const FEntityInstanceId Depot = Actor->Network->EntityIdAt(SecondIndex);
 
-	const int32 WideSheds = Runtime->QuoteFacility(First).Modules[0].Reserved;
+	const int32 WideSheds = FacilityWiredShedRow(Runtime->QuoteFacility(First)).Reserved;
 	if (!TestTrue(TEXT("setup: a wide plot reserves a second shed"), WideSheds >= 2)) { return false; }
 
 	TArray<FVector2D> Narrow = Second;
@@ -429,7 +440,7 @@ bool FFacilityRollbackResolvesTest::RunTest(const FString&)
 		FRoadEditScope Edit(nullptr, Actor->Network, TEXT("re-plot"));
 		if (!TestTrue(TEXT("setup: the plot is narrowed inside the scope"),
 			FRoadNetworkTestAccess(*Actor->Network).SetEntityOutlineForTest(Depot, Narrow))) { return false; }
-		NarrowSheds = Runtime->QuoteFacility(Depot).Modules[0].Reserved;
+		NarrowSheds = FacilityWiredShedRow(Runtime->QuoteFacility(Depot)).Reserved;
 		TestTrue(TEXT("control: the narrow plot holds fewer sheds - the memo now holds THAT"), NarrowSheds < WideSheds);
 		const int32 Solves = Runtime->ReservationSolvesForTest();
 
@@ -437,7 +448,7 @@ bool FFacilityRollbackResolvesTest::RunTest(const FString&)
 		TestTrue(TEXT("the scope rolls back"), Edit.Rollback());
 		TestTrue(TEXT("in place: the network object is the one the memo was filled against"), Actor->Network == LiveBefore);
 
-		const int32 After = Runtime->QuoteFacility(Depot).Modules[0].Reserved;
+		const int32 After = FacilityWiredShedRow(Runtime->QuoteFacility(Depot)).Reserved;
 		TestTrue(TEXT("the ceiling was solved afresh - a pointer-keyed memo would answer from the failed edit"),
 			Runtime->ReservationSolvesForTest() > Solves);
 		TestEqual(TEXT("and it is the restored (wide) plot's, not the narrowed one's"), After, WideSheds);
@@ -517,8 +528,9 @@ bool FFacilityDetachClearsHooksTest::RunTest(const FString&)
 	TestFalse(TEXT("and the repair's removal hook (#266) - left set, it would remove modules from a field nobody drives"),
 		static_cast<bool>(Shop->ApplyModuleRemoval));
 	const FFacilityQuote Q = Shop->Quote(*TestWorld.Actor->Network, Depot);
-	TestTrue(TEXT("the shed row refuses NotAFacility"),
-		Q.Modules.Num() == 1 && Q.Modules[0].Refusal == EPurchaseRefusal::NotAFacility);
+	TestEqual(TEXT("one row per offer survives the detach"), Q.Modules.Num(), Runtime->GetFacilityPurchases()->ModuleOffers.Num());
+	TestTrue(TEXT("every module row refuses NotAFacility"),
+		Q.Modules.Num() > 0 && !Q.Modules.ContainsByPredicate([](const FModuleOfferQuote& Row) { return Row.Refusal != EPurchaseRefusal::NotAFacility; }));
 	return true;
 }
 
@@ -679,7 +691,10 @@ bool FFacilityRepairWiredTest::RunTest(const FString&)
 		TestEqual(TEXT("counting the sheds removed"), Refund->Count, 2 - Seats);
 		TestEqual(TEXT("with the refund as posted"), Refund->Amount, (2 - Seats) * Shed.Price, 1e-6);
 	}
-	TestEqual(TEXT("upkeep charges only the standing sheds"), Runtime->GetFacilityPurchases()->DailyUpkeep(*Actor->Network).Modules, Seats * Shed.UpkeepPerDay, 1e-9);
+	// The depot's one tank (FacilityWiredDepot's kit) stands and is charged too, now that the tank has an offer.
+	const FModuleOffer& Tank = Runtime->GetFacilityPurchases()->ModuleOffers.FindChecked(EDepotModule::Tank);
+	TestEqual(TEXT("upkeep charges only the standing sheds, and the tank"), Runtime->GetFacilityPurchases()->DailyUpkeep(*Actor->Network).Modules,
+		Seats * Shed.UpkeepPerDay + Tank.UpkeepPerDay, 1e-9);
 
 	Runtime->Tick(Step);
 	TestEqual(TEXT("once repaired, the next frame repairs nothing"), FacilityWiredRefunds(*Ledger), 1);

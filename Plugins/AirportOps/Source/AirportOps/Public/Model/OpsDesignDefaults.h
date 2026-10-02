@@ -26,4 +26,8 @@ namespace OpsDesignDefaults
 
 	/** The load a flight nobody offered asks for (key 7, an agent no flight owns): the MIDDLE of the draw, derived. */
 	inline constexpr double FuelLoadDefault = (FuelLoadDrawMin + FuelLoadDrawMax) * 0.5;
+
+	/** Litres one Tank module holds (spec 2026-10-02 §7). A starter depot's one tank is a working morning's fuel at a
+	 *  small field: the pacing model sold ~15,000-25,000 L a day at three stands (2026-10-02). */
+	inline constexpr double LitresPerTank = 30000.0;
 }

@@ -160,6 +160,44 @@ struct AIRPORTOPS_API FAirlineSatisfactionTuning
 	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0")) double MaxRateMultiplier = 1.5;
 };
 
+/** One rung of the fuel contract (spec 2026-10-02-progression-and-fuel-supply §7): litres delivered each game day at a
+ *  price per litre. A tier needs the tanks to hold one day's delivery - see UFuelSupply::JudgeContract. */
+USTRUCT(BlueprintType)
+struct AIRPORTOPS_API FFuelContractTier
+{
+	GENERATED_BODY()
+
+	FFuelContractTier() = default;
+	FFuelContractTier(double InLitres, double InPrice) : LitresPerDay(InLitres), PricePerLitre(InPrice) {}
+
+	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "0.0")) double LitresPerDay = 0.0;
+	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "0.0")) double PricePerLitre = 0.0;
+};
+
+/**
+ * What fuel costs the airport and how it arrives (spec 2026-10-02 §7). FIRST GUESSES from the pacing model
+ * (Tools/pacing_model.py, 2026-10-02): contract 0.9, spot 1.2 against a 2.0 sell price. Larger tiers will sit on the
+ * cargo milestone track when milestones exist; until then every tier is open to anyone with the tanks for it.
+ */
+USTRUCT(BlueprintType)
+struct AIRPORTOPS_API FFuelSupplyFigures
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "1.0")) double LitresPerTank = OpsDesignDefaults::LitresPerTank;
+	/** A new game opens with the starter tank full, so the first flights can be fuelled before any order arrives. */
+	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "0.0")) double StartingStockLitres = OpsDesignDefaults::LitresPerTank;
+	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "0.0")) double SpotPricePerLitre = 1.2;
+	/** GAME seconds from order to delivery. A timer until there is a landside road for a tanker to drive. */
+	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "0.0")) double SpotDelaySeconds = 7200.0;
+	UPROPERTY(EditAnywhere, Category = "Fuel") TArray<FFuelContractTier> ContractTiers = {
+		FFuelContractTier(5000.0, 0.9), FFuelContractTier(10000.0, 0.9),
+		FFuelContractTier(20000.0, 0.9), FFuelContractTier(40000.0, 0.9) };
+	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "1")) int32 ContractTermDays = 7;
+	/** Cancelling owes this share of the days left at the tier's daily cost. */
+	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "0.0", ClampMax = "1.0")) double CancelFraction = 0.5;
+};
+
 /** A new-game setup. Difficulty is these numbers and nothing else (spec §5.2). */
 UCLASS(BlueprintType)
 class AIRPORTOPS_API UScenario : public UOpsDefinition
@@ -242,14 +280,20 @@ public:
 	/**
 	 * The depot modules the player can buy, and what each grants. Into UFacilityPurchases, applied at attach
 	 * and after every load by UOpsRuntime::ApplyScenarioFigures (#449). THE SHED ONLY this slice (spec 2026-09-29-facility-upgrades §1: pumps and tanks are out of
-	 * scope) - a module with no row here is not for sale, and its buy is refused UnknownType.
+	 * scope) - THE SHED AND THE TANK (2026-10-02, spec 2026-10-02-progression-and-fuel-supply §7); pumps are still not for sale.
+	 * A module with no row here is not for sale, and its buy is refused UnknownType.
 	 * ENFORCED BY: AirportOps.Present.Facility.AttachCopiesTheOffers (the copy),
 	 * AirportOps.Model.Facility.RefusalsChargeAndPublishNothing ("UnknownType module (no offer)")
 	 * The shed x0.4 on 2026-10-02 (was 40,000 and 200/day), with every other build price.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Facilities")
 	TMap<EDepotModule, FModuleOffer> ModuleOffers = {
-		{ EDepotModule::Shed, FModuleOffer(16000.0, 80.0, 1, NSLOCTEXT("Scenario", "Shed", "Shed"), NSLOCTEXT("Scenario", "Sheds", "Sheds")) } };
+		{ EDepotModule::Shed, FModuleOffer(16000.0, 80.0, 1, NSLOCTEXT("Scenario", "Shed", "Shed"), NSLOCTEXT("Scenario", "Sheds", "Sheds")) },
+		{ EDepotModule::Tank, FModuleOffer(20000.0, 100.0, 0, NSLOCTEXT("Scenario", "Tank", "Fuel tank"), NSLOCTEXT("Scenario", "Tanks", "Fuel tanks")) } };
+
+	/** Fuel's price, delivery and storage figures (spec 2026-10-02 §7); consumed by UFuelSupply. */
+	UPROPERTY(EditAnywhere, Category = "Fuel")
+	FFuelSupplyFigures FuelSupply;
 
 	/**
 	 * How many offers the inbox holds before new ones are dropped (spec 2026-09-28 ruling 6).
