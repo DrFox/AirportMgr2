@@ -210,6 +210,9 @@ void FAircraftCard::Compose(const FAircraftDisplay& D, FInspectorCardView& Out)
 	}
 
 	Out.Verbs = EInspectorVerbs::Depart | EInspectorVerbs::Follow | EInspectorVerbs::Unstick;
+	// BY ID, not by a position: SelectAndFocus finds the agent where it is at the click, and D.Id is in the display, so this is gated with it.
+	Out.Locate.Kind = EAlertFocusKind::Agent;
+	Out.Locate.Id = D.Id;
 	Out.bCanDepart = D.bCanDepart;
 	Out.WaitedForId = D.WaitedForId;
 	if (D.WaitedForId != 0)

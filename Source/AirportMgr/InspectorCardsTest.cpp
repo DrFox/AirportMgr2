@@ -7,6 +7,8 @@
 #include "InspectorCards.h"
 #include "InspectorFacilityRows.h"
 #include "InspectorWidget.h"
+#include "RoadBuildController.h"
+#include "Solve/GuidelineGeom.h"
 #include "Misc/AutomationTest.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
@@ -577,6 +579,7 @@ bool FInspectorEveryKindHasACardTest::RunTest(const FString&)
 		TestEqual(Step + TEXT(": the flip"), Shown(Panel->RunwayButton), Want.bRunwayVerbs);
 		TestEqual(Step + TEXT(": the runway mode"), Shown(Panel->RunwayUseButton), Want.bRunwayVerbs);
 		TestEqual(Step + TEXT(": no deadlock line off an aircraft's card"), Panel->DeadlockForTest().IsEmpty(), true);
+		TestTrue(Step + TEXT(": Locate, on every card"), Panel->IsLocateShownForTest());
 		// COLLAPSED, not merely not Visible: the rows' root is SelfHitTestInvisible when shown, so a Visible test could never fail.
 		// A depot's card is AirportMgr.Inspector.PurchaseRowsCollapseOffTheDepotCard's - this walk has no runtime to quote from.
 		TestTrue(Step + TEXT(": no purchase rows off a depot's card"), Panel->FacilityRows->GetVisibility() == ESlateVisibility::Collapsed);
@@ -929,6 +932,109 @@ bool FInspectorTurnaroundKeyMatchesTest::RunTest(const FString&)
 	}
 	TestTrue(FString::Printf(TEXT("ten minutes at half-second steps: %d composes for %d asks"), Recomposed - Before, Asks), Recomposed - Before <= 12);
 	TestEqual(TEXT("and still no sentence differed"), Mismatches, 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorEveryCardLocatesTest, "AirportMgr.Inspector.EveryCardLocatesItsSubject",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FInspectorEveryCardLocatesTest::RunTest(const FString&)
+{
+	// EVERY CARD SAYS WHERE ITS SUBJECT IS (2026-10-02, "on all inspection tabs a button to locate the thing"): the five cards each fill
+	// FInspectorCardView::Locate, by the kind SelectAndFocus can act on - an aircraft by agent id (found where it is at the click), a
+	// stand and a depot by entity index, a runway and a taxiway as a Point on the selected segment's own curve. A card that forgot is a
+	// Locate button that never shows, which nothing else here would notice.
+	using namespace InspectorCardsTest;
+	FCardRig Rig;
+	if (!TestTrue(TEXT("the rig"), Rig.Ok())) { return false; }
+	FInspectorCards Cards;
+	auto ViewOf = [&](ESelectionKind Kind, int32 Id, const FAgentFacts* Facts) -> const FInspectorCardView*
+	{
+		FInspectorCardInput In = Rig.Input(FCardRig::Select(Kind, Id));
+		In.PrecomputedAgentFacts = Facts;
+		IInspectorCard* Card = Cards.Find(FInspectorCards::CardFor(In.Selection, Rig.Net));
+		return Card != nullptr ? Card->Describe(In) : nullptr;
+	};
+	auto SegmentMid = [&](int32 Index)
+	{
+		const FRoadSegment& S = Rig.Net->GetSegments()[Index];
+		return GuidelineGeom::Eval(Rig.Net->GetNode(S.A)->Position, S.Control, Rig.Net->GetNode(S.B)->Position, 0.5);
+	};
+
+	FAgentFacts F;
+	F.Id = 7;
+	F.TypeName = TEXT("TestType");
+	if (const FInspectorCardView* V = ViewOf(ESelectionKind::Aircraft, 7, &F); TestNotNull(TEXT("an aircraft card"), V))
+	{
+		TestEqual(TEXT("an aircraft is located by its agent id, where it is at the click"), V->Locate.Kind, EAlertFocusKind::Agent);
+		TestEqual(TEXT("that agent"), V->Locate.Id, 7);
+	}
+	for (const int32 Segment : { Rig.RunwaySegment(), Rig.TaxiwaySegment() })
+	{
+		const bool bRunway = Segment == Rig.RunwaySegment();
+		const FInspectorCardView* V = ViewOf(bRunway ? ESelectionKind::Runway : ESelectionKind::Taxiway, Segment, nullptr);
+		if (!TestNotNull(bRunway ? TEXT("a runway card") : TEXT("a taxiway card"), V)) { continue; }
+		TestEqual(TEXT("a segment is located as a point - it is already the selection"), V->Locate.Kind, EAlertFocusKind::Point);
+		TestEqual(TEXT("on the segment's own curve, at its middle"), V->Locate.Point, SegmentMid(Segment));
+	}
+	const int32 Stand = Rig.Field.Stands[0].Index;
+	if (const FInspectorCardView* V = ViewOf(ESelectionKind::Stand, Stand, nullptr); TestNotNull(TEXT("a stand card"), V))
+	{
+		TestEqual(TEXT("a stand is located as its entity"), V->Locate.Kind, EAlertFocusKind::Entity);
+		TestEqual(TEXT("that stand"), V->Locate.Id, Stand);
+	}
+	FCardDepotRig Depot;
+	if (TestTrue(TEXT("setup: a plotted depot"), Depot.Build()))
+	{
+		FDepotCard Card;
+		const FInspectorCardInput In = Depot.Input();
+		if (const FInspectorCardView* V = Card.Describe(In); TestNotNull(TEXT("a depot card"), V))
+		{
+			TestEqual(TEXT("a depot is located as its entity"), V->Locate.Kind, EAlertFocusKind::Entity);
+			TestEqual(TEXT("that depot"), V->Locate.Id, In.Selection.Id);
+		}
+	}
+
+	// THE WIDGET SHOWS IT for each, and hides it with nothing selected - a Locate left from the last card would send the camera to it.
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(Rig.TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+	Panel->Refresh(Rig.Actor, FCardRig::Select(ESelectionKind::Taxiway, Rig.TaxiwaySegment()), nullptr);
+	TestTrue(TEXT("the panel shows Locate on a card that has a place"), Panel->IsLocateShownForTest());
+	Panel->Refresh(Rig.Actor, FSelection(), nullptr);
+	ARoadBuildController* C = Rig.TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(Rig.Actor);
+	TestFalse(TEXT("nothing selected: Locate has nowhere to go"), Panel->Locate(*C));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorLocateMovesTheCameraTest, "AirportMgr.Inspector.LocateMovesTheCamera",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FInspectorLocateMovesTheCameraTest::RunTest(const FString&)
+{
+	// THE BUTTON'S ACTION, through a real controller: the camera goes to the card's subject and the card stays on it. A taxiway (a
+	// Point - camera only) and a stand (an Entity - SelectAndFocus re-selects what is already selected).
+	using namespace InspectorCardsTest;
+	FCardRig Rig;
+	if (!TestTrue(TEXT("the rig"), Rig.Ok())) { return false; }
+	ARoadBuildController* C = Rig.TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(Rig.Actor);
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(Rig.TestWorld.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+
+	const int32 Segment = Rig.TaxiwaySegment();
+	const FRoadSegment& S = Rig.Net->GetSegments()[Segment];
+	const FVector2D Mid = GuidelineGeom::Eval(Rig.Net->GetNode(S.A)->Position, S.Control, Rig.Net->GetNode(S.B)->Position, 0.5);
+	Panel->Refresh(Rig.Actor, FCardRig::Select(ESelectionKind::Taxiway, Segment), nullptr);
+	TestTrue(TEXT("a taxiway is somewhere to go"), Panel->Locate(*C));
+	TestEqual(TEXT("the camera goes to the taxiway's middle"), C->GetViewFocus(), Mid);
+
+	const int32 Stand = Rig.Field.Stands[0].Index;
+	Panel->Refresh(Rig.Actor, FCardRig::Select(ESelectionKind::Stand, Stand), nullptr);
+	TestTrue(TEXT("a stand is somewhere to go"), Panel->Locate(*C));
+	TestEqual(TEXT("the camera goes to the stand"), C->GetViewFocus(), Rig.Net->GetEntities()[Stand].Position);
+	TestEqual(TEXT("and the stand is the selection"), C->GetSelection().Kind, ESelectionKind::Stand);
+	TestEqual(TEXT("that stand"), C->GetSelection().Id, Stand);
 	return true;
 }
 

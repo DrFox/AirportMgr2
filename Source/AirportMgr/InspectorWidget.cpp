@@ -42,6 +42,7 @@ void UInspectorWidget::BuildOnce(const UUIStyle& Style)
 	if (RunwayButton != nullptr) { RunwayButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleRunway); }
 	if (RunwayUseButton != nullptr) { RunwayUseButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleRunwayUse); }
 	if (WaitingForButton != nullptr) { WaitingForButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleWaitingFor); }
+	if (LocateButton != nullptr) { LocateButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleLocate); }
 	if (UnstickMenu != nullptr)
 	{
 		// WEAK, not this: a lambda held by a child widget that captured a raw pointer to its owner is
@@ -121,7 +122,7 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	UHorizontalBox* Row = nullptr;
 	if (Column != nullptr && (DepartButton == nullptr || FollowButton == nullptr || RunwayButton == nullptr
 		|| RunwayUseButton == nullptr
-		|| UnstickMenu == nullptr || WaitingForButton == nullptr))
+		|| UnstickMenu == nullptr || WaitingForButton == nullptr || LocateButton == nullptr))
 	{
 		Row = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("InspectorVerbs"));
 		Column->AddChildToVerticalBox(Row)->SetPadding(FMargin(0.0f, 8.0f, 0.0f, 0.0f));
@@ -186,6 +187,15 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 		WaitingForButton->Build(*Style, EUiButtonKind::Secondary);
 		WaitingForButton->SetToolTipText(NSLOCTEXT("AirportMgr", "InspectorShowBlockerTip", "Select what this is waiting for"));
 		if (Row != nullptr) { Row->AddChildToHorizontalBox(WaitingForButton)->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f)); }
+	}
+	// LOCATE - no BuildActions row either (see LocateButton); shown per card in PaintVerbs.
+	if (LocateButton == nullptr)
+	{
+		LocateButton = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass(), TEXT("LocateButton"));
+		LocateButton->SetLabel(NSLOCTEXT("AirportMgr", "InspectorLocate", "Locate"));
+		LocateButton->Build(*Style, EUiButtonKind::Secondary);
+		LocateButton->SetToolTipText(NSLOCTEXT("AirportMgr", "InspectorLocateTip", "Move the camera to it"));
+		if (Row != nullptr) { Row->AddChildToHorizontalBox(LocateButton)->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f)); }
 	}
 
 	// THE PURCHASE ROWS, a sub-widget of their own (issue #441): built empty, and filled from the depot card's quote (PaintView).
@@ -289,6 +299,7 @@ void UInspectorWidget::RefreshWith(const UOpsRuntime* Runtime, const ARoadNetwor
 	// ONE RESET, before any early return: only the aircraft card sets it again, so every other
 	// path - no selection, a gone agent, another kind of card - leaves Show with nothing to select.
 	WaitedForId = 0;
+	LocateFocus = FAlertFocus();
 	if (Target == nullptr || !Selection.IsSet())
 	{
 		// NOTHING SELECTED: hidden. The sale armed on the card that has just gone is disarmed by the selection EVENT
@@ -370,6 +381,7 @@ void UInspectorWidget::HideCard()
 void UInspectorWidget::PaintView(const FInspectorCardView& View, const FSelection& Selection, const ARoadNetworkActor& Target)
 {
 	WaitedForId = View.WaitedForId;
+	LocateFocus = View.Locate;
 	bDepartEnabled = View.bCanDepart;
 	PaintTexts(View);
 	PaintVerbs(View, Selection, Target);
@@ -435,6 +447,10 @@ void UInspectorWidget::PaintVerbs(const FInspectorCardView& View, const FSelecti
 	if (WaitingForButton != nullptr)
 	{
 		Caption(*WaitingForButton, Has(EInspectorVerbs::WaitingFor), View.WaitingForCaption);
+	}
+	if (LocateButton != nullptr)
+	{
+		LocateButton->SetVisibility(View.Locate.Kind != EAlertFocusKind::None ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	}
 	if (DepartButton != nullptr)
 	{
@@ -595,6 +611,33 @@ void UInspectorWidget::HandleWaitingFor()
 		return;
 	}
 	UE_LOG(LogInspector, Warning, TEXT("Inspector Show ignored: no controller"));
+}
+
+bool UInspectorWidget::Locate(ARoadBuildController& InController)
+{
+	if (LocateFocus.Kind == EAlertFocusKind::None)
+	{
+		UE_LOG(LogInspector, Warning, TEXT("Inspector Locate ignored: the card has no place to go"));
+		return false;
+	}
+	// THE CARD'S OWN LINE FIRST, Show's reason: SelectAndFocus logs as "Alert Go".
+	UE_LOG(LogInspector, Log, TEXT("Inspector Locate: %s %d"), *UEnum::GetValueAsString(LocateFocus.Kind), LocateFocus.Id);
+	return InController.SelectAndFocus(LocateFocus);
+}
+
+void UInspectorWidget::HandleLocate()
+{
+	if (ARoadBuildController* C = Controller())
+	{
+		Locate(*C);
+		return;
+	}
+	UE_LOG(LogInspector, Warning, TEXT("Inspector Locate ignored: no controller"));
+}
+
+bool UInspectorWidget::IsLocateShownForTest() const
+{
+	return LocateButton != nullptr && LocateButton->GetVisibility() != ESlateVisibility::Collapsed;
 }
 
 void UInspectorWidget::UseFlightBoardForTest(const UFlightBoard* Board) { FlightBoardForTest = Board; }

@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Model/FacilityPurchases.h"
 #include "Model/InspectFacts.h"
+#include "Model/OpsAlerts.h"
 #include "Tool/Selection.h"
 #include "UObject/WeakObjectPtr.h"
 
@@ -87,6 +88,14 @@ struct FInspectorCardView
 	 * are one answer from one key and cannot disagree (spec §4: the card cannot disagree with the rules).
 	 */
 	FFacilityQuote Quote;
+	/**
+	 * WHERE THE SUBJECT IS, for the Locate button (2026-10-02, every card): the alert Go's own FAlertFocus, so Locate goes through
+	 * ARoadBuildController::SelectAndFocus like Go and Show - an agent by id (found where it is NOW, at the click), a stand or depot
+	 * by entity index, a runway or taxiway as a Point. None collapses the button. Filled by each card's Compose, so a new card says
+	 * where its subject is or has no Locate - the widget learns no kinds.
+	 * ENFORCED BY: AirportMgr.Inspector.EveryCardLocatesItsSubject
+	 */
+	FAlertFocus Locate;
 };
 
 /**

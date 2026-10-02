@@ -5,10 +5,29 @@
 
 #include "ArrivalsPanelWidget.generated.h"
 
+class ARoadBuildController;
+class UArrivalsPanelWidget;
 class UArrivalsViewModel;
+class UFlight;
 class UTextBlock;
+class UUiButton;
 class UUIStyle;
 class UVerticalBox;
+
+/** One row's Inspect button: a UObject because UButton::OnClicked binds to a UFUNCTION (UAlertRowEntry's shape). */
+UCLASS()
+class UArrivalRowEntry : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY() TWeakObjectPtr<UArrivalsPanelWidget> Owner;
+	/** BY FLIGHT, not slot: rows move between slots as the queue moves (UAlertRowEntry's reason). Re-pointed on every repaint of its slot. */
+	UPROPERTY() TWeakObjectPtr<UFlight> Flight;
+	UPROPERTY() TObjectPtr<UUiButton> Button;
+
+	UFUNCTION() void HandleClick();
+};
 
 /**
  * The flights the player ACCEPTED, inbound and on the ground (spec 2026-09-28-arrival-queue
@@ -50,6 +69,18 @@ public:
 	 *  bring it back, and a flight the player took must stay findable. */
 	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
 
+	/**
+	 * A row's Inspect: select the flight's aircraft and move the camera to it, through the alert Go's
+	 * ARoadBuildController::SelectAndFocus, so the inspector opens on it. False when the flight has no aircraft (not yet spawned, or
+	 * gone). Public, taking the controller, for UAlertsPanelWidget::Go's reason: a headless test has no owning player.
+	 * ENFORCED BY: AirportMgr.UI.Arrivals.InspectSelectsTheAircraft
+	 */
+	bool Inspect(const UFlight& Flight, ARoadBuildController& Controller);
+	/** Whether Row's Inspect button is showing, and bound to its entry - what the Inspect test reads. */
+	bool IsInspectShownForTest(int32 Row) const;
+	/** The flight Row's Inspect button would inspect, or null. */
+	const UFlight* InspectFlightForTest(int32 Row) const;
+
 	/** Re-read the board and repaint - NativeTick's work, callable by a headless test. */
 	void Refresh();
 
@@ -74,6 +105,9 @@ private:
 	 * SetText, no colour, no visibility write (#446: they ran every tick for every row). Reset with the slots above.
 	 */
 	TArray<int32> PaintedRevisions;
+
+	/** Each row's Inspect button and the entry it is bound to - rebuilt with the slots above. */
+	UPROPERTY() TArray<TObjectPtr<UArrivalRowEntry>> Entries;
 
 	/** The row count the window's badge last showed, so a still tick formats nothing (FText::AsNumber is a format, and SetBadge has no early-out). -1: none yet. */
 	int32 BadgedCount = -1;

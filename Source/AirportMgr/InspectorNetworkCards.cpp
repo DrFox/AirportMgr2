@@ -9,6 +9,7 @@
 #include "Present/OpsRuntime.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
+#include "Solve/GuidelineGeom.h"
 
 namespace
 {
@@ -38,6 +39,40 @@ namespace
 			Key.GuidelineRevision = Network->GetGuidelineRevision();
 		}
 		return Key;
+	}
+
+	/**
+	 * A runway's or taxiway's Locate: the SELECTED SEGMENT's curve midpoint, as a Point. A Point and not a new focus kind: the
+	 * segment is already selected (it is the card), so Locate only has the camera to move, which is all Point does. The curve's
+	 * own evaluator (GuidelineGeom::Eval), not the chord's midpoint, so a bent taxiway centres on its pavement.
+	 */
+	FAlertFocus InspectorSegmentFocus(const URoadNetwork& Network, int32 SegmentIndex)
+	{
+		FAlertFocus Out;
+		if (!Network.GetSegments().IsValidIndex(SegmentIndex))
+		{
+			return Out;
+		}
+		const FRoadSegment& Segment = Network.GetSegments()[SegmentIndex];
+		const FRoadNode* A = Network.GetNode(Segment.A);
+		const FRoadNode* B = Network.GetNode(Segment.B);
+		if (A == nullptr || B == nullptr)
+		{
+			return Out;
+		}
+		Out.Kind = EAlertFocusKind::Point;
+		Out.Id = SegmentIndex;
+		Out.Point = GuidelineGeom::Eval(A->Position, Segment.Control, B->Position, 0.5);
+		return Out;
+	}
+
+	/** A stand's or depot's Locate: the entity by index, which SelectAndFocus re-checks is alive at the click. */
+	FAlertFocus InspectorEntityFocus(int32 EntityIndex)
+	{
+		FAlertFocus Out;
+		Out.Kind = EAlertFocusKind::Entity;
+		Out.Id = EntityIndex;
+		return Out;
 	}
 }
 
@@ -96,6 +131,7 @@ bool FRunwayCard::Compose(const FInspectorCardInput& In, FInspectorCardView& Out
 	Out.Status = FString::Format(*NSLOCTEXT("AirportMgr", "InspectorRunwayStatus",
 		"Landing and taking off {0}. A change reaches the next flight planned.").ToString(), { InUse });
 	Out.Verbs = EInspectorVerbs::Runway | EInspectorVerbs::RunwayUse;
+	Out.Locate = InspectorSegmentFocus(*Network, In.Selection.Id);
 	Out.RunwayCaption = FText::Format(NSLOCTEXT("AirportMgr", "InspectorRunwayUse", "Use {0}"), FText::FromString(Other));
 	// The CURRENT mode, selection.runway_use's own caption rule - see its row in BuildActions.
 	Out.RunwayUseCaption = R.Use == ERunwayUse::ArrivalsOnly ? NSLOCTEXT("AirportMgr", "InspectorRunwayArrivals", "Arrivals only")
@@ -140,6 +176,7 @@ bool FTaxiwayCard::Compose(const FInspectorCardInput& In, FInspectorCardView& Ou
 	Out.Status = T.RestrictedTo.IsSet()
 		? NSLOCTEXT("AirportMgr", "InspectorTaxiwayStatusRestricted", "Restricted").ToString()
 		: NSLOCTEXT("AirportMgr", "InspectorTaxiwayStatusOpen", "Open to its letter").ToString();
+	Out.Locate = InspectorSegmentFocus(*Network, In.Selection.Id);
 	return true;
 }
 
@@ -167,6 +204,7 @@ bool FStandCard::Compose(const FInspectorCardInput& In, FInspectorCardView& Out)
 	{
 		return false;
 	}
+	Out.Locate = InspectorEntityFocus(In.Selection.Id);
 	// FString::Format, not Printf - see the aircraft card's own comment on why
 	// (issue #192, UE 5.8's compile-time Printf format check).
 	// THE NUMBER, not the index - the one painted at the stand's turn-off; an index is
@@ -241,6 +279,7 @@ bool FDepotCard::Compose(const FInspectorCardInput& In, FInspectorCardView& Out)
 	{
 		return false;
 	}
+	Out.Locate = InspectorEntityFocus(In.Selection.Id);
 	// bReachable is the pose node having line on it, which for a depot means a
 	// SERVICE ROAD within its lead-in reach. The message names the fix rather than
 	// the symptom: the road is the thing the player goes and draws.
