@@ -140,7 +140,16 @@ enum class EServiceRefusal : uint8
 	 * NOT NoRoute, for NoPump's reason. APPENDED so no other value moves.
 	 * ENFORCED BY: AirportOps.Fuel.UnknownKindSaysSo
 	 */
-	UnknownVehicleKind
+	UnknownVehicleKind,
+
+	/**
+	 * The airport holds no fuel to refill with (spec 2026-10-02 §7). Re-opened by UJobBoard::ReopenStockRefusals when fuel
+	 * arrives, not by a graph change. NOT TERMINAL the way a road refusal is: stock arriving moves no guideline revision, so
+	 * the usual re-judge would never fire. LAST BEFORE NoRoute in RefusalOf's chain - a dry airport with no road is a road
+	 * problem first. APPENDED so no other value moves.
+	 * ENFORCED BY: AirportOps.Fuel.DryDepotFlightLeavesUnfuelled, AirportOps.Fuel.DeliveryReopensStockRefusals
+	 */
+	NoFuelStock
 };
 
 /**

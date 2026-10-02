@@ -2188,6 +2188,28 @@ bool FFuelCouldServeSoldOutTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * A DRY AIRPORT STILL ADMITS OFFERS (spec 2026-10-02 §7, review focus 5): CouldServe is about the airport's SHAPE - a
+ * depot, a road, a vehicle that fits - and stock is a thing the player buys between the offer and the arrival. An offer
+ * refused for the stock of the moment would hide the fuel market behind the very shortage it exists to fix.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelCouldServeDryTest, "AirportOps.Fuel.CouldServe.DryDepotStillAdmitsOffers",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelCouldServeDryTest::RunTest(const FString& Parameters)
+{
+	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	FFuelFixture Fixture;
+	Fixture.SupplyLitres = 0.0;
+	Fixture.Build(/*bWithRoad=*/true);
+	Fixture.Service->SeedStarterFleets(*Fixture.Net, *Fixture.Clock);
+	if (!TestTrue(TEXT("setup: the board reads a dry supply"), Fixture.Service->FuelAvailable() < FFuelRolePolicy::FuelledWithinLitres)) { return false; }
+	TestTrue(TEXT("a dry airport with a depot on a road still admits the offer"),
+		Fixture.Service->CouldServe(*Fixture.Traffic, *Fixture.Net, Airframe));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFuelCouldServeAgreesWithBidTest, "AirportOps.Fuel.CouldServe.StarterDepotVerdictAgreesWithItsFirstBid",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
@@ -4416,6 +4438,146 @@ bool FFuelSaveMidRefillTest::RunTest(const FString&)
 	TestEqual(TEXT("carrying the 120 L it was granted - settled, not lost"), Back.Cargo, CargoAtSave + 120.0, 1e-6);
 	TestEqual(TEXT("with nothing left granted"), Back.RefillLitres, 0.0, 1e-9);
 	TestEqual(TEXT("and the stock unchanged across the load - not drawn again"), F.Supply->StockLitres, 0.0, 1e-9);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelDryLeavesTest, "AirportOps.Fuel.DryDepotFlightLeavesUnfuelled",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelDryLeavesTest::RunTest(const FString&)
+{
+	// THE RULING (spec 2026-10-02 §7): no stock, no wait - the job is refused NoFuelStock and the aircraft goes at its
+	// deadline with nothing, earning no fuel fee.
+	// ONE EMPTY BOWSER, added by hand: bEmptyDepot alone leaves the depot with NO vehicle, which is NoVehicles - a different
+	// refusal - so the brief's "the truck starts with nothing" is a truck that exists and is empty.
+	FFuelFixture F;
+	F.SupplyLitres = 0.0;
+	F.bEmptyDepot = true;
+	F.bWithRunway = true;
+	F.TurnaroundSeconds = 1800.0;
+	F.Build(true);
+	F.Service->AddVehicleForTest(F.Service->VehiclesFor(EIcaoCode::C).TypeCode, F.Depot, EServiceVehicleState::Idle, 0.0);
+	FTurnaroundRecorder Recorder(*F.Service);
+	const int32 Aircraft = F.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
+	if (!TestTrue(TEXT("the fuel job is unserviceable"), F.AdvanceUntil([&]()
+		{
+			return F.Service->GetJobs().Num() > 0 && F.Service->GetJobs()[0].State == EServiceJobState::Unserviceable;
+		}, 60.0))) { return false; }
+	const FServiceJob& Job = F.Service->GetJobs()[0];
+	TestEqual(TEXT("for want of stock"), Job.Why, EServiceRefusal::NoFuelStock);
+	TestEqual(TEXT("and nothing was delivered"), Job.QuantityDelivered, 0.0, 1e-9);
+
+	// THE DEPARTURE: an Unserviceable job is not "being served" (FTurnarounds::IsBeingServed), so the deadline sends it.
+	TestTrue(TEXT("it leaves at its deadline"), F.AdvanceUntil([&]()
+		{
+			const FRoadAgent* Agent = F.Traffic->FindAgent(Aircraft);
+			return Agent == nullptr || Agent->Phase != EAgentPhase::Parked;
+		}, 300.0));
+	if (!TestEqual(TEXT("its departure ends the turnaround once"), Recorder.Drained(), 1)) { return false; }
+	TestEqual(TEXT("unfuelled"), static_cast<int32>(Recorder.Ended[0].Outcome), static_cast<int32>(EFuelOutcome::Unfuelled));
+	TestEqual(TEXT("with nothing delivered"), Recorder.Ended[0].Delivered, 0.0, 1e-9);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelDryMidJobTest, "AirportOps.Fuel.DryMidJobEndsTheJob",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelDryMidJobTest::RunTest(const FString&)
+{
+	// REVIEW FOCUS 1: a truck that delivers what it carried, goes home for more and finds none must not loop zero-second
+	// refills for ever. The job ends NoFuelStock with its delivery kept. ONE BOWSER (see RefillDrawsTheStock), so the truck
+	// read below is the one that served.
+	FFuelFixture F;
+	F.SupplyLitres = 0.0;
+	F.FixtureLitres = 30000.0;   // more than one tank-load, so a second trip is owed
+	F.Build(true);
+	F.Service->StarterFleet = { F.Service->VehiclesFor(EIcaoCode::C).TypeCode };
+	F.ParkAircraft();
+	if (!TestTrue(TEXT("the job ends"), F.AdvanceUntil([&]()
+		{
+			return F.Service->GetJobs().Num() > 0 && F.Service->GetJobs()[0].State == EServiceJobState::Unserviceable;
+		}, 20000.0))) { return false; }
+	const FServiceJob& Job = F.Service->GetJobs()[0];
+	TestEqual(TEXT("the job ended for want of stock"), Job.Why, EServiceRefusal::NoFuelStock);
+	TestTrue(FString::Printf(TEXT("and kept what the first trip delivered (%.0f L)"), Job.QuantityDelivered),
+		Job.QuantityDelivered > 0.0 && Job.QuantityDelivered < F.FixtureLitres);
+	if (!TestEqual(TEXT("one vehicle, the bowser"), F.Service->GetVehicles().Num(), 1)) { return false; }
+	const FServiceVehicle& Truck = F.Service->GetVehicles()[0];
+	if (!TestTrue(TEXT("the truck goes home and is idle"), F.AdvanceUntil([&]() { return Truck.State == EServiceVehicleState::Idle; }, 4000.0))) { return false; }
+	// NOT CYCLING THE DEPOT: a further stretch with no visit, the loop this test exists for being an AtFacility every Step.
+	int32 Visits = 0;
+	F.AdvanceUntil([&]() { Visits += Truck.State == EServiceVehicleState::AtFacility ? 1 : 0; return false; }, 120.0);
+	TestEqual(TEXT("the truck is idle, not cycling the depot"), static_cast<int32>(Truck.State), static_cast<int32>(EServiceVehicleState::Idle));
+	TestEqual(TEXT("and made no depot visit while idle"), Visits, 0);
+	TestEqual(TEXT("the job stays refused"), F.Service->GetJobs()[0].State, EServiceJobState::Unserviceable);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelDryRefillReleasesTest, "AirportOps.Fuel.DryRefillReleasesItsQueue",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelDryRefillReleasesTest::RunTest(const FString&)
+{
+	// THE LIVE HALF OF THE BID'S RULE: a job already QUEUED on an empty truck when the stock ran dry (another truck took the
+	// last of it after the bid). Before Task 4 the truck began a zero-litre refill, went Idle, and began another - every
+	// Step, the job held for ever. Now the refill that finds nothing releases its queue to the board, and the bid refuses
+	// it NoFuelStock. CONTROL: with fuel in the airport the same truck refills and keeps its job.
+	auto Run = [this](double Stock, EServiceJobState& OutState, EServiceRefusal& OutWhy) -> bool
+	{
+		FFuelFixture F;
+		F.SupplyLitres = Stock;
+		F.bEmptyDepot = true;
+		F.Build(true);
+		FServiceVehicle& Truck = F.Service->AddVehicleForTest(F.Service->VehiclesFor(EIcaoCode::C).TypeCode, F.Depot,
+			EServiceVehicleState::Idle, 0.0);
+		const int32 TruckId = Truck.Id;
+		FServiceJob& Job = F.Service->AddJobForTest(905, EServiceJobState::Queued, EServiceRefusal::None, 0);
+		Job.Stand = F.Stand;
+		Job.QuantityOwed = 300.0;
+		Job.VehicleId = TruckId;
+		Truck.Queue.Add(Job.Id);
+		const bool bEnded = F.AdvanceUntil([&]()
+		{
+			const EServiceJobState State = F.Service->GetJobs()[0].State;
+			return State == EServiceJobState::Unserviceable || State == EServiceJobState::Underway;
+		}, 120.0);
+		OutState = F.Service->GetJobs()[0].State;
+		OutWhy = F.Service->GetJobs()[0].Why;
+		return bEnded;
+	};
+	EServiceJobState DryState = EServiceJobState::Open;
+	EServiceRefusal DryWhy = EServiceRefusal::None;
+	TestTrue(TEXT("dry: the job was settled, not held for ever"), Run(0.0, DryState, DryWhy));
+	TestEqual(TEXT("dry: refused"), DryState, EServiceJobState::Unserviceable);
+	TestEqual(TEXT("dry: for want of stock"), DryWhy, EServiceRefusal::NoFuelStock);
+
+	EServiceJobState StockedState = EServiceJobState::Open;
+	EServiceRefusal StockedWhy = EServiceRefusal::None;
+	TestTrue(TEXT("CONTROL: stocked, the truck refills and sets off"), Run(100000.0, StockedState, StockedWhy));
+	TestEqual(TEXT("CONTROL: on its way"), StockedState, EServiceJobState::Underway);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelReopenTest, "AirportOps.Fuel.DeliveryReopensStockRefusals",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelReopenTest::RunTest(const FString&)
+{
+	// REVIEW FOCUS 2: NoFuelStock is NOT terminal the way a road refusal is - stock arriving changes no graph revision,
+	// so the board is told, and an aircraft still on stand is served. One empty bowser - see DryDepotFlightLeavesUnfuelled.
+	FFuelFixture F;
+	F.SupplyLitres = 0.0;
+	F.bEmptyDepot = true;
+	F.Build(true);
+	F.Service->AddVehicleForTest(F.Service->VehiclesFor(EIcaoCode::C).TypeCode, F.Depot, EServiceVehicleState::Idle, 0.0);
+	F.ParkAircraft();
+	if (!TestTrue(TEXT("refused first"), F.AdvanceUntil([&]()
+		{
+			return F.Service->GetJobs().Num() > 0 && F.Service->GetJobs()[0].State == EServiceJobState::Unserviceable;
+		}, 60.0))) { return false; }
+	TestEqual(TEXT("for want of stock"), F.Service->GetJobs()[0].Why, EServiceRefusal::NoFuelStock);
+	F.Supply->Receive(100000.0);
+	TestEqual(TEXT("one refused job re-opened"), F.Service->ReopenStockRefusals(), 1);
+	F.AdvanceUntil([&]() { return F.Service->GetJobs()[0].State == EServiceJobState::Done; }, 8000.0);
+	TestEqual(TEXT("and it was served"), F.Service->GetJobs()[0].State, EServiceJobState::Done);
+	TestEqual(TEXT("CONTROL: a second call re-opens nothing"), F.Service->ReopenStockRefusals(), 0);
 	return true;
 }
 

@@ -68,6 +68,15 @@ namespace ServiceBid
 		int32 FacilityVisits = 0;
 		int32 Trips = 0;
 		bool bReachable = true;
+
+		/**
+		 * WHY bReachable IS FALSE, when it is the stock (spec 2026-10-02 §7): the vehicle needs its facility before its first
+		 * trip for this job and the facility has less than DoneWithin to give, so it would deliver NOTHING. Only then - a
+		 * vehicle that runs dry AFTER delivering something finishes there instead (partial service beats none). Never true
+		 * with bReachable true. Read by the board's refusal (UJobBoard::FJudgement::bNoStock -> NoFuelStock).
+		 * ENFORCED BY: AirportOps.Service.Bid.DryAndEmptyDeliversNothing, AirportOps.Service.Bid.DryAfterATripFinishesPartial
+		 */
+		bool bNoStock = false;
 	};
 
 	/**

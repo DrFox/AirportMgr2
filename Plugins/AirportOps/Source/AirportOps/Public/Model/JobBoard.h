@@ -208,6 +208,11 @@ public:
 	/** What a refill may take now: the stock, or unbounded when there is no supply. */
 	double FuelAvailable() const;
 
+	/** Re-opens every Unserviceable job refused NoFuelStock (spec 2026-10-02 §7) and returns how many. Fuel arriving
+	 *  changes no graph revision, so the refusal's usual re-judge never fires; UOpsRuntime calls this on FFuelDeliveredEvent.
+	 *  ENFORCED BY: AirportOps.Fuel.DeliveryReopensStockRefusals */
+	int32 ReopenStockRefusals();
+
 	/**
 	 * Seated tanks across every live depot, in litres (FDepotCapability::Tanks x LitresPerTank). UOpsRuntime wires
 	 * UFuelSupply::CapacityOf to this (task 6). LitresPerTank is a PARAMETER, not read here, because the figure lives on the
@@ -825,6 +830,9 @@ private:
 		bool bAnyPumpless = false;
 		bool bAnyTooLarge = false;
 		bool bAnyTooNarrow = false;
+		/** Every vehicle that may bid failed its bid for want of stock alone (ServiceBid::FResult::bNoStock) - NoFuelStock.
+		 *  Written by the bid pass, after Judge: eligibility is the airport's shape, and stock is not part of it. */
+		bool bNoStock = false;
 		FGuidelineEdgeId NarrowAt;
 		FName TooLargeType;
 		FName DesignType;

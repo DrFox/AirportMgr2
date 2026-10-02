@@ -273,7 +273,7 @@ bool FServiceTextBoardForwardsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and the late count"), Forwarded.LateJobs, Direct.LateJobs);
 
 	// EVERY REFUSAL'S WORDS.
-	for (int32 Why = 0; Why <= static_cast<int32>(EServiceRefusal::UnknownVehicleKind); ++Why)
+	for (int32 Why = 0; Why <= static_cast<int32>(EServiceRefusal::NoFuelStock); ++Why)
 	{
 		const EServiceRefusal Refusal = static_cast<EServiceRefusal>(Why);
 		TestEqual(*FString::Printf(TEXT("RefusalText forwards refusal %d"), Why),

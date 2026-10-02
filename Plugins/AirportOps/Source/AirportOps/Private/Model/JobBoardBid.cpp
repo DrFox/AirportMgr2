@@ -236,6 +236,13 @@ EServiceRefusal UJobBoard::RefusalOf(const FJudgement& Out)
 	{
 		return EServiceRefusal::TooNarrow;
 	}
+	if (Out.bNoStock)
+	{
+		// LAST BUT NoRoute (spec 2026-10-02 §7): every vehicle that could reach the stand would arrive with nothing. After
+		// every road and vehicle refusal - a dry airport with no road is a road problem first, and stock is the one fix
+		// that comes by the market rather than by building.
+		return EServiceRefusal::NoFuelStock;
+	}
 	return EServiceRefusal::NoRoute;
 }
 
@@ -302,6 +309,26 @@ double UJobBoard::FuelAvailable() const
 	return FuelSupply != nullptr ? FuelSupply->Available() : TNumericLimits<double>::Max();
 }
 
+int32 UJobBoard::ReopenStockRefusals()
+{
+	// THROUGH ReopenRefusedJob, the graph-change re-offer's own door: Open with the reason KEPT (#445's "refused, asking
+	// again"), so the alert stands through the frame the bid is pending, and the bid that follows clears it or re-refuses.
+	int32 Reopened = 0;
+	for (FServiceJob& Job : Jobs)
+	{
+		if (Job.State == EServiceJobState::Unserviceable && Job.Why == EServiceRefusal::NoFuelStock)
+		{
+			ReopenRefusedJob(Job);
+			++Reopened;
+		}
+	}
+	if (Reopened > 0)
+	{
+		UE_LOG(LogAirportOps, Log, TEXT("Fuel: %d job(s) re-opened by a delivery"), Reopened);
+	}
+	return Reopened;
+}
+
 double UJobBoard::FuelCapacityLitres(const URoadNetwork& Network, double LitresPerTank) const
 {
 	// THE SAME LIVE-DEPOT WALK UFacilityPurchases makes for its seated modules (FacilityPurchases.cpp, the excess pass), so
@@ -329,6 +356,23 @@ void UJobBoard::BeginFacility(FServiceVehicle& Vehicle, const URoadNetwork& Netw
 	// and a second role's facility would need its own supply here.
 	const double Missing = Policy != nullptr ? FMath::Max(FFuelRolePolicy::CapacityOf(TypeFor(Vehicle.TypeCode)) - Vehicle.Cargo, 0.0) : 0.0;
 	Vehicle.RefillLitres = FuelSupply != nullptr ? FuelSupply->Draw(Missing) : Missing;
+	// A DRY REFILL FOR AN EMPTY TRUCK RELEASES ITS QUEUE (spec 2026-10-02 §7): ServiceBid's dry rule, live, on the same two
+	// figures - nothing on board and nothing granted, each below DoneWithin. Without it the truck went Idle in no time and
+	// StartNext sent it here again, every Step, its jobs held for ever. RELEASED, NOT REFUSED HERE: the jobs go back to the
+	// board, whose bid refuses them NoFuelStock - or gives them to a truck that still carries fuel (partial service beats
+	// none). A truck with cargo is not released: NextStep sends it straight there with what it has.
+	// ENFORCED BY: AirportOps.Fuel.DryRefillReleasesItsQueue
+	if (Policy != nullptr && Vehicle.Queue.Num() > 0 && Vehicle.Cargo < Policy->DoneWithin() && Vehicle.RefillLitres < Policy->DoneWithin())
+	{
+		for (const int32 JobId : Vehicle.Queue)
+		{
+			if (const FServiceJob* Job = FindJob(JobId))
+			{
+				UE_LOG(LogAirportOps, Log, TEXT("Fuel: depot dry - vehicle %d gives up job %d after %.0f L"), Vehicle.Id, Job->Id, Job->QuantityDelivered);
+			}
+		}
+		ReleaseJobsOf(Vehicle);
+	}
 	const double Seconds = Policy != nullptr && Home != nullptr
 		? Policy->FacilitySeconds(Vehicle.Cargo, TypeFor(Vehicle.TypeCode), PumpsAt(Vehicle.Home, *Home), Vehicle.RefillLitres) : 0.0;
 	Lifecycle(Vehicle).BeginFacility(Clock.Now() + Seconds);
@@ -527,6 +571,8 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 		double BestFinish = TNumericLimits<double>::Max();
 		const FServiceVehicle* Next = nullptr;
 		double NextFinish = TNumericLimits<double>::Max();
+		int32 Bidders = 0;
+		int32 DryBidders = 0;   // NoFuelStock only when EVERY bid failed for the stock alone - see FJudgement::bNoStock
 		for (const FCandidate& Candidate : Eligible)
 		{
 			FServiceVehicle* Vehicle = FindVehicleMutable(Candidate.VehicleId);
@@ -535,6 +581,8 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 				continue;
 			}
 			const ServiceBid::FResult Bid = BidFor(*Vehicle, Job, Traffic, Network, Clock);
+			++Bidders;
+			DryBidders += Bid.bNoStock ? 1 : 0;
 			if (!Bid.bReachable)
 			{
 				continue;
@@ -555,9 +603,11 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 
 		if (Best == nullptr)
 		{
-			// NOTHING MAY BID. Unserviceable, which is TERMINAL until the graph changes - and there is no
-			// "busy" to fall back on here, because a busy vehicle bids with its queue.
+			// NOTHING MAY BID. Unserviceable, which is TERMINAL until the graph changes (or, for NoFuelStock, until fuel
+			// arrives - ReopenStockRefusals) - and there is no "busy" to fall back on here, because a busy vehicle bids
+			// with its queue.
 			++RevisionCount;   // See Revision: the job's state and reason changed, and the fuel line says why.
+			Judged.bNoStock = Bidders > 0 && DryBidders == Bidders;
 			Job.State = EServiceJobState::Unserviceable;
 			Job.Why = RefusalOf(Judged);
 			Job.RefusedAtRevision = Revision;
@@ -572,6 +622,11 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 				UE_LOG(LogAirportOps, Warning,
 					TEXT("Fuel: no road wide enough for any fuel vehicle from any depot - the first edge one does not fit is guideline edge %d"),
 					Judged.NarrowAt.Index);
+			}
+			else if (Job.Why == EServiceRefusal::NoFuelStock)
+			{
+				UE_LOG(LogAirportOps, Warning, TEXT("Fuel: %d vehicle(s) could reach aircraft %d but none carries fuel, and the airport holds %.1f L"),
+					Bidders, Job.AircraftId, FuelAvailable());
 			}
 
 			// THE COUNTS THAT DECIDED IT, in the line itself. A bare reason sent the player to look at

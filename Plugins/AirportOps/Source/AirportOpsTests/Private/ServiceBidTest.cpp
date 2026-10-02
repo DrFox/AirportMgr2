@@ -319,4 +319,58 @@ bool FServiceBidUnreachableTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FServiceBidDryEmptyFailsTest, "AirportOps.Service.Bid.DryAndEmptyDeliversNothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FServiceBidDryEmptyFailsTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceBidTest;
+	// AN EMPTY TOW AT A DRY AIRPORT (spec 2026-10-02 §7): it needs the depot before its first trip and the depot has
+	// nothing to give, so it would deliver NOTHING - the one dry case that is a failed bid, and it says why (bNoStock), so
+	// the board can refuse NoFuelStock rather than NoRoute. CONTROL: the same tow with fuel in the airport bids.
+	FFuelRolePolicy Policy;
+	const FServiceVehicleType TowType = Tow();
+	ServiceBid::FInput In = Input(TowType, Policy);
+	In.CargoWhenFree = 0.0;
+	In.FacilityAvailable = 0.0;
+	In.Appended = { StandA, 300.0 };
+	const ServiceBid::FResult Dry = ServiceBid::Finish(In);
+	TestFalse(TEXT("dry and empty: no finish time"), Dry.bReachable);
+	TestTrue(TEXT("and the reason is the stock, not the road"), Dry.bNoStock);
+	TestEqual(TEXT("not one trip priced"), Dry.Trips, 0);
+
+	In.FacilityAvailable = Unbounded;
+	const ServiceBid::FResult Stocked = ServiceBid::Finish(In);
+	TestTrue(TEXT("CONTROL: with fuel it bids"), Stocked.bReachable && !Stocked.bNoStock);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FServiceBidDryPartialTest, "AirportOps.Service.Bid.DryAfterATripFinishesPartial",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FServiceBidDryPartialTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceBidTest;
+	// PARTIAL SERVICE BEATS NONE (spec 2026-10-02 §7): a full tow, a 1,500 L job, a dry airport. It delivers its 1,000 L and
+	// then could refill nothing - the bid finishes at the end of that trip, exactly as the live job does (the remainder is
+	// refused NoFuelStock), and NOT at a zero-litre second trip's end, which priced a drive home and back for nothing.
+	FFuelRolePolicy Policy;
+	const FServiceVehicleType TowType = Tow();
+	ServiceBid::FInput In = Input(TowType, Policy);
+	In.FacilityAvailable = 0.0;
+	In.Appended = { StandA, 1500.0 };
+	const ServiceBid::FResult Dry = ServiceBid::Finish(In);
+	AddInfo(FString::Printf(TEXT("dry: %d trips, %d refills, finish %.0f s"), Dry.Trips, Dry.FacilityVisits, Dry.Finish));
+	TestTrue(TEXT("it bids - it delivers what it carries"), Dry.bReachable && !Dry.bNoStock);
+	TestEqual(TEXT("one trip"), Dry.Trips, 1);
+	TestEqual(TEXT("no depot visit priced"), Dry.FacilityVisits, 0);
+	TestEqual(TEXT("finished when that trip's pumping ends: the drive plus 1,000 L at 75 L/min"),
+		Dry.Finish, Drive + 1000.0 / TowType.RatePerMinute * 60.0, 1e-6);
+
+	In.FacilityAvailable = Unbounded;
+	const ServiceBid::FResult Stocked = ServiceBid::Finish(In);
+	TestEqual(TEXT("CONTROL: with fuel it makes the second trip"), Stocked.Trips, 2);
+	return true;
+}
+
 #endif
