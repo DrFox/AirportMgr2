@@ -139,7 +139,7 @@ bool UTaxiPlanning::BookAlong(const URoadNetwork& Network, int32 Holder, ETaxiCl
 	}
 	FTaxiClearance& Clearance = Clearances[Holder];
 	// BEHIND IT ALREADY: nothing booked there to release, nor its start.
-	Clearance.ReleasedThrough = Prefix - 2;
+	Clearance.ReleasedThrough = FMath::Max<int32>(INDEX_NONE, Prefix - 2);
 	Clearance.bStartReleased = Prefix > 0;
 	if (Prefix > 0)
 	{

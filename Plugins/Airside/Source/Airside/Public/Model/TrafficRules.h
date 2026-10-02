@@ -103,6 +103,15 @@ struct AIRSIDE_API FTrafficRules
 	UPROPERTY(EditAnywhere, meta = (ClampMin = "1")) double TaxiPlanRetimeLag = 15.0;
 
 	/**
+	 * How long a departure's plan holds its RUNWAY ENTRY after reaching it, seconds - not for ever (taxi planning PR 3, the
+	 * 80 mov/h starvation): held for ever until it lined up, the entry turned every later departure into a queue at a
+	 * holding node, each held for ever too, and taxi-in routes through them found no window - arrivals held in the air.
+	 * Bounded, the next departure plans to the entry after it; one still there past it is ahead in the order and is
+	 * waited for, and a late one is re-timed. 0: for ever, PR 2's rule.
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0")) double TaxiPlanEntryHold = 90.0;
+
+	/**
 	 * How fast a push off a stand runs, uu/s. 1 uu is 1 cm - see UAircraftType::MainWheelRadius.
 	 *
 	 * ON THE RULES AND NOT THE AIRFRAME, unlike the braking figure the claim window reads:

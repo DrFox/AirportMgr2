@@ -251,8 +251,12 @@ namespace TaxiPlanDeadlock
 		double ArrivalInterval = 180.0;
 		double Dwell = 1200.0;
 
-		/** After Duration nothing more is scheduled, and the field is run until it is empty - or this long. */
-		double DrainLimit = 3600.0;
+		/**
+		 * After Duration nothing more is scheduled, and the field is run until it is empty - or this long. 5400 s since PR 3
+		 * (2026-10-02): at 80/h it admits 67, not 41, and the last of them lands, dwells 20 minutes and taxis out in a runway
+		 * queue - 3600 s ended the run with five still moving, none stuck (no stop of 300 s at the end).
+		 */
+		double DrainLimit = 5400.0;
 
 		/** SEEDED DELAYS: every DelayEvery seconds one taxiing aircraft, picked by Random, is held still 20-90 s. */
 		double DelayEvery = 90.0;
@@ -685,10 +689,10 @@ bool FTaxiPlanNoPermanentDeadlockTest::RunTest(const FString& Parameters)
 	// NOT VACUOUS (review of #528 finding 3): a field that admits nobody has no deadlock either, so each rate also asserts
 	// how many arrivals LANDED, and that the resolver never touched a planned aircraft.
 	// - 40/h: every scheduled arrival admitted - all 40 (2026-10-02, with every fourth an A320: 40 admitted).
-	// - 80/h: an honest floor, not all 80: 39 of 80 admitted with the A320 in the mix (Pipers only, PR 2: 48) - the rest
-	//   held in the air for want of a taxi-in plan, because a departure holds its runway entry for ever until it lines up.
-	//   That starvation is PR 3's to work on (plan, PR 3); the floor is 39 less a slack of 3, so a regression in arrival
-	//   capacity goes red without the floor pretending the starvation is solved.
+	// - 80/h: an honest floor, not all 80: 67 of 80 admitted with the A320 in the mix (2026-10-02, PR 3). PR 2 admitted 39:
+	//   a departure held its runway entry for ever until it lined up, every later one queued at a holding node held for
+	//   ever too, and taxi-in routes through them found no window. PR 3 bounds the entry hold (TaxiPlanEntryHold). The
+	//   floor is 67 less a slack of 7, so a regression in arrival capacity goes red.
 	// MUTATION PROOF, not in the suite (it doubles the test's ~6 min): with UTaxiPlanning::bEnforceOrderForTest false this
 	// went red, "40/h: 1 jam, 80/h: 2 jams" (one-off local build, 2026-10-02 - see the plan's PR 2 execution notes).
 	struct FRate
@@ -697,7 +701,7 @@ bool FTaxiPlanNoPermanentDeadlockTest::RunTest(const FString& Parameters)
 		const TCHAR* Label;
 		int32 AdmittedFloor;
 	};
-	const FRate Rates[] = { { 180.0, TEXT("40/h"), 40 }, { 90.0, TEXT("80/h"), 36 } };
+	const FRate Rates[] = { { 180.0, TEXT("40/h"), 40 }, { 90.0, TEXT("80/h"), 60 } };
 	for (const FRate& Rate : Rates)
 	{
 		TaxiPlanDeadlock::FRunResult Run;

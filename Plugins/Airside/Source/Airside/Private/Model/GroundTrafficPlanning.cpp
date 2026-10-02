@@ -22,6 +22,27 @@
 namespace
 {
 	/** Why a taxi plan was refused, in the log's words. */
+	/**
+	 * A departure's plan to its runway entry holds the entry, and the edge onto it, for Hold seconds after it arrives
+	 * rather than for ever (FTrafficRules::TaxiPlanEntryHold). 0 leaves it for ever.
+	 */
+	void CapEntryHold(FTaxiPlan& Plan, double Hold)
+	{
+		if (!(Hold > 0.0) || Plan.Route.Steps.Num() == 0)
+		{
+			return;
+		}
+		const FTaxiResource Entry = FTaxiResource::Node(Plan.Route.Steps.Last().To);
+		const FTaxiResource Onto = FTaxiResource::Edge(Plan.Route.Steps.Last().Edge);
+		for (FTaxiPass& Pass : Plan.Passes)
+		{
+			if ((Pass.Resource == Entry || Pass.Resource == Onto) && Pass.Window.To >= FTaxiReservations::Forever)
+			{
+				Pass.Window.To = FMath::Max(Pass.Window.From + 1.0, Plan.Arrival + Hold);
+			}
+		}
+	}
+
 	FString TaxiRefusalText(const FTaxiPlan& Taxi)
 	{
 		return Taxi.Result == ETaxiPlanResult::NoRoute
@@ -591,7 +612,13 @@ EDepartureRefusal UGroundTraffic::ClearDeparture(int32 AgentId, const URoadNetwo
 	// the push's whole ground asked of the order as StartDuePushes asks it; a straight-out departure is ordered as it
 	// taxis (UTaxiPlanning::OrderHold), from its stand.
 	const FRoutePlan PushRoute = Ask.bStraightOut ? FRoutePlan() : Ask.Push.PushRoute;
-	if (!TaxiPlanning->Book(Network, AgentId, ETaxiClearanceKind::TaxiOut, Ask.Taxi, ETaxiClearanceStage::Booked, PushRoute,
+	// TO THE ENTRY ITSELF: held a while there, not for ever (TaxiPlanEntryHold). A queue's end stays for ever - it waits there.
+	FTaxiPlan Taxi = Ask.Taxi;
+	if (!Ask.QueueFor.IsSet())
+	{
+		CapEntryHold(Taxi, Rules.TaxiPlanEntryHold);
+	}
+	if (!TaxiPlanning->Book(Network, AgentId, ETaxiClearanceKind::TaxiOut, Taxi, ETaxiClearanceStage::Booked, PushRoute,
 		SimSeconds))
 	{
 		return WatchForTaxiPlan(AgentId, Network, PushRoute);
@@ -661,7 +688,8 @@ void UGroundTraffic::ExtendQueuedDepartures(const URoadNetwork& Network)
 		Rest.Errand = Clearance->QueueErrand;
 		Rest.Holder = Id;
 		Rest.DepartAt = FMath::Max(SimSeconds, Clearance->Plan.Arrival);
-		const FTaxiPlan Ext = TaxiPlanning->Plan(Network, *Aircraft, Rules, Rest);
+		FTaxiPlan Ext = TaxiPlanning->Plan(Network, *Aircraft, Rules, Rest);
+		CapEntryHold(Ext, Rules.TaxiPlanEntryHold);
 		if (!Ext.IsPlanned() || !TaxiPlanning->Extend(Network, Id, Ext, SimSeconds))
 		{
 			continue;

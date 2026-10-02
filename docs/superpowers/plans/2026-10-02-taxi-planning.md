@@ -408,3 +408,11 @@ public:
 - Test `Airside.Model.TaxiPlan.ArrivalNeverHeldOnTheExit`: a stand-in booked ahead of an arrival on its first move, never released (late) - the arrival leaves the runway, never "not my turn" there.
 
 ### Task 19: starvation attempt, headline, full suite, PR
+
+## Execution notes (PR 3, 2026-10-02)
+
+- **A re-time from NOW never caught up, measured.** The first cut shifted windows held after now by the lag; the overdue leave (the moment it was late FOR) was before now and never moved, so it read late again a second later and was re-timed by a growing lag every second - 709 re-times at 40 mov/h, push times thrown hours out, 16 of 40 admitted and the field jammed on order waits. Re-timed from just before the overdue moment (`Retime(Since = Latest)`), the plan reads on time after it: 411 re-times, 40/40.
+- **80 mov/h starvation, attempt 1 converged.** A departure's entry window bounded to `TaxiPlanEntryHold` (90 s) after it arrives, not for ever: admitted at 80/h 41 -> 67 of 80, arrDelay mean 340 -> 218 s, departure wait mean 373 -> 156 s. Its drain needed longer than 3600 s (five still moving, none stuck) - the headline drain is 5400 s. The headline's 80/h floor (60) pins it: a hold of 0 (for ever) admits 41.
+- **UTaxiPlanning split** for rule 77: `TaxiPlanningReplan.cpp` (rebuild take-out, BookAlong, unplanned record, re-time), rule 104 lists it.
+- `FTaxiShift`, `ShiftLater`'s fixed point runs in BOOKED order (arrays re-sorted only at the end), so "behind" is the order as booked, and each push is the least that restores it.
+- Not done: provisional windows for every moving aircraft's current edge before a rebuild's re-plan (the topological order replaced it; a follower on the same edge is placed a headway behind by `EarliestFit` on its prefix). Vehicles still unplanned at road-taxiway crossings (spec ruling 1) - PR 4 or its own.
