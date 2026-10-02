@@ -9,7 +9,8 @@
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 #include "Present/AirsideGroundCoverActor.h"
-#include "Present/AirsideOwnedLandActor.h"
+#include "Model/LandGrid.h"
+#include "Present/RoadEditFacade.h"
 #include "Present/GroundCoverPresenter.h"
 #include "Present/GroundCoverSubsystem.h"
 #include "Present/RoadNetworkActor.h"
@@ -245,13 +246,13 @@ bool FGroundCoverMaskOutsideLandIsCovered::RunTest(const FString&)
 	FGroundCoverMask Mask;
 	TestFalse(TEXT("with no land set, open ground far out is bare - every older map owns everything"),
 		Mask.IsCovered(FVector2D(1.0e6, -1.0e6)));
-	Mask.SetLand(FBox2D(FVector2D(-1000.0, -2000.0), FVector2D(3000.0, 4000.0)));
-	TestFalse(TEXT("inside the land, open ground is bare"), Mask.IsCovered(FVector2D(0.0, 0.0)));
-	TestTrue(TEXT("past the east edge is covered"), Mask.IsCovered(FVector2D(3001.0, 0.0)));
-	TestTrue(TEXT("past the south edge is covered"), Mask.IsCovered(FVector2D(0.0, -2001.0)));
-	TestTrue(TEXT("ON the edge is covered - a tuft centred there leans over the cut"), Mask.IsCovered(FVector2D(3000.0, 0.0)));
-	Mask.SetLand(FBox2D(ForceInit));
-	TestFalse(TEXT("an invalid land owns everything again"), Mask.IsCovered(FVector2D(3001.0, 0.0)));
+	const FIntPoint Tiles[] = { FIntPoint(0, 3), FIntPoint(0, 4) };
+	Mask.SetLand(FLandGrid::Make(FVector2D::ZeroVector, 60000.0, 8, 8, Tiles));
+	TestFalse(TEXT("on owned land, open ground is bare"), Mask.IsCovered(FVector2D(30000.0, 210000.0)));
+	TestTrue(TEXT("on an unowned tile it is covered"), Mask.IsCovered(FVector2D(90000.0, 210000.0)));
+	TestTrue(TEXT("ON the cut is covered - a tuft centred there leans over it"), Mask.IsCovered(FVector2D(60000.0, 210000.0)));
+	Mask.SetLand(FLandGrid());
+	TestFalse(TEXT("an invalid grid owns everything again"), Mask.IsCovered(FVector2D(90000.0, 210000.0)));
 	return true;
 }
 
@@ -421,31 +422,40 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FGroundCoverNoTuftPastTheOwnedLand, "Airside.Pr
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FGroundCoverNoTuftPastTheOwnedLand::RunTest(const FString&)
 {
-	// THE SEAM, through the composition: the grass actor must FIND the level's owned land and hand
-	// it to the mask. Unwired, the mask test above still passes and tufts float past the cut edge -
-	// the report that started this (2026-10-02). The edge runs through the streamed area, so tufts
-	// exist on both sides of it to be kept or refused.
+	// THE SEAM, through the composition: the grass actor must read the airport's land and HEAR it change. Unwired,
+	// the mask test above still passes and tufts float past the cut (the report that started this, 2026-10-02), or
+	// a bought tile stays bald. Column 0 spans X [-30000, 30000), rows 3-4 span Y [-60000, 60000): the viewer stands ON
+	// the east cut at X = 30000, so grass streams on both sides of it (it grows within ~40 m of the camera only - a
+	// viewer at the origin, 300 m off, saw no cut at all and passed for nothing).
 	FAirsideTestWorld Fixture;
-	AAirsideOwnedLandActor* Land = Fixture.World->SpawnActor<AAirsideOwnedLandActor>();
-	if (!TestNotNull(TEXT("owned land spawned"), Land))
-	{
-		return false;
-	}
-	const FVector2D Min(-100000.0, -100000.0), Max(1000.0, 100000.0);
-	Land->SetOwnedLand(Min, Max);
+	const FIntPoint Start[] = { FIntPoint(0, 3), FIntPoint(0, 4) };
+	const FLandGrid Land = FLandGrid::Make(FVector2D(-30000.0, -240000.0), 60000.0, 8, 8, Start);
+	Fixture.Actor->GetEditFacade()->AuthorOwnedLand(Land);
 
 	AAirsideGroundCoverActor* Grass = Fixture.World->SpawnActor<AAirsideGroundCoverActor>();
 	Grass->SetKit(GcCubeKit());
 	Grass->BindTo(Fixture.Actor);
-	GcStreamFully(*Grass, FVector(0.0, 0.0, 300.0));
+	GcStreamFully(*Grass, FVector(30000.0, 10000.0, 300.0));
 
-	int32 Inside = 0, Outside = 0;
+	int32 Owned = 0, Past = 0;
 	Grass->GetPresenter()->ForEachInstanceLocation([&](int32, const FVector& Location)
 	{
-		(Location.X < Max.X ? Inside : Outside) += 1;
+		(Land.IsOwned(FVector2D(Location)) ? Owned : Past) += 1;
 	});
-	TestTrue(FString::Printf(TEXT("%d tufts grow on the owned side"), Inside), Inside > 100);
-	TestEqual(TEXT("NO tuft grows past the owned land's edge"), Outside, 0);
+	TestTrue(FString::Printf(TEXT("%d tufts grow on owned land"), Owned), Owned > 100);
+	TestEqual(TEXT("NO tuft grows past the cut"), Past, 0);
+
+	// A PURCHASE east of the cut: the grass hears it and grows there.
+	FLandGrid Grown = Land;
+	Grown.SetTileOwned(FIntPoint(1, 4), true);
+	Fixture.Actor->GetEditFacade()->AuthorOwnedLand(Grown);
+	GcStreamFully(*Grass, FVector(30000.0, 10000.0, 300.0));
+	int32 East = 0;
+	Grass->GetPresenter()->ForEachInstanceLocation([&](int32, const FVector& Location)
+	{
+		East += Location.X > 30000.0 && Location.Y > 0.0 ? 1 : 0;
+	});
+	TestTrue(FString::Printf(TEXT("%d tufts grow on the bought tile"), East), East > 0);
 	return true;
 }
 

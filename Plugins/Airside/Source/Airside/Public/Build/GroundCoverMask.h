@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/LandGrid.h"
 
 /**
  * "Is this ground point under a built surface?" - the question that keeps grass off every
@@ -29,12 +30,12 @@ public:
 	void AddPolygon(TArray<FVector2D> Outline);
 
 	/**
-	 * The owned land (AAirsideOwnedLandActor): everything OUTSIDE it counts as covered, so no tuft
-	 * grows over the void past the diorama's cut edge - where a tuft stands on nothing and gives
-	 * the edge away (2026-10-02). Invalid, the default, owns everything. A point ON the edge is
-	 * covered, the same inclusive rule as a slab's: a tuft centred there would lean over the cut.
+	 * The airport's owned land (FLandGrid): everything not owned counts as covered, so no tuft grows over the void
+	 * past the diorama's cut edge - where a tuft stands on nothing and gives the edge away (2026-10-02). Invalid, the
+	 * default, owns everything. A point ON the cut is covered (FLandGrid::IsOwned), the same inclusive rule as a
+	 * slab's: a tuft centred there would lean over it.
 	 */
-	void SetLand(const FBox2D& InLand) { Land = InLand; }
+	void SetLand(const FLandGrid& InLand) { Land = InLand; }
 
 	bool IsCovered(const FVector2D& Point) const;
 
@@ -57,7 +58,7 @@ private:
 	FIntPoint BucketOf(const FVector2D& Point) const;
 
 	double BucketSizeUu;
-	FBox2D Land = FBox2D(ForceInit);
+	FLandGrid Land;
 	TArray<FTriangle> Triangles;
 	TArray<TArray<FVector2D>> Polygons;
 	TMap<FIntPoint, FBucket> Buckets;

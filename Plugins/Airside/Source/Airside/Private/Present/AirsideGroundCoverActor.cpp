@@ -10,7 +10,7 @@
 #include "Model/ExhaustiveSwitch.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
-#include "Present/AirsideOwnedLandActor.h"
+#include "Present/RoadEditFacade.h"
 #include "Present/GroundCoverPresenter.h"
 #include "Present/RoadNetworkActor.h"
 #include "Present/RoadSurfacePresenter.h"
@@ -60,9 +60,20 @@ void AAirsideGroundCoverActor::BindTo(ARoadNetworkActor* Road)
 	}
 	Bound = Road;
 	BoundHandle = Road->OnNetworkChanged.AddUObject(this, &AAirsideGroundCoverActor::OnNetworkChanged);
+	// AND THE LAND: a bought tile grows grass, at once - a purchase is one event, so no settle delay.
+	if (URoadEditFacade* Facade = Road->GetEditFacade())
+	{
+		BoundFacade = Facade;
+		LandHandle = Facade->OnOwnedLandChanged.AddUObject(this, &AAirsideGroundCoverActor::OnOwnedLandChanged);
+	}
 	UE_LOG(LogAirside, Log, TEXT("GroundCover: %s growing grass around %s"), *GetName(), *Road->GetName());
 	// THE CATCH-UP, for AAirsideBuildingsActor::BindTo's reason: the road's own first rebuild
 	// may have fired before this bound.
+	RebuildMask();
+}
+
+void AAirsideGroundCoverActor::OnOwnedLandChanged(const FLandGrid& Land)
+{
 	RebuildMask();
 }
 
@@ -72,8 +83,14 @@ void AAirsideGroundCoverActor::Unbind()
 	{
 		Road->OnNetworkChanged.Remove(BoundHandle);
 	}
+	if (URoadEditFacade* Facade = BoundFacade.Get())
+	{
+		Facade->OnOwnedLandChanged.Remove(LandHandle);
+	}
 	Bound.Reset();
 	BoundHandle.Reset();
+	BoundFacade.Reset();
+	LandHandle.Reset();
 }
 
 void AAirsideGroundCoverActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -135,18 +152,19 @@ void AAirsideGroundCoverActor::RebuildMask()
 			}
 		}
 	}
-	// THE OWNED LAND, read at every rebuild rather than cached: one actor lookup beside a rebuild
-	// that already reads every surface triangle. No land actor owns everything.
-	if (const AAirsideOwnedLandActor* Land = AAirsideOwnedLandActor::Find(GetWorld()))
+	// THE OWNED LAND, read at every rebuild - the airport's, the one record (land purchase spec 2). A purchase
+	// rebuilds through OnOwnedLandChanged. An invalid grid owns everything.
+	if (Road->Network != nullptr)
 	{
-		Mask.SetLand(Land->GetOwnedLand());
+		Mask.SetLand(Road->Network->GetOwnedLand());
 	}
 	const int32 Triangles = Mask.NumTriangles();
 	const int32 Outlines = Mask.NumPolygons();
 	const int32 Buckets = Mask.NumBuckets();
 	Presenter->SetMask(MoveTemp(Mask));
-	UE_LOG(LogAirside, Log, TEXT("GroundCover: mask rebuilt - %d triangle(s), %d outline(s), %d bucket(s), %d cell(s) refilled in %.1f ms"),
-		Triangles, Outlines, Buckets, Presenter->NumLiveCells(), (FPlatformTime::Seconds() - Start) * 1000.0);
+	const int32 LandTiles = Road->Network != nullptr && Road->Network->GetOwnedLand().IsValid() ? Road->Network->GetOwnedLand().NumOwned() : 0;
+	UE_LOG(LogAirside, Log, TEXT("GroundCover: mask rebuilt - %d triangle(s), %d outline(s), %d bucket(s), %d cell(s) refilled in %.1f ms, land %d tile(s)"),
+		Triangles, Outlines, Buckets, Presenter->NumLiveCells(), (FPlatformTime::Seconds() - Start) * 1000.0, LandTiles);
 }
 
 int32 AAirsideGroundCoverActor::LayersForQuality()
