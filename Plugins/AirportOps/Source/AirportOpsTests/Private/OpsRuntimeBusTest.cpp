@@ -167,6 +167,8 @@ bool FOpsRuntimeBusReattachTest::RunTest(const FString&)
 			[&]() { return Bus.DispatchedCountOfForTest<FNetworkChangedEvent>(); } },
 		{ TEXT("BuildRefused"), [&]() { Facade->OnRefused.Broadcast(FBuildQuote(), EBuildRefusal::CannotAfford); },
 			[&]() { return Bus.DispatchedCountOfForTest<FBuildRefusedEvent>(); } },
+		{ TEXT("TaxiwaySplit"), [&]() { Facade->OnTaxiwaySplit.Broadcast(TEXT("C"), TEXT("A")); },
+			[&]() { return Bus.DispatchedCountOfForTest<FTaxiwaySplitEvent>(); } },
 	};
 	TArray<FName> Probed;
 	for (const FBridgeProbe& Probe : Probes) { Probed.Add(Probe.Name); }
@@ -532,6 +534,39 @@ bool FOpsRuntimeBuildRefusedTest::RunTest(const FString&)
 	TestFalse(TEXT("a taxiway the player cannot pay for is refused"), TestWorld.Actor->ConnectNodes(A, B, ERoadKind::Taxiway, INDEX_NONE));
 	Runtime->Tick(0.0);
 	TestEqual(TEXT("and the refusal reaches the UI's face of the bus - no longer only a log line"), Listener->CountOf(TEXT("refused:")), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeTaxiwaySplitTest, "AirportOps.Present.TaxiwaySplitReachesUi",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeTaxiwaySplitTest::RunTest(const FString&)
+{
+	// THE WHOLE ROUTE (plan D10): a real delete through the actor, the facade's normalise, the bridge, the bus, the face.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
+	Runtime->GetEvents()->OnTaxiwaySplit.AddDynamic(Listener, &UOpsEventsTestListener::OnTaxiwaySplit);
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	const int32 N0 = Actor->PlaceNode(FVector2D(0.0, 60000.0));
+	const int32 N1 = Actor->PlaceNode(FVector2D(40000.0, 60000.0));
+	const int32 N2 = Actor->PlaceNode(FVector2D(50000.0, 60000.0));
+	const int32 N3 = Actor->PlaceNode(FVector2D(70000.0, 60000.0));
+	TestTrue(TEXT("click 1"), Actor->ConnectNodes(N0, N1, ERoadKind::Taxiway, INDEX_NONE));
+	const int32 Long = Actor->Network->GetSegments().Num() - 1;
+	TestTrue(TEXT("click 2"), Actor->ConnectNodes(N1, N2, ERoadKind::Taxiway, INDEX_NONE));
+	const int32 Middle = Actor->Network->GetSegments().Num() - 1;
+	TestTrue(TEXT("click 3"), Actor->ConnectNodes(N2, N3, ERoadKind::Taxiway, INDEX_NONE));
+	const int32 Short = Actor->Network->GetSegments().Num() - 1;
+	TestTrue(TEXT("the middle is deleted"), Actor->DeleteSegment(Middle));
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("the split reaches the UI's face of the bus, once"), Listener->CountOf(TEXT("split:")), 1);
+	// C FROM B, NOT B FROM A: RuntimeBusTestAttach lays its own 200 m taxiway first, which takes A. Read back from the
+	// model as well, so the words on the bus are the names the network now holds.
+	const auto NameAt = [Actor](int32 Index) { return Actor->Network->TaxiwayDisplayName(Actor->Network->TaxiwayOf(Actor->Network->SegmentIdAt(Index))); };
+	TestEqual(TEXT("the long piece kept B"), NameAt(Long), FString(TEXT("B")));
+	TestEqual(TEXT("the short piece is C"), NameAt(Short), FString(TEXT("C")));
+	TestEqual(TEXT("as C from B"), Listener->CountOf(TEXT("split:C<B")), 1);
 	return true;
 }
 

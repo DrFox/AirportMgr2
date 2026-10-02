@@ -559,4 +559,22 @@ bool FEveryOpsEventDelegateHasAListenerTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FToastsTaxiwaySplitTest, "AirportMgr.UI.ToastsSayTaxiwaySplits",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FToastsTaxiwaySplitTest::RunTest(const FString& Parameters)
+{
+	// "C split off from A" (taxiway naming spec): the player's own edit renamed part of a taxiway - Info, not a Warning,
+	// since nothing needs fixing. Bound through BindTo, the seam the runtime binding uses.
+	FAirsideTestWorld TestWorld;
+	UToastStackWidget* Stack = MakeStack(TestWorld.World);
+	if (!TestNotNull(TEXT("a toast stack"), Stack)) { return false; }
+	UOpsEvents* Events = NewObject<UOpsEvents>();
+	Stack->BindTo(*Events);
+	Events->OnTaxiwaySplit.Broadcast(TEXT("C"), TEXT("A"));
+	if (!TestEqual(TEXT("one toast"), Stack->Centre()->Entries().Num(), 1)) { return false; }
+	TestEqual(TEXT("in the spec's words"), Stack->Centre()->Entries()[0].Text.ToString(), FString(TEXT("C split off from A")));
+	TestEqual(TEXT("Info"), Stack->Centre()->Entries()[0].Severity, ENotificationSeverity::Info);
+	return true;
+}
+
 #endif

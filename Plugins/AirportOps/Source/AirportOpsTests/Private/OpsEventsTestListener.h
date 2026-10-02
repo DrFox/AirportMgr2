@@ -48,6 +48,7 @@ public:
 		Seen.Add(FString::Printf(TEXT("land:%d"), static_cast<int32>(Why)));
 		LastLandSentence = Sentence;
 	}
+	UFUNCTION() void OnTaxiwaySplit(const FString& SplitOff, const FString& From) { Seen.Add(TEXT("split:") + SplitOff + TEXT("<") + From); }
 
 	/** The words the last land refusal carried - the toast shows these (#456 review). */
 	FString LastLandSentence;
