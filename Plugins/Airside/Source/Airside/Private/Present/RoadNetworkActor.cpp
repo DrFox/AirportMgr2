@@ -609,6 +609,11 @@ int32 ARoadNetworkActor::RepairLoadedNetwork(ELoadedFrom From)
 	// ENFORCED BY: Airside.Model.StandFrontage.MigrationStoresTheEntranceOnce (AFTER the outlines: the save-game half's outline-less stand gets its box and then
 	// edge 0), Airside.Present.StandPlot.OldPoseRederivedOnLoad (BEFORE the rebind: the legacy stand's entrance is migrated and then read, or it is not re-posed)
 	const int32 Entranced = Network->EnsureStandFrontages();
+	// AND THE TAXIWAY NAMES (2026-10-02), AFTER THE DEFAULT ABOVE: a road saved without a profile of its own reads as a
+	// taxiway only through DefaultProfile (ProfileFor), so naming before it is re-resolved would leave those roads
+	// unnamed and name them later in a different order. Both paths, like the migrations above.
+	// ENFORCED BY: Airside.Present.TaxiwayNames.LoadBackfillsBothPaths
+	const int32 Named = Network->EnsureTaxiwayNames(TaxiwayNaming);
 
 	// THE DEFINITIONS NEXT, before anything below reads one: a D/E/F stand's definition is
 	// never saved (see LetterStandDefinitions), so a loaded or duplicated level arrives
@@ -643,12 +648,12 @@ int32 ARoadNetworkActor::RepairLoadedNetwork(ELoadedFrom From)
 	// ONE LINE WHEN A LOAD REPAIRED ANYTHING, so "did it" is one grep - the questions the
 	// comments above answer by reasoning, answered by measurement. Silent when nothing needed
 	// it: PostRegisterAllComponents re-runs on every editor re-registration of this actor.
-	const int32 Total = DefaultsResolved + Outlined + Numbered + Fronted + Entranced + Rebound + RefreshedAnchors + Forgotten;
+	const int32 Total = DefaultsResolved + Outlined + Numbered + Fronted + Entranced + Named + Rebound + RefreshedAnchors + Forgotten;
 	if (Total > 0)
 	{
 		UE_LOG(LogRoadMesh, Log,
-			TEXT("Load repairs on %s: %d default re-resolved, %d outline(s), %d number(s), %d depot frontage(s), %d stand entrance(s), %d definition(s), %d anchor(s), %d transient profile ref(s)"),
-			*GetName(), DefaultsResolved, Outlined, Numbered, Fronted, Entranced, Rebound, RefreshedAnchors, Forgotten);
+			TEXT("Load repairs on %s: %d default re-resolved, %d outline(s), %d number(s), %d depot frontage(s), %d stand entrance(s), %d taxiway name(s), %d definition(s), %d anchor(s), %d transient profile ref(s)"),
+			*GetName(), DefaultsResolved, Outlined, Numbered, Fronted, Entranced, Named, Rebound, RefreshedAnchors, Forgotten);
 	}
 	return Total;
 }

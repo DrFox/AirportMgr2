@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Model/TrafficRules.h"
+#include "Model/Taxiway.h"
 #include "Build/AnchorLink.h"
 #include "Present/RoadSurfacePresenter.h"
 #include "Tool/BuildSession.h"
@@ -609,6 +610,14 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Placement")
 	FSnapGuideSettings GuideSources;
+
+	/**
+	 * The taxiway-naming knobs (spec 2026-10-02): how short a connector is, how far a bend may turn, how far apart a
+	 * long taxiway's name repeats. Read by URoadEditFacade::NotifyChanged's normalise, RepairLoadedNetwork's backfill and
+	 * both drivers' labels - one struct, so the three cannot disagree about the same number.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Taxiway names")
+	FTaxiwayNamingRules TaxiwayNaming;
 
 	/**
 	 * Snap and placement tunables, for a driver-supplied view scale - FORWARDS TO Facade

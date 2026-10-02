@@ -947,6 +947,17 @@ public:
 	FString JunctionName(FRoadNodeId Node) const;
 
 	/**
+	 * Name every unnamed taxiway - a level or save written before 2026-10-02 (every map then, M_ScaleGatwick included).
+	 * NormaliseTaxiways itself, whose step 1 IS the backfill (longest chain first, plan D4), plus the spec's one line:
+	 * "TaxiwayNames: backfilled N taxiway(s), M connector(s)". Returns N + M; 0, silent, when nothing was unnamed, so a
+	 * second load is a no-op. Called from ARoadNetworkActor::RepairLoadedNetwork on BOTH load paths, after the default
+	 * profile is re-resolved - NOT from PostLoad, where a road saved without its own profile cannot yet be told from a
+	 * service road (plan D6).
+	 * ENFORCED BY: Airside.Model.TaxiwayNames.BackfillGatwickShape, Airside.Present.TaxiwayNames.LoadBackfillsBothPaths
+	 */
+	int32 EnsureTaxiwayNames(const FTaxiwayNamingRules& Rules);
+
+	/**
 	 * Removes the entity, the anchor nodes it owns, and every guideline edge incident to
 	 * them - RemoveGuidelineNode cascades. So deleting a stand also deletes the taxi line
 	 * drawn into it, which is intended (a lead-in to a deleted stand leads nowhere) but is

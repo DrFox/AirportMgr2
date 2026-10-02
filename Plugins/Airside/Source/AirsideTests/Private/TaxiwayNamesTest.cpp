@@ -7,6 +7,7 @@
 #include "Profiles/RoadProfile.h"
 #include "Solve/TaxiwayLetters.h"
 #include "Testing/AirsideTestGraph.h"
+#include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -535,6 +536,69 @@ bool FTaxiwayNamesInvariantTest::RunTest(const FString&)
 		if (!TestTrue(FString::Printf(TEXT("the contract holds after every edit (%s)"), *Violation), Violation.IsEmpty())) { return false; }
 		RandomEditRun(Seed, Second);
 		TestEqual(FString::Printf(TEXT("seed %d: same edits, same names"), Seed), First, Second);
+	}
+	return true;
+}
+
+namespace TaxiwayNamesTest
+{
+	/** A GATWICK-SHAPED airport (M_ScaleGatwick's pattern, 2026-10-02): a runway, two 3 km parallels A (y -200 m) and B
+	 *  (y -400 m), three 200 m exits runway->A, two 200 m end links A->B round 90 degree corners, two 150 m stand stubs
+	 *  off B ending at stands. Laid in that order, so segment indices are fixed. */
+	struct FGatwickShape
+	{
+		FTaxiwayNamesNet N;
+		TArray<FRoadSegmentId> ASegs, BSegs, Exits, EndLinks, Stubs;
+
+		FGatwickShape()
+		{
+			TArray<FRoadNodeId> R, A, B;
+			for (const double X : { 0.0, 60000.0, 150000.0, 240000.0, 300000.0 }) { R.Add(N.Node(X, 0.0)); }
+			for (int32 I = 0; I + 1 < R.Num(); ++I) { N.Lay(R[I], R[I + 1], N.Runway); }
+			for (const double X : { 0.0, 60000.0, 100000.0, 150000.0, 200000.0, 240000.0, 300000.0 }) { A.Add(N.Node(X, -20000.0)); }
+			for (int32 I = 0; I + 1 < A.Num(); ++I) { ASegs.Add(N.Lay(A[I], A[I + 1])); }
+			for (const double X : { 0.0, 50000.0, 100000.0, 150000.0, 200000.0, 250000.0, 300000.0 }) { B.Add(N.Node(X, -40000.0)); }
+			for (int32 I = 0; I + 1 < B.Num(); ++I) { BSegs.Add(N.Lay(B[I], B[I + 1])); }
+			Exits = { N.Lay(R[1], A[1]), N.Lay(R[2], A[3]), N.Lay(R[3], A[5]) };
+			EndLinks = { N.Lay(A[0], B[0]), N.Lay(A[6], B[6]) };
+			Stubs = { N.Lay(B[1], N.Node(50000.0, -55000.0)), N.Lay(B[2], N.Node(100000.0, -55000.0)) };
+		}
+	};
+}
+
+/** Backfill (spec): unnamed chains, longest first - the parallels take A and B, the links and stubs are connectors;
+ *  logged once; a second load names nothing; and it is deterministic. */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesBackfillTest, "Airside.Model.TaxiwayNames.BackfillGatwickShape",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesBackfillTest::RunTest(const FString&)
+{
+	using namespace TaxiwayNamesTest;
+	FGatwickShape G;
+	FLogLineSpy Spy(TEXT("LogAirside"));
+	GLog->AddOutputDevice(&Spy);
+	const int32 Named = G.N.Net->EnsureTaxiwayNames(G.N.Rules);
+	GLog->RemoveOutputDevice(&Spy);
+	TestEqual(TEXT("two letters and seven connectors"), Named, 9);
+	TestTrue(TEXT("logged as the spec words it"), Spy.CapturedLines.ContainsByPredicate([](const FString& L)
+		{ return L.Contains(TEXT("TaxiwayNames: backfilled 2 taxiway(s), 7 connector(s)")); }));
+	for (const FRoadSegmentId& S : G.ASegs) { TestEqual(TEXT("the first parallel is A"), G.N.NameOf(S), FString(TEXT("A"))); }
+	for (const FRoadSegmentId& S : G.BSegs) { TestEqual(TEXT("the second parallel is B"), G.N.NameOf(S), FString(TEXT("B"))); }
+	const TArray<FString> Expected = { TEXT("A1"), TEXT("A2"), TEXT("A3"), TEXT("A4"), TEXT("A5"), TEXT("B1"), TEXT("B2") };
+	TArray<FString> Got;
+	for (const FRoadSegmentId& S : G.Exits) { Got.Add(G.N.NameOf(S)); }
+	for (const FRoadSegmentId& S : G.EndLinks) { Got.Add(G.N.NameOf(S)); }
+	for (const FRoadSegmentId& S : G.Stubs) { Got.Add(G.N.NameOf(S)); }
+	TestEqual(TEXT("exits A1-A3, end links A4-A5, stand stubs B1-B2"), Got, Expected);
+	TestEqual(TEXT("a second load names nothing"), G.N.Net->EnsureTaxiwayNames(G.N.Rules), 0);
+
+	FGatwickShape Again;
+	Again.N.Net->EnsureTaxiwayNames(Again.N.Rules);
+	FRoadNetworkTestAccess(*G.N.Net).ClearTaxiwayNamesForTest();
+	G.N.Net->EnsureTaxiwayNames(G.N.Rules);
+	for (int32 Index = 0; Index < G.N.Net->GetSegments().Num(); ++Index)
+	{
+		const FRoadSegmentId Id = G.N.Net->SegmentIdAt(Index);
+		TestEqual(FString::Printf(TEXT("segment %d: same network, same name"), Index), G.N.NameOf(Id), Again.N.NameOf(Again.N.Net->SegmentIdAt(Index)));
 	}
 	return true;
 }

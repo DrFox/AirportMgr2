@@ -696,3 +696,30 @@ int32 URoadNetwork::RetireEmptyTaxiways()
 	}
 	return Retired;
 }
+
+int32 URoadNetwork::EnsureTaxiwayNames(const FTaxiwayNamingRules& Rules)
+{
+	int32 Unnamed = 0;
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const FRoadSegmentId Id = SegmentIdAt(Index);
+		Unnamed += Id.IsSet() && TaxiwayStrip::HasStrip(*this, Id) && TaxiwayOf(Id) == INDEX_NONE ? 1 : 0;
+	}
+	if (Unnamed == 0)
+	{
+		return 0;
+	}
+	const int32 Before = Taxiways.Num();
+	NormaliseTaxiways(Rules);
+	int32 Lettered = 0;
+	int32 Connectors = 0;
+	for (int32 Index = Before; Index < Taxiways.Num(); ++Index)
+	{
+		if (Taxiways[Index].bAlive)
+		{
+			(Taxiways[Index].IsConnector() ? Connectors : Lettered) += 1;
+		}
+	}
+	UE_LOG(LogAirside, Log, TEXT("TaxiwayNames: backfilled %d taxiway(s), %d connector(s)"), Lettered, Connectors);
+	return Lettered + Connectors;
+}
