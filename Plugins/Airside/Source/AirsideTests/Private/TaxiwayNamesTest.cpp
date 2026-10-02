@@ -1,8 +1,12 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Math/RandomStream.h"
+#include "Model/GroundTraffic.h"
+#include "Model/InspectFacts.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
+#include "Model/RouteSearch.h"
 #include "Model/TaxiwayStrip.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/TaxiwayLetters.h"
@@ -599,6 +603,44 @@ bool FTaxiwayNamesBackfillTest::RunTest(const FString&)
 	{
 		const FRoadSegmentId Id = G.N.Net->SegmentIdAt(Index);
 		TestEqual(FString::Printf(TEXT("segment %d: same network, same name"), Index), G.N.NameOf(Id), Again.N.NameOf(Again.N.Net->SegmentIdAt(Index)));
+	}
+	return true;
+}
+
+/** Where an agent is, in names (spec "First consumers"): a taxiing aircraft on FTestAirport's one taxiway is on A - and
+ *  before the names exist it is nowhere, which is what proves the answer is read from them (plan D13). */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesWhereIsTest, "Airside.Model.TaxiwayNames.WhereIsAnAgent",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesWhereIsTest::RunTest(const FString&)
+{
+	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	FTestAirport Airport = FTestAirport::Build(Airframe);
+	const FGuidelineNodeId Exit = RouteSearch::FindNearestNode(*Airport.Net, Airport.ExitAt, ETraversalClass::Aircraft, 200.0);
+	const FRoutePlan Plan = TestGraph::Probe(*Airport.Net, Exit, Airport.Pose(Airport.Stands[0]), ETraversalClass::Aircraft);
+	if (!TestTrue(TEXT("setup: a taxi route"), Plan.IsValid())) { return false; }
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Plane = Traffic->DispatchAgent(Airport.Net, Plan, Airframe, ETraversalClass::Aircraft, 0.0);
+	if (!TestNotNull(TEXT("setup: dispatched"), Traffic->FindAgent(Plane))) { return false; }
+	// OFF THE RUNWAY FIRST: the route starts on the runway's centreline node (FTestAirport), where the answer is the pair.
+	const auto OnRunway = [&]()
+	{
+		const FRoadAgent* Moving = Traffic->FindAgent(Plane);
+		const FRoutePlan& Route = Moving->PlanInProgress();
+		const FGuidelineEdge* Edge = Airport.Net->GetGuidelineEdge(
+			Route.Steps[UGroundTraffic::CurrentStep(Route, Moving->DistanceAlongPlan())].Edge);
+		return Edge != nullptr && Airport.Net->IsRunwaySegment(Edge->DerivedFrom);
+	};
+	for (int32 Tick = 0; Tick < 4000 && OnRunway(); ++Tick) { Traffic->Advance(0.05, Airport.Net); }
+	const FRoadAgent* Agent = Traffic->FindAgent(Plane);
+	if (!TestTrue(TEXT("setup: off the runway"), Agent != nullptr && !OnRunway())) { return false; }
+	TestEqual(TEXT("control: before any name exists it is nowhere"), InspectFacts::WhereIs(*Agent, *Airport.Net), FString());
+	Airport.Net->NormaliseTaxiways(FTaxiwayNamingRules());
+	const FString Where = InspectFacts::WhereIs(*Agent, *Airport.Net);
+	TestTrue(FString::Printf(TEXT("on the fixture's one taxiway, A, or its junction ('%s')"), *Where), Where == TEXT("A"));
+	FAgentFacts Facts;
+	if (TestTrue(TEXT("described"), InspectFacts::DescribeAgent(*Traffic, Airport.Net, Plane, Facts)))
+	{
+		TestEqual(TEXT("the card's On is the same answer"), Facts.On, Where);
 	}
 	return true;
 }

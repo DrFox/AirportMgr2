@@ -6,6 +6,7 @@
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
+#include "Model/InspectFacts.h"
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
 #include "Model/OfferGenerator.h"
@@ -240,21 +241,27 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 				Aircraft += (Who != nullptr && Who->Class == ETraversalClass::Aircraft) ? 1 : 0;
 			}
 			const int32 Vehicles = Cycle.Num() - Aircraft;
+			// WHERE, by the lowest member - the agent the alert focuses (taxiway naming spec 2026-10-02): " on A3", or
+			// nothing on an unnamed network, so the sentence reads as before there.
+			const FRoadAgent* Focus = Sources.Traffic->FindAgent(Lowest);
+			const FString Where = Focus != nullptr && Sources.Network != nullptr ? InspectFacts::WhereIs(*Focus, *Sources.Network) : FString();
+			const FText On = Where.IsEmpty() ? FText::GetEmpty()
+				: FText::Format(NSLOCTEXT("OpsAlerts", "DeadlockOn", " on {0}"), FText::FromString(Where));
 			FText Text;
 			if (Vehicles == 0)
 			{
-				Text = FText::Format(NSLOCTEXT("OpsAlerts", "Deadlock", "{0} aircraft deadlocked - {1}"),
-					FText::AsNumber(Aircraft), DeadlockRemedy());
+				Text = FText::Format(NSLOCTEXT("OpsAlerts", "Deadlock", "{0} aircraft deadlocked{2} - {1}"),
+					FText::AsNumber(Aircraft), DeadlockRemedy(), On);
 			}
 			else if (Aircraft == 0)
 			{
-				Text = FText::Format(NSLOCTEXT("OpsAlerts", "DeadlockVehicles", "{0} {0}|plural(one=vehicle,other=vehicles) deadlocked - {1}"),
-					Vehicles, DeadlockRemedy());
+				Text = FText::Format(NSLOCTEXT("OpsAlerts", "DeadlockVehicles", "{0} {0}|plural(one=vehicle,other=vehicles) deadlocked{2} - {1}"),
+					Vehicles, DeadlockRemedy(), On);
 			}
 			else
 			{
-				Text = FText::Format(NSLOCTEXT("OpsAlerts", "DeadlockMixed", "{0} aircraft and {1} {1}|plural(one=vehicle,other=vehicles) deadlocked - {2}"),
-					Aircraft, Vehicles, DeadlockRemedy());
+				Text = FText::Format(NSLOCTEXT("OpsAlerts", "DeadlockMixed", "{0} aircraft and {1} {1}|plural(one=vehicle,other=vehicles) deadlocked{3} - {2}"),
+					Aircraft, Vehicles, DeadlockRemedy(), On);
 			}
 			FOpsAlert& Alert = Found.Add_GetRef(OpsAlertOf(EAlertKind::Deadlock, Lowest, NAME_None, Text));
 			if (const FRoadAgent* Agent = Sources.Traffic->FindAgent(Lowest))

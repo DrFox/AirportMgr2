@@ -793,4 +793,47 @@ bool FOpsAlertsBusyRunwayEditTest::RunTest(const FString&)
 	return true;
 }
 
+// THE DEADLOCK SAYS WHERE (taxiway naming spec 2026-10-02): on a 40-stand airport "2 aircraft deadlocked" cannot be found.
+// Two aircraft on the airport's taxiway wait on each other; once the network is named, the alert names the taxiway the
+// lowest member is on - and before, it says what it always said.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsAlertsDeadlockWhereTest, "AirportOps.Model.Alerts.DeadlockSaysWhere",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsAlertsDeadlockWhereTest::RunTest(const FString&)
+{
+	FAlertsField F;
+	if (!TestTrue(TEXT("an aircraft taxiing in"), F.Build())) { return false; }
+	// THE LOWEST MEMBER (the alert's key and focus) is F.Plane, taxiing in from the exit; it is moved off the runway's
+	// centreline node first, where WhereIs would answer the runway's pair instead of the taxiway.
+	const auto OnRunway = [&F]()
+	{
+		const FRoadAgent* Moving = F.Traffic->FindAgent(F.Plane);
+		const FRoutePlan& Route = Moving->PlanInProgress();
+		const FGuidelineEdge* Edge = F.Airport.Net->GetGuidelineEdge(
+			Route.Steps[UGroundTraffic::CurrentStep(Route, Moving->DistanceAlongPlan())].Edge);
+		return Edge != nullptr && F.Airport.Net->IsRunwaySegment(Edge->DerivedFrom);
+	};
+	for (int32 Tick = 0; Tick < 4000 && OnRunway(); ++Tick) { F.Traffic->Advance(0.05, F.Airport.Net); }
+	if (!TestFalse(TEXT("setup: the first aircraft is off the runway"), OnRunway())) { return false; }
+	// A SECOND AIRCRAFT, from the other stand out to the exit - a higher id, so F.Plane stays the lowest member.
+	const FGuidelineNodeId Exit = RouteSearch::FindNearestNode(*F.Airport.Net, F.Airport.ExitAt, ETraversalClass::Aircraft, 200.0);
+	const FRoutePlan Out = TestGraph::Probe(*F.Airport.Net, F.Airport.Pose(F.Airport.Stands[1]), Exit, ETraversalClass::Aircraft);
+	const int32 Second = Out.IsValid() ? F.Traffic->DispatchAgent(F.Airport.Net, Out, UAirsideSettings::ResolveDefaultAirframe(),
+		ETraversalClass::Aircraft, 0.0) : 0;
+	if (!TestTrue(TEXT("a second aircraft"), Second > F.Plane)) { return false; }
+	FGroundTrafficTestAccess Access(*F.Traffic);
+	const FGuidelineNodeId Any = F.Airport.Pose(F.Airport.Stands[0]);
+	Access.ScriptWait(F.Plane, FTrafficResource::OfNode(Any), Second, F.Traffic->Rules.StallSeconds * 2.0);
+	Access.ScriptWait(Second, FTrafficResource::OfNode(Any), F.Plane, F.Traffic->Rules.StallSeconds * 2.0);
+	F.Airport.Net->NormaliseTaxiways(FTaxiwayNamingRules());
+	F.Recompute();
+	FString Text;
+	for (const FOpsAlert& Alert : F.Raised)
+	{
+		if (Alert.Key.Kind == EAlertKind::Deadlock) { Text = Alert.Text.ToString(); }
+	}
+	TestTrue(FString::Printf(TEXT("the deadlock says where ('%s')"), *Text), Text.Contains(TEXT("2 aircraft deadlocked on A - ")));
+	TestTrue(TEXT("and still gives the remedy"), Text.Contains(UOpsAlerts::DeadlockRemedy().ToString()));
+	return true;
+}
+
 #endif
