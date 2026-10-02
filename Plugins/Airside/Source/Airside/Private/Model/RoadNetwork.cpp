@@ -465,6 +465,8 @@ void URoadNetwork::CopyFrom(const URoadNetwork& Source)
 	// a number a bulldozed depot had already worn. Written beside NextStandNumber so the next counter added is not left out of one of them.
 	// ENFORCED BY: Airside.Model.CopyFromCoversEveryProperty (the counter), Airside.Model.DepotNumbers (a copy keeps each depot's own number)
 	NextDepotNumber = Source.NextDepotNumber;
+	// THE NAMES (2026-10-02): an undo that restored the roads but not their names would re-letter the airport.
+	Taxiways = Source.Taxiways;
 }
 
 void URoadNetwork::RestoreFrom(const URoadNetwork& Snapshot)

@@ -11,6 +11,7 @@
 #include "Model/TrafficOccupancy.h"
 #include "Solve/IcaoCode.h"
 #include "Solve/LetterEnvelope.h"
+#include "Model/Taxiway.h"
 #include "RoadNetwork.generated.h"
 
 class URoadProfile;
@@ -901,6 +902,30 @@ public:
 	/** The number the next placed depot will be issued. See NextDepotNumber. */
 	int32 GetNextDepotNumber() const { return NextDepotNumber; }
 
+	// --- Taxiway names (spec 2026-10-02-taxiway-naming) - bodies in RoadNetworkTaxiways.cpp, which rule 77's budget
+	// on this file's .cpp (33 lines to spare on 2026-10-02) and rule 103's single writer both send there. -------------
+
+	/** The live taxiway with this Id, or null - dead, never minted, or INDEX_NONE. */
+	const FTaxiway* GetTaxiway(int32 TaxiwayId) const;
+	const TArray<FTaxiway>& GetTaxiways() const { return Taxiways; }
+
+	/** The live taxiway Segment belongs to, or INDEX_NONE (a road, a runway, an unnamed or dead segment). */
+	int32 TaxiwayOf(FRoadSegmentId Segment) const;
+
+	/**
+	 * THE ONE FUNCTION that turns a taxiway id into text (spec): its Name, or - for a connector with none - its parent's
+	 * Name plus its ConnectorNumber ("A3"). Empty for a dead or unknown id.
+	 * ENFORCED BY: Airside.Model.TaxiwayNames.Connector, Airside.Model.TaxiwayNames.RenamePropagatesToConnectors
+	 */
+	FString TaxiwayDisplayName(int32 TaxiwayId) const;
+
+	/** Some live taxiway other than Except displays Name. Display names are unique (the invariant). */
+	bool IsTaxiwayNameTaken(const FString& Name, int32 Except) const;
+
+	/** A live connector names this taxiway its parent - which keeps an empty parent alive, its letter reserved. */
+	bool HasTaxiwayConnectors(int32 TaxiwayId) const;
+	int32 TaxiwayConnectorCount(int32 TaxiwayId) const;
+
 	/**
 	 * Removes the entity, the anchor nodes it owns, and every guideline edge incident to
 	 * them - RemoveGuidelineNode cascades. So deleting a stand also deletes the taxi line
@@ -1224,6 +1249,10 @@ private:
 	 *  to build that case ahead of the tool that will draw one. */
 	FEntityInstance* GetEntityMutable(FEntityInstanceId Entity);
 
+	/** THE ONE WRITER of FRoadSegment::TaxiwayId (RoadNetworkTaxiways.cpp). ENFORCED BY: Check-Architecture rule 103 */
+	void WriteTaxiwayId(FRoadSegmentId Segment, int32 TaxiwayId);
+	FTaxiway* FindTaxiwayMutable(int32 TaxiwayId);
+
 	friend struct FRoadNetworkTestAccess;
 
 	UPROPERTY() TArray<FRoadNode>    Nodes;
@@ -1305,6 +1334,12 @@ private:
 	 * double-spends a number. A counter per kind, not one shared: a stand's number is painted on the ground and counts stands only.
 	 */
 	UPROPERTY() int32 NextDepotNumber = 1;
+
+	/**
+	 * Every taxiway ever named - see FTaxiway (append-only). SAVED and copied by CopyFrom, so an undo restores names and
+	 * ids exactly. ENFORCED BY: Airside.Model.CopyFromCoversEveryProperty, Airside.Present.TaxiwayNames.SplitIsAnnouncedAndUndone
+	 */
+	UPROPERTY() TArray<FTaxiway> Taxiways;
 
 	/**
 	 * FindEntityIndexByPoseNode's index, memoised the same discipline FNodeReachCache and
@@ -1389,6 +1424,10 @@ struct AIRSIDE_API FRoadNetworkTestAccess
 	 *  (INDEX_NONE, Airside.Model.StandFrontage.MigrationStoresTheEntranceOnce), or an edge that disagrees with what a search would
 	 *  answer, to show a reader reads the stored one (Airside.Model.StandFrontage.ReadersReadTheStoredEdge). False for a dead entity. */
 	bool SetEntityFrontageForTest(FEntityInstanceId Entity, int32 FrontageEdge);
+
+	/** Every segment unnamed and every taxiway forgotten - a level as saved before 2026-10-02 loads
+	 *  (Airside.Model.TaxiwayNames.BackfillGatwickShape). */
+	void ClearTaxiwayNamesForTest();
 
 private:
 	URoadNetwork& Network;

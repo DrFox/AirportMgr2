@@ -78,6 +78,15 @@ struct AIRSIDE_API FRoadSegment
 	 */
 	UPROPERTY() uint8 RestrictedLetter = 0xFF;
 
+	/**
+	 * The taxiway this segment belongs to - an Id into URoadNetwork::GetTaxiways() - or INDEX_NONE: a service road, a
+	 * runway, or a taxiway segment the next URoadNetwork::NormaliseTaxiways has not named yet. SAVED, so names ride the
+	 * level, the save game and the undo Memento; a level saved before 2026-10-02 loads INDEX_NONE and is named by
+	 * URoadNetwork::EnsureTaxiwayNames. Written ONLY through URoadNetwork::WriteTaxiwayId, in RoadNetworkTaxiways.cpp.
+	 * ENFORCED BY: Check-Architecture rule 103
+	 */
+	UPROPERTY() int32 TaxiwayId = INDEX_NONE;
+
 	/** Written ONLY by FRoadNetworkSolver, through URoadNetwork::WriteSegmentEndSolve (#191) -
 	 *  not a raw pointer, so this and the cut vertices below cannot land out of step with
 	 *  bSolvedA/B. Distance from each end at which the segment is cut. */
