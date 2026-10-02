@@ -84,6 +84,7 @@ double UOfferGenerator::MoodFactor(const UAirlineDefinition& Airline) const
 double UOfferGenerator::CurrentRate(const UAirlineDefinition& Airline, const USimClock& Clock) const
 {
 	// THE ONE EXPRESSION: TickMinute accrues exactly this each minute, and the panel shows it - see the declaration.
+	// ENFORCED BY: AirportOps.Model.Offers.Rate.CurrentRateIsWhatAccrues
 	return RateAt(Airline, Clock.TimeOfDay(), Clock.IsDaylight(), DemandFactor(), AirlineFactor(Airline));
 }
 
@@ -142,6 +143,7 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 			Cache.FleetSize = Each.Fleet.Num();
 			// ONE SEARCH PER TYPE, ONE VERDICT PER SEARCH: this loop is the only place a verdict is made, and everything
 			// below (the pick, the share, the log line, the event text) reads Verdicts - see GetFleetAdmission.
+			// ENFORCED BY: AirportOps.Model.Offers.FleetAdmission.EveryTypeHasAVerdict
 			Cache.Verdicts.Reset();
 			for (int32 Index = 0; Index < Each.Fleet.Num(); ++Index)
 			{
@@ -150,7 +152,13 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 				Verdict.TypeName = Each.Fleet[Index].TypeName;
 				FString Sentence;
 				Verdict.bAdmitted = CouldEverAdmit(Network, Focus, Each.Fleet[Index].Airframe, Verdict.Why, Sentence);
-				if (!Verdict.bAdmitted)
+				if (Verdict.bAdmitted)
+				{
+					// CouldEverAdmit passes TEMPORARY refusals (RunwayOccupied...) through OutWhy with true; a tick must not
+					// carry one, or the panel would read a reason beside it.
+					Verdict.Why = EArrivalRefusal::None;
+				}
+				else
 				{
 					// THE PLAN'S SENTENCE, with its figures, when there is one (#396); the reason's own wording
 					// otherwise.

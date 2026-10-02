@@ -58,6 +58,7 @@ struct FFleetAdmission
 {
 	FText TypeName;
 	bool bAdmitted = false;
+	/** None when admitted - even if the plan had a TEMPORARY refusal (RunwayOccupied...), which is no reason a type cannot come. */
 	EArrivalRefusal Why = EArrivalRefusal::None;
 	/** Empty when admitted; else the plan's own sentence with its figures (#396), else the reason's wording. */
 	FString Sentence;

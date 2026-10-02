@@ -400,6 +400,9 @@ bool FOfferFleetAdmissionMixedTest::RunTest(const FString& Parameters)
 		TestTrue(*FString::Printf(TEXT("row %d has a permanent reason"), Index), ArrivalPlanner::IsPermanentRefusal(Rows[Index].Why));
 		TestFalse(*FString::Printf(TEXT("row %d says why"), Index), Rows[Index].Sentence.IsEmpty());
 	}
+	TestEqual(TEXT("too long a landing field: refused by admission"), Rows[1].Why, EArrivalRefusal::NotAdmitted);
+	TestEqual(TEXT("too wide a wingspan: refused by admission"), Rows[2].Why, EArrivalRefusal::NotAdmitted);
+	TestTrue(TEXT("each cross has ITS OWN sentence"), Rows[1].Sentence != Rows[2].Sentence);
 	TestEqual(TEXT("FleetShare reads the same list: one of three"), Generator->FleetShare(*Airline), 1.0 / 3.0, 1e-9);
 	TestEqual(TEXT("DescribeWhyNot is the FIRST cross's sentence"), Generator->DescribeWhyNot(Airline->GetFName()), Rows[1].Sentence);
 	return true;
@@ -424,6 +427,9 @@ bool FOfferFleetAdmissionAllRefusedTest::RunTest(const FString& Parameters)
 		TestFalse(*FString::Printf(TEXT("%s is crossed"), *Row.TypeName.ToString()), Row.bAdmitted);
 		TestFalse(*FString::Printf(TEXT("%s has its own sentence"), *Row.TypeName.ToString()), Row.Sentence.IsEmpty());
 	}
+	TestEqual(TEXT("too long: its reason"), Rows[0].Why, EArrivalRefusal::NotAdmitted);
+	TestEqual(TEXT("too wide: its reason"), Rows[1].Why, EArrivalRefusal::NotAdmitted);
+	TestTrue(TEXT("two crosses, two sentences"), Rows[0].Sentence != Rows[1].Sentence);
 	TestEqual(TEXT("the share is zero"), Generator->FleetShare(*Airline), 0.0, 1e-9);
 	TestEqual(TEXT("DescribeWhyNot is unchanged: the first row's sentence"),
 		Generator->DescribeWhyNot(Airline->GetFName()), Rows[0].Sentence);
@@ -463,6 +469,8 @@ bool FOfferFleetAdmissionRebuildTest::RunTest(const FString& Parameters)
 	if (!TestEqual(TEXT("still two rows"), Rows.Num(), 2)) { return false; }
 	TestTrue(TEXT("the big type is admitted once the airport can take it"), Rows[1].bAdmitted);
 	TestTrue(TEXT("and its sentence is gone"), Rows[1].Sentence.IsEmpty());
+	TestEqual(TEXT("and an admitted row carries no reason (Why == None), so the panel never reads one beside a tick"),
+		Rows[1].Why, EArrivalRefusal::None);
 	TestEqual(TEXT("and the share follows the same list"), Generator->FleetShare(*Airline), 1.0, 1e-9);
 	return true;
 }
