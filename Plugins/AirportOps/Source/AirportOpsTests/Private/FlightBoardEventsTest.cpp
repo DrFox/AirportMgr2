@@ -25,6 +25,8 @@ namespace
 	/** Everything a board test needs, with a bus the board publishes onto and recorders on it. */
 	struct FFbEventsFixture
 	{
+		/** Kept whole for its stand's pose node: a Parked there is ON BLOCKS (#398), a Parked anywhere else is not. */
+		FTestAirport Airport;
 		URoadNetwork* Net = nullptr;
 		UGroundTraffic* Traffic = nullptr;
 		USimClock* Clock = nullptr;
@@ -32,7 +34,7 @@ namespace
 		FOpsEventBus Bus;
 		TArray<FOfferExpiredEvent> Expired;
 		TArray<FOfferDeclinedEvent> Declined;
-		TArray<FFlightAirborneEvent> Airborne;
+		TArray<FFlightOffBlocksEvent> OffBlocks;
 		TArray<FOfferAcceptedEvent> Accepted;
 		/** Every phase change the board announced (#442 item 4) - what the billing reaction hears. */
 		TArray<FFlightPhaseChangedEvent> Changed;
@@ -42,7 +44,8 @@ namespace
 			// A FIELD AN ARRIVAL CAN USE - runway, exit, taxiway, stand (#431): an accept is the arrival plan's now, so a strip nothing can land on, or a stand nothing reaches, accepts nothing. Sized for the offers' own airframe.
 			FAirframe Airframe;
 			Airframe.Wingspan = 3400.0;
-			Net = FTestAirport::Build(Airframe).Net;
+			Airport = FTestAirport::Build(Airframe);
+			Net = Airport.Net;
 			Traffic = NewObject<UGroundTraffic>();
 			Clock = NewObject<USimClock>();
 			Board = NewObject<UFlightBoard>(GetTransientPackage());
@@ -51,7 +54,7 @@ namespace
 			Bus.BeginWiring();
 			Bus.Subscribe<FOfferExpiredEvent>(EOpsTier::Sim, TEXT("test"), [this](const FOfferExpiredEvent& E) { Expired.Add(E); });
 			Bus.Subscribe<FOfferDeclinedEvent>(EOpsTier::Sim, TEXT("test"), [this](const FOfferDeclinedEvent& E) { Declined.Add(E); });
-			Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Sim, TEXT("test"), [this](const FFlightAirborneEvent& E) { Airborne.Add(E); });
+			Bus.Subscribe<FFlightOffBlocksEvent>(EOpsTier::Sim, TEXT("test"), [this](const FFlightOffBlocksEvent& E) { OffBlocks.Add(E); });
 			Bus.Subscribe<FOfferAcceptedEvent>(EOpsTier::Sim, TEXT("test"), [this](const FOfferAcceptedEvent& E) { Accepted.Add(E); });
 			Bus.Subscribe<FFlightPhaseChangedEvent>(EOpsTier::Sim, TEXT("test"), [this](const FFlightPhaseChangedEvent& E) { Changed.Add(E); });
 			Bus.EndWiring();
@@ -68,7 +71,7 @@ namespace
 
 		/** A flight already on the ground as agent 5, driven through the phase sequence to Departing. Agent 5 is no
 		 *  agent of this traffic model, so its Parked is at no stand and moves the flight nowhere (#405); the
-		 *  manoeuvre and the taxi out after it are what reach Departing. */
+		 *  manoeuvre and the taxi out after it are what reach Departing. NO TURNAROUND, so no contract ran (#398). */
 		UFlight* DepartAt(double Now, double AcceptedAt, double ContractSeconds)
 		{
 			UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
@@ -83,10 +86,45 @@ namespace
 			Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked));
 			Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Parked, EAgentPhase::Manoeuvring, EAgentEvent::DepartOrdered));
 			Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing, EAgentEvent::PushedBack));
-			// THE CLOCK AT TAKE-OFF, set only now: AirborneAt is taken on the Departing change.
+			// THE CLOCK AT TAKE-OFF, set only now: the Departing change is dated by it.
 			Clock->StartAtHour(Now / 3600.0);
 			Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Departing, EAgentEvent::LinedUp));
 			return Flight;
+		}
+
+		/** A flight as agent 5 that lands and taxis in, its Parked ON THE FIXTURE'S STAND with the clock at OnBlocks - a
+		 *  turnaround, so the contract starts there (#398). Accepted at AcceptedAt with a ContractSeconds contract. */
+		UFlight* OnStandAt(double OnBlocks, double AcceptedAt, double ContractSeconds)
+		{
+			UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+			Flight->Airframe.Wingspan = 3400.0;
+			Flight->AirlineId = TEXT("Cumbria");
+			Flight->AgentId = 5;
+			Flight->SetPhaseForTest(EFlightPhase::Landing);
+			Flight->AcceptedAt = AcceptedAt;
+			Flight->ContractSeconds = ContractSeconds;
+			Board->AddOffer(*Clock, Flight);
+			Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Arriving, EAgentPhase::Taxiing, EAgentEvent::Vacated));
+			Clock->StartAtHour(OnBlocks / 3600.0);
+			Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked,
+				Airport.Pose(Airport.Stands[0])));
+			return Flight;
+		}
+
+		/** Off the stand at LeftAt: a push (Manoeuvring), or with bDriveOut a stand left forward straight onto the taxi out. */
+		void OffStandAt(double LeftAt, bool bDriveOut = false)
+		{
+			Clock->StartAtHour(LeftAt / 3600.0);
+			Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Parked,
+				bDriveOut ? EAgentPhase::Taxiing : EAgentPhase::Manoeuvring, EAgentEvent::DepartOrdered));
+		}
+
+		/** The rest of the way out after a push, at TakeOff: the push ends, and the line-up. */
+		void TakeOffAt(double TakeOff)
+		{
+			Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing, EAgentEvent::PushedBack));
+			Clock->StartAtHour(TakeOff / 3600.0);
+			Board->OnAgentPhase(*Net, *Clock, OpsTestTransition(5, EAgentPhase::Taxiing, EAgentPhase::Departing, EAgentEvent::LinedUp));
 		}
 	};
 }
@@ -151,25 +189,84 @@ bool FFlightBoardEventsExpiredTest::RunTest(const FString&)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightBoardEventsAirborneTest, "AirportOps.Model.FlightBoard.Events.AirborneLateness",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFlightBoardEventsOffBlocksTest, "AirportOps.Model.FlightBoard.Events.OffBlocksLateness",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-bool FFlightBoardEventsAirborneTest::RunTest(const FString&)
+bool FFlightBoardEventsOffBlocksTest::RunTest(const FString&)
 {
+	// #398 (ruling 2026-10-02): THE CONTRACT IS TIME ON STAND, on-blocks to off-blocks. Measured, movement ate ~80% of the old
+	// accept-to-airborne two hours - landing, taxi-in, pushback, taxi-out - none of which the player's stand work controls. So the
+	// figures below put FAR more than the contract between the accept and the stand, and between the stand and the take-off: a
+	// board that still measured from the accept, or to the line-up, reads hours late here.
 	{
 		FFbEventsFixture F;
-		// Accepted at 100 with a 600 s contract: due airborne by 700. Up at 1300 is 600 s late.
-		F.DepartAt(1300.0, 100.0, 600.0);
+		// Accepted at 100 with a 600 s contract. On blocks at 5000 - 4900 s of holding and taxi, eight contracts' worth.
+		UFlight* Flight = F.OnStandAt(5000.0, 100.0, 600.0);
 		F.Bus.Drain();
-		if (!TestEqual(TEXT("take-off is published once"), F.Airborne.Num(), 1)) { return false; }
-		TestEqual(TEXT("lateness is measured against the contract the row showed"), F.Airborne[0].LateBySeconds, 600.0, 1e-6);
+		if (!TestEqual(TEXT("PRECONDITION: parked on the stand is a turnaround"), Flight->GetPhase(), EFlightPhase::Turnaround)) { return false; }
+		TestEqual(TEXT("ON BLOCKS is stamped at the clock the aeroplane parked"), Flight->OnBlocksAt, 5000.0, 1e-6);
+		TestTrue(TEXT("and the contract has started"), Flight->HasContractStarted());
+		TestEqual(TEXT("THE HOLDING AND THE TAXI COST NOTHING: the whole contract is left at on-blocks"), Flight->ContractSecondsLeft(5000.0), 600.0, 1e-6);
+		TestFalse(TEXT("so the flight is not late on arrival at its stand"), Flight->IsLate(5000.0));
+		TestEqual(TEXT("nothing is scored while it stands"), F.OffBlocks.Num(), 0);
+
+		// Off blocks at 5500: 500 s on stand against 600 - on time by 100.
+		F.OffStandAt(5500.0);
+		F.Bus.Drain();
+		TestEqual(TEXT("PRECONDITION: the push is Manoeuvring"), Flight->GetPhase(), EFlightPhase::Manoeuvring);
+		TestEqual(TEXT("OFF BLOCKS is stamped at the push"), Flight->OffBlocksAt, 5500.0, 1e-6);
+		if (!TestEqual(TEXT("SCORED AT OFF-BLOCKS, not at the take-off: published the moment it leaves the stand"), F.OffBlocks.Num(), 1)) { return false; }
+		TestEqual(TEXT("lateness = OffBlocksAt - (OnBlocksAt + ContractSeconds); early is negative, unclamped"),
+			F.OffBlocks[0].LateBySeconds, 5500.0 - (5000.0 + 600.0), 1e-6);
+		TestEqual(TEXT("naming the airline the roster scores"), F.OffBlocks[0].AirlineId, FName(TEXT("Cumbria")));
+
+		// The taxi out and the take-off, an hour later, change nothing: the contract has ended.
+		F.TakeOffAt(9000.0);
+		F.Bus.Drain();
+		TestEqual(TEXT("PRECONDITION: it lined up"), Flight->GetPhase(), EFlightPhase::Departing);
+		TestEqual(TEXT("THE TAXI OUT COSTS NOTHING: no second score at the line-up"), F.OffBlocks.Num(), 1);
+		TestEqual(TEXT("the clock stopped at off-blocks - what is left is frozen there, not still running"), Flight->ContractSecondsLeft(9000.0), 100.0, 1e-6);
+		TestFalse(TEXT("so a flight that left on time never turns late on the taxiway"), Flight->IsLate(9000.0));
 	}
 	{
 		FFbEventsFixture F;
-		F.DepartAt(500.0, 100.0, 600.0);
+		// Late: on blocks at 5000, a 600 s contract, off at 5900 - 300 s over.
+		UFlight* Flight = F.OnStandAt(5000.0, 100.0, 600.0);
+		TestTrue(TEXT("past the deadline while still on stand is late"), Flight->IsLate(5601.0));
+		F.OffStandAt(5900.0);
 		F.Bus.Drain();
-		if (!TestEqual(TEXT("take-off is published once"), F.Airborne.Num(), 1)) { return false; }
-		TestEqual(TEXT("early is negative, not clamped - what early is worth is the listener's call"),
-			F.Airborne[0].LateBySeconds, -200.0, 1e-6);
+		if (!TestEqual(TEXT("off-blocks is published once"), F.OffBlocks.Num(), 1)) { return false; }
+		TestEqual(TEXT("late by the time on stand over the contract"), F.OffBlocks[0].LateBySeconds, 300.0, 1e-6);
+	}
+	{
+		FFbEventsFixture F;
+		// DRIVEN STRAIGHT OUT (no push - EPushbackNeed lets a type leave forward): Turnaround -> TaxiOut is off-blocks too.
+		UFlight* Flight = F.OnStandAt(5000.0, 100.0, 600.0);
+		F.OffStandAt(5400.0, /*bDriveOut=*/true);
+		F.Bus.Drain();
+		TestEqual(TEXT("PRECONDITION: driving off the stand is the taxi out"), Flight->GetPhase(), EFlightPhase::TaxiOut);
+		TestEqual(TEXT("a stand left forward is off-blocks as surely as a push"), Flight->OffBlocksAt, 5400.0, 1e-6);
+		if (!TestEqual(TEXT("and is scored there, once"), F.OffBlocks.Num(), 1)) { return false; }
+		TestEqual(TEXT("on time by 200"), F.OffBlocks[0].LateBySeconds, -200.0, 1e-6);
+	}
+	{
+		FFbEventsFixture F;
+		// NO TURNAROUND, NO CONTRACT: an aeroplane that never parked on a stand (the fallback junction, #405) and left anyway
+		// started no contract - there is nothing to be late against, and scoring it against its accept was the old rule.
+		UFlight* Flight = F.DepartAt(9000.0, 100.0, 600.0);
+		F.Bus.Drain();
+		TestFalse(TEXT("no on-blocks, no contract"), Flight->HasContractStarted());
+		TestEqual(TEXT("and nothing scored for it"), F.OffBlocks.Num(), 0);
+		TestFalse(TEXT("nor is it late - the accept is no longer a deadline's start"), Flight->IsLate(9000.0));
+	}
+	{
+		FFbEventsFixture F;
+		// NO CONTRACT (0 s - never offered, or an airline authored with none): on and off blocks are stamped, nothing is scored -
+		// "late by its whole stand time" would be an artefact of the zero, not a verdict.
+		UFlight* Flight = F.OnStandAt(5000.0, 100.0, 0.0);
+		F.OffStandAt(5400.0);
+		F.Bus.Drain();
+		TestEqual(TEXT("off blocks is still stamped"), Flight->OffBlocksAt, 5400.0, 1e-6);
+		TestEqual(TEXT("but a flight with no contract is not scored"), F.OffBlocks.Num(), 0);
 	}
 	return true;
 }

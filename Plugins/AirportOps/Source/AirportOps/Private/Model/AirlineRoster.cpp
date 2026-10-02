@@ -36,7 +36,7 @@ double UAirlineRoster::RateMultiplier(FName AirlineId, bool bIsFloor) const
 	return bIsFloor ? FMath::Max(Multiplier, 1.0) : Multiplier;
 }
 
-void UAirlineRoster::OnFlightAirborne(const FFlightAirborneEvent& Event)
+void UAirlineRoster::OnFlightOffBlocks(const FFlightOffBlocksEvent& Event)
 {
 	FAirlineStanding* Row = FindMutable(Event.AirlineId);
 	if (Row == nullptr)
@@ -52,8 +52,12 @@ void UAirlineRoster::OnFlightAirborne(const FFlightAirborneEvent& Event)
 	}
 	// PER TEN GAME MINUTES, CAPPED: a flight two hours late is not twelve times worse to an airline
 	// than one ten minutes late - it has already missed its slot either way.
+	//
+	// LATE OFF STAND, NOT LATE DEPARTURE (#398): the lateness is time on stand over the contract, measured at off-blocks. Time
+	// spent holding for the runway, taxiing in and taxiing out is NOT scored - out of scope for the ruling of 2026-10-02, and a
+	// candidate for its own penalty later; if one comes, it is a second line here with its own cause, not a change to this one.
 	const double Penalty = FMath::Min(Tuning.LatePenaltyCap, Tuning.LatePenaltyPerTenMinutes * (Event.LateBySeconds / 600.0));
-	Apply(*Row, -Penalty, FString::Printf(TEXT("late departure (%d min)"), FMath::CeilToInt(Event.LateBySeconds / 60.0)));
+	Apply(*Row, -Penalty, FString::Printf(TEXT("late off stand (%d min)"), FMath::CeilToInt(Event.LateBySeconds / 60.0)));
 }
 
 void UAirlineRoster::OnOfferExpired(const FOfferExpiredEvent& Event)
@@ -170,7 +174,7 @@ void UAirlineRoster::OnDayEnded(const FDayEndedEvent& Event)
 		const double Gap = Tuning.Start - Row.Satisfaction;
 		const double Drift = FMath::Abs(Gap) < DriftSnap ? Gap : Gap * FMath::Clamp(Tuning.DailyDriftFraction, 0.0, 1.0);
 		// NOT REMEMBERED as the row's cause: a day's forgiveness is not something the player did, and
-		// letting it replace "late departure" would hide the one reason they could act on.
+		// letting it replace "late off stand" would hide the one reason they could act on.
 		Apply(Row, Drift, TEXT("a day's forgiveness"), /*bRemember=*/false);
 	}
 }

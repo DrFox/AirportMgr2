@@ -190,7 +190,7 @@ bool FFlightMidFlightGoesRoundTest::RunTest(const FString& Parameters)
 	{
 		FlightBilling::OnFlightPhaseChanged(Ledger, *LiveBoard, E);
 	});
-	Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Reaction, TEXT("test"), [&Scored](const FFlightAirborneEvent&) { ++Scored; });
+	Bus.Subscribe<FFlightOffBlocksEvent>(EOpsTier::Reaction, TEXT("test"), [&Scored](const FFlightOffBlocksEvent&) { ++Scored; });
 	Bus.Subscribe<FFlightCancelledEvent>(EOpsTier::Reaction, TEXT("test"), [&Scored](const FFlightCancelledEvent&) { ++Scored; });
 	Bus.Subscribe<FTurnaroundEndedEvent>(EOpsTier::Reaction, TEXT("test"), [&Scored](const FTurnaroundEndedEvent&) { ++Scored; });
 	Bus.EndWiring();

@@ -594,7 +594,8 @@ private:
 	 *   Accepted   - arms the arrival; publishes FOfferAcceptedEvent.
 	 *   Inbound    - HoldingSince = Cause.At; publishes FFlightInboundEvent (the queue pass's wake-up).
 	 *   Landing    - hooks the aeroplane (Cause.AgentId).
-	 *   Departing  - stamps AirborneAt once; publishes FFlightAirborneEvent.
+	 *   Turnaround - stamps OnBlocksAt once: the turnaround contract starts (#398).
+	 *   Manoeuvring / TaxiOut - the first after on-blocks stamps OffBlocksAt and publishes FFlightOffBlocksEvent (#398).
 	 *   Declined / Expired - publish FOfferDeclinedEvent / FOfferExpiredEvent; into History.
 	 *   Withdrawn  - into History, publishing nothing (no Ignored penalty: nobody let it lapse).
 	 *   Cancelled  - from Accepted/Inbound releases the stand; publishes FFlightCancelledEvent(Cause.CancelReason) unless

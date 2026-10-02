@@ -107,7 +107,7 @@ public:
 	float GetTimeLeftFraction() const { return TimeLeftFraction; }
 	FText GetAcceptLabel() const { return AcceptLabel; }
 
-	/** "62% \u25BC late departure (25 min)" - see DescribeSatisfaction. Empty with no roster. */
+	/** "62% \u25BC late off stand (25 min)" - see DescribeSatisfaction. Empty with no roster. */
 	FText GetSatisfaction() const { return Satisfaction; }
 
 	/**
@@ -124,7 +124,7 @@ public:
 	static FText DescribeMood(const FOfferMoodKey& Mood);
 
 	/**
-	 * "lands in 15 min - airborne within 1 h 10 min", from the flight's lead time and contract.
+	 * "lands in 15 min - 40 min on stand", from the flight's lead time and contract (time on stand since #398).
 	 * GAME time, in the clock's own words (GameTimeText::Duration, which the arrivals rows, the cards and the depot's backlog
 	 * share - DescribeDuration lived here until #447): the player reads the clock, not a seconds count.
 	 * Static so a test can ask it of numbers.

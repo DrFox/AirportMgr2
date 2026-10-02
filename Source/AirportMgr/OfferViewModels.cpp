@@ -19,7 +19,9 @@ namespace
 
 FText UOfferViewModel::DescribeContract(double LeadTimeSeconds, double ContractSeconds)
 {
-	return FText::Format(NSLOCTEXT("AirportMgr", "OfferContract", "lands in {0} \u00B7 airborne within {1}"),
+	// "ON STAND", NOT "AIRBORNE WITHIN" (#398): the contract is time on the stand, on-blocks to off-blocks. The old words promised
+	// a deadline from the accept that the taxiways and the runway queue spent, and the player could not see where it went.
+	return FText::Format(NSLOCTEXT("AirportMgr", "OfferContract", "lands in {0} \u00B7 {1} on stand"),
 		GameTimeText::Duration(LeadTimeSeconds), GameTimeText::Duration(ContractSeconds));
 }
 

@@ -275,10 +275,10 @@ bool FOfferRowContractTextTest::RunTest(const FString& Parameters)
 {
 	TestEqual(TEXT("game time in the clock's words"),
 		UOfferViewModel::DescribeContract(900.0, 4200.0).ToString(),
-		FString(TEXT("lands in 15 min \u00B7 airborne within 1 h 10 min")));
+		FString(TEXT("lands in 15 min \u00B7 1 h 10 min on stand")));
 	TestEqual(TEXT("a round hour drops its minutes"),
-		UOfferViewModel::DescribeContract(600.0, 7200.0).ToString(),
-		FString(TEXT("lands in 10 min \u00B7 airborne within 2 h")));
+		UOfferViewModel::DescribeContract(600.0, 2400.0).ToString(),
+		FString(TEXT("lands in 10 min \u00B7 40 min on stand")));
 	return true;
 }
 
@@ -379,9 +379,9 @@ bool FOfferSatisfactionTextTest::RunTest(const FString& Parameters)
 
 	Standing.Satisfaction = 0.62;
 	Standing.Recent.Add({ 0.03, TEXT("on time") });
-	Standing.Recent.Add({ -0.04, TEXT("late departure (25 min)") });
+	Standing.Recent.Add({ -0.04, TEXT("late off stand (25 min)") });
 	TestEqual(TEXT("the NEWEST reason, with the way it went"),
-		UOfferViewModel::DescribeSatisfaction(&Standing).ToString(), FString(TEXT("62% ▼ late departure (25 min)")));
+		UOfferViewModel::DescribeSatisfaction(&Standing).ToString(), FString(TEXT("62% ▼ late off stand (25 min)")));
 
 	Standing.Satisfaction = 0.53;
 	Standing.Recent.Add({ 0.03, TEXT("on time") });

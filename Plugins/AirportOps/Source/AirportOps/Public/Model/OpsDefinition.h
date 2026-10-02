@@ -123,7 +123,7 @@ struct AIRPORTOPS_API FAirlineSatisfactionTuning
 	/** Where every airline starts, and where the daily drift pulls it back to. 0..1. */
 	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0", ClampMax = "1.0")) double Start = 0.5;
 
-	/** A flight airborne by its contract's deadline. */
+	/** A flight off its stand by its contract's deadline - on-blocks plus the contract, #398. */
 	UPROPERTY(EditAnywhere, Category = "Airlines", meta = (ClampMin = "0.0")) double OnTimeBonus = 0.03;
 
 	/** A late flight costs this per ten game minutes late, up to LatePenaltyCap. */
