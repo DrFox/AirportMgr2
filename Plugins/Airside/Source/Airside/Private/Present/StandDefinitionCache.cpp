@@ -1,6 +1,7 @@
 #include "Present/StandDefinitionCache.h"
 
 #include "AirsideLog.h"
+#include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
@@ -76,24 +77,9 @@ namespace StandDefinitionCacheLocal
 	}
 }
 
-ARoadNetworkActor& UStandDefinitionCache::Actor() const
-{
-	ARoadNetworkActor* Owner = GetTypedOuter<ARoadNetworkActor>();
-	checkf(Owner != nullptr,
-		TEXT("UStandDefinitionCache created without an owning ARoadNetworkActor - it is only "
-			 "ever valid as that actor's CreateDefaultSubobject, see the class comment."));
-	return *Owner;
-}
-
 UEntityDefinition* UStandDefinitionCache::ResolveStandDefinitionFor(EIcaoCode Letter)
 {
-	// CODE C KEEPS ITS AUTHORED ASSET - see the header. Every other letter has none, so it
-	// falls through to the lazily-built cache below.
-	if (Letter == EIcaoCode::C)
-	{
-		return Actor().ResolveStandDefinition();
-	}
-
+	// EVERY LETTER BUILT HERE, C INCLUDED since 2026-10-03 - see the header for the retired asset.
 	// SIZED ON FIRST USE rather than in the constructor, so an actor spawned before this cache
 	// existed (or a saved level from before it) still starts with an empty array rather than six
 	// null-but-present slots nobody asked for.
@@ -112,11 +98,14 @@ UEntityDefinition* UStandDefinitionCache::ResolveStandDefinitionFor(EIcaoCode Le
 		// back in on load) instead of serialising a frozen copy of the template beside it.
 		Definition->SetFlags(RF_Transient);
 
-		// THE ONE PLACE a per-letter design aircraft could be filled in, matching every other
-		// Resolve* here (CLAUDE.md's "Content/ resolves every content default in exactly one
-		// function") - see UAirsideSettings::ResolveLargestAircraftOfLetter's own header for
-		// why it returns null for every letter today rather than scanning for one.
-		Definition->DesignAircraft = UAirsideSettings::ResolveLargestAircraftOfLetter(Letter);
+		// THE LETTER'S CONTENT ROW (UAirsideSettings::ResolveStandLetterDefaults): its design aircraft is
+		// already on the template - MakeStandTransient resolves it through the same row - and its PRICES
+		// are stamped here, the template the game places (2026-10-03: Code C's were on DA_Stand_CodeC,
+		// and a runtime-built C with none would have placed for free). Not in MakeStandTransient, whose
+		// world-free fixtures price their own stands.
+		const FStandLetterDefaults Content = UAirsideSettings::ResolveStandLetterDefaults(Letter);
+		Definition->PlacementCost = Content.PlacementCost;
+		Definition->UpkeepPerDay = Content.UpkeepPerDay;
 
 		LetterStandDefinitions[Ordinal] = Definition;
 

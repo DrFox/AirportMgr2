@@ -1,4 +1,4 @@
-"""Authors the aircraft types and the Code C stand. Run headless:
+"""Authors the aircraft types and the fuel depot (the Code C stand is retired - see the tail). Run headless:
 
   UnrealEditor-Cmd.exe <project> -run=pythonscript -script=<this file> -unattended -nosplash -nopause
 
@@ -13,7 +13,7 @@ puts a hold door in one place in code and another in content.
 Four assets, and the splits between them are the point:
 
   DA_Aircraft_A320 / DA_Aircraft_B738   where each service CONNECTS to that airframe
-  DA_Stand_CodeC                        what the ground PROVIDES, its plant, and its bays
+  (DA_Stand_CodeC                       RETIRED 2026-10-03 - built at runtime now; see the tail)
   DA_FuelDepot                          where the trucks live, and how many
 
 Both types park on the same Code C stand and put their hold doors metres apart, which is
@@ -113,60 +113,6 @@ def build_aircraft(name, builder):
     return aircraft
 
 
-def build_stand(design_aircraft):
-    stand = replace_asset(
-        "DA_Stand_CodeC", unreal.EntityDefinition,
-        data_asset_factory(unreal.EntityDefinition))
-    if stand is None:
-        return None
-
-    # The design aircraft goes IN rather than being set afterwards. The LAYOUT is measured
-    # against the code letter rather than against this aeroplane, but the envelope drawing and
-    # the inspect panel both read it, and a stand naming no design aircraft is one nothing can
-    # be shown parked on.
-    unreal.EntityDefinition.build_code_c_stand(stand, design_aircraft)
-
-    if not unreal.EntityDefinition.has_usable_anchor_ids(stand):
-        unreal.log_error("MARKER: DA_Stand_CodeC has empty or duplicate fixture ids")
-        return None
-
-    save("DA_Stand_CodeC")
-
-    fixtures = stand.get_editor_property("anchors")
-    unreal.log("MARKER: DA_Stand_CodeC built, %d ground fixtures" % len(fixtures))
-    for fixture in fixtures:
-        local = fixture.get_editor_property("local_position")
-        unreal.log("MARKER:   %s at (%.0f, %.0f)" % (
-            fixture.get_editor_property("id"), local.x, local.y))
-
-    # THE BAYS, logged as their own fact. The layout is invisible in the editor - no mesh, no
-    # material, no marking builder - so this is the only place it can be read back, and an
-    # asset that saved an EMPTY ServiceBays array looks identical in the content browser to one
-    # that saved four. That is not hypothetical: it is exactly the state this asset was left in
-    # when ServiceLane was deleted from the class, and no stand in the game had a layout at all
-    # until it was re-authored.
-    #
-    # THE ID AND THE LEG COUNTS, not just the poses. A bay whose legs failed to build still has
-    # an anchor id and three poses, so a pose-only listing reads as correct on a layout no
-    # vehicle can drive - which is the failure the whole piece exists to make impossible. The
-    # four counts are arrive / serve / reverse / depart, in that order.
-    bays = stand.get_editor_property("service_bays")
-    extent = stand.get_editor_property("required_extent")
-    unreal.log("MARKER: DA_Stand_CodeC layout, %d bay(s), needs %.0f x %.0f uu"
-               % (len(bays), extent.x, extent.y))
-    for bay in bays:
-        entry = bay.get_editor_property("entry_local")
-        park = bay.get_editor_property("park_local")
-        exit_at = bay.get_editor_property("exit_local")
-        legs = [len(bay.get_editor_property(leg).get_editor_property("points"))
-                for leg in ("arrive_leg", "serve_leg", "reverse_leg", "depart_leg")]
-        unreal.log("MARKER:   %s entry (%.0f, %.0f) park (%.0f, %.0f) exit (%.0f, %.0f) legs %s"
-                   % (bay.get_editor_property("anchor_id"), entry.x, entry.y,
-                      park.x, park.y, exit_at.x, exit_at.y,
-                      "/".join(str(n) for n in legs)))
-    return stand
-
-
 def build_fuel_depot():
     depot = replace_asset(
         "DA_FuelDepot", unreal.EntityDefinition,
@@ -224,10 +170,11 @@ build_aircraft("DA_Aircraft_B738", unreal.AircraftType.build737)
 # and rig, which this script has no business knowing about. Two scripts authoring one asset
 # is how the later run silently wins.
 
-# The stand is sized for the A320, and draws it to show how it would be used. When aircraft
-# exist, occupancy replaces this with whatever is actually parked.
-if airbus is not None:
-    build_stand(airbus)
+# NO STAND IS AUTHORED HERE SINCE 2026-10-03 (owner ruling). DA_Stand_CodeC is retired: a stand
+# layout is DERIVED data, and the saved copy went stale once (the tow's settle straights had to be
+# re-authored by hand). Code C is built at runtime by UStandDefinitionCache like every other letter,
+# and its A320 pairing is the content set's StandDesignAircraft, resolved by
+# UAirsideSettings::ResolveLargestAircraftOfLetter. The airbus is still authored above for that.
 
 fuel_depot = build_fuel_depot()
 if fuel_depot is not None:

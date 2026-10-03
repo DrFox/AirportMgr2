@@ -827,7 +827,6 @@ namespace
 		FAirsideTestWorld World;
 		ARoadNetworkActor* Actor = World.Actor;
 		if (!T.TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
-		Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 
 		const int32 RebuildsBefore = Actor->RebuildCountForTest();
 		const int32 TopologyBefore = Actor->TopologyRebuildCountForTest();
@@ -841,9 +840,11 @@ namespace
 	bool Case_PlaceEntityRefused(FAutomationTestBase& T)
 	{
 		// NEITHER the actor's own override NOR the content set's default: with either alone
-		// present the resolver still finds a stand and this would wrongly place, not refuse -
+		// present the resolver still finds a definition and this would wrongly place, not refuse -
 		// FuelDepotPlaceToolTest's own "no depot definition anywhere" block clears the same
-		// setting for the same reason and restores it straight after.
+		// setting for the same reason and restores it straight after. A FUEL DEPOT since
+		// 2026-10-03: a stand can no longer be refused this way - Code C is built at runtime and
+		// needs no content - and the depot is the kind whose definition is still content.
 		FAirsideTestWorld World;
 		ARoadNetworkActor* Actor = World.Actor;
 		if (!T.TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
@@ -855,7 +856,7 @@ namespace
 
 		const int32 RebuildsBefore = Actor->RebuildCountForTest();
 		T.TestTrue(TEXT("no definition anywhere refuses PlaceEntity"),
-			Actor->PlaceEntity(FVector2D::ZeroVector, 0.0, EPlaceableEntity::Stand) == INDEX_NONE);
+			Actor->PlaceEntity(FVector2D::ZeroVector, 0.0, EPlaceableEntity::FuelDepot) == INDEX_NONE);
 		T.TestEqual(TEXT("and nothing rebuilt for the refusal"), Actor->RebuildCountForTest(), RebuildsBefore);
 		return true;
 	}
@@ -934,7 +935,6 @@ namespace
 		FAirsideTestWorld World;
 		ARoadNetworkActor* Actor = World.Actor;
 		if (!T.TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
-		Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 		Actor->PlaceEntity(FVector2D::ZeroVector, 0.0, EPlaceableEntity::Stand);
 
 		const int32 RebuildsBefore = Actor->RebuildCountForTest();

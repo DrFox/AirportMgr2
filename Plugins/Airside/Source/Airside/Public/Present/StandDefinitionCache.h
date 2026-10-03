@@ -22,13 +22,10 @@ class URoadNetwork;
  * (LetterStandDefinitions below), and every one of them is derived, rebuildable state - see that
  * field's own comment for why none of it is ever saved.
  *
- * REACHES ITS OWNER THROUGH Outer, the same idiom as URoadEditFacade's private Actor() (see that
- * class's own comment) - CreateDefaultSubobject sets it, so a second stored pointer would only be
- * a second thing that could disagree with the first. Needed for exactly one thing: Code C's
- * definition is StandDefinition (an authored, saved UPROPERTY) or the content default, and that
- * resolution stays on the actor with every other Resolve* (CLAUDE.md's "Content/ resolves every
- * content default in exactly one function") - this cache asks the actor for the answer rather
- * than duplicating it.
+ * NEEDS NO OWNER: until 2026-10-03 it reached the actor through Outer for one thing - Code C's
+ * definition was the actor's authored StandDefinition or DA_Stand_CodeC by content default. Both
+ * are retired (owner ruling: a stand layout is derived data, and the saved copy went stale), so
+ * Code C is built here like every other letter and the cache asks its owner nothing.
  *
  * NO const_cast, UNLIKE THE ACTOR'S OLD ResolveStandDefinitionFor. That existed only to let a
  * CONST actor method lazily fill a cache - the shape ResolveProfile's RuntimeProfile would need
@@ -48,11 +45,11 @@ public:
 	 * A stand template for Letter, resolved and cached - the drawn-stand commit path's one place
 	 * to ask "what does a Code X stand look like".
 	 *
-	 * CODE C FORWARDS TO THE ACTOR'S ResolveStandDefinition() UNCHANGED: it alone has an
-	 * authored asset (StandDefinition, else DA_Stand_CodeC by content default), and a drawn
-	 * Code C stand must place the SAME object a legacy PlaceStand drops, or the two could
-	 * disagree about anchors, trucks or the envelope. Every other letter has no authored asset
-	 * (Task 1's own finding), so it is built once with UEntityDefinition::MakeStandTransient
+	 * EVERY LETTER ALIKE, CODE C INCLUDED since 2026-10-03: C used to forward to the actor's
+	 * authored DA_Stand_CodeC, which went stale once (re-authored by hand for the tow's settle
+	 * straights) - so it is built here now, and ARoadNetworkActor::ResolveStandDefinition (the
+	 * point-placed stand) asks THIS for C, so a drawn C and a placed C are the SAME object, as they
+	 * were when both read the asset. Each letter is built once with UEntityDefinition::MakeStandTransient
 	 * (Letter, this), flagged RF_Transient - see LetterStandDefinitions for why it is never
 	 * saved - and cached in LetterStandDefinitions[ordinal] so a second stand of the same letter
 	 * reuses it rather than building a second Flyweight. OUTERED TO THIS CACHE, not the actor:
@@ -107,16 +104,8 @@ public:
 
 private:
 	/**
-	 * The owning actor, found through Outer rather than stored a second time - see the class
-	 * comment. Needed for exactly one call: Actor().ResolveStandDefinition() for Code C.
-	 */
-	ARoadNetworkActor& Actor() const;
-
-	/**
 	 * A drawn stand's definition, per letter (A-F, indexed by EIcaoCode's own ordinal) - lazily
-	 * built by ResolveStandDefinitionFor. Code C keeps using the actor's StandDefinition/
-	 * ResolveStandDefinition instead - see ResolveStandDefinitionFor - so this array is never
-	 * touched for C and index 2 (EIcaoCode::C) stays unset.
+	 * built by ResolveStandDefinitionFor, Code C included since 2026-10-03.
 	 *
 	 * TRANSIENT, moved verbatim from ARoadNetworkActor (issue #298), where it was REVERSED by
 	 * the final review on the original task (C2/I7) from being saved: it used to be saved, on

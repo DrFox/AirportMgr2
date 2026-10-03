@@ -30,7 +30,8 @@ void UAirsideContent::PostLoad()
 	Migrate(EPavement::Concrete, RunwayConcreteMaterial_DEPRECATED);
 
 	// MIGRATED, NOT RESAVED (issue #192 item 1): an asset authored before Placeables existed
-	// still has its bytes under DefaultStand / DefaultFuelDepot - meta = (DeprecatedProperty)
+	// still has its bytes under DefaultFuelDepot (and DefaultStand, retired 2026-10-03 with the stand
+	// asset it named - its bytes are now skipped on load) - meta = (DeprecatedProperty)
 	// keeps those tagged names matching on load without an "_DEPRECATED" rename, since
 	// nothing else is claiming the old names. Each deprecated slot only fills its OWN map
 	// entry when Placeables does not already have one there, so a set authored (or re-saved)
@@ -43,6 +44,5 @@ void UAirsideContent::PostLoad()
 			Placeables.Add(Kind, Deprecated);
 		}
 	};
-	MigratePlaceable(EPlaceableEntity::Stand, DefaultStand);
 	MigratePlaceable(EPlaceableEntity::FuelDepot, DefaultFuelDepot);
 }

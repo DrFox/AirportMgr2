@@ -40,8 +40,13 @@ struct AIRSIDE_API FVehicleEnvelope
 	/** The widest reverse turning circle (VehicleFit::TightestReverseRadius) - the reverse leg's corner. */
 	double ReverseRadius = 0.0;
 
-	/** The longest chain, steered axle to rearmost axle (VehicleFit::ChainLength), of ANY member. */
-	double Chain = 0.0;
+	/**
+	 * The longest chain, steered axle to rearmost axle (VehicleFit::ChainLength), of a RIGID member,
+	 * or zero when none is rigid. Its own axis for the reason TrailerChain is (review 2026-10-03): one
+	 * Chain maxed over every member let a rigid kind as long as the tow's 575 onto C-F lanes laid for
+	 * a 355 truck and a 575 TOW - no member there was a rigid that long.
+	 */
+	double RigidChain = 0.0;
 
 	/**
 	 * The longest chain of a member that TOWS, or zero when none does. A SEPARATE AXIS from Chain
@@ -66,7 +71,7 @@ struct AIRSIDE_API FVehicleEnvelope
 
 	/**
 	 * Whether Kind is within every maximum - may serve a stand laid for this envelope. A towing
-	 * Kind is held to TrailerChain as well as Chain (see TrailerChain); a rigid one to Chain alone.
+	 * Kind's chain is held to TrailerChain, a rigid one's to RigidChain - never to the other kind's.
 	 * An empty envelope admits nothing.
 	 */
 	bool Admits(const FVehicle& Kind) const;

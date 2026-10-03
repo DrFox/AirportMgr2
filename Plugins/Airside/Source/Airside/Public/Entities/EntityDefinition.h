@@ -76,8 +76,9 @@ struct AIRSIDE_API FStandLeg
 	 *
 	 * VisibleAnywhere, LIKE EVERY FIELD OF THE LAYOUT, and the reason is a readback rather
 	 * than a UI. A bare UPROPERTY() serialises perfectly well but cannot be reached by
-	 * get_editor_property - FindPropertyByName does not see it - so the Python that authors
-	 * DA_Stand_CodeC could not print what it had just saved. The layout is invisible in the
+	 * get_editor_property - FindPropertyByName does not see it - so the Python that authored
+	 * DA_Stand_CodeC (retired 2026-10-03; the layout is built at runtime now) could not print what
+	 * it had just saved. The layout is invisible in the
 	 * editor (no mesh, no material, no marking builder), so that log IS the only way to tell
 	 * a stand carrying four bays from one carrying none, and the two look identical in the
 	 * content browser. VISIBLE rather than Edit, because all of it is derived: a hand-edited
@@ -256,10 +257,11 @@ public:
 	 * (through AdmittedVehicles below, which it heads) asks THIS definition and not a resolve that could have
 	 * moved on since (2026-09-27: a per-letter table beside it held the same fact twice).
 	 *
-	 * COMPUTED, like ServiceBays and RequiredExtent, never authored. An asset saved before this
-	 * field existed loads it empty (TypeCode None); UAirsideSettings::ResolveStandDesignVehicleOf falls back to
-	 * the letter's resolve then, and says so.
-	 * ENFORCED BY: AirportOps.Fuel.StandDesignVehicleFallsBackWhenUnauthored
+	 * COMPUTED, like ServiceBays and RequiredExtent, never authored - and since 2026-10-03 never
+	 * saved either: every stand template is built at runtime (UStandDefinitionCache), so there is no
+	 * asset left to carry a stale one. Named on its own for the logs and the refusal line
+	 * ("too large for this stand", designed for X); admission reads AdmittedVehicles, which it heads.
+	 * ENFORCED BY: Airside.Content.StandDesignVehicle.EveryLetterAdmitsEverySmallerLetter (it is the set's first)
 	 */
 	UPROPERTY(VisibleAnywhere) FVehicle DesignVehicle;
 
@@ -270,16 +272,16 @@ public:
 	 * so a Code C stand's lanes carry the utility tow's settle straight as well as the truck's
 	 * radii, and the bid admits by FVehicleEnvelope::Of(this), the figures they were laid from.
 	 *
-	 * COMPUTED by BuildStandTemplate, like DesignVehicle. An asset saved before this field existed
-	 * loads it empty; UAirsideSettings::ResolveStandVehiclesOf falls back to the letter's set then.
+	 * COMPUTED by BuildStandTemplate, like DesignVehicle. A definition it never ran on has none, and
+	 * UAirsideSettings::ResolveStandVehiclesOf falls back to the letter's set then, and says so.
 	 * ENFORCED BY: Airside.Content.StandDesignVehicle.EveryLetterAdmitsEverySmallerLetter
 	 */
 	UPROPERTY(VisibleAnywhere) TArray<FVehicle> AdmittedVehicles;
 
 	/**
-	 * FVehicleEnvelope::Of(AdmittedVehicles), or of DesignVehicle alone for a definition saved before
-	 * AdmittedVehicles existed; empty when neither is set. What a consumer that holds the
-	 * definition sizes by (FAnchorLink's stand entry links).
+	 * FVehicleEnvelope::Of(AdmittedVehicles) - empty when BuildStandTemplate never ran on this
+	 * definition. What a consumer that holds the definition sizes by (FAnchorLink's stand entry links).
+	 * ENFORCED BY: Airside.Build.StandEntry.LinkFilletsForTheWidestTurningAdmitted
 	 */
 	FVehicleEnvelope AdmittedEnvelope() const;
 
@@ -294,9 +296,9 @@ public:
 	 *
 	 * WRITTEN AND SAVED, NOT ASKED. Its one reader, Provides(Role), had no production caller and went
 	 * in #462 (2026-10-01): a stand's services are read from its resolved anchors
-	 * (URoadNetwork::FirstAnchorIdForRole). The property stays because DA_FuelDepot and DA_Stand_CodeC
-	 * still serialise it - deleting it would drop their stored value on the next resave and warn on
-	 * load, for no gain - so it goes WITH a resave of those two assets, not before.
+	 * (URoadNetwork::FirstAnchorIdForRole). The property stays because DA_FuelDepot still serialises
+	 * it (DA_Stand_CodeC did until it was retired, 2026-10-03) - deleting it would drop the stored
+	 * value on the next resave and warn on load, for no gain - so it goes WITH a resave, not before.
 	 */
 	UPROPERTY(EditAnywhere) TArray<EServiceRole> AvailableServices;
 
@@ -382,11 +384,10 @@ public:
 	 * A transient stand template for ANY ICAO letter, A-F - the overload MakeStandTransient()
 	 * specialises to Code C.
 	 *
-	 * NO AIRCRAFT YET for a letter other than C: the shipping stand still gets the real A320
-	 * (see MakeStandTransient()'s own comment on why the fixture must be the shipping stand),
-	 * but nothing yet names "the" largest shipped airframe of each OTHER letter, so those
-	 * templates are built against nullptr - BuildStandFor's header says a null aircraft is
-	 * supported. A caller that measures whether a letter's FLOOR fits its own template does
+	 * ITS DESIGN AIRCRAFT IS THE CONTENT SET'S CHOICE (UAirsideSettings::ResolveLargestAircraftOfLetter,
+	 * 2026-10-03): C's A320, and null for every other letter until one is authored - BuildStandFor's
+	 * header says a null aircraft is supported. THIS IS WHAT THE GAME PLACES for every letter, C
+	 * included, since DA_Stand_CodeC was retired (UStandDefinitionCache builds it and stamps prices). A caller that measures whether a letter's FLOOR fits its own template does
 	 * not need an aircraft to do it: RequiredExtent comes off IcaoCode and the anchors alone.
 	 */
 	static UEntityDefinition* MakeStandTransient(EIcaoCode Letter, UObject* Outer = GetTransientPackage());
@@ -394,9 +395,9 @@ public:
 	/**
 	 * Fill Definition with the Code C contact stand layout, replacing whatever it held.
 	 *
-	 * Shared by MakeStandTransient and the commandlet that authors the DA_Stand_CodeC data
-	 * asset, so the tested layout and the shipped one are the same numbers rather than two
-	 * transcriptions of them.
+	 * Used by MakeStandTransient's Code C and the tests that measure Code C's derivation. It also
+	 * authored the DA_Stand_CodeC data asset until that was retired (2026-10-03): the shipped C
+	 * layout is now this builder's own output, built at runtime, with no saved copy to drift.
 	 *
 	 * TAKES THE DESIGN AIRCRAFT, and sets it. Named Aircraft rather than DesignAircraft
 	 * because UHT refuses a UFUNCTION parameter that shadows a UPROPERTY of the same class. Both callers used to set DesignAircraft
@@ -407,9 +408,9 @@ public:
 	 * being pushed clear of a nose and a tail that are not there - which is what a definition
 	 * with no envelope to clear actually wants.
 	 *
-	 * A FORWARDER since 2026-09-16, and it KEEPS THIS NAME AND THIS UFUNCTION because
-	 * Tools/Python/build_stand_asset.py calls build_code_c_stand() on it. A UFUNCTION that
-	 * moves is a Python script and a Blueprint that stop compiling.
+	 * A FORWARDER since 2026-09-16, and it KEEPS THIS NAME AND THIS UFUNCTION (the refactor
+	 * contract): Tools/Python/build_stand_asset.py called build_code_c_stand() until the stand asset
+	 * was retired, and a UFUNCTION that moves is a script or a Blueprint that stops compiling.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	static void BuildCodeCStand(UEntityDefinition* Definition, UAircraftType* Aircraft);
@@ -426,9 +427,8 @@ public:
 	 * (VehicleFit::TightestReverseRadius), which a chassis alone cannot answer.
 	 *
 	 * A ONE-LINE FORWARDER onto BuildStandFor(..., EIcaoCode::C, ...) since the drawn-stand
-	 * work generalised the body to every letter - kept, at this name, because
-	 * Tools/Python/build_stand_asset.py and the tests that prove Code C's derivation both
-	 * call it.
+	 * work generalised the body to every letter - kept, at this name, because the tests that
+	 * prove Code C's derivation call it.
 	 *
 	 * Envelope BY REFERENCE, since #292, for the reason StandBox::PoseFor's header gives:
 	 * MaxTailAft/MaxNoseFwd are fleet figures now, resolved by the caller

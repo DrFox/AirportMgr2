@@ -5385,7 +5385,7 @@ else {
 }
 $ranRules.Add('relay-adds-behaviour')
 
-# --- 103. A STAND ADMITS BY THE ENVELOPE IT WAS LAID FOR, NEVER BY ONE VEHICLE (2026-10-03) ---------------------------
+# --- 105. A STAND ADMITS BY THE ENVELOPE IT WAS LAID FOR, NEVER BY ONE VEHICLE (2026-10-03) ---------------------------
 # User ruling 2026-10-03: a stand admits every smaller letter's vehicle. Admission was VehicleFit::NoLargerThan against the
 # stand's design vehicle alone, in JobBoard.cpp and JobBoardBid.cpp, while the layout read that one vehicle's figures - so the
 # utility tow (chain 575) was refused every C-F stand laid for the truck (355). Both now read FVehicleEnvelope::Of the stand's
@@ -5399,7 +5399,7 @@ $ranRules.Add('relay-adds-behaviour')
 # mutation-checked 2026-10-03: the bid's Ceiling.Admits put back as NoLargerThan against Admitted[0] fails here alone.
 $admitBid = Join-Path $ops 'Private\Model\JobBoardBid.cpp'
 if (-not (Test-Path $admitBid)) {
-    $failures.Add("stand-admits-by-envelope: $admitBid is named by rule 103 but does not exist - update the rule, do not let it check nothing")
+    $failures.Add("stand-admits-by-envelope: $admitBid is named by rule 105 but does not exist - update the rule, do not let it check nothing")
 }
 else {
     $admitBidNames = $false
@@ -5409,16 +5409,60 @@ else {
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
             if ($code -match '\bNoLargerThan\s*\(') {
-                $failures.Add("stand-admits-by-envelope: $($file.Name):$($i + 1) admits by VehicleFit::NoLargerThan - one vehicle's figures; a stand admits by FVehicleEnvelope::Of its AdmittedVehicles, the set its lanes were laid for (rule 103): $($lines[$i].Trim())")
+                $failures.Add("stand-admits-by-envelope: $($file.Name):$($i + 1) admits by VehicleFit::NoLargerThan - one vehicle's figures; a stand admits by FVehicleEnvelope::Of its AdmittedVehicles, the set its lanes were laid for (rule 105): $($lines[$i].Trim())")
             }
             if ($file.FullName -ieq $admitBid -and $code -match '\bFVehicleEnvelope\b') { $admitBidNames = $true }
         }
     }
     if (-not $admitBidNames) {
-        $failures.Add("stand-admits-by-envelope: JobBoardBid.cpp no longer names FVehicleEnvelope - the bid's stand ceiling moved or went; update rule 103, do not let it check nothing")
+        $failures.Add("stand-admits-by-envelope: JobBoardBid.cpp no longer names FVehicleEnvelope - the bid's stand ceiling moved or went; update rule 105, do not let it check nothing")
     }
 }
 $ranRules.Add('stand-admits-by-envelope')
+
+# --- 106. NO PER-LETTER BRANCH IN THE STAND DEFINITION / PLACEMENT PATH (2026-10-03) ----------------------------------
+# Owner ruling 2026-10-03: Code C is built at runtime like every letter. It had been an `if (Letter == EIcaoCode::C)
+# return Actor().ResolveStandDefinition();` in UStandDefinitionCache - a branch that kept C on a saved asset that went stale
+# (DA_Stand_CodeC) - and MakeStandTransient built C's A320 under another such branch. A letter's differences are TABLE
+# lookups (IcaoCode's rows, UAirsideContent::StandLetters, ResolveStandDesignVehicle's ruling); the SHAPE removed is a
+# comparison against one named letter in the files that build or place a stand template: ==, !=, <, >, <=, >= against an
+# EIcaoCode::X, or a `case EIcaoCode::X:` (comments and strings stripped). A legitimate compare is an allow-list row naming
+# its FUNCTION and its reason - never a looser regex.
+# WHAT NO REGEX SEES: a letter special-cased by an index (`Letter == static_cast<EIcaoCode>(2)`) or in a file not listed.
+# The behaviour half is Airside.Entities.RuntimeCodeCStandEqualsTheRetiredAsset (C is the cache's like every letter).
+# MUTATION-CHECKED 2026-10-03: the old `if (Letter == EIcaoCode::C)` put back in ResolveStandDefinitionFor fails here alone.
+$letterPathFiles = @(
+    'Plugins\Airside\Source\Airside\Private\Present\StandDefinitionCache.cpp',
+    'Plugins\Airside\Source\Airside\Private\Entities\EntityDefinition.cpp',
+    'Plugins\Airside\Source\Airside\Private\Content\AirsideSettings.cpp',
+    'Plugins\Airside\Source\Airside\Private\Present\RoadEditFacadeSurfaces.cpp',
+    'Plugins\Airside\Source\Airside\Private\Present\RoadNetworkActor.cpp'
+)
+$letterAllowed = @{
+    # THE USER'S RULING 2026-09-26, the per-letter design vehicle: A and B are the tow's, C up the truck's. A two-row
+    # table written as one ordered compare on a scoped enum declared A..F - see the function's own comment.
+    'UAirsideSettings::ResolveStandDesignVehicle' = 'per-letter design vehicle ruling (2026-09-26)'
+}
+foreach ($rel in $letterPathFiles) {
+    $file = Join-Path $Root $rel
+    if (-not (Test-Path $file)) {
+        $failures.Add("stand-letter-no-branch: $rel is named by rule 106 but does not exist - update the rule, do not let it check nothing")
+        continue
+    }
+    $inBlock = $false
+    $current = ''
+    $lines = @(Get-Content -LiteralPath $file)
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+        $def = Get-ArchDefinition $code
+        if ($null -ne $def) { $current = $def }
+        if ($code -match '(==|!=|<=|>=|<|>)\s*EIcaoCode::[A-F]\b|\bEIcaoCode::[A-F]\s*(==|!=|<=|>=|<|>)|\bcase\s+EIcaoCode::[A-F]\b') {
+            if ($letterAllowed.ContainsKey($current)) { continue }
+            $failures.Add("stand-letter-no-branch: $($rel):$($i + 1) in $current compares against one ICAO letter - the stand path reads a letter's differences from a TABLE (IcaoCode, UAirsideContent::StandLetters), never a branch; a legitimate compare is an allow-list row in rule 106 with its reason: $($lines[$i].Trim())")
+        }
+    }
+}
+$ranRules.Add('stand-letter-no-branch')
 
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was

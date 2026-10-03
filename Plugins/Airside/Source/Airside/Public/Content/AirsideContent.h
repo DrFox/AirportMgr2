@@ -41,6 +41,26 @@ struct FGroundCoverLayerSetting
 };
 
 /**
+ * One ICAO letter's stand facts that are CONTENT rather than derived layout - see
+ * UAirsideContent::StandLetters. ONE STRUCT, not three parallel arrays, so a letter's aircraft and
+ * its prices cannot be indexed out of step.
+ */
+USTRUCT(BlueprintType)
+struct AIRSIDE_API FStandLetterDefaults
+{
+	GENERATED_BODY()
+
+	/** The aircraft the stand is DRAWN with and reads its design span off. Null: none chosen. */
+	UPROPERTY(EditAnywhere) TSoftObjectPtr<UAircraftType> DesignAircraft;
+
+	/** What placing one costs - UEntityDefinition::PlacementCost on the built template. */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0.0")) double PlacementCost = 0.0;
+
+	/** What a day of owning one costs - UEntityDefinition::UpkeepPerDay on the built template. */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0.0")) double UpkeepPerDay = 0.0;
+};
+
+/**
  * The content this plugin reaches for when nothing has been assigned by hand.
  *
  * WHY IT EXISTS. These references used to be string literals in constructors, resolved by
@@ -58,7 +78,7 @@ struct FGroundCoverLayerSetting
  * first wanted - see UAirsideSettings.
  *
  * EVERY FIELD IS OPTIONAL. Null means "no default for this", which is the state the plugin
- * already had to handle: no material set is the supported single-material road, no stand
+ * already had to handle: no material set is the supported single-material road, no depot
  * definition is a tool that places nothing, and no profile is a network with no width to
  * draw. A missing entry must degrade the way it always did, never assert.
  */
@@ -206,25 +226,22 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TArray<TSoftObjectPtr<URoadProfile>> ServiceRoadProfiles;
 
+	// DefaultStand (deprecated by #192 item 1, migrated into Placeables[Stand] by PostLoad) WAS HERE until
+	// 2026-10-03: the asset it named, DA_Stand_CodeC, is retired - stands are built at runtime - and a
+	// migration that kept re-adding a soft reference to a deleted asset is a second source of truth
+	// pointing at nothing. An old asset's DefaultStand bytes are skipped on load and drop on its next save.
+
 	/**
-	 * DEPRECATED (issue #192 item 1). What the stand tool placed before Placeables existed.
+	 * DEPRECATED (issue #192 item 1). What the fuel depot tool placed before Placeables
+	 * existed. See PostLoad for the migration into Placeables[EPlaceableEntity::FuelDepot].
 	 *
 	 * meta = (DeprecatedProperty) RATHER THAN AN "_DEPRECATED" NAME SUFFIX, unlike the three
 	 * runway materials above: those were RENAMED, so the suffix is what keeps UE's
 	 * tagged-property serialisation matching an old asset's bytes against a name that no
 	 * longer exists in the details panel. This field keeps its ORIGINAL name - nothing else
 	 * is claiming it - so the deprecation meta alone is enough to hide it from the panel and
-	 * Blueprint while PostLoad still finds it under the tag an old asset saved. See PostLoad
-	 * for the migration into Placeables[EPlaceableEntity::Stand].
-	 */
-	UPROPERTY(meta = (DeprecatedProperty, DeprecationMessage = "Use Placeables[EPlaceableEntity::Stand]"))
-	TSoftObjectPtr<UEntityDefinition> DefaultStand;
-
-	/**
-	 * DEPRECATED (issue #192 item 1). What the fuel depot tool placed before Placeables
-	 * existed. See DefaultStand's own comment for why this keeps its name rather than
-	 * gaining an "_DEPRECATED" suffix, and PostLoad for the migration into
-	 * Placeables[EPlaceableEntity::FuelDepot].
+	 * Blueprint while PostLoad still finds it under the tag an old asset saved. (Moved here
+	 * from DefaultStand's comment when that field went, 2026-10-03.)
 	 */
 	UPROPERTY(meta = (DeprecatedProperty, DeprecationMessage = "Use Placeables[EPlaceableEntity::FuelDepot]"))
 	TSoftObjectPtr<UEntityDefinition> DefaultFuelDepot;
@@ -233,7 +250,7 @@ public:
 	 * What each placeable KIND resolves to by default. See UAirsideSettings::ResolvePlaceable,
 	 * the one place this is read.
 	 *
-	 * A MAP KEYED BY EPlaceableEntity, replacing DefaultStand / DefaultFuelDepot above -
+	 * A MAP KEYED BY EPlaceableEntity, replacing the deprecated DefaultStand / DefaultFuelDepot -
 	 * EntityDefinition.h's own comment claims "a new kind is a new data asset, not new code",
 	 * and a hand-named slot per kind plus a ternary resolver
 	 * (ARoadNetworkActor::ResolveEntityDefinition) never lived up to that, the way DepotKits
@@ -261,6 +278,20 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TSoftObjectPtr<UAircraftType> DefaultAircraft;
+
+	/**
+	 * What a runtime-built stand template of each ICAO letter takes from CONTENT, as opposed to the
+	 * layout it derives: INDEXED BY EIcaoCode's ordinal, A..F (a plain enum UHT cannot key a map
+	 * with); a shorter array is defaults for the missing letters. See FStandLetterDefaults, and
+	 * UAirsideSettings::ResolveStandLetterDefaults, the one reader.
+	 *
+	 * ADDED 2026-10-03 when DA_Stand_CodeC was retired: that asset held Code C's layout AND these
+	 * three facts. The layout is derived, so it went to runtime; these are choices, so they came here,
+	 * copied from the asset before it was deleted. Only C is set - the other letters' templates were
+	 * always runtime-built and always free and aircraft-less, and still are.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TArray<FStandLetterDefaults> StandLetters;
 
 	/**
 	 * The airframe a dispatched agent wears. Null leaves the placeholder cube.

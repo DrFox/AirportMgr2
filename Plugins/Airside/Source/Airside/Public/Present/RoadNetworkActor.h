@@ -673,31 +673,21 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual int32 FindEntityAt(FVector2D Where, double Radius) const override;
 
-	/**
-	 * The stand layout new stands are placed from. Defaults to DA_Stand_CodeC.
-	 *
-	 * A Flyweight: every stand shares one definition and carries only its own pose, which
-	 * is the whole reason anchors live on the definition rather than on the instance.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
-	TObjectPtr<UEntityDefinition> StandDefinition;
-
-	// D/E/F's OWN PER-LETTER FLYWEIGHTS (LetterStandDefinitions) MOVED TO UStandDefinitionCache
-	// (issue #298, StandDefinitions below): a lazily-built cache and the whole-network rebind
-	// that re-points a load at it are LOGIC, not a level-authored UPROPERTY, a component, or a
-	// thing only an AActor can do - see that class's own header for the comment this array used
-	// to carry (TRANSIENT, why it is never saved, what RebindStandDefinitions is for) verbatim.
-	// StandDefinition just above STAYS HERE: it is Code C's own authored asset, level content
-	// like every other UPROPERTY on this actor, not a thing the cache resolves.
+	// NO StandDefinition UPROPERTY SINCE 2026-10-03 (owner ruling): it was Code C's authored asset,
+	// DA_Stand_CodeC by content default, and a stand layout is DERIVED data - the saved copy went stale
+	// once (the tow's settle straights). Every letter, C included, is built at runtime by
+	// UStandDefinitionCache (StandDefinitions below); ResolveStandDefinition asks it for C. A level that
+	// set the property drops it silently on load, and RebindStandDefinitions re-points its stands.
+	// D/E/F's per-letter flyweights moved to that cache by issue #298 - see its own header.
 
 	/**
 	 * What the fuel depot tool places. Unset falls back to the content set's Placeables map
 	 * (UAirsideSettings::ResolvePlaceable) - see UAirsideContent::Placeables, which issue #192
 	 * item 1 gave the same map treatment this comment already argues against giving THIS pair.
 	 *
-	 * BESIDE StandDefinition rather than in a map keyed by EPlaceableEntity: there are two
-	 * kinds, and two asset pickers in the Details panel are easier to author than a map, for
-	 * no loss until a third arrives. That argument was about the PER-ACTOR override, which
+	 * A NAMED PROPERTY rather than a map keyed by EPlaceableEntity: it was one of two (beside a
+	 * StandDefinition retired 2026-10-03), and an asset picker in the Details panel is easier to
+	 * author than a map. That argument was about the PER-ACTOR override, which
 	 * still has only two authors ever wanting to set by hand; the CONTENT set's default is a
 	 * different question, answered once for every actor, which is exactly where a third kind
 	 * would otherwise need a third named property and a ternary to match it.
@@ -706,7 +696,7 @@ public:
 	TObjectPtr<UEntityDefinition> FuelDepotDefinition;
 
 	/**
-	 * IRoadEditTarget accessor for StandDefinition - RESOLVED, via ResolveStandDefinition(),
+	 * IRoadEditTarget accessor for a kind's definition - RESOLVED, via ResolveEntityDefinition(),
 	 * the same as PlaceStand places from: preview and placement must resolve the same
 	 * object, or a stand's ghost and the stand PlaceStand actually drops can disagree.
 	 */
@@ -1298,10 +1288,8 @@ public:
 	 * actor into UStandDefinitionCache, see that class's own header for the const_cast this
 	 * used to need, the Flyweight cache, and the null-when-it-does-not-fit-its-letter rule).
 	 * Still an actor method, not a bare subobject accessor (there is none: the one that existed, GetStandDefinitions,
-	 * had no production caller and went in #450 - the duplication test reads the member by reflection), because Code C's own
-	 * branch inside it calls back into THIS actor's ResolveStandDefinition() - the cache asks
-	 * the actor rather than duplicating what only the actor's authored StandDefinition and
-	 * content-default fallback can answer.
+	 * had no production caller and went in #450 - the duplication test reads the member by reflection): the actor is the
+	 * door every caller already holds. Code C is the cache's like every letter since 2026-10-03.
 	 */
 	UEntityDefinition*  ResolveStandDefinitionFor(EIcaoCode Letter) const;
 

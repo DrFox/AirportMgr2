@@ -230,6 +230,9 @@ D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat AirportMgrEditor Win64 Developm
   (`UAirsideSettings::Resolve*`). A literal asset path or performance figure at a second
   call site is a second source of truth, and the two drift - the Piper's numbers were
   typed at seven sites while its mesh came from content.
+- **Derived data is never saved as an asset.** A layout, mesh or table a builder computes is built at runtime; a saved
+  copy is a second source of truth that goes stale silently (DA_Stand_CodeC, 2026-10-03: its drift test compared bay
+  poses, not legs, and passed while stale). An authored asset's drift test compares the WHOLE output, shown red by mutation.
 
 Named deviations from textbook patterns are documented at their site (undo is a Memento,
 not a Command; `RouteSearch` takes `URoadNetwork` rather than a graph adapter; the editor

@@ -654,7 +654,6 @@ bool FInspectorPurchaseRowsCollapseTest::RunTest(const FString&)
 	FCardDepotRig Rig;
 	if (!TestTrue(TEXT("setup: an attached runtime and a plotted depot"), Rig.Build())) { return false; }
 	ARoadNetworkActor* Actor = Rig.World.Actor;
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 	IRoadEditTarget* Target = Actor;
 	const int32 Stand = Target->PlaceStand(FVector2D(60000.0, 0.0), 0.0);
 	if (!TestTrue(TEXT("setup: a stand to select after the depot"), Stand != INDEX_NONE)) { return false; }

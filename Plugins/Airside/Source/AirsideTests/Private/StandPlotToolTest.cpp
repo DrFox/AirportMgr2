@@ -142,7 +142,6 @@ namespace StandPlotToolFixture
 	void TaxiwayWorld(ARoadNetworkActor* Actor)
 	{
 		Actor->ClearNetwork();
-		Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 		LayRoad(Actor, 0.0, ERoadKind::Taxiway);
 	}
 
@@ -861,7 +860,6 @@ namespace StandPlotToolFixture
 	void DiagonalWorld(ARoadNetworkActor* Actor, const FVector2D& A, const FVector2D& B)
 	{
 		Actor->ClearNetwork();
-		Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 		IRoadEditTarget* Target = Actor;
 		const int32 NodeA = Target->PlaceNode(A);
 		const int32 NodeB = Target->PlaceNode(B);
@@ -975,10 +973,8 @@ bool FStandPlotDesignAircraftIsNotTheStandTest::RunTest(const FString& Parameter
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 
-	// THROUGH THE RESOLVER, not the raw property. StandDefinition stays null unless somebody
-	// authored one: the actor used to have the content default written INTO it, which is what
-	// silently gave every level a material set and a stand it never asked for. Asking the
-	// resolver is now the only way to know what the actor will actually place.
+	// THROUGH THE RESOLVER, the only way to know what the actor will actually place - Code C's
+	// runtime template since 2026-10-03, when the actor's StandDefinition property was retired.
 	UEntityDefinition* Stand = Actor->ResolveStandDefinition();
 	if (!TestNotNull(TEXT("the actor resolves a stand definition"), Stand)) { return false; }
 	TestTrue(TEXT("and its anchors are all named and distinct"),
@@ -1310,12 +1306,6 @@ bool FStandPlotDrawnStandTakesAnArrivalTest::RunTest(const FString& Parameters)
 	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 	if (!TestNotNull(TEXT("the actor has a network"), Actor->Network.Get())) { return false; }
 
-	// A CODE C DEFINITION WITH NO CONTENT ASSET: ResolveStandDefinitionFor(C) forwards to
-	// ResolveStandDefinition() unchanged (ARoadNetworkActor's own comment on why), which reads
-	// this property - the same fixture every other test in this file uses, so drawing a Code C
-	// stand needs no DA_Stand_CodeC to be loaded in a bare automation run.
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
-
 	// THE AIRPORT: a runway sized to the 737, one exit, a taxiway south of it - NOT derived yet
 	// (bDerived=false, matching ArrivalDispatchTest's own "world variant") and NO STAND
 	// (StandCount=0): the stand under test is drawn through the tool below, not FTestAirport's
@@ -1459,7 +1449,12 @@ bool FGhostCommitAndPointPlacedAgreeTest::RunTest(const FString& Parameters)
 		TEXT("DA_Aircraft_EnvelopeProbe"), RF_Public | RF_Standalone);
 	Probe->Code = FName(TEXT("C"));
 	Probe->SteerAxleX = 0.0;
-	Probe->Footprint.NoseX = FloorC.MaxNoseFwd + 3000.0;   // 30 m past what the floor admits
+	// 10 m PAST WHAT THE FLOOR ADMITS - 30 m until 2026-10-03. At 30 m the nose reaches past a C
+	// stand's far edge (front x 2512 against a floor nose of 509), so Code C's template, built at runtime
+	// since DA_Stand_CodeC was retired, no longer fits its own floor and is refused by FitsItsLetter, as
+	// any letter's is - the saved asset, laid with the FLOOR envelope when it was authored, had masked
+	// that. 10 m still raises the envelope past the floor, which is all this test needs.
+	Probe->Footprint.NoseX = FloorC.MaxNoseFwd + 1000.0;
 	Probe->Footprint.TailX = -FloorC.MaxTailAft;            // unchanged - only NoseFwd moves
 
 	ON_SCOPE_EXIT
@@ -1482,7 +1477,7 @@ bool FGhostCommitAndPointPlacedAgreeTest::RunTest(const FString& Parameters)
 
 	const FLetterEnvelope Raised = UAirsideSettings::ResolveLetterEnvelope(EIcaoCode::C);
 	if (!TestTrue(TEXT("the probe actually raised Code C's MaxNoseFwd"),
-		Raised.MaxNoseFwd > FloorC.MaxNoseFwd + 2999.0))
+		Raised.MaxNoseFwd > FloorC.MaxNoseFwd + 999.0))
 	{
 		return false;
 	}

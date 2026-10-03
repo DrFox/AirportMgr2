@@ -284,12 +284,13 @@ int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEn
 		// literals: UE 5.8's format-string sanitiser needs a compile-time TCHAR array, and a
 		// ternary is not one. The message still names the ASSET AND THE SCRIPT that authors
 		// it, which is what turned "the stand tool does nothing" into a one-line fix.
+		// A STAND IS NOT CONTENT since 2026-10-03 (Code C is built at runtime, like every letter), so
+		// its null means the template failed its own letter's floor - UStandDefinitionCache has
+		// already logged which; there is nothing to author.
 		const TCHAR* Missing = Kind == EPlaceableEntity::FuelDepot
-			? TEXT("FuelDepotDefinition (author DA_FuelDepot)")
-			: TEXT("StandDefinition (author DA_Stand_CodeC)");
-		UE_LOG(LogRoadMesh, Warning,
-			TEXT("PlaceEntity refused: no %s with Tools/Python/build_stand_asset.py, or set "
-				 "one on the actor."), Missing);
+			? TEXT("FuelDepotDefinition (author DA_FuelDepot with Tools/Python/build_stand_asset.py, or set one on the actor)")
+			: TEXT("Code C stand template (it does not fit its letter's floor - see the ResolveStandDefinitionFor warning)");
+		UE_LOG(LogRoadMesh, Warning, TEXT("PlaceEntity refused: no %s."), Missing);
 		return INDEX_NONE;
 	}
 

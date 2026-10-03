@@ -88,6 +88,37 @@ bool FStandAdmitsEverySmallerLetterTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FEnvelopeHoldsRigidChainApartTest,
+	"Airside.Model.VehicleEnvelope.RigidChainIsItsOwnAxis",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FEnvelopeHoldsRigidChainApartTest::RunTest(const FString& Parameters)
+{
+	// REVIEW 2026-10-03: with ONE chain axis maxed over every member, a C stand's envelope (truck 355,
+	// tow 575) admitted a RIGID kind with a 455 wheelbase - no rigid that long was ever laid for. A rigid
+	// kind is held to the longest RIGID member, a towing one to the longest TOWING member. The long
+	// rigid here is the truck with its steered axle 100 uu further forward and a near-90 degree lock, so
+	// its turning circles stay inside the truck's and the chain is the only axis that can refuse it.
+	const FVehicle Truck = UAirsideSettings::ResolveDefaultVehicle();
+	FVehicle LongRigid = Truck;
+	LongRigid.TypeCode = TEXT("LONGRIGID");
+	LongRigid.Chassis.SteerAxleX += LongRigid.Chassis.SteerAxleX >= LongRigid.Chassis.FixedAxleX ? 100.0 : -100.0;
+	LongRigid.Chassis.Ground.MaxSteerDegrees = 89.0;
+	const FVehicleEnvelope C = FVehicleEnvelope::Of(UAirsideSettings::ResolveStandVehicles(EIcaoCode::C));
+	if (!TestTrue(TEXT("setup: the long rigid turns no wider than the truck forward"),
+			LongRigid.Chassis.TightestFollowableRadius() <= C.ForwardRadius)
+		|| !TestTrue(TEXT("setup: nor in reverse"), VehicleFit::TightestReverseRadius(LongRigid) <= C.ReverseRadius)
+		|| !TestTrue(TEXT("setup: its chain is between the truck's and the tow's"),
+			VehicleFit::ChainLength(LongRigid) > C.RigidChain && VehicleFit::ChainLength(LongRigid) < C.TrailerChain))
+	{
+		return false;
+	}
+	TestFalse(*FString::Printf(TEXT("a rigid kind longer (%.0f) than any rigid the C stand was laid for (%.0f) is refused"),
+		VehicleFit::ChainLength(LongRigid), C.RigidChain), C.Admits(LongRigid));
+	TestTrue(TEXT("the truck itself still is admitted"), C.Admits(Truck));
+	TestTrue(TEXT("and the tow"), C.Admits(UAirsideSettings::ResolveUtilityTowVehicle()));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FVehicleNoLargerThanTest,
 	"Airside.Model.VehicleFit.NoLargerThanChecksEveryAxis",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

@@ -13,6 +13,7 @@
 #include "AirsideSettings.generated.h"
 
 class UAirsideContent;
+struct FStandLetterDefaults; // declared by value below; full type in Content/AirsideContent.h, which every caller includes
 class USkeletalMesh;
 class UStaticMesh;
 class UEntityDefinition;
@@ -267,16 +268,6 @@ public:
 	static FVehicle ResolveStandDesignVehicle(EIcaoCode Letter);
 
 	/**
-	 * What a PLACED stand's lanes were built for: its definition's own DesignVehicle, the vehicle
-	 * BuildStandTemplate laid them for. A definition that does not carry one - an asset saved
-	 * before the field existed, or none at all - falls back to ResolveStandDesignVehicle(Letter)
-	 * and logs a Warning once per definition, because the answer is then a guess about how the
-	 * stand was built rather than a fact read off it (2026-09-27).
-	 * ENFORCED BY: AirportOps.Fuel.StandDesignVehicleFallsBackWhenUnauthored
-	 */
-	static FVehicle ResolveStandDesignVehicleOf(const UEntityDefinition* Definition, EIcaoCode Letter);
-
-	/**
 	 * EVERY vehicle a stand of Letter is laid for and admits (user ruling 2026-10-03): its own
 	 * letter's design vehicle first, then every smaller letter's - VehicleEnvelope::AdmittedUpTo over
 	 * ResolveStandDesignVehicle, so the rule lives there and the table here. What BuildStandTemplate
@@ -287,11 +278,11 @@ public:
 
 	/**
 	 * What a PLACED stand admits: its definition's AdmittedVehicles, the set BuildStandTemplate laid
-	 * its lanes for. An asset saved before that field existed admits its DesignVehicle alone (it was
-	 * laid for that one) and says so once; a definition with neither falls back through
-	 * ResolveStandDesignVehicleOf to the letter's set. The fuel bid's eligibility ceiling, through
-	 * FVehicleEnvelope::Of, read via the ops runtime's stand hook.
-	 * ENFORCED BY: AirportOps.Fuel.TowServesCodeC
+	 * its lanes for. A definition without one (none at all, or one made by hand) falls back to its
+	 * letter's set, ResolveStandVehicles(Letter), and logs a Warning once per definition - the answer
+	 * is then a guess about how the stand was built, not a fact read off it. The fuel bid's
+	 * eligibility ceiling, through FVehicleEnvelope::Of, read via the ops runtime's stand hook.
+	 * ENFORCED BY: AirportOps.Fuel.TowServesCodeC, AirportOps.Fuel.StandVehiclesFallBackWhenUnset
 	 */
 	static TArray<FVehicle> ResolveStandVehiclesOf(const UEntityDefinition* Definition, EIcaoCode Letter);
 
@@ -365,9 +356,10 @@ public:
 	 * other Resolve* here: ARoadNetworkActor::ResolveEntityDefinition used to answer this with
 	 * a ternary over exactly two members, which is a list a third kind could join without
 	 * anything here noticing - the "check where a list is CONSUMED" failure this codebase has
-	 * shipped three times. A per-actor override still wins first (StandDefinition /
-	 * FuelDepotDefinition on the actor); this is only the content-set fallback, called from
-	 * ARoadNetworkActor::ResolveStandDefinition / ::ResolveFuelDepotDefinition.
+	 * shipped three times. A per-actor override still wins first (FuelDepotDefinition on the
+	 * actor); this is only the content-set fallback, called from
+	 * ARoadNetworkActor::ResolveFuelDepotDefinition. A STAND IS NOT A PLACEABLE ASSET since
+	 * 2026-10-03 - Code C is built at runtime like every letter - so nothing asks this for one.
 	 */
 	static UEntityDefinition* ResolvePlaceable(EPlaceableEntity Kind);
 
@@ -377,19 +369,24 @@ public:
 	 * stand", matching every other Resolve* here (CLAUDE.md's "Content/ resolves every
 	 * content default in exactly one function").
 	 *
-	 * RETURNS NULL FOR EVERY LETTER TODAY, and that is a finding, not a stub left half done.
-	 * UAirsideContent carries exactly one aircraft reference (DefaultAircraft, a single
-	 * TSoftObjectPtr) - no per-letter table and no list of shipped UAircraftType assets to
-	 * search (grepped: there is no AircraftTypes array anywhere in AirsideContent.h). Adding
-	 * an AssetRegistry scan to answer one letter would be exactly the kind of mechanism this
-	 * project reaches for only when nothing simpler exists, and a scan built for this one
-	 * caller would still need a per-letter Code match on every asset found, which is a second
-	 * table by another name. Code C does not call this at all - it keeps its authored
-	 * DA_Stand_CodeC / DA_Aircraft_A320 pairing through ResolveStandDefinition - so this is
-	 * the seam a future per-letter aircraft asset would resolve through, not a duplicate of
-	 * Code C's own answer.
+	 * AN AUTHORED TABLE, UAirsideContent::StandLetters (by letter ordinal, through ResolveStandLetterDefaults), not a scan: the
+	 * question is which aircraft a stand is DRAWN with, a choice, and a scan for "the largest" would
+	 * answer a different one (plane9's A320 or the 737 for C, not the A320 the stand always paired
+	 * with). Code C names DA_Aircraft_A320 since 2026-10-03, the pairing the retired DA_Stand_CodeC
+	 * carried; every other letter answers null until somebody authors one. "Largest" in the name is
+	 * the question the seam was opened for, kept for its callers.
+	 * ENFORCED BY: Airside.Content.CodeCStandDrawsTheRetiredAssetsAircraft
 	 */
 	static UAircraftType* ResolveLargestAircraftOfLetter(EIcaoCode Letter);
+
+	/**
+	 * Letter's stand facts that are content, not layout - its design aircraft and its prices
+	 * (UAirsideContent::StandLetters). Defaults (none, free) past the array or with no content set.
+	 * UStandDefinitionCache stamps them onto every template it builds; Code C's are the retired
+	 * DA_Stand_CodeC's own (16000 to place, 16 a day, the A320), copied before it was deleted.
+	 * ENFORCED BY: Airside.Content.CodeCStandDrawsTheRetiredAssetsAircraft
+	 */
+	static FStandLetterDefaults ResolveStandLetterDefaults(EIcaoCode Letter);
 
 	/**
 	 * Letter's FLEET ENVELOPE - MaxTailAft and MaxNoseFwd, the max over every LOADED

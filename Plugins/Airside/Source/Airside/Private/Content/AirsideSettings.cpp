@@ -157,27 +157,6 @@ FVehicle UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode Letter)
 	return Letter <= EIcaoCode::B ? ResolveUtilityTowVehicle() : ResolveDefaultVehicle();
 }
 
-FVehicle UAirsideSettings::ResolveStandDesignVehicleOf(const UEntityDefinition* Definition, EIcaoCode Letter)
-{
-	if (Definition != nullptr && !Definition->DesignVehicle.TypeCode.IsNone())
-	{
-		return Definition->DesignVehicle;
-	}
-
-	// ONCE PER DEFINITION, by path: a fuel service asks this for every offer to every stand, and
-	// a line per ask would bury the one that says which asset wants re-authoring.
-	static TSet<FString> Warned;
-	const FString Who = Definition != nullptr ? Definition->GetPathName() : FString(TEXT("(no definition)"));
-	if (!Warned.Contains(Who))
-	{
-		Warned.Add(Who);
-		UE_LOG(LogAirsideContent, Warning,
-			TEXT("Stand definition %s carries no DesignVehicle (saved before the field existed?); assuming Code %s's, %s. Re-author it (Tools/Python/build_stand_asset.py)."),
-			*Who, IcaoCode::ToLetter(Letter), *ResolveStandDesignVehicle(Letter).TypeCode.ToString());
-	}
-	return ResolveStandDesignVehicle(Letter);
-}
-
 TArray<FVehicle> UAirsideSettings::ResolveStandVehicles(EIcaoCode Letter)
 {
 	return VehicleEnvelope::AdmittedUpTo(Letter, [](EIcaoCode Each) { return ResolveStandDesignVehicle(Each); });
@@ -189,26 +168,22 @@ TArray<FVehicle> UAirsideSettings::ResolveStandVehiclesOf(const UEntityDefinitio
 	{
 		return Definition->AdmittedVehicles;
 	}
-	// A DEFINITION WITH A DesignVehicle BUT NO SET was laid before 2026-10-03, for that one vehicle -
-	// so it admits that one, as UEntityDefinition::AdmittedEnvelope sizes its road joins for that one.
-	// Claiming the letter's set would send a tow onto lanes with no settle straight. Said once per
-	// definition, as the no-DesignVehicle case below is, for the same reason.
-	if (Definition != nullptr && !Definition->DesignVehicle.TypeCode.IsNone())
+
+	// NO SET ON IT - no definition, or one made by hand rather than by BuildStandTemplate (every stand
+	// template is built at runtime since 2026-10-03, so no saved asset can lack it): assumed built
+	// today for its letter. ONCE PER DEFINITION, by path: the bid asks this for every offer to every
+	// stand, and a line per ask would bury the one that says which definition is the odd one out.
+	static TSet<FString> Warned;
+	const FString Who = Definition != nullptr ? Definition->GetPathName() : FString(TEXT("(no definition)"));
+	const TArray<FVehicle> Assumed = ResolveStandVehicles(Letter);
+	if (!Warned.Contains(Who))
 	{
-		static TSet<FString> Warned;
-		const FString Who = Definition->GetPathName();
-		if (!Warned.Contains(Who))
-		{
-			Warned.Add(Who);
-			UE_LOG(LogAirsideContent, Warning,
-				TEXT("Stand definition %s carries no AdmittedVehicles (saved before 2026-10-03?); it admits only its DesignVehicle, %s. Re-author it (Tools/Python/build_stand_asset.py)."),
-				*Who, *Definition->DesignVehicle.TypeCode.ToString());
-		}
-		return { Definition->DesignVehicle };
+		Warned.Add(Who);
+		UE_LOG(LogAirsideContent, Warning,
+			TEXT("Stand definition %s carries no AdmittedVehicles (not built by UEntityDefinition::BuildStandTemplate?); assuming Code %s's set, %d vehicle(s) led by %s."),
+			*Who, IcaoCode::ToLetter(Letter), Assumed.Num(), Assumed.Num() > 0 ? *Assumed[0].TypeCode.ToString() : TEXT("none"));
 	}
-	// NOTHING AUTHORED AT ALL: assumed built today for its letter, as ResolveStandDesignVehicleOf
-	// assumes (and logs) - its design vehicle first, the letter's smaller ones after it.
-	return VehicleEnvelope::WithDesignFirst(ResolveStandDesignVehicleOf(Definition, Letter), ResolveStandVehicles(Letter));
+	return Assumed;
 }
 
 namespace AirsideSettingsTierCache
@@ -534,21 +509,25 @@ UEntityDefinition* UAirsideSettings::ResolvePlaceable(EPlaceableEntity Kind)
 	return Found != nullptr ? Found->LoadSynchronous() : nullptr;
 }
 
+FStandLetterDefaults UAirsideSettings::ResolveStandLetterDefaults(EIcaoCode Letter)
+{
+	// THE CONTENT SET'S StandLetters, by letter ordinal - see UAirsideContent::StandLetters. A letter
+	// past the array's end, or no content set at all, takes the struct's defaults: no aircraft, free.
+	const UAirsideContent* Content = GetContent();
+	const int32 Index = static_cast<int32>(Letter);
+	return Content != nullptr && Content->StandLetters.IsValidIndex(Index) ? Content->StandLetters[Index] : FStandLetterDefaults();
+}
+
 UAircraftType* UAirsideSettings::ResolveLargestAircraftOfLetter(EIcaoCode Letter)
 {
-	// SEE THE HEADER: no scannable per-letter list exists (UAirsideContent carries one
-	// DefaultAircraft soft pointer, not a table), and adding an AssetRegistry scan for one
-	// caller would be a second table by another name. Null for every letter until a real
-	// one is authored and this function is the one place that starts resolving it.
+	// THE CONTENT SET'S AUTHORED CHOICE (ResolveStandLetterDefaults) - see the header for why a table
+	// and not a scan. C names DA_Aircraft_A320 since 2026-10-03, the pairing the retired
+	// DA_Stand_CodeC carried; every other letter is null until somebody chooses one.
 	//
 	// #292 DID ADD AN ASSETREGISTRY SCAN TO THIS FILE (see ResolveLetterEnvelope below), but
 	// it answers a different question - "what are Letter's FIGURES", not "which ASSET is the
 	// biggest" - and never needs to hand back a UAircraftType* the caller could dereference.
-	// A future caller of THIS function still wants the actual asset (to draw it parked, say),
-	// which is the harder problem this function's header names; ResolveLetterEnvelope solves
-	// the narrower one.
-	(void)Letter;   // kept named for the caller and for when a real table lands
-	return nullptr;
+	return ResolveStandLetterDefaults(Letter).DesignAircraft.LoadSynchronous();
 }
 
 int32 UAirsideSettings::ResolveLetterEnvelopeCallCountForTest = 0;

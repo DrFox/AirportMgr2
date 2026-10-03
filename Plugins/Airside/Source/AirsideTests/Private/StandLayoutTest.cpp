@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
 #include "Build/StandLayoutBuild.h"
+#include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
@@ -13,6 +14,7 @@
 #include "Model/Vehicle.h"
 #include "Model/VehicleEnvelope.h"
 #include "Model/VehicleFit.h"
+#include "Present/RoadNetworkActor.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/IcaoCode.h"
 #include "Solve/StandBox.h"
@@ -903,98 +905,185 @@ bool FEveryBayEntryReachesItsServicePointTest::RunTest(const FString& Parameters
 	return true;
 }
 
+namespace RetiredCodeCStand
+{
+	/** One anchor of the retired asset, as it was saved. */
+	struct FAnchorRow { const TCHAR* Id; FVector2D At; double Heading; EServiceRole Role; };
+
+	/** One bay's three poses, as saved. */
+	struct FBayPoses
+	{
+		const TCHAR* AnchorId;
+		FVector2D Entry; double EntryHeading;
+		FVector2D Exit; double ExitHeading;
+		FVector2D Park; double ParkHeading;
+	};
+
+	/** One bay's four legs (arrive, serve, reverse, depart), points then controls each. */
+	struct FBayLegs { TArrayView<const FVector2D> Points[4]; TArrayView<const FVector2D> Controls[4]; };
+
+	// DUMPED FROM /Game/Entities/DA_Stand_CodeC ON 2026-10-03, at full double precision (Python repr,
+	// which round-trips a double exactly), by a read-only commandlet script - the asset as re-authored
+	// for the round-1 settle straights, the moment before it was deleted. Its DesignAircraft was
+	// /Game/Entities/DA_Aircraft_A320.
+	static const FVector2D Extent = FVector2D(5900.0, 6500.0);
+	static const FAnchorRow Anchors[] = {
+		{ TEXT("HydrantPit"), FVector2D(-800.0, 700.0), -1.5707963267948966, EServiceRole::Fuel },
+		{ TEXT("BaggageHold"), FVector2D(-350.0, 700.0), -1.5707963267948966, EServiceRole::Baggage },
+		{ TEXT("FixedGPU"), FVector2D(-350.0, -700.0), 1.5707963267948966, EServiceRole::GPU },
+		{ TEXT("PassengerDoor"), FVector2D(200.0, -300.0), 1.5707963267948966, EServiceRole::Passenger },
+		{ TEXT("TugStand"), FVector2D(350.0, -1400.0), 3.141592653589793, EServiceRole::Tug },
+	};
+	// bay 0
+	static const FBayPoses Bay0 = { TEXT("BaggageHold"), FVector2D(1731.0, 2150.1026286840843), 3.141592653589793, FVector2D(1731.0, 2150.1026286840843), 0.0, FVector2D(1155.9486856579576, 2477.557155952037), 2.356194490192345 };
+	static const FVector2D Bay0_arrive_leg_Points[] = { FVector2D(1731.0, 2150.1026286840843), FVector2D(1308.32584578582, 2325.1799958241745), FVector2D(1155.9486856579576, 2477.557155952037) };
+	static const FVector2D Bay0_arrive_leg_Controls[] = { FVector2D(1483.4032129259106, 2150.1026286840843), FVector2D(1232.137265721889, 2401.3685758881056) };
+	static const FVector2D Bay0_serve_leg_Points[] = { FVector2D(1155.9486856579576, 2477.557155952037), FVector2D(1058.5832087500853, 2574.9226328599098), FVector2D(635.9090545359053, 2750.0), FVector2D(430.9999999999999, 2750.0), FVector2D(-350.0, 1969.0), FVector2D(-350.0, 700.0) };
+	static const FVector2D Bay0_serve_leg_Controls[] = { FVector2D(1107.2659472040214, 2526.2398944059732), FVector2D(883.5058416099948, 2750.0), FVector2D(533.4545272679526, 2750.0), FVector2D(-350.0, 2750.0), FVector2D(-350.0, 1334.5) };
+	static const FVector2D Bay0_reverse_leg_Points[] = { FVector2D(-350.0, 700.0), FVector2D(-350.0, 2197.7496038933064), FVector2D(-902.2503961066935, 2750.0), FVector2D(-2052.2503961066936, 2750.0) };
+	static const FVector2D Bay0_reverse_leg_Controls[] = { FVector2D(-350.0, 1448.8748019466532), FVector2D(-350.0, 2750.0), FVector2D(-1477.2503961066936, 2750.0) };
+	static const FVector2D Bay0_depart_leg_Points[] = { FVector2D(-2052.2503961066936, 2750.0), FVector2D(635.9090545359053, 2750.0), FVector2D(1058.5832087500853, 2574.9226328599098), FVector2D(1308.32584578582, 2325.1799958241745), FVector2D(1731.0, 2150.1026286840843) };
+	static const FVector2D Bay0_depart_leg_Controls[] = { FVector2D(-708.1706707853941, 2750.0), FVector2D(883.5058416099948, 2750.0), FVector2D(1183.4545272679527, 2450.051314342042), FVector2D(1483.4032129259106, 2150.1026286840843) };
+	// bay 1
+	static const FBayPoses Bay1 = { TEXT("HydrantPit"), FVector2D(1731.0, 2150.1026286840843), 3.141592653589793, FVector2D(1731.0, 2150.1026286840843), 0.0, FVector2D(660.7551115097785, 2477.557155952037), 2.356194490192345 };
+	static const FVector2D Bay1_arrive_leg_Points[] = { FVector2D(1731.0, 2150.1026286840843), FVector2D(1235.806425851821, 2150.1026286840843), FVector2D(813.132271637641, 2325.1799958241745), FVector2D(660.7551115097785, 2477.557155952037) };
+	static const FVector2D Bay1_arrive_leg_Controls[] = { FVector2D(1483.4032129259103, 2150.1026286840843), FVector2D(988.2096387777315, 2150.1026286840843), FVector2D(736.9436915737098, 2401.3685758881056) };
+	static const FVector2D Bay1_serve_leg_Points[] = { FVector2D(660.7551115097785, 2477.557155952037), FVector2D(563.3896346019061, 2574.9226328599098), FVector2D(140.71548038772622, 2750.0), FVector2D(-19.000000000000114, 2750.0), FVector2D(-800.0, 1969.0), FVector2D(-800.0, 700.0) };
+	static const FVector2D Bay1_serve_leg_Controls[] = { FVector2D(612.0723730558423, 2526.2398944059732), FVector2D(388.31226746181574, 2750.0), FVector2D(60.85774019386305, 2750.0), FVector2D(-800.0, 2750.0), FVector2D(-800.0, 1334.5) };
+	static const FVector2D Bay1_reverse_leg_Points[] = { FVector2D(-800.0, 700.0), FVector2D(-800.0, 2197.7496038933064), FVector2D(-1352.2503961066936, 2750.0), FVector2D(-2502.2503961066936, 2750.0) };
+	static const FVector2D Bay1_reverse_leg_Controls[] = { FVector2D(-800.0, 1448.8748019466532), FVector2D(-800.0, 2750.0), FVector2D(-1927.2503961066936, 2750.0) };
+	static const FVector2D Bay1_depart_leg_Points[] = { FVector2D(-2502.2503961066936, 2750.0), FVector2D(635.9090545359053, 2750.0), FVector2D(1058.5832087500853, 2574.9226328599098), FVector2D(1308.32584578582, 2325.1799958241745), FVector2D(1731.0, 2150.1026286840843) };
+	static const FVector2D Bay1_depart_leg_Controls[] = { FVector2D(-933.1706707853941, 2750.0), FVector2D(883.5058416099948, 2750.0), FVector2D(1183.4545272679527, 2450.051314342042), FVector2D(1483.4032129259106, 2150.1026286840843) };
+	// bay 2
+	static const FBayPoses Bay2 = { TEXT("FixedGPU"), FVector2D(1731.0, -2150.1026286840843), 3.141592653589793, FVector2D(1731.0, -2150.1026286840843), 0.0, FVector2D(1155.9486856579576, -2477.557155952037), -2.356194490192345 };
+	static const FVector2D Bay2_arrive_leg_Points[] = { FVector2D(1731.0, -2150.1026286840843), FVector2D(1308.32584578582, -2325.1799958241745), FVector2D(1155.9486856579576, -2477.557155952037) };
+	static const FVector2D Bay2_arrive_leg_Controls[] = { FVector2D(1483.4032129259106, -2150.1026286840843), FVector2D(1232.137265721889, -2401.3685758881056) };
+	static const FVector2D Bay2_serve_leg_Points[] = { FVector2D(1155.9486856579576, -2477.557155952037), FVector2D(1058.5832087500853, -2574.9226328599098), FVector2D(635.9090545359053, -2750.0), FVector2D(430.9999999999999, -2750.0), FVector2D(-350.0, -1969.0), FVector2D(-350.0, -700.0) };
+	static const FVector2D Bay2_serve_leg_Controls[] = { FVector2D(1107.2659472040214, -2526.2398944059732), FVector2D(883.5058416099948, -2750.0), FVector2D(533.4545272679526, -2750.0), FVector2D(-350.0, -2750.0), FVector2D(-350.0, -1334.5) };
+	static const FVector2D Bay2_reverse_leg_Points[] = { FVector2D(-350.0, -700.0), FVector2D(-350.0, -2197.7496038933064), FVector2D(-902.2503961066935, -2750.0), FVector2D(-2052.2503961066936, -2750.0) };
+	static const FVector2D Bay2_reverse_leg_Controls[] = { FVector2D(-350.0, -1448.8748019466532), FVector2D(-350.0, -2750.0), FVector2D(-1477.2503961066936, -2750.0) };
+	static const FVector2D Bay2_depart_leg_Points[] = { FVector2D(-2052.2503961066936, -2750.0), FVector2D(635.9090545359053, -2750.0), FVector2D(1058.5832087500853, -2574.9226328599098), FVector2D(1308.32584578582, -2325.1799958241745), FVector2D(1731.0, -2150.1026286840843) };
+	static const FVector2D Bay2_depart_leg_Controls[] = { FVector2D(-708.1706707853941, -2750.0), FVector2D(883.5058416099948, -2750.0), FVector2D(1183.4545272679527, -2450.051314342042), FVector2D(1483.4032129259106, -2150.1026286840843) };
+
+	inline FBayLegs LegsOf(int32 Bay)
+	{
+		FBayLegs Out;
+		const TArrayView<const FVector2D> Rows[3][8] = {
+		{ MakeArrayView(Bay0_arrive_leg_Points), MakeArrayView(Bay0_arrive_leg_Controls), MakeArrayView(Bay0_serve_leg_Points), MakeArrayView(Bay0_serve_leg_Controls), MakeArrayView(Bay0_reverse_leg_Points), MakeArrayView(Bay0_reverse_leg_Controls), MakeArrayView(Bay0_depart_leg_Points), MakeArrayView(Bay0_depart_leg_Controls) },
+		{ MakeArrayView(Bay1_arrive_leg_Points), MakeArrayView(Bay1_arrive_leg_Controls), MakeArrayView(Bay1_serve_leg_Points), MakeArrayView(Bay1_serve_leg_Controls), MakeArrayView(Bay1_reverse_leg_Points), MakeArrayView(Bay1_reverse_leg_Controls), MakeArrayView(Bay1_depart_leg_Points), MakeArrayView(Bay1_depart_leg_Controls) },
+		{ MakeArrayView(Bay2_arrive_leg_Points), MakeArrayView(Bay2_arrive_leg_Controls), MakeArrayView(Bay2_serve_leg_Points), MakeArrayView(Bay2_serve_leg_Controls), MakeArrayView(Bay2_reverse_leg_Points), MakeArrayView(Bay2_reverse_leg_Controls), MakeArrayView(Bay2_depart_leg_Points), MakeArrayView(Bay2_depart_leg_Controls) },
+		};
+		for (int32 Leg = 0; Leg < 4; ++Leg)
+		{
+			Out.Points[Leg] = Rows[Bay][2 * Leg];
+			Out.Controls[Leg] = Rows[Bay][2 * Leg + 1];
+		}
+		return Out;
+	}
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FShippedCodeCStandMatchesTheBuilderTest,
-	"Airside.Entities.ShippedCodeCStandMatchesTheBuilder",
+	FRuntimeCodeCStandEqualsTheRetiredAssetTest,
+	"Airside.Entities.RuntimeCodeCStandEqualsTheRetiredAsset",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FShippedCodeCStandMatchesTheBuilderTest::RunTest(const FString& Parameters)
+bool FRuntimeCodeCStandEqualsTheRetiredAssetTest::RunTest(const FString& Parameters)
 {
-	// THE GAME PLOPS THE ASSET; EVERY OTHER C TEST MEASURES THE TRANSIENT (final review,
-	// 2026-09-27). DA_Stand_CodeC is a SAVED copy of what BuildCodeCStand laid the day it was
-	// authored, and every change to the template since - the far-side bays of 2026-09-26 among
-	// them - reaches a player only when the asset is re-authored. So the shipped bays are held
-	// against the builder as it is now: an asset left behind by a template change goes red here,
-	// not as a stand in PIE whose bays sit where the tests say they do not.
-	const UEntityDefinition* Shipped =
-		LoadObject<UEntityDefinition>(nullptr, TEXT("/Game/Entities/DA_Stand_CodeC.DA_Stand_CodeC"));
-	if (!TestNotNull(TEXT("DA_Stand_CodeC loads"), Shipped))
+	using namespace RetiredCodeCStand;
+
+	// CODE C IS BUILT AT RUNTIME SINCE 2026-10-03 (owner ruling): the saved DA_Stand_CodeC went stale
+	// once already - ShippedCodeCStandMatchesTheBuilder, which this replaces, stayed green on it because
+	// it compared poses and the stale part was a leg - so a stand layout is derived data now, like the
+	// other five letters'. THIS PROVES THE SWITCH MOVED NOTHING: the runtime template, built the way
+	// UStandDefinitionCache builds it, against the retired asset's own saved figures.
+	//
+	// BITWISE, not toleranced: both are the same builder over the same inputs (the asset was authored by
+	// BuildCodeCStand, which forwards to the BuildStandFor that MakeStandTransient calls), and the dump
+	// round-trips every double exactly. A tolerance here could only hide a difference that should not
+	// exist. When the template changes ON PURPOSE this goes red by design - update the rows with the
+	// reason, as a box-pinning test would be.
+	const UEntityDefinition* Runtime = UEntityDefinition::MakeStandTransient(EIcaoCode::C);
+	TestTrue(*FString::Printf(TEXT("extent %s, retired %s"), *Runtime->RequiredExtent.ToString(), *Extent.ToString()),
+		Runtime->RequiredExtent == Extent);
+	if (TestEqual(TEXT("as many anchors as the retired asset"), Runtime->Anchors.Num(), static_cast<int32>(UE_ARRAY_COUNT(Anchors))))
+	{
+		for (int32 At = 0; At < Runtime->Anchors.Num(); ++At)
+		{
+			const FEntityAnchor& Have = Runtime->Anchors[At];
+			const FAnchorRow& Want = Anchors[At];
+			TestTrue(*FString::Printf(TEXT("anchor %d is '%s' at %s, heading %.17g, role %d - retired '%s' at %s, %.17g, %d"), At,
+					*Have.Id.ToString(), *Have.LocalPosition.ToString(), Have.LocalHeading, static_cast<int32>(Have.Role),
+					Want.Id, *Want.At.ToString(), Want.Heading, static_cast<int32>(Want.Role)),
+				Have.Id == FName(Want.Id) && Have.LocalPosition == Want.At && Have.LocalHeading == Want.Heading && Have.Role == Want.Role);
+		}
+	}
+	const FBayPoses* Poses[] = { &Bay0, &Bay1, &Bay2 };
+	if (!TestEqual(TEXT("as many bays as the retired asset"), Runtime->ServiceBays.Num(), static_cast<int32>(UE_ARRAY_COUNT(Poses))))
 	{
 		return false;
 	}
-
-	// THE SAME AIRCRAFT the asset carries, so the one thing compared is the layout itself.
-	UEntityDefinition* Built = NewObject<UEntityDefinition>(GetTransientPackage());
-	UEntityDefinition::BuildCodeCStand(Built, Shipped->DesignAircraft);
-
-	TestEqual(TEXT("the shipped stand's design vehicle is the one the builder lays C for"),
-		Shipped->DesignVehicle.TypeCode, Built->DesignVehicle.TypeCode);
-	// AND THE SET IT ADMITS (2026-10-03): the bid reads AdmittedVehicles off the shipped asset, so an
-	// asset authored before the field existed admits its design vehicle alone in PIE while every
-	// transient-template test here says the tow is admitted - the exact report this field fixes.
+	const TCHAR* LegNames[] = { TEXT("arrive"), TEXT("serve"), TEXT("reverse"), TEXT("depart") };
+	for (int32 Index = 0; Index < Runtime->ServiceBays.Num(); ++Index)
 	{
-		auto Names = [](const UEntityDefinition& Stand)
+		const FServiceBay& Have = Runtime->ServiceBays[Index];
+		const FBayPoses& Want = *Poses[Index];
+		const FString Who = Have.AnchorId.ToString();
+		TestTrue(*FString::Printf(TEXT("bay %d is '%s', retired '%s'"), Index, *Who, Want.AnchorId), Have.AnchorId == FName(Want.AnchorId));
+		TestTrue(*FString::Printf(TEXT("'%s' entry pose is the retired one"), *Who), Have.EntryLocal == Want.Entry && Have.EntryHeading == Want.EntryHeading);
+		TestTrue(*FString::Printf(TEXT("'%s' exit pose is the retired one"), *Who), Have.ExitLocal == Want.Exit && Have.ExitHeading == Want.ExitHeading);
+		TestTrue(*FString::Printf(TEXT("'%s' park pose is the retired one"), *Who), Have.ParkLocal == Want.Park && Have.ParkHeading == Want.ParkHeading);
+		const FBayLegs Legs = LegsOf(Index);
+		const FStandLeg* HaveLegs[] = { &Have.ArriveLeg, &Have.ServeLeg, &Have.ReverseLeg, &Have.DepartLeg };
+		for (int32 Leg = 0; Leg < 4; ++Leg)
 		{
-			FString Out;
-			for (const FVehicle& Vehicle : Stand.AdmittedVehicles) { Out += Vehicle.TypeCode.ToString() + TEXT(" "); }
-			return Out;
-		};
-		TestEqual(TEXT("the shipped stand admits the vehicles the builder lays C for"), Names(*Shipped), Names(*Built));
-	}
-	TestTrue(*FString::Printf(TEXT("the shipped extent (%.0f x %.0f) is the builder's (%.0f x %.0f)"),
-			Shipped->RequiredExtent.X, Shipped->RequiredExtent.Y, Built->RequiredExtent.X, Built->RequiredExtent.Y),
-		Shipped->RequiredExtent.Equals(Built->RequiredExtent, 0.5));
-	if (!TestEqual(TEXT("as many bays as the builder lays"), Shipped->ServiceBays.Num(), Built->ServiceBays.Num()))
-	{
-		return false;
-	}
-
-	// BY ANCHOR, never by index - see FResolvedAnchor for why position in an array is not identity.
-	for (const FServiceBay& Want : Built->ServiceBays)
-	{
-		const FServiceBay* Have = Shipped->ServiceBays.FindByPredicate(
-			[&Want](const FServiceBay& Bay) { return Bay.AnchorId == Want.AnchorId; });
-		if (!TestNotNull(*FString::Printf(TEXT("the shipped stand has a bay for '%s'"), *Want.AnchorId.ToString()), Have))
-		{
-			continue;
+			const FStandLeg& HaveLeg = *HaveLegs[Leg];
+			const bool bSameCount = HaveLeg.Points.Num() == Legs.Points[Leg].Num() && HaveLeg.Controls.Num() == Legs.Controls[Leg].Num();
+			bool bSame = bSameCount;
+			for (int32 K = 0; bSame && K < HaveLeg.Points.Num(); ++K) { bSame = HaveLeg.Points[K] == Legs.Points[Leg][K]; }
+			for (int32 K = 0; bSame && K < HaveLeg.Controls.Num(); ++K) { bSame = HaveLeg.Controls[K] == Legs.Controls[Leg][K]; }
+			TestTrue(*FString::Printf(TEXT("'%s' %s leg is the retired one, point for point and control for control (%d points, retired %d)"),
+				*Who, LegNames[Leg], HaveLeg.Points.Num(), Legs.Points[Leg].Num()), bSame);
 		}
-		const FString Who = Want.AnchorId.ToString();
-		TestTrue(*FString::Printf(TEXT("'%s' entry at (%.0f, %.0f), builder (%.0f, %.0f)"), *Who,
-				Have->EntryLocal.X, Have->EntryLocal.Y, Want.EntryLocal.X, Want.EntryLocal.Y),
-			Have->EntryLocal.Equals(Want.EntryLocal, 0.5));
-		TestTrue(*FString::Printf(TEXT("'%s' exit at (%.0f, %.0f), builder (%.0f, %.0f)"), *Who,
-				Have->ExitLocal.X, Have->ExitLocal.Y, Want.ExitLocal.X, Want.ExitLocal.Y),
-			Have->ExitLocal.Equals(Want.ExitLocal, 0.5));
-		TestTrue(*FString::Printf(TEXT("'%s' park at (%.0f, %.0f), builder (%.0f, %.0f)"), *Who,
-				Have->ParkLocal.X, Have->ParkLocal.Y, Want.ParkLocal.X, Want.ParkLocal.Y),
-			Have->ParkLocal.Equals(Want.ParkLocal, 0.5));
-		TestEqual(*FString::Printf(TEXT("'%s' entry heading"), *Who), Have->EntryHeading, Want.EntryHeading, 1.0e-6);
-		TestEqual(*FString::Printf(TEXT("'%s' exit heading"), *Who), Have->ExitHeading, Want.ExitHeading, 1.0e-6);
-		TestEqual(*FString::Printf(TEXT("'%s' park heading"), *Who), Have->ParkHeading, Want.ParkHeading, 1.0e-6);
+	}
+	return true;
+}
 
-		// AND EVERY LEG, POINT FOR POINT (2026-10-03): the poses above do not move when a leg's own shape
-		// does - the reverse leg's settle straight for the tow changed only where the reverse ENDS, and
-		// this test stayed green on an asset still carrying the truck-only reverse legs.
-		struct FLegPair { const TCHAR* What; const FStandLeg* HaveLeg; const FStandLeg* WantLeg; };
-		const FLegPair Legs[] = {
-			{ TEXT("arrive"), &Have->ArriveLeg, &Want.ArriveLeg }, { TEXT("serve"), &Have->ServeLeg, &Want.ServeLeg },
-			{ TEXT("reverse"), &Have->ReverseLeg, &Want.ReverseLeg }, { TEXT("depart"), &Have->DepartLeg, &Want.DepartLeg } };
-		for (const FLegPair& Leg : Legs)
-		{
-			const FStandLeg& HaveLeg = *Leg.HaveLeg;
-			const FStandLeg& WantLeg = *Leg.WantLeg;
-			if (!TestEqual(*FString::Printf(TEXT("'%s' %s leg has the builder's point count"), *Who, Leg.What),
-				HaveLeg.Points.Num(), WantLeg.Points.Num()))
-			{
-				continue;
-			}
-			for (int32 At = 0; At < WantLeg.Points.Num(); ++At)
-			{
-				TestTrue(*FString::Printf(TEXT("'%s' %s leg point %d at (%.0f, %.0f), builder (%.0f, %.0f)"), *Who, Leg.What, At,
-						HaveLeg.Points[At].X, HaveLeg.Points[At].Y, WantLeg.Points[At].X, WantLeg.Points[At].Y),
-					HaveLeg.Points[At].Equals(WantLeg.Points[At], 0.5));
-			}
-		}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCodeCStandDrawsTheRetiredAssetsAircraftTest,
+	"Airside.Content.CodeCStandDrawsTheRetiredAssetsAircraft",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FCodeCStandDrawsTheRetiredAssetsAircraftTest::RunTest(const FString& Parameters)
+{
+	// THE OTHER HALF OF RETIRING DA_Stand_CodeC (2026-10-03): the asset carried Code C's layout AND its
+	// pairing with DA_Aircraft_A320, the aircraft a C stand is drawn with and reads its design span off.
+	// The layout is runtime now (RuntimeCodeCStandEqualsTheRetiredAsset); the pairing is content, and
+	// moved to the ONE resolver, UAirsideSettings::ResolveLargestAircraftOfLetter, read off the content
+	// set's StandDesignAircraft - the asset's own reference, dumped from it before it was deleted.
+	const UAircraftType* C = UAirsideSettings::ResolveLargestAircraftOfLetter(EIcaoCode::C);
+	if (TestNotNull(TEXT("Code C resolves a design aircraft"), C))
+	{
+		TestEqual(TEXT("and it is the one DA_Stand_CodeC paired with"), C->GetPathName(),
+			FString(TEXT("/Game/Entities/DA_Aircraft_A320.DA_Aircraft_A320")));
+	}
+	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
+	{
+		TestNull(*FString::Printf(TEXT("Code %s has no aircraft chosen to draw it with yet"), IcaoCode::ToLetter(Letter)),
+			UAirsideSettings::ResolveLargestAircraftOfLetter(Letter));
+	}
+
+	// AND ITS PRICES, which the asset carried too (16000 to place, 16 a day, dumped from it before it
+	// went): through the ACTOR, the way a placement resolves a stand, so the cache's stamping is what
+	// is measured - a template built with no prices would place a Code C stand for nothing.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World) || !TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	const UEntityDefinition* Placed = TestWorld.Actor->ResolveStandDefinition();
+	if (TestNotNull(TEXT("the actor resolves a Code C stand"), Placed))
+	{
+		TestEqual(TEXT("which costs what DA_Stand_CodeC cost to place"), Placed->PlacementCost, 16000.0);
+		TestEqual(TEXT("and to keep"), Placed->UpkeepPerDay, 16.0);
+		TestTrue(TEXT("and is drawn with its A320"), C != nullptr && Placed->DesignAircraft.Get() == C);
+		TestTrue(TEXT("and is the same object a drawn Code C resolves"), Placed == TestWorld.Actor->ResolveStandDefinitionFor(EIcaoCode::C));
 	}
 	return true;
 }

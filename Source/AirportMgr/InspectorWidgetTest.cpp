@@ -587,7 +587,6 @@ bool FInspectorStandTitleIsTheNumberTest::RunTest(const FString& Parameters)
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor"), Actor)) { return false; }
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 
 	IRoadEditTarget* Target = Actor;
 	const int32 Retired = Target->PlaceStand(FVector2D(-60000.0, 0.0), 0.0);

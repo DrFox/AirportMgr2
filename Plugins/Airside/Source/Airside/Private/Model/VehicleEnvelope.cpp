@@ -19,11 +19,8 @@ FVehicleEnvelope FVehicleEnvelope::Of(TConstArrayView<FVehicle> Vehicles)
 		Out.Width = FMath::Max(Out.Width, Vehicle.WidestBody());
 		Out.ReverseRadius = FMath::Max(Out.ReverseRadius, VehicleFit::TightestReverseRadius(Vehicle));
 		const double Chain = VehicleFit::ChainLength(Vehicle);
-		Out.Chain = FMath::Max(Out.Chain, Chain);
-		if (Vehicle.HasTrailer())
-		{
-			Out.TrailerChain = FMath::Max(Out.TrailerChain, Chain);
-		}
+		double& Axis = Vehicle.HasTrailer() ? Out.TrailerChain : Out.RigidChain;
+		Axis = FMath::Max(Axis, Chain);
 		Out.bEmpty = false;
 	}
 	return Out;
@@ -39,8 +36,7 @@ bool FVehicleEnvelope::Admits(const FVehicle& Kind) const
 	return Kind.WidestBody() <= Width
 		&& Kind.Chassis.TightestFollowableRadius() <= ForwardRadius
 		&& VehicleFit::TightestReverseRadius(Kind) <= ReverseRadius
-		&& KindChain <= Chain
-		&& (!Kind.HasTrailer() || KindChain <= TrailerChain);
+		&& KindChain <= (Kind.HasTrailer() ? TrailerChain : RigidChain);
 }
 
 TArray<FVehicle> VehicleEnvelope::WithDesignFirst(const FVehicle& First, TConstArrayView<FVehicle> Rest)

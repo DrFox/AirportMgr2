@@ -2090,41 +2090,34 @@ bool FFuelRuntimeResolvesPerStandTest::RunTest(const FString& Parameters)
 #if WITH_DEV_AUTOMATION_TESTS
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FFuelStandDesignVehicleFallsBackTest, "AirportOps.Fuel.StandDesignVehicleFallsBackWhenUnauthored",
+	FFuelStandVehiclesFallBackTest, "AirportOps.Fuel.StandVehiclesFallBackWhenUnset",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FFuelStandDesignVehicleFallsBackTest::RunTest(const FString& Parameters)
+bool FFuelStandVehiclesFallBackTest::RunTest(const FString& Parameters)
 {
-	// A DEFINITION THAT CARRIES ITS DESIGN VEHICLE answers with it, silently; one saved before
-	// UEntityDefinition::DesignVehicle existed (TypeCode None) answers with its letter's resolve
-	// and says so - the shape of a DA_Stand_CodeC not yet re-authored.
-	UEntityDefinition* Built = UEntityDefinition::MakeStandTransient(EIcaoCode::A);
-	TestEqual(TEXT("a built A template carries the tow"), Built->DesignVehicle.TypeCode,
-		UAirsideSettings::ResolveUtilityTowVehicle().TypeCode);
-	TestEqual(TEXT("and the reader returns it"),
-		UAirsideSettings::ResolveStandDesignVehicleOf(Built, EIcaoCode::C).TypeCode,
-		UAirsideSettings::ResolveUtilityTowVehicle().TypeCode);
+	// A DEFINITION THAT CARRIES ITS ADMITTED SET answers with it, silently; one that does not - made by
+	// hand rather than by BuildStandTemplate, or no definition at all - answers with its letter's set and
+	// says so, once. Was StandDesignVehicleFallsBackWhenUnauthored, for a saved DA_Stand_CodeC not yet
+	// re-authored; that asset is retired (2026-10-03: every stand template is built at runtime), so the
+	// legacy-asset case went with it and only this one remains.
+	UEntityDefinition* Built = UEntityDefinition::MakeStandTransient(EIcaoCode::B);
+	const TArray<FVehicle> BuiltSet = UAirsideSettings::ResolveStandVehiclesOf(Built, EIcaoCode::C);
+	TestTrue(TEXT("a built B template answers with its own set (the tow), not the letter asked (C)"),
+		BuiltSet.Num() == 1 && BuiltSet[0].TypeCode == UAirsideSettings::ResolveUtilityTowVehicle().TypeCode);
 
-	UEntityDefinition* Legacy = UEntityDefinition::MakeStandTransient(EIcaoCode::C);
-	Legacy->DesignVehicle = FVehicle();
-	AddExpectedMessagePlain(TEXT("carries no DesignVehicle"), ELogVerbosity::Warning,
+	UEntityDefinition* Unset = UEntityDefinition::MakeStandTransient(EIcaoCode::C);
+	Unset->AdmittedVehicles.Reset();
+	AddExpectedMessagePlain(TEXT("carries no AdmittedVehicles"), ELogVerbosity::Warning,
 		EAutomationExpectedMessageFlags::Contains, 1);
-	TestEqual(TEXT("an unauthored definition falls back to its letter's design vehicle"),
-		UAirsideSettings::ResolveStandDesignVehicleOf(Legacy, EIcaoCode::C).TypeCode,
-		UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C).TypeCode);
-	TestEqual(TEXT("and warns once per definition, not once per ask"),
-		UAirsideSettings::ResolveStandDesignVehicleOf(Legacy, EIcaoCode::C).TypeCode,
-		UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C).TypeCode);
-
-	// THE SHIPPED ASSET IS NOT THE LEGACY CASE: DA_Stand_CodeC was re-authored with
-	// build_stand_asset.py when the field arrived (2026-09-27), so the one stand a player
-	// can plop carries the vehicle its bays were built for and never takes the fallback.
-	const UEntityDefinition* Shipped = LoadObject<UEntityDefinition>(nullptr, TEXT("/Game/Entities/DA_Stand_CodeC.DA_Stand_CodeC"));
-	if (TestNotNull(TEXT("DA_Stand_CodeC loads"), Shipped))
+	auto Names = [](const TArray<FVehicle>& Set)
 	{
-		TestEqual(TEXT("and carries Code C's design vehicle, authored rather than assumed"),
-			Shipped->DesignVehicle.TypeCode, UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C).TypeCode);
-	}
+		FString Out;
+		for (const FVehicle& Vehicle : Set) { Out += Vehicle.TypeCode.ToString() + TEXT(" "); }
+		return Out;
+	};
+	const FString Letter = Names(UAirsideSettings::ResolveStandVehicles(EIcaoCode::C));
+	TestEqual(TEXT("a definition with no set falls back to its letter's"), Names(UAirsideSettings::ResolveStandVehiclesOf(Unset, EIcaoCode::C)), Letter);
+	TestEqual(TEXT("and warns once per definition, not once per ask"), Names(UAirsideSettings::ResolveStandVehiclesOf(Unset, EIcaoCode::C)), Letter);
 	return true;
 }
 
@@ -2258,11 +2251,13 @@ bool FFuelBigLoadTakesTripsTest::RunTest(const FString& Parameters)
 	Fixture.FixtureLitres = 2500.0;
 	Fixture.Build(/*bWithRoad=*/true);
 	// ONE VEHICLE, THE BOWSER (2026-10-03): since a C stand admits the utility tow as well, the default
-	// starter fleet's two vehicles may split this job's trips - and two vehicles splitting one stand's trips
-	// deadlock head-on as the first leaves and the second arrives ("Deadlock among agents [2, 3]: no member
-	// can turn"). That deadlock is OLDER than the tow's admission: two trucks on a C stand, or two tows on a
-	// B stand, do the same (probed 2026-10-03; no ClaimServiceBay exists, though EntityDefinition.cpp's lane
-	// comment names one). This test is about trips, not about which vehicle, so it keeps one.
+	// starter fleet's two vehicles may split this job's trips, and the second then meets the first head-on
+	// ("Deadlock among agents [2, 3]: no member can turn"). MEASURED WHERE, 2026-10-03: on this FIXTURE'S
+	// access road - edge 2, the single two-way guideline LaySouthRoad lays up x = 2932 from the road at
+	// y = -4000, no stand geometry (StandGeometryOwner unset) and ~5 km of the tow's way home - not inside the
+	// stand. Every road here is one LayLine, a single bidirectional guideline, where a played service road is
+	// two lanes one each way (build_road_profiles.py). Two trucks on C, or two tows on B, meet the same way.
+	// This test is about trips, not about which vehicle, so it keeps one.
 	Fixture.Service->StarterFleet = { Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode };
 	// EVERY VEHICLE A 1000 L TANK AT A QUICK 600 L/MIN, so three trips fit the test's patience.
 	Fixture.EveryKindCarries(FFuelVehicleSpec(1000.0, 600.0));

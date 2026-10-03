@@ -35,17 +35,12 @@ UEntityDefinition* UEntityDefinition::MakeStandTransient()
 
 UEntityDefinition* UEntityDefinition::MakeStandTransient(EIcaoCode Letter, UObject* Outer)
 {
-	// THE SAME A320 THE ZERO-ARG OVERLOAD USES, and only for Code C - see the header. No
-	// shipped UAircraftType is sized for D, E or F yet (that is Task 5's job in the
-	// drawn-stands plan); a null design aircraft is supported by BuildStandFor and does not
-	// change RequiredExtent, which is all a caller measuring "does the letter's floor fit"
-	// needs.
-	UAircraftType* Aircraft = nullptr;
-	if (Letter == EIcaoCode::C)
-	{
-		Aircraft = NewObject<UAircraftType>(Outer);
-		UAircraftType::BuildA320(Aircraft);
-	}
+	// THE LETTER'S AUTHORED DESIGN AIRCRAFT, through the one resolver (the content set's StandLetters):
+	// C's A320 - the pairing DA_Stand_CodeC carried until it was retired, 2026-10-03 - and null for
+	// every other letter. It was an `if (Letter == EIcaoCode::C)` that built a paper A320 here, a
+	// per-letter branch beside the table; Check-Architecture rule 106 now refuses one. A null design
+	// aircraft is supported by BuildStandFor and does not change RequiredExtent or any leg.
+	UAircraftType* Aircraft = UAirsideSettings::ResolveLargestAircraftOfLetter(Letter);
 
 	UEntityDefinition* Definition = NewObject<UEntityDefinition>(Outer);
 	//
@@ -61,14 +56,9 @@ UEntityDefinition* UEntityDefinition::MakeStandTransient(EIcaoCode Letter, UObje
 
 FVehicleEnvelope UEntityDefinition::AdmittedEnvelope() const
 {
-	// A DEFINITION SAVED BEFORE AdmittedVehicles EXISTED was laid for DesignVehicle alone, so that is
-	// all its envelope may claim - never the letter's set, which would size a road join for a layout
-	// the asset does not carry.
-	if (AdmittedVehicles.Num() > 0)
-	{
-		return FVehicleEnvelope::Of(AdmittedVehicles);
-	}
-	return DesignVehicle.TypeCode.IsNone() ? FVehicleEnvelope() : FVehicleEnvelope::Of(MakeArrayView(&DesignVehicle, 1));
+	// EMPTY WITHOUT A SET, never the letter's: this answers for the lanes as laid, and a definition
+	// BuildStandTemplate never ran on has none - FAnchorLink then keeps its caller's largest vehicle.
+	return FVehicleEnvelope::Of(AdmittedVehicles);
 }
 
 bool UEntityDefinition::FitsItsLetter(const UEntityDefinition& Stand, EIcaoCode Letter)
@@ -256,7 +246,7 @@ void UEntityDefinition::BuildCodeCStandFor(
 {
 	// A ONE-LINE FORWARDER - see the header. The body used to live here with Letter pinned to
 	// C as a local const; it is now BuildStandFor's body with Letter a parameter, so this name
-	// keeps compiling for build_stand_asset.py and the tests that measure Code C's derivation.
+	// keeps compiling for the tests that measure Code C's derivation.
 	BuildStandFor(Definition, Aircraft, EIcaoCode::C, Design, Envelope);
 }
 
@@ -374,10 +364,10 @@ void UEntityDefinition::BuildStandFor(
 		EServiceRole::Tug, EServiceRole::GPU, EServiceRole::Passenger, EServiceRole::Crew };
 
 	// EVERY FIELD THIS BUILDER OWNS, SET, including the three that happen to want the
-	// constructor default. Not decoration: build_stand_asset.py re-authors an EXISTING asset
-	// in place (it must - deleting one that a level and another asset reference fails), so a
-	// field the builder leaves alone keeps whatever was last saved into it. Stating them is
-	// what makes "re-run the script" mean the same thing as "make it from scratch".
+	// constructor default. Written when build_stand_asset.py re-authored DA_Stand_CodeC IN PLACE, so a
+	// field the builder left alone kept whatever was last saved into it; the asset is retired
+	// (2026-10-03) and every template is a fresh NewObject now, but a builder that states every field
+	// it owns stays correct for any caller that hands it a used definition.
 	Definition->PoseRole = EServiceRole::Aircraft;   // the nose gear stop mark
 	Definition->FootprintExtent = FVector2D::ZeroVector;   // the stand's extent IS its aircraft's
 	Definition->Trucks = 0;                          // nothing is based here; a depot has the fleet
@@ -636,7 +626,10 @@ void UEntityDefinition::BuildStandTemplate(
 		// ContactSpan between them and the band outboard of the wingtip is not that wide, so they
 		// share one. The lane is two-way in consequence - which it already was, since every depart
 		// leg on a side ran back down the lane its serve legs had come up - and making two vehicles
-		// take turns over it is ClaimServiceBay's job rather than the geometry's.
+		// take turns over it is a TRAFFIC rule's job rather than the geometry's. NO SUCH RULE EXISTS
+		// (checked 2026-10-03: this named a ClaimServiceBay that was never written), so two vehicles
+		// meeting head-on on one side's lane can deadlock; the multi-trip deadlock measured that day was
+		// on a fixture's single-guideline access road, not here - see AirportOps.Fuel.BigLoadTakesTrips.
 		//
 		// STRAIGHT IN AND STRAIGHT OUT, because the heading is exactly what the road corner is
 		// measured against. Square to the front edge is square to a road drawn ahead of the nose,

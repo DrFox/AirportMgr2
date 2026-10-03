@@ -80,7 +80,6 @@ namespace StandGridFixture
 	{
 		if (Out.TestWorld.World == nullptr || Out.TestWorld.Actor == nullptr) { return false; }
 		Out.TestWorld.Actor->ClearNetwork();
-		Out.TestWorld.Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 
 		const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
 		int32 Index = INDEX_NONE;

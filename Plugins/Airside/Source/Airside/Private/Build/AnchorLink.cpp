@@ -92,7 +92,7 @@ namespace
 	 *
 	 * FROM THE CAPTURED DesignWingspan, not the definition's design aircraft (final review
 	 * I5). A drawn D, E or F stand has NO design aircraft (UAirsideSettings::
-	 * ResolveLargestAircraftOfLetter returns null for every letter today), and reading the
+	 * ResolveLargestAircraftOfLetter returns null for every letter but C), and reading the
 	 * aircraft gave it Code C's 25 m radius and no span limit at all. And even with one,
 	 * the aircraft's RAW span was a second rule disagreeing with the first: a Code C stand
 	 * designed around the A320 (34.1 m) limited its lead-in to 34.1 m, so a 737-800 (35.8 m,

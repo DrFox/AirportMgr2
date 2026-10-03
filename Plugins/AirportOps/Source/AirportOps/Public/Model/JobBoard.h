@@ -317,19 +317,19 @@ public:
 	bool CouldServe(const UGroundTraffic& Traffic, const URoadNetwork& Network, const FAirframe& Airframe) const;
 
 	/**
-	 * Could ANY stand admit this kind - is it no larger than some stand's design vehicle (VehicleFit::NoLargerThan), the
-	 * eligibility ceiling the bid applies per stand (Judge)? Asked by the shop (UFacilityPurchases::JudgeVehicle) before it
-	 * sells one: a kind larger than every stand's design vehicle is bought and then refuses every job as VehicleTooLarge (#478).
+	 * Could ANY stand admit this kind - is it inside some stand's FVehicleEnvelope (the per-axis maxima over the vehicles its
+	 * lanes were laid for), the eligibility ceiling the bid applies per stand (Judge)? Asked by the shop
+	 * (UFacilityPurchases::JudgeVehicle) before it sells one: a kind no stand admits is bought and then refuses every job as
+	 * VehicleTooLarge (#478).
 	 *
-	 * EVERY DESIGN VEHICLE THERE IS: each stand letter's table entry (VehiclesFor, what a stand with no authored figure is
-	 * built for) AND each live stand's own (DesignVehicleFor - a definition may author a bigger one than its letter's), so a
-	 * kind a placed stand admits is never refused. NOT ONLY THE PLACED STANDS: a shop asked before any stand is drawn must not
-	 * refuse every kind, and a stand the player has not yet placed is one the letter's figure describes. NO DESIGN VEHICLE AT
-	 * ALL (a bare NewObject that never resolved its letters) admits nothing: a fixture that buys states its letters
-	 * (ResolveVehicles), as UOpsRuntime::Attach does (AirportOps.Fuel.RuntimeResolvesPerStand).
-	 * Cost: one NoLargerThan per letter (LetterCount, 6 on 2026-09-30) and per live stand, per quote row - a turning-circle
-	 * bisection for a towing kind - asked when a depot card rebuilds, not per frame; it stops at the first design vehicle that
-	 * admits the kind, and the letters come first. The stand count is not measured here: it is whatever the player has drawn.
+	 * EVERY ADMITTED SET THERE IS: each letter's (VehicleEnvelope::AdmittedUpTo over the letter table - what a stand with no
+	 * definition is assumed built for) AND each live stand's own (StandVehiclesFor - a definition may author a bigger design
+	 * vehicle than its letter's), so a kind a placed stand admits is never refused. NOT ONLY THE PLACED STANDS: a shop asked
+	 * before any stand is drawn must not refuse every kind. NO LETTERS RESOLVED (a bare NewObject) admits nothing: a fixture
+	 * that buys states its letters (ResolveVehicles), as UOpsRuntime::Attach does (AirportOps.Fuel.RuntimeResolvesPerStand).
+	 * Cost: one FVehicleEnvelope::Of per letter (LetterCount, 6) and per live stand, per quote row - each a reverse-radius
+	 * bisection per towing member (2 vehicles a set on 2026-10-03) - asked when a depot card rebuilds, not per frame; it stops
+	 * at the first set that admits the kind, and the letters come first. The stand count is whatever the player has drawn.
 	 * ENFORCED BY: AirportOps.Model.Facility.KindNoStandAdmitsIsRefused
 	 */
 	bool AnyStandAdmits(const FVehicle& Kind, const URoadNetwork& Network) const;

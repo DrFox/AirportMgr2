@@ -446,7 +446,6 @@ bool FOpsRuntimeDrawnStandSurvivesLoadTest::RunTest(const FString& Parameters)
 		ARoadNetworkActor* Actor = TestWorld.Actor;
 		if (!TestNotNull(TEXT("an actor to draw on"), Actor)) { return false; }
 		Actor->ClearNetwork();
-		Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 
 		IRoadEditTarget* Target = Actor;
 		const int32 West = Target->PlaceNode(FVector2D(-10000.0, 0.0));
@@ -491,7 +490,6 @@ bool FOpsRuntimeDrawnStandSurvivesLoadTest::RunTest(const FString& Parameters)
 	// A NETWORK TO LOAD INTO - a fresh actor makes one lazily, and LoadFromSlot refuses
 	// without one rather than inventing it.
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 	Runtime->Attach(Actor);
 	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
@@ -528,7 +526,6 @@ bool FOpsRuntimeLegacyStandGetsOutlineOnLoadTest::RunTest(const FString& Paramet
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 
 	IRoadEditTarget* Target = Actor;
 	const int32 Placed = Target->PlaceStand(FVector2D(1000.0, 2000.0), FMath::DegreesToRadians(90.0));

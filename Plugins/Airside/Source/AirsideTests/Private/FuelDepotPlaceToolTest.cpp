@@ -30,7 +30,6 @@ bool FFuelDepotPlaceToolTest::RunTest(const FString& Parameters)
 	// Assigned by hand on the ACTOR - the per-level override, which takes precedence over the
 	// content set, so this test says nothing about what is authored until the last block.
 	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 
 	// THROUGH THE EDIT TARGET, not a tool. This drove FStandPlaceTool constructed with each
 	// kind until 2026-09-23, when that press-drag-release tool was deleted for the drawn stand
@@ -59,7 +58,7 @@ bool FFuelDepotPlaceToolTest::RunTest(const FString& Parameters)
 	if (!TestEqual(TEXT("two entities now"), Actor->Network->GetEntities().Num(), 2)) { return false; }
 	{
 		const FEntityInstance& Placed = Actor->Network->GetEntities()[1];
-		TestEqual(TEXT("the second is a stand"), Placed.Definition.Get(), Actor->StandDefinition.Get());
+		TestEqual(TEXT("the second is a stand - Code C's runtime template"), Placed.Definition.Get(), Actor->ResolveStandDefinition());
 		TestEqual(TEXT("with an aircraft's pose"),
 			static_cast<int32>(Placed.PoseRole), static_cast<int32>(EServiceRole::Aircraft));
 		TestTrue(TEXT("and its fixtures"), Placed.ResolvedAnchors.Num() > 0);
@@ -72,7 +71,7 @@ bool FFuelDepotPlaceToolTest::RunTest(const FString& Parameters)
 		static_cast<const UEntityDefinition*>(Actor->FuelDepotDefinition.Get()));
 	TestEqual(TEXT("and GetStandDefinition still answers for the stand"),
 		Actor->GetStandDefinition(),
-		static_cast<const UEntityDefinition*>(Actor->StandDefinition.Get()));
+		static_cast<const UEntityDefinition*>(Actor->ResolveStandDefinition()));
 
 	// CLEARING THE ACTOR'S OVERRIDE FALLS BACK TO THE CONTENT SET, which since this slice
 	// names DA_FuelDepot. That is the resolver's whole contract, and what a player who never
