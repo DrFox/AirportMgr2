@@ -93,6 +93,18 @@ public:
 	/** Every kept day's tallies added together, by cause, in the order causes were first seen. */
 	TArray<FAirlineCauseTally> SummedTallies(FName AirlineId) const;
 
+	/**
+	 * The kept days as a line: the OLDEST kept day's OPENING value, then each day's close (today's running value last), oldest
+	 * first - one point more than there are days. Empty for an unknown id.
+	 *
+	 * OPENING, NOT ITS CLOSE, so the line spans exactly what SummedTallies sums: last - first == the summed deltas. Starting at the
+	 * oldest close left that day's moves in the tally and out of the line ("late off stand -10%" beside a flat line). The opening is
+	 * DERIVED (close minus the day's tallied deltas) rather than stored: exact, because Record tallies the CLAMPED delta, and it costs
+	 * no saved field.
+	 * ENFORCED BY: AirportMgr.Airlines.Detail.TrendSpansTheTally
+	 */
+	TArray<double> Trend(FName AirlineId) const;
+
 	int32 GetCurrentDay() const { return CurrentDay; }
 
 	// --- IOpsPersistent ---------------------------------------------------------------

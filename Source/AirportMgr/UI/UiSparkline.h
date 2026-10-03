@@ -8,7 +8,7 @@ class SUiSparkline;
 class UUIStyle;
 
 /**
- * A tiny trend line (Airlines window, Task 6): 1-7 values on a FIXED 0..1 scale with a faint 50%
+ * A tiny trend line (Airlines window, Task 6): a handful of values (a week's opening and closes, 8) on a FIXED 0..1 scale with a faint 50%
  * baseline. Fixed, not auto-scaled, because the figure is a satisfaction share - an auto-fit axis
  * would make a flat 0.52 week look as dramatic as a collapse from 0.9 to 0.1.
  *

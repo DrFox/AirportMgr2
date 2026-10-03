@@ -8,9 +8,13 @@
 #include "Components/TextBlock.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
+#include "ArrivalViewModels.h"
 #include "Model/AirlineHistory.h"
 #include "Model/AirlineRoster.h"
+#include "Model/Flight.h"
+#include "Model/FlightBoard.h"
 #include "Model/OpsEventBus.h"
+#include "Model/SimClock.h"
 #include "OpsRuntimeResolver.h"
 #include "Present/OpsRuntime.h"
 #include "RoadBuildController.h"
@@ -152,6 +156,74 @@ bool FAirlinesPanelSelectTest::RunTest(const FString&)
 	{
 		TestNotNull(TEXT("added to the window, not merely constructed"), Trend->GetParent());
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlinesPanelQuietFramesTest, "AirportMgr.Airlines.Panel.QuietFramesAtSpeedDoNotRebuild",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirlinesPanelQuietFramesTest::RunTest(const FString&)
+{
+	// THE TWO CLOCKS: an offer's countdown drains in REAL seconds (UFlightBoard::TickOffers), while the game clock runs ~11 game seconds
+	// a frame at x32. The detail rebuilds when what it PRINTS changes - the countdown's whole second at once, a game-time sentence at
+	// most a real second late - never on every game second, which at speed is every frame.
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	FAirlinesPanelRig Rig(TestWorld.World, { TEXT("AlphaAir") });
+	USimClock* Clock = Rig.Runtime->GetClock();
+	Clock->StartAtHour(9.0);
+	UFlightBoard* Board = Rig.Runtime->GetFlightBoard();
+	UFlight* Offer = NewObject<UFlight>(Board);
+	Offer->Callsign = TEXT("AA 1");
+	Offer->AirlineId = TEXT("AlphaAir");
+	Offer->OfferWindowSeconds = 60.0;
+	Offer->OfferSecondsLeft = 42.3;
+	UFlight* OnStand = NewObject<UFlight>(Board);
+	OnStand->Callsign = TEXT("AA 2");
+	OnStand->AirlineId = TEXT("AlphaAir");
+	OnStand->SetPhaseForTest(EFlightPhase::Turnaround);
+	OnStand->ContractSeconds = 2400.0;
+	OnStand->OnBlocksAt = Clock->Now();
+	Board->AddOffer(*Clock, Offer);
+	Board->AddOffer(*Clock, OnStand);
+
+	UAirlinesPanelWidget* Panel = CreateWidget<UAirlinesPanelWidget>(TestWorld.World, UAirlinesPanelWidget::StaticClass());
+	if (!TestNotNull(TEXT("an airlines window"), Panel)) { return false; }
+	Panel->Toggle();
+	if (!TestTrue(TEXT("open - the tick refreshes only an open window"), Panel->IsShown())) { return false; }
+	TestTrue(TEXT("the countdown in the inbox's words"), Panel->ShowsTextForTest(TEXT("43 s")));
+	bool bLate = false;
+	const FString ContractAtOpen = UArrivalRowViewModel::DescribeDetail(*OnStand, Clock->Now(), bLate).ToString();
+	TestTrue(TEXT("and the flight's contract"), Panel->ShowsTextForTest(ContractAtOpen));
+
+	// QUIET FRAMES AT x32: under half a real second, minutes of game time, the countdown still on 43.
+	Clock->SetSpeed(ESimSpeed::X32);
+	const double GameBefore = Clock->Now();
+	const int32 Built = Panel->DetailRebuildsForTest();
+	for (int32 Frame = 0; Frame < 29; ++Frame)
+	{
+		Clock->Advance(1.0 / 60.0);
+		Panel->RunPanelTick(1.0f / 60.0f);
+	}
+	TestTrue(TEXT("CONTROL: the game clock really ran - more than a game second a frame"), Clock->Now() - GameBefore > 29.0);
+	TestEqual(TEXT("frames that change nothing the countdown prints rebuild nothing"), Panel->DetailRebuildsForTest(), Built);
+
+	// GAME-TIME SENTENCES, ONCE A REAL SECOND: the contract has moved on by minutes, and shows once a real second has passed.
+	const FString ContractNow = UArrivalRowViewModel::DescribeDetail(*OnStand, Clock->Now(), bLate).ToString();
+	TestNotEqual(TEXT("CONTROL: the game minutes moved the contract's words"), ContractNow, ContractAtOpen);
+	Panel->RunPanelTick(0.6f);
+	Panel->RunPanelTick(0.6f);
+	TestEqual(TEXT("a real second on, the moved sentence rebuilds once"), Panel->DetailRebuildsForTest(), Built + 1);
+	TestTrue(TEXT("and shows"), Panel->ShowsTextForTest(ContractNow));
+
+	// THE COUNTDOWN'S SECOND: the integer changed, so the detail rebuilds on THAT frame - not up to a second late.
+	Offer->OfferSecondsLeft = 41.9;
+	Panel->RunPanelTick(1.0f / 60.0f);
+	TestEqual(TEXT("a new countdown second rebuilds once"), Panel->DetailRebuildsForTest(), Built + 2);
+	TestTrue(TEXT("and prints it"), Panel->ShowsTextForTest(TEXT("42 s")));
+
+	// A REAL SECOND WITH NOTHING MOVED: checked, not rebuilt.
+	Clock->SetSpeed(ESimSpeed::Paused);
+	Panel->RunPanelTick(1.5f);
+	TestEqual(TEXT("paused: a checked second that prints the same rebuilds nothing"), Panel->DetailRebuildsForTest(), Built + 2);
 	return true;
 }
 

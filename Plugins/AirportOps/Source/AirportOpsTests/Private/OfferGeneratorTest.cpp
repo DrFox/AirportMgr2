@@ -506,6 +506,19 @@ bool FOfferCurrentRateTest::RunTest(const FString& Parameters)
 	Generator->TickMinute(*Field, FVector2D::ZeroVector, Airlines, *Clock, 0, []() { return 1; });
 	TestEqual(TEXT("and one minute's accrual x 60 is that rate"),
 		Generator->States.FindOrAdd(Airline->GetFName()).Accumulated * 60.0, Now, 1e-9);
+
+	// CLOSED, NOTHING ACCRUES - so nothing is "now": the inbox says "Closed", and the panel's rate must not say ~2.7 beside it.
+	UAirport* Closed = NewObject<UAirport>(GetTransientPackage());
+	Closed->SetClosedByPlayer(true, *Field);
+	Generator->Airport = Closed;
+	Generator->States.FindOrAdd(Airline->GetFName()).Accumulated = 0.0;
+	Generator->TickMinute(*Field, FVector2D::ZeroVector, Airlines, *Clock, 0, []() { return 1; });
+	TestEqual(TEXT("closed: a minute accrues nothing"), Generator->States.FindOrAdd(Airline->GetFName()).Accumulated, 0.0, 1e-12);
+	TestEqual(TEXT("closed: and CurrentRate says so"), Generator->CurrentRate(*Airline, *Clock), 0.0, 1e-12);
+	UAirport* Open = NewObject<UAirport>(GetTransientPackage());
+	Open->Reseat(*Field);
+	Generator->Airport = Open;
+	TestEqual(TEXT("CONTROL: open again, the rate is back"), Generator->CurrentRate(*Airline, *Clock), Now, 1e-9);
 	return true;
 }
 

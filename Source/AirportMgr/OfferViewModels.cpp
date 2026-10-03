@@ -69,7 +69,16 @@ FText UOfferViewModel::DescribeMood(const FOfferMoodKey& Mood)
 		return Percent;
 	}
 	return FText::Format(NSLOCTEXT("AirportMgr", "OfferSatisfaction", "{0} {1} {2}"), Percent,
-		FText::FromString(Mood.bUp ? TEXT("\u25B2") : TEXT("\u25BC")), FText::FromString(Mood.Cause));
+		FText::FromString(MoodArrowOf(Mood)), FText::FromString(Mood.Cause));
+}
+
+FString UOfferViewModel::MoodArrowOf(const FOfferMoodKey& Mood)
+{
+	if (!Mood.bStanding || !Mood.bRecent)
+	{
+		return FString();
+	}
+	return Mood.bUp ? TEXT("\u25B2") : TEXT("\u25BC");
 }
 
 FText UOfferViewModel::DescribeSatisfaction(const FAirlineStanding* Standing)

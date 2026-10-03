@@ -121,3 +121,25 @@ TArray<FAirlineCauseTally> UAirlineHistory::SummedTallies(FName AirlineId) const
 	}
 	return Out;
 }
+
+TArray<double> UAirlineHistory::Trend(FName AirlineId) const
+{
+	TArray<double> Out;
+	const FAirlineDays* Row = Find(AirlineId);
+	if (Row == nullptr || Row->Days.IsEmpty())
+	{
+		return Out;
+	}
+	double Opening = Row->Days[0].CloseSatisfaction;
+	for (const FAirlineCauseTally& T : Row->Days[0].Tallies)
+	{
+		Opening -= T.SumDelta;
+	}
+	Out.Reserve(Row->Days.Num() + 1);
+	Out.Add(Opening);
+	for (const FAirlineDay& Day : Row->Days)
+	{
+		Out.Add(Day.CloseSatisfaction);
+	}
+	return Out;
+}

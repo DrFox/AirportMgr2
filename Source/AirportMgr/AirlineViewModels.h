@@ -10,12 +10,8 @@ class UFlightBoard;
 class UOfferGenerator;
 class UOpsRuntime;
 class USimClock;
-struct FAirlineDays;
 struct FAirlineOffers;
 enum class EAirlineSatisfactionCause : uint8;
-
-/** Which way an airline's satisfaction has gone today against yesterday's close. */
-enum class EAirlineTrend : uint8 { Up, Down, Flat };
 
 /** One row of the airlines list. Built only from roster standings (UAirlineListViewModel::BuildRows), so every row HAS one - no
  *  bHasStanding here, unlike FAirlineDetail, which is asked for an id. */
@@ -24,7 +20,9 @@ struct FAirlineListRow
 	FName AirlineId;
 	FText Name;
 	int32 SatisfactionPct = 0;
-	EAirlineTrend Trend = EAirlineTrend::Flat;
+	/** The inbox's arrow (UOfferViewModel::MoodArrowOf): which way the newest remembered change went; empty with none. The longer
+	 *  view is the detail's 7-day line. */
+	FString Arrow;
 	bool bFloor = false;
 };
 
@@ -34,6 +32,9 @@ struct FAirlineTallyRow
 	FText Label;
 	int32 Count = 0;
 	double SumDelta = 0.0;
+	/** SumDelta in the whole signed points DeltaText prints (UAirlineDetailViewModel::PointsOf) - what the widget colours by, so a
+	 *  "0%" is never green or red and no second rounding can disagree with the text. */
+	int32 Points = 0;
 	FText DeltaText;
 };
 
@@ -68,8 +69,9 @@ struct FAirlineFlightRow
 struct FAirlineDetail
 {
 	FText Name;
-	/** The roster has a standing for this airline. FALSE: SatisfactionPct is meaningless (0) and the widget prints "—", never "0%"
-	 *  (review focus 1) - an id the roster was never seeded with, or a detail built before the seed. */
+	/** The roster has a standing for this airline. FALSE: SatisfactionPct is meaningless (0) and the widget prints "—", never "0%",
+	 *  which would say the airline hates the airport when nothing is known - an id the roster was never seeded with, or a detail
+	 *  built before the seed. */
 	bool bHasStanding = false;
 	/** Meaningful only when bHasStanding. */
 	int32 SatisfactionPct = 0;
@@ -78,7 +80,8 @@ struct FAirlineDetail
 	/** "mood x0.9 · 3 of 5 types can come", or "mood x1.0 · fleet not judged yet"; empty with no generator, or when the airline has
 	 *  no catalog definition. */
 	FText FactorLine;
-	/** Each kept day's close (today's running value last), 0..1, oldest first - missing days omitted. Empty when !bHasHistory. */
+	/** UAirlineHistory::Trend: the oldest kept day's opening, then each kept day's close (today's running value last), 0..1, oldest
+	 *  first - missing days omitted. Its last minus its first is the Tallies' summed delta. Empty when !bHasHistory. */
 	TArray<double> Trend;
 	/** At least one day has CLOSED. False on a fresh game's first day: the pane says "no history yet" and shows today's tally only. */
 	bool bHasHistory = false;
@@ -127,15 +130,6 @@ public:
 	TArray<FAirlineListRow> BuildRows(const UOpsRuntime& Runtime) const;
 
 	static TArray<FAirlineListRow> BuildRows(const FAirlinePanelSources& Sources);
-
-	/**
-	 * Today's RUNNING value (the open day's CloseSatisfaction) against YESTERDAY's close; Flat within FlatWithin, and Flat for an
-	 * airline with no closed day yet - there is no yesterday to compare with.
-	 */
-	static EAirlineTrend TrendOf(const FAirlineDays* Days);
-
-	/** The rule: a change of at most half a percentage point (0.005) is Flat - no direction (spec 2026-10-02 section 2). */
-	static constexpr double FlatWithin = 0.005;
 };
 
 /**
@@ -161,4 +155,7 @@ public:
 
 	/** "+18%", "-6%", "0%": a summed delta in whole percentage points, signed. */
 	static FText DescribeDelta(double SumDelta);
+
+	/** A summed delta in the whole signed points DescribeDelta prints - ONE rounding for the text and the colour. */
+	static int32 PointsOf(double SumDelta);
 };

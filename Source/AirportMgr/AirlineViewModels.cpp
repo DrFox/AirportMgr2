@@ -38,12 +38,6 @@ namespace
 		return Airline != nullptr ? Airline->DisplayName : FText::FromName(AirlineId);
 	}
 
-	/** The percentage the inbox row prints (UOfferViewModel::MoodKeyOf rounds the same way), so the two windows show one number. */
-	int32 AirlineVmPercent(double Satisfaction)
-	{
-		return static_cast<int32>(FMath::RoundToInt(Satisfaction * 100.0));
-	}
-
 	FText AirlineVmOneDecimal(double Value)
 	{
 		FNumberFormattingOptions Options;
@@ -86,8 +80,10 @@ TArray<FAirlineListRow> UAirlineListViewModel::BuildRows(const FAirlinePanelSour
 		FAirlineListRow& Row = Rows.AddDefaulted_GetRef();
 		Row.AirlineId = Standing.AirlineId;
 		Row.Name = AirlineVmNameOf(Airline, Standing.AirlineId);
-		Row.SatisfactionPct = AirlineVmPercent(Standing.Satisfaction);
-		Row.Trend = TrendOf(Sources.History != nullptr ? Sources.History->Find(Standing.AirlineId) : nullptr);
+		// THE INBOX'S KEY, percentage and arrow both: one rounding and one meaning of the glyph across the two windows.
+		const FOfferMoodKey Mood = UOfferViewModel::MoodKeyOf(&Standing);
+		Row.SatisfactionPct = Mood.Percent;
+		Row.Arrow = UOfferViewModel::MoodArrowOf(Mood);
 		Row.bFloor = Airline != nullptr && Airline->bIsFloor;
 	}
 	// FLOOR FIRST, then by name: the floor airlines are the ones that keep the airport from going quiet, and the name is what the
@@ -103,22 +99,6 @@ TArray<FAirlineListRow> UAirlineListViewModel::BuildRows(const FAirlinePanelSour
 	return Rows;
 }
 
-EAirlineTrend UAirlineListViewModel::TrendOf(const FAirlineDays* Days)
-{
-	// TODAY'S RUNNING VALUE AGAINST YESTERDAY'S CLOSE, both from the history: the roster feeds it after the clamp (UAirlineHistory's
-	// class comment), so the open day's value is the standing's. A row with one day has no yesterday - Flat, not a guess.
-	if (Days == nullptr || Days->Days.Num() < 2)
-	{
-		return EAirlineTrend::Flat;
-	}
-	const double Change = Days->Days.Last().CloseSatisfaction - Days->Days.Last(1).CloseSatisfaction;
-	if (FMath::Abs(Change) <= FlatWithin)
-	{
-		return EAirlineTrend::Flat;
-	}
-	return Change > 0.0 ? EAirlineTrend::Up : EAirlineTrend::Down;
-}
-
 FAirlineDetail UAirlineDetailViewModel::Build(const UOpsRuntime& Runtime, FName AirlineId, double Now) const
 {
 	return Build(FAirlinePanelSources::From(Runtime), AirlineId, Now);
@@ -130,9 +110,11 @@ FAirlineDetail UAirlineDetailViewModel::Build(const FAirlinePanelSources& Source
 	const UAirlineDefinition* Airline = AirlineVmDefinitionOf(Sources.Airlines, AirlineId);
 	Out.Name = AirlineVmNameOf(Airline, AirlineId);
 	const FAirlineStanding* Standing = Sources.Roster != nullptr ? Sources.Roster->Find(AirlineId) : nullptr;
-	// NO STANDING IS SAID, not shown as 0%: bHasStanding false and the widget prints a dash (review focus 1).
+	// NO STANDING IS SAID, not shown as 0%: bHasStanding false and the widget prints a dash - 0% would read as an airline that hates
+	// the airport, when the truth is that nothing is known yet (a fresh game's first minute, or an id the roster never seeded).
 	Out.bHasStanding = Standing != nullptr;
-	Out.SatisfactionPct = Standing != nullptr ? AirlineVmPercent(Standing->Satisfaction) : 0;
+	// THE INBOX ROW'S PERCENTAGE (UOfferViewModel::MoodKeyOf), not a rounding of this file's own, so the two windows show one number.
+	Out.SatisfactionPct = Standing != nullptr ? UOfferViewModel::MoodKeyOf(Standing).Percent : 0;
 
 	// THE FLEET FIRST: the factor line counts its ticks. Empty before the generator's first admission check - "not judged yet", which
 	// must not read as "nothing can come" (GetFleetAdmission's own comment).
@@ -170,10 +152,8 @@ FAirlineDetail UAirlineDetailViewModel::Build(const FAirlinePanelSources& Source
 	Out.bHasHistory = Days != nullptr && Days->Days.Num() >= 2;
 	if (Out.bHasHistory)
 	{
-		for (const FAirlineDay& Day : Days->Days)
-		{
-			Out.Trend.Add(Day.CloseSatisfaction);
-		}
+		// THE HISTORY'S OWN LINE, opening point and all, so it spans what SummedTallies below sums (UAirlineHistory::Trend).
+		Out.Trend = Sources.History->Trend(AirlineId);
 	}
 	if (Sources.History != nullptr)
 	{
@@ -196,6 +176,7 @@ FAirlineDetail UAirlineDetailViewModel::Build(const FAirlinePanelSources& Source
 			Row.Label = CauseLabel(Tally.Kind);
 			Row.Count = Tally.Count;
 			Row.SumDelta = Tally.SumDelta;
+			Row.Points = PointsOf(Tally.SumDelta);
 			Row.DeltaText = DescribeDelta(Tally.SumDelta);
 		}
 	}
@@ -255,9 +236,8 @@ AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 FText UAirlineDetailViewModel::DescribeDelta(double SumDelta)
 {
-	// WHOLE PERCENTAGE POINTS, as the list's percentage prints. A sum that rounds to nothing reads "0%", never "-0%" or "+0%": the
-	// sign belongs to a move the player can see.
-	const int32 Points = static_cast<int32>(FMath::RoundToInt(SumDelta * 100.0));
+	// A sum that rounds to nothing reads "0%", never "-0%" or "+0%": the sign belongs to a move the player can see.
+	const int32 Points = PointsOf(SumDelta);
 	if (Points == 0)
 	{
 		return NSLOCTEXT("AirportMgr", "AirlineDeltaZero", "0%");
@@ -266,4 +246,10 @@ FText UAirlineDetailViewModel::DescribeDelta(double SumDelta)
 			? NSLOCTEXT("AirportMgr", "AirlineDeltaUp", "+{0}%")
 			: NSLOCTEXT("AirportMgr", "AirlineDeltaDown", "-{0}%"),
 		FText::AsNumber(FMath::Abs(Points)));
+}
+
+int32 UAirlineDetailViewModel::PointsOf(double SumDelta)
+{
+	// WHOLE PERCENTAGE POINTS, as the list's percentage prints.
+	return static_cast<int32>(FMath::RoundToInt(SumDelta * 100.0));
 }

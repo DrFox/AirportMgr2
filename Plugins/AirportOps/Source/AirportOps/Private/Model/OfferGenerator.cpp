@@ -81,10 +81,20 @@ double UOfferGenerator::MoodFactor(const UAirlineDefinition& Airline) const
 	return AirlineFactorOf ? AirlineFactorOf(Airline) : 1.0;
 }
 
+bool UOfferGenerator::AcceptsOffers() const
+{
+	return Airport == nullptr || Airport->AdmitsArrivals();
+}
+
 double UOfferGenerator::CurrentRate(const UAirlineDefinition& Airline, const USimClock& Clock) const
 {
-	// THE ONE EXPRESSION: TickMinute accrues exactly this each minute, and the panel shows it - see the declaration.
+	// THE ONE EXPRESSION: TickMinute accrues exactly this each minute, and the panel shows it - see the declaration. Behind
+	// TickMinute's own gate, so a closed airport's rate is the nothing it accrues.
 	// ENFORCED BY: AirportOps.Model.Offers.Rate.CurrentRateIsWhatAccrues
+	if (!AcceptsOffers())
+	{
+		return 0.0;
+	}
 	return RateAt(Airline, Clock.TimeOfDay(), Clock.IsDaylight(), DemandFactor(), AirlineFactor(Airline));
 }
 
@@ -97,7 +107,7 @@ TArray<UFlight*> UOfferGenerator::TickMinute(const URoadNetwork& Network, const 
 	// so a runway-less field runs no route search and judges no airline unable to come - no AirlineCannotCome
 	// alert, no "cannot use this airport" line per airline, for a condition the NoRunway alert already names.
 	// ENFORCED BY: AirportOps.Model.Offers.Generate.NothingUnlessOpen
-	if (Airport != nullptr && !Airport->AdmitsArrivals())
+	if (!AcceptsOffers())
 	{
 		return Made;
 	}

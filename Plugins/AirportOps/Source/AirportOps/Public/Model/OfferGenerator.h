@@ -257,7 +257,8 @@ public:
 	/**
 	 * Offers per GAME hour this airline accrues right now: RateAt at the clock's time, with DemandFactor and
 	 * AirlineFactor (mood x fleet share). THE EXPRESSION TickMinute accrues, extracted - both call it, so the
-	 * panel's "~N offers/h now" is the number that is actually accruing.
+	 * panel's "~N offers/h now" is the number that is actually accruing. ZERO while the airport admits no arrivals
+	 * (AcceptsOffers): TickMinute accrues nothing then, and the inbox says "Closed" beside it.
 	 * ENFORCED BY: AirportOps.Model.Offers.Rate.CurrentRateIsWhatAccrues
 	 */
 	double CurrentRate(const UAirlineDefinition& Airline, const USimClock& Clock) const;
@@ -329,6 +330,13 @@ public:
 	int32 AdmissionChecksForTest() const { return AdmissionChecks; }
 
 private:
+	/**
+	 * THE GATE: no airport (a bare NewObject) reads as open, else UAirport::AdmitsArrivals. ONE predicate for TickMinute's early
+	 * return and CurrentRate's zero, so "nothing accrues" and "the panel says 0" cannot part.
+	 * ENFORCED BY: AirportOps.Model.Offers.Generate.NothingUnlessOpen, AirportOps.Model.Offers.Rate.CurrentRateIsWhatAccrues
+	 */
+	bool AcceptsOffers() const;
+
 	/**
 	 * Which of an airline's fleet this field could ever take, remembered per airline.
 	 *

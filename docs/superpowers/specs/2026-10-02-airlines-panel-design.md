@@ -81,11 +81,14 @@ the airline factor split for display (`AirlineFactorOf` = mood, `FleetShare` = s
   The four lists that must agree (enum, name table, PanelFor, WireWindows) - follow the existing
   static_assert; add the window to whatever test enumerates windows.
 - **View models** (plain UObjects, the OfferViewModels pattern; polled with a revision/memo key):
-  - `UAirlineListViewModel` -> rows `{AirlineId, Name, SatisfactionPct, Trend(Up/Down/Flat vs
-    yesterday's close), bFloor}`; sorted floor first then by name; selection kept by AirlineId.
+  - `UAirlineListViewModel` -> rows `{AirlineId, Name, SatisfactionPct, Arrow, bFloor}`; sorted floor
+    first then by name; selection kept by AirlineId. (Final review ruling, 2026-10-03: the arrow is the
+    INBOX's - the direction of the latest remembered change, `UOfferViewModel::MoodArrowOf` - not today
+    vs yesterday's close, so the two windows never point opposite ways; the week's direction is the line.)
   - `UAirlineDetailViewModel` for the selected airline:
     - header: name, %, "~N offers/h now", "mood x0.9, N of M types can come".
-    - trend: 7 values (missing days omitted, not zero-filled).
+    - trend: the oldest kept day's OPENING, then each kept day's close - up to 8 values for 7 days
+      (missing days omitted, not zero-filled), so last - first equals the summed tally (final review I1).
     - tally rows: cause label, count, summed % - one row per cause seen in the window, largest
       |delta| first; DailyDrift last.
     - fleet rows: tick/cross, type display name, sentence for a cross.

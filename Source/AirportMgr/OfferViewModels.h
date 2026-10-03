@@ -124,6 +124,14 @@ public:
 	static FText DescribeMood(const FOfferMoodKey& Mood);
 
 	/**
+	 * The mood's ARROW: which way the newest remembered change went, "▲" or "▼" - empty with nothing remembered (or no
+	 * standing). ONE MEANING FOR THE GLYPH: DescribeMood prints it and so does the Airlines list, so the two windows, open side by side,
+	 * never point opposite ways for one airline.
+	 * ENFORCED BY: AirportMgr.Airlines.List.SortAndTrend
+	 */
+	static FString MoodArrowOf(const FOfferMoodKey& Mood);
+
+	/**
 	 * "lands in 15 min - 40 min on stand", from the flight's lead time and contract (time on stand since #398).
 	 * GAME time, in the clock's own words (GameTimeText::Duration, which the arrivals rows, the cards and the depot's backlog
 	 * share - DescribeDuration lived here until #447): the player reads the clock, not a seconds count.

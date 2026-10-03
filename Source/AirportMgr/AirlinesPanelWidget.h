@@ -47,11 +47,19 @@ public:
  * READ-ONLY. Offers are listed, never answered here: the inbox is the one place that acts on an offer, so the two windows cannot
  * disagree about what Accept did.
  *
- * REBUILT ON A MEMO KEY, NOT PER FRAME (controller ruling T6): the list's key is a hash of every standing's satisfaction and the
- * history's day; the detail's adds the board's revision, the selection and the clock's minute (its second while the selected airline has
- * offers, whose countdown would otherwise sit a minute stale). The list is rebuilt only when ITS key moves, because its rows are buttons:
- * rebuilding them under the cursor between a press and its release would eat the click. Selecting relights the existing buttons and
- * repaints the detail, never the list.
+ * REBUILT WHEN WHAT IT PRINTS CHANGES, NOT PER FRAME. Neither the roster nor the generator keeps a revision, so each half keys on a
+ * hash of what it draws from. The LIST's key is every standing's printed percentage and arrow; it is rebuilt only when that moves,
+ * because its rows are buttons: rebuilding them under the cursor between a press and its release would eat the click. Selecting
+ * relights the existing buttons and repaints the detail, never the list.
+ *
+ * The DETAIL mixes two clocks, and keys on neither directly. An offer's countdown drains in REAL seconds, while the game clock runs 20
+ * to 2400 game seconds per real one (x1 daylight to x32 night), so a key on game time rebuilt every frame at speed. Two checks instead:
+ *  - every frame, a cheap key of what moves the detail at once - the selection, the board's revision, the selected standing's value,
+ *    the history's day, and each of the airline's offers' countdown in the whole seconds it prints (DetailKeyOf);
+ *  - once a REAL second (TextCheckSeconds), whatever the game clock has moved - the rate, the fleet verdicts, a flight's contract.
+ * Either one builds the view model, and the widgets are rebuilt only when its printed text differs from what is on screen (TextKeyOf).
+ * So a countdown ticks on the frame its second changes, a game-time sentence shows at most a real second late, and a frame that
+ * changes nothing printed rebuilds nothing at any speed.
  *
  * C++ BASE, BLUEPRINT OPTIONAL in principle (UAirportMgrPanelWidget's rule) but CODE-ONLY in practice, like Alerts and Arrivals: no
  * *Class hook on UBuildHudLayer, and no BindWidgetOptional slots - a window born after windows existed (see SettingsPanel's comment).
@@ -69,7 +77,7 @@ public:
 	/** The detail pane's tallest, uu, before it scrolls on its own - so a long fleet list does not push the window off screen. */
 	UPROPERTY(EditAnywhere, Category = "Airlines|Style") float DetailMaxHeight = 460.0f;
 
-	/** Top-left, below the alerts window's corner; toggled from the bar's Airlines button (game.airlines). */
+	/** Centred on screen (the corners are taken - see the definition); toggled from the bar's Airlines button (game.airlines). */
 	virtual bool WantsWindow(FUiWindowSpec& Out) const override;
 	/** REPAINTED ON OPEN, the ledger's reason: a window that appears empty for a frame reads as a bug, not as latency. */
 	virtual void OnShownChanged(bool bShown) override;
@@ -123,15 +131,23 @@ private:
 	/** The keys the two halves were last painted at - see the class comment. bHas* false: never painted. */
 	uint32 PaintedListKey = 0;
 	uint32 PaintedDetailKey = 0;
+	uint32 PaintedTextKey = 0;
 	bool bHasPaintedList = false;
 	bool bHasPaintedDetail = false;
+	bool bHasPaintedText = false;
+	/** Real seconds since the detail's game-time text was last checked - accumulated from the tick's real DeltaTime. */
+	float RealSinceTextCheck = 0.0f;
+	/** How stale a game-time sentence (rate, verdicts, a flight's contract) may get: one REAL second, the finest any of them prints at
+	 *  x1 ("12 min" moves once per ~3 real s in daylight) and the countdown's own grain - see the class comment. */
+	static constexpr float TextCheckSeconds = 1.0f;
 	/** See ListRebuildsForTest / DetailRebuildsForTest: how often each half was actually rebuilt - the memo key's effect, made visible. */
 	int32 ListRebuilds = 0;
 	int32 DetailRebuilds = 0;
 
 	void BuildLayout(const UUIStyle& Style);
 	void PaintList(const UOpsRuntime& Runtime);
-	void PaintDetail(const UOpsRuntime& Runtime, double Now);
+	/** Rebuild the detail's widgets from D; null: no airline selected (an empty roster) and the pane collapses. */
+	void PaintDetail(const FAirlineDetail* D);
 	void LightSelectedRow();
 
 	/** A heading in the detail pane ("Last 7 days"), muted, with a section's gap above it. */
@@ -140,5 +156,7 @@ private:
 	UTextBlock* AddLine(UVerticalBox& Column, const FText& Text, const FLinearColor& Colour, bool bWrap = false);
 
 	static uint32 ListKeyOf(const UOpsRuntime& Runtime);
-	uint32 DetailKeyOf(const UOpsRuntime& Runtime, uint32 ListKey, double Now) const;
+	uint32 DetailKeyOf(const UOpsRuntime& Runtime) const;
+	/** Every string, flag and figure PaintDetail prints from D, hashed - what decides whether a built detail is a rebuild. */
+	static uint32 TextKeyOf(const FAirlineDetail& D);
 };

@@ -117,21 +117,24 @@ bool FAirlinesListSortAndTrendTest::RunTest(const FString&)
 	const FName Club = F.Add(AirlinesVmAirline(TEXT("Wings Club"), /*bFloor=*/true));
 	const FName Bravo = F.Add(AirlinesVmAirline(TEXT("Bravo")));
 
-	// NO YESTERDAY, NO DIRECTION: a move on the first day is not a trend - there is no close to compare it with.
+	// THE INBOX'S ARROW: the direction of the latest REMEMBERED change, from the inbox's own helper - so the two windows, open side by
+	// side, never point opposite ways for one airline. A first-day move has a direction; nothing remembered has none.
 	F.OffBlocks(Meridian, 0.0);
 	{
 		const TArray<FAirlineListRow> Rows = UAirlineListViewModel::BuildRows(F.Sources());
 		const FAirlineListRow* Row = AirlinesVmRow(Rows, Meridian);
 		if (!TestNotNull(TEXT("a row per standing"), Row)) { return false; }
-		TestEqual(TEXT("first day: Flat, whatever moved"), Row->Trend, EAirlineTrend::Flat);
+		TestEqual(TEXT("first day: the on-time flight points up, as the inbox's row does"), Row->Arrow, FString(TEXT("▲")));
 		TestEqual(TEXT("the percentage is the standing's"), Row->SatisfactionPct, 53);
+		const FAirlineListRow* Quiet = AirlinesVmRow(Rows, Alpha);
+		TestEqual(TEXT("nothing remembered: no arrow"), Quiet != nullptr ? Quiet->Arrow : FString(TEXT("▲")), FString());
 	}
 
 	F.EndDay();
 	F.OffBlocks(Alpha, 0.0);              // +3 points: Up
-	F.OffBlocks(Meridian, 3600.0);        // -10 points (the cap) against last night's close: Down
+	F.OffBlocks(Meridian, 3600.0);        // -10 points (the cap): Down
 	F.Roster->Tuning.OnTimeBonus = 0.004;
-	F.OffBlocks(Bravo, 0.0);              // +0.4 points: moved, but prints as the same percent - Flat
+	F.OffBlocks(Bravo, 0.0);              // +0.4 points: prints as the same percent, but the inbox's arrow is up - so is this one
 
 	const TArray<FAirlineListRow> Rows = UAirlineListViewModel::BuildRows(F.Sources());
 	if (!TestEqual(TEXT("one row per standing"), Rows.Num(), 4)) { return false; }
@@ -143,13 +146,25 @@ bool FAirlinesListSortAndTrendTest::RunTest(const FString&)
 	TestFalse(TEXT("and no other does"), Rows[1].bFloor || Rows[2].bFloor || Rows[3].bFloor);
 	TestEqual(TEXT("the name is the definition's display name"), Rows[1].Name.ToString(), FString(TEXT("Alpha Air")));
 
-	TestEqual(TEXT("Alpha gained today: Up"), Rows[1].Trend, EAirlineTrend::Up);
-	TestEqual(TEXT("Meridian lost today: Down"), Rows[3].Trend, EAirlineTrend::Down);
-	TestEqual(TEXT("Bravo moved under half a point: Flat"), Rows[2].Trend, EAirlineTrend::Flat);
-	TestEqual(TEXT("the club did nothing: Flat"), Rows[0].Trend, EAirlineTrend::Flat);
+	TestEqual(TEXT("Alpha gained today: up"), Rows[1].Arrow, FString(TEXT("▲")));
+	TestEqual(TEXT("Meridian lost today: down"), Rows[3].Arrow, FString(TEXT("▼")));
+	TestEqual(TEXT("Bravo's newest change was up: up"), Rows[2].Arrow, FString(TEXT("▲")));
+	TestEqual(TEXT("the club did nothing it remembers (drift is not remembered): no arrow"), Rows[0].Arrow, FString());
 	TestEqual(TEXT("Alpha at 53%"), Rows[1].SatisfactionPct, 53);
 	// 0.53, a fifth of the way home overnight (0.524), then the capped -0.10.
 	TestEqual(TEXT("Meridian at 42%"), Rows[3].SatisfactionPct, 42);
+
+	// THE REVIEW'S CASE: a bad morning, then one on-time flight. Against yesterday's close it is down; the inbox reads "▲ on time".
+	F.OffBlocks(Meridian, 0.0);
+	const TArray<FAirlineListRow> After = UAirlineListViewModel::BuildRows(F.Sources());
+	const FAirlineListRow* Recovering = AirlinesVmRow(After, Meridian);
+	if (TestNotNull(TEXT("Meridian's row"), Recovering))
+	{
+		TestTrue(TEXT("CONTROL: still below yesterday's close, so a vs-yesterday arrow would point down"), Recovering->SatisfactionPct < 52);
+		TestEqual(TEXT("but its newest change was up, and the list says what the inbox says"), Recovering->Arrow, FString(TEXT("▲")));
+		const FString Inbox = UOfferViewModel::DescribeSatisfaction(F.Roster->Find(Meridian)).ToString();
+		TestTrue(TEXT("the inbox's own sentence carries the same glyph"), Inbox.Contains(Recovering->Arrow));
+	}
 	return true;
 }
 
@@ -214,16 +229,18 @@ bool FAirlinesDetailTallyOrderTest::RunTest(const FString&)
 
 	const FAirlineDetail D = UAirlineDetailViewModel::Build(F.Sources(), Alpha, 0.0);
 	TestTrue(TEXT("a closed day is history"), D.bHasHistory);
-	if (TestEqual(TEXT("two days, oldest first, today's running value last"), D.Trend.Num(), 2))
+	if (TestEqual(TEXT("two days and yesterday's opening, oldest first, today's running value last"), D.Trend.Num(), 3))
 	{
-		TestEqual(TEXT("yesterday closed at 50%"), D.Trend[0], 0.5, 1e-9);
-		TestEqual(TEXT("today runs at 48%"), D.Trend[1], 0.48, 1e-9);
+		TestEqual(TEXT("yesterday opened at 50%"), D.Trend[0], 0.5, 1e-9);
+		TestEqual(TEXT("and closed at 50%"), D.Trend[1], 0.5, 1e-9);
+		TestEqual(TEXT("today runs at 48%"), D.Trend[2], 0.48, 1e-9);
 	}
 	if (!TestEqual(TEXT("one row per cause seen in the week"), D.Tallies.Num(), 4)) { return false; }
 	const EAirlineSatisfactionCause Expected[] = { EAirlineSatisfactionCause::LateOffStand, EAirlineSatisfactionCause::OnTime,
 		EAirlineSatisfactionCause::OfferIgnored, EAirlineSatisfactionCause::DailyDrift };
 	const TCHAR* ExpectedText[] = { TEXT("-10%"), TEXT("+6%"), TEXT("-2%"), TEXT("+4%") };
 	const int32 ExpectedCount[] = { 1, 2, 1, 1 };
+	const int32 ExpectedPoints[] = { -10, 6, -2, 4 };
 	for (int32 Index = 0; Index < 4; ++Index)
 	{
 		const FAirlineTallyRow& Row = D.Tallies[Index];
@@ -232,6 +249,7 @@ bool FAirlinesDetailTallyOrderTest::RunTest(const FString&)
 			Row.Label.ToString(), UAirlineDetailViewModel::CauseLabel(Expected[Index]).ToString());
 		TestEqual(*(Why + TEXT(" - signed whole percent")), Row.DeltaText.ToString(), FString(ExpectedText[Index]));
 		TestEqual(*(Why + TEXT(" - count")), Row.Count, ExpectedCount[Index]);
+		TestEqual(*(Why + TEXT(" - the points the text prints, which the widget colours by")), Row.Points, ExpectedPoints[Index]);
 	}
 	TestEqual(TEXT("the sum is the clamped figure, kept unrounded"), D.Tallies[1].SumDelta, 0.06, 1e-9);
 
@@ -239,6 +257,7 @@ bool FAirlinesDetailTallyOrderTest::RunTest(const FString&)
 	TestEqual(TEXT("-6%"), UAirlineDetailViewModel::DescribeDelta(-0.06).ToString(), FString(TEXT("-6%")));
 	TestEqual(TEXT("nothing: 0%, unsigned"), UAirlineDetailViewModel::DescribeDelta(0.0).ToString(), FString(TEXT("0%")));
 	TestEqual(TEXT("a loss that rounds to nothing is no -0%"), UAirlineDetailViewModel::DescribeDelta(-0.004).ToString(), FString(TEXT("0%")));
+	TestEqual(TEXT("and is 0 points, so it is coloured neither way"), UAirlineDetailViewModel::PointsOf(-0.004), 0);
 
 	// EVERY CAUSE HAS ITS OWN LABEL - the switch is exhaustive at build time; this catches an empty or a copied one.
 	const UEnum* Enum = StaticEnum<EAirlineSatisfactionCause>();
@@ -250,6 +269,51 @@ bool FAirlinesDetailTallyOrderTest::RunTest(const FString&)
 		TestFalse(*FString::Printf(TEXT("%s's label is its own"), *Enum->GetNameStringByIndex(Index)), Seen.Contains(Label));
 		Seen.Add(Label);
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlinesDetailTrendSpansTallyTest, "AirportMgr.Airlines.Detail.TrendSpansTheTally",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirlinesDetailTrendSpansTallyTest::RunTest(const FString&)
+{
+	// THE LINE AND THE TALLY BESIDE IT COVER ONE SPAN: the line's last point minus its first is the tally's sum. A line that started at
+	// the oldest day's CLOSE left that day's moves in the tally and out of the line - "late off stand -10%" beside a flat line.
+	FAirlinesVmFixture F;
+	const FName Alpha = F.Add(AirlinesVmAirline(TEXT("Alpha Air")));
+	auto Check = [this, &F, Alpha](const TCHAR* When)
+	{
+		const FAirlineDetail D = UAirlineDetailViewModel::Build(F.Sources(), Alpha, 0.0);
+		if (!TestTrue(*FString::Printf(TEXT("%s: history"), When), D.bHasHistory && D.Trend.Num() >= 2)) { return; }
+		double Sum = 0.0;
+		for (const FAirlineTallyRow& Row : D.Tallies) { Sum += Row.SumDelta; }
+		TestEqual(*FString::Printf(TEXT("%s: last - first of the line is the summed tally"), When), D.Trend.Last() - D.Trend[0], Sum, 1e-9);
+	};
+
+	// The review's trace: day one opens at 50%, a late flight costs 10 points, the night's drift gives 2 back.
+	F.OffBlocks(Alpha, 3600.0);
+	F.EndDay();
+	{
+		const FAirlineDetail D = UAirlineDetailViewModel::Build(F.Sources(), Alpha, 0.0);
+		if (TestTrue(TEXT("day two: history"), D.Trend.Num() >= 2))
+		{
+			TestEqual(TEXT("day two: the line starts where day one OPENED, not where it closed"), D.Trend[0], F.Roster->Tuning.Start, 1e-9);
+		}
+	}
+	Check(TEXT("day two"));
+
+	// PAST THE TRIM: ten more days of mixed moves, so the oldest kept day is one whose opening was never a close the line kept.
+	for (int32 Day = 0; Day < 10; ++Day)
+	{
+		F.OffBlocks(Alpha, Day % 2 == 0 ? 0.0 : 3600.0);
+		F.Ignored(Alpha);
+		F.EndDay();
+		Check(*FString::Printf(TEXT("day %d"), Day + 3));
+	}
+	F.OffBlocks(Alpha, 0.0);
+	Check(TEXT("mid-day after the trim"));
+	const FAirlineDays* Days = F.History->Find(Alpha);
+	TestTrue(TEXT("CONTROL: the history really trimmed, so the last checks measured a dropped day"),
+		Days != nullptr && Days->Days.Num() == UAirlineHistory::DaysKept);
 	return true;
 }
 

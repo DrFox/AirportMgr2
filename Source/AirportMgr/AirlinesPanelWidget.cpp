@@ -14,6 +14,7 @@
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/SimClock.h"
+#include "OfferViewModels.h"
 #include "Present/OpsRuntime.h"
 #include "RoadBuildLog.h"
 #include "UI/UiButton.h"
@@ -23,14 +24,12 @@
 #define LOCTEXT_NAMESPACE "Airlines"
 
 // GLYPHS CHECKED AGAINST THE FONT, not assumed (2026-10-03): the UI font is Inter (UUIStyle::Composite, FF_Inter_Regular), whose cmap
-// has U+25B2/U+25BC (the inbox's mood arrows already use them), U+2713/U+2717 and U+2014 - and NOT the heavier U+2714/U+2718 the brief
-// drew. A missing glyph renders as a box, so the tick and cross are the light pair.
+// has U+25B2/U+25BC (the inbox's mood arrows, which the list now prints through UOfferViewModel::MoodArrowOf), U+2713/U+2717 and
+// U+2014 - and NOT the heavier U+2714/U+2718 the brief drew. A missing glyph renders as a box, so the tick and cross are the light pair.
 namespace
 {
 	const TCHAR* const AirlinesTick = TEXT("✓");
 	const TCHAR* const AirlinesCross = TEXT("✗");
-	const TCHAR* const AirlinesUp = TEXT("▲");
-	const TCHAR* const AirlinesDown = TEXT("▼");
 	const TCHAR* const AirlinesDash = TEXT("—");
 }
 
@@ -166,31 +165,65 @@ void UAirlinesPanelWidget::OnShownChanged(bool bShown)
 {
 	if (bShown)
 	{
+		// A WINDOW REOPENED is checked at once, not up to a real second later: its game-time text went stale while it was shut.
+		RealSinceTextCheck = TextCheckSeconds;
 		Refresh();
 	}
 }
 
 void UAirlinesPanelWidget::TickPanel(float DeltaTime)
 {
-	// ONLY WHILE OPEN, the ledger's rule - and even then the memo keys make a quiet frame cost a hash, not a rebuild.
+	// ONLY WHILE OPEN, the ledger's rule - and even then the memo keys make a quiet frame cost a hash, not a rebuild. DeltaTime is
+	// the widget tick's REAL seconds, which is what the once-a-second text check counts.
 	if (IsShown())
 	{
+		RealSinceTextCheck += DeltaTime;
 		Refresh();
 	}
 }
 
 uint32 UAirlinesPanelWidget::ListKeyOf(const UOpsRuntime& Runtime)
 {
-	// CONTROLLER RULING T6: no roster revision exists, so the key is a hash of what the list draws from - every standing's id and
-	// satisfaction (percentage AND trend move only when one does), and the history's day (a close moves every row's trend).
+	// NO ROSTER REVISION EXISTS, so the key is a hash of what the list PRINTS - every standing's id, and its percentage and arrow from
+	// the inbox's own key (UOfferViewModel::MoodKeyOf, which the view model builds the row from) - so a move too small to print
+	// rebuilds no button under the cursor. The names and the floor flag come from the catalog, which does not change in play.
 	uint32 Key = 0;
 	if (const UAirlineRoster* Roster = Runtime.GetAirlines())
 	{
 		for (const FAirlineStanding& Standing : Roster->GetStandings())
 		{
-			Key = HashCombine(Key, HashCombine(GetTypeHash(Standing.AirlineId), GetTypeHash(Standing.Satisfaction)));
+			const FOfferMoodKey Mood = UOfferViewModel::MoodKeyOf(&Standing);
+			Key = HashCombine(Key, HashCombine(GetTypeHash(Standing.AirlineId), GetTypeHash(Mood.Percent)));
+			Key = HashCombine(Key, GetTypeHash(UOfferViewModel::MoodArrowOf(Mood)));
 		}
 		Key = HashCombine(Key, GetTypeHash(Roster->GetStandings().Num()));
+	}
+	return Key;
+}
+
+uint32 UAirlinesPanelWidget::DetailKeyOf(const UOpsRuntime& Runtime) const
+{
+	// WHAT MOVES THE DETAIL BETWEEN TEXT CHECKS, cheap enough for every frame: the selection; the board's revision (an offer or flight
+	// came, went or changed phase); the selected standing's value (every recorded change moves it - the header, the tally, the line);
+	// the history's day (a close); and the selected airline's offers' countdowns in the WHOLE seconds they print (SecondsLeftOf, the
+	// inbox's rounding), which drain in REAL time - so "43 s" becomes "42 s" on the frame it changes. NOT the game clock: at x32 it moves
+	// every frame, and what it moves is checked once a real second instead (see the class comment).
+	uint32 Key = GetTypeHash(Selected);
+	if (const UFlightBoard* Board = Runtime.GetFlightBoard())
+	{
+		Key = HashCombine(Key, GetTypeHash(Board->Revision()));
+		for (const UFlight* Offer : Board->Offers())
+		{
+			if (Offer != nullptr && Offer->AirlineId == Selected)
+			{
+				Key = HashCombine(Key, GetTypeHash(UOfferViewModel::SecondsLeftOf(*Offer)));
+			}
+		}
+	}
+	if (const UAirlineRoster* Roster = Runtime.GetAirlines())
+	{
+		const FAirlineStanding* Standing = Roster->Find(Selected);
+		Key = HashCombine(Key, GetTypeHash(Standing != nullptr ? Standing->Satisfaction : -1.0));
 	}
 	if (const UAirlineHistory* History = Runtime.GetAirlineHistory())
 	{
@@ -199,26 +232,46 @@ uint32 UAirlinesPanelWidget::ListKeyOf(const UOpsRuntime& Runtime)
 	return Key;
 }
 
-uint32 UAirlinesPanelWidget::DetailKeyOf(const UOpsRuntime& Runtime, uint32 ListKey, double Now) const
+uint32 UAirlinesPanelWidget::TextKeyOf(const FAirlineDetail& D)
 {
-	// The list's key, the board's revision (an offer or flight came or went), the selection, and TIME: the generator's rate and verdicts
-	// move with the clock without any of the above. A minute normally; a SECOND while this airline has an offer open, whose countdown
-	// ("45 s") would otherwise read a minute stale - a scan of a handful of offers, cheaper than the rebuild it gates.
-	uint32 Key = HashCombine(ListKey, GetTypeHash(Selected));
-	double Bucket = 60.0;
-	if (const UFlightBoard* Board = Runtime.GetFlightBoard())
+	// EVERYTHING PaintDetail PRINTS OR SHOWS, and nothing else: a field painted and left out here would be a sentence that never
+	// refreshes on a quiet frame, so this walks D in the paint's own order.
+	auto Text = [](uint32 Key, const FText& Value) { return HashCombine(Key, GetTypeHash(Value.ToString())); };
+	uint32 Key = Text(0, D.Name);
+	Key = HashCombine(Key, GetTypeHash(D.bHasStanding));
+	Key = HashCombine(Key, GetTypeHash(D.SatisfactionPct));
+	Key = Text(Key, D.RateLine);
+	Key = Text(Key, D.FactorLine);
+	Key = HashCombine(Key, GetTypeHash(D.bHasHistory));
+	for (const double Value : D.Trend)
 	{
-		Key = HashCombine(Key, GetTypeHash(Board->Revision()));
-		for (const UFlight* Offer : Board->Offers())
-		{
-			if (Offer != nullptr && Offer->AirlineId == Selected)
-			{
-				Bucket = 1.0;
-				break;
-			}
-		}
+		Key = HashCombine(Key, GetTypeHash(Value));
 	}
-	return HashCombine(Key, GetTypeHash(FMath::FloorToInt64(Now / Bucket)));
+	for (const FAirlineTallyRow& Tally : D.Tallies)
+	{
+		Key = Text(Key, Tally.Label);
+		Key = HashCombine(Key, HashCombine(GetTypeHash(Tally.Count), GetTypeHash(Tally.Points)));
+		Key = Text(Key, Tally.DeltaText);
+	}
+	Key = HashCombine(Key, GetTypeHash(D.bJudged));
+	for (const FAirlineFleetRow& Fleet : D.Fleet)
+	{
+		Key = Text(Key, Fleet.TypeName);
+		Key = HashCombine(Key, GetTypeHash(Fleet.bAdmitted));
+		Key = Text(Key, Fleet.Reason);
+	}
+	for (const FAirlineOfferRow& Offer : D.Offers)
+	{
+		Key = Text(Text(Text(Key, Offer.Callsign), Offer.TypeName), Offer.Countdown);
+	}
+	for (const FAirlineFlightRow& Flight : D.Flights)
+	{
+		Key = Text(Text(Text(Text(Key, Flight.Callsign), Flight.TypeName), Flight.Phase), Flight.Contract);
+		Key = HashCombine(Key, GetTypeHash(Flight.bLate));
+	}
+	// THE SECTION SIZES TOO, so a row moving from one section to the next ("No offers" now, the same flight under "Flights") is a change.
+	Key = HashCombine(Key, HashCombine(GetTypeHash(D.Tallies.Num()), GetTypeHash(D.Fleet.Num())));
+	return HashCombine(Key, HashCombine(GetTypeHash(D.Offers.Num()), GetTypeHash(D.Flights.Num())));
 }
 
 void UAirlinesPanelWidget::Refresh()
@@ -235,14 +288,36 @@ void UAirlinesPanelWidget::Refresh()
 		PaintedListKey = ListKey;
 		bHasPaintedList = true;
 	}
-	const USimClock* Clock = Runtime->GetClock();
-	const double Now = Clock != nullptr ? Clock->Now() : 0.0;
-	const uint32 DetailKey = DetailKeyOf(*Runtime, ListKey, Now);
-	if (!bHasPaintedDetail || DetailKey != PaintedDetailKey)
+	// THE DETAIL: build its view model when the cheap key moved or a real second passed; rebuild its widgets only when what that
+	// prints differs from the screen - see the class comment.
+	const uint32 DetailKey = DetailKeyOf(*Runtime);
+	const bool bKeyMoved = !bHasPaintedDetail || DetailKey != PaintedDetailKey;
+	if (!bKeyMoved && RealSinceTextCheck < TextCheckSeconds)
 	{
-		PaintDetail(*Runtime, Now);
-		PaintedDetailKey = DetailKey;
-		bHasPaintedDetail = true;
+		return;
+	}
+	PaintedDetailKey = DetailKey;
+	bHasPaintedDetail = true;
+	RealSinceTextCheck = 0.0f;
+	if (Selected.IsNone() || DetailModel == nullptr)
+	{
+		// Nothing to be about: collapsed once, then left alone (text key 0 stands for "no airline").
+		if (!bHasPaintedText || PaintedTextKey != 0)
+		{
+			PaintDetail(nullptr);
+			PaintedTextKey = 0;
+			bHasPaintedText = true;
+		}
+		return;
+	}
+	const USimClock* Clock = Runtime->GetClock();
+	const FAirlineDetail D = DetailModel->Build(*Runtime, Selected, Clock != nullptr ? Clock->Now() : 0.0);
+	const uint32 TextKey = TextKeyOf(D);
+	if (!bHasPaintedText || TextKey != PaintedTextKey)
+	{
+		PaintDetail(&D);
+		PaintedTextKey = TextKey;
+		bHasPaintedText = true;
 	}
 }
 
@@ -287,9 +362,10 @@ void UAirlinesPanelWidget::PaintList(const UOpsRuntime& Runtime)
 		UUiButton* Button = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass());
 		Button->SetLabel(Row.Name);
 		Button->SetLabelMinWidth(ListWidth * 0.6f);
-		const TCHAR* Arrow = Row.Trend == EAirlineTrend::Up ? AirlinesUp : Row.Trend == EAirlineTrend::Down ? AirlinesDown : nullptr;
-		Button->SetDetail(Arrow != nullptr
-			? FText::Format(LOCTEXT("ListPctTrend", "{0}% {1}"), FText::AsNumber(Row.SatisfactionPct), FText::FromString(Arrow))
+		// THE INBOX'S ARROW (the view model's Row.Arrow, UOfferViewModel::MoodArrowOf): the newest remembered change, so this list and
+		// the inbox row beside it never point opposite ways for one airline. The week's direction is the detail's line.
+		Button->SetDetail(!Row.Arrow.IsEmpty()
+			? FText::Format(LOCTEXT("ListPctTrend", "{0}% {1}"), FText::AsNumber(Row.SatisfactionPct), FText::FromString(Row.Arrow))
 			: FText::Format(LOCTEXT("ListPct", "{0}%"), FText::AsNumber(Row.SatisfactionPct)));
 		// A SECONDARY BUTTON, LIT WHEN SELECTED - the radio group's and the bar's "this one" (UUiButton::LookFor), rather than a UUiRow:
 		// UUiRow is a UBorder, which handles no click, and a row the player picks from must be one.
@@ -320,20 +396,23 @@ void UAirlinesPanelWidget::LightSelectedRow()
 	}
 }
 
-void UAirlinesPanelWidget::PaintDetail(const UOpsRuntime& Runtime, double Now)
+void UAirlinesPanelWidget::PaintDetail(const FAirlineDetail* Built)
 {
-	if (DetailModel == nullptr || PanelStyle == nullptr || DetailColumn == nullptr)
+	if (PanelStyle == nullptr || DetailColumn == nullptr)
 	{
 		return;
 	}
 	const UUIStyle& Style = *PanelStyle;
 	++DetailRebuilds;
+	// VERBOSE, for the PIE check of the memo (about one a real second while an offer's countdown runs, none on a quiet pane at any
+	// speed): `log LogRoadBuild Verbose`, then count these per second.
+	UE_LOG(LogRoadBuild, Verbose, TEXT("Airlines window: detail rebuilt (%d) for %s"), DetailRebuilds, *Selected.ToString());
 
 	TallyColumn->ClearChildren();
 	FleetColumn->ClearChildren();
 	OfferColumn->ClearChildren();
 	FlightColumn->ClearChildren();
-	if (Selected.IsNone())
+	if (Built == nullptr)
 	{
 		// No airline at all (an empty roster): the list says so; the detail has nothing to be about.
 		DetailColumn->SetVisibility(ESlateVisibility::Collapsed);
@@ -341,10 +420,10 @@ void UAirlinesPanelWidget::PaintDetail(const UOpsRuntime& Runtime, double Now)
 	}
 	DetailColumn->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 
-	const FAirlineDetail D = DetailModel->Build(Runtime, Selected, Now);
+	const FAirlineDetail& D = *Built;
 
 	HeaderName->SetText(D.Name);
-	// NO STANDING IS A DASH, never "0%" (review focus 1): 0% would say the airline hates the airport.
+	// NO STANDING IS A DASH, never "0%": 0% would say the airline hates the airport, when nothing is known about it yet.
 	HeaderPercent->SetText(D.bHasStanding
 		? FText::Format(LOCTEXT("HeaderPct", "{0}%"), FText::AsNumber(D.SatisfactionPct))
 		: FText::FromString(AirlinesDash));
@@ -386,10 +465,9 @@ void UAirlinesPanelWidget::PaintDetail(const UOpsRuntime& Runtime, double Now)
 		UHorizontalBox* Line = NewLine(*TallyColumn);
 		Cell(*Line, Tally.Label, Style.Ink, true);
 		Cell(*Line, FText::Format(LOCTEXT("TallyCount", "×{0}"), FText::AsNumber(Tally.Count)), Style.InkMuted, false);
-		// COLOURED BY THE SIGN OF WHAT IS PRINTED - the view model's own rounding (DescribeDelta), so a "0%" is never green or red - and
-		// read off the number, never parsed back out of the text.
-		const int32 Points = static_cast<int32>(FMath::RoundToInt(Tally.SumDelta * 100.0));
-		Cell(*Line, Tally.DeltaText, Points > 0 ? Style.Positive : Points < 0 ? Style.Warning : Style.InkMuted, false);
+		// COLOURED BY THE SIGN OF WHAT IS PRINTED - the row's Points, the view model's one rounding (PointsOf, which DescribeDelta also
+		// uses), so a "0%" is never green or red - and read off the number, never parsed back out of the text.
+		Cell(*Line, Tally.DeltaText, Tally.Points > 0 ? Style.Positive : Tally.Points < 0 ? Style.Warning : Style.InkMuted, false);
 	}
 
 	if (!D.bJudged)
