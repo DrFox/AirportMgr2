@@ -555,8 +555,11 @@ URoadProfile* ARoadNetworkActor::ResolveRunwayProfile(int32 Index) const
 
 UEntityDefinition* ARoadNetworkActor::ResolveStandDefinition() const
 {
-	if (StandDefinition != nullptr) { return StandDefinition; }
-	return UAirsideSettings::ResolvePlaceable(EPlaceableEntity::Stand);
+	// CODE C, BUILT AT RUNTIME like every letter since 2026-10-03 - the point-placed stand gets the SAME
+	// object a drawn Code C does. It was the actor's StandDefinition, else DA_Stand_CodeC through the
+	// content set's Placeables map; both are retired (see UStandDefinitionCache's header).
+	// ENFORCED BY: Airside.Entities.RuntimeCodeCStandEqualsTheRetiredAsset (the layout moved nothing)
+	return ResolveStandDefinitionFor(EIcaoCode::C);
 }
 
 UEntityDefinition* ARoadNetworkActor::ResolveStandDefinitionFor(EIcaoCode Letter) const

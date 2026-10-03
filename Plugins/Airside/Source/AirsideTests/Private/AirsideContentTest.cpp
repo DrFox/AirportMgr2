@@ -100,7 +100,8 @@ bool FAirsideContentPostLoadDoesNotClobberAuthoredSlotTest::RunTest(const FStrin
 
 /**
  * An asset saved before Placeables existed (issue #192 item 1) still has its bytes under
- * DefaultStand / DefaultFuelDepot - meta = (DeprecatedProperty) keeps those tagged names
+ * DefaultFuelDepot (and had them under DefaultStand, removed 2026-10-03 with the retired stand
+ * asset) - meta = (DeprecatedProperty) keeps the tagged name
  * matching on load, the way the runway materials test above proves for its own three fields
  * - and this asserts PostLoad actually moves them into Placeables rather than leaving it
  * empty, which is what would make ARoadNetworkActor place nothing for a shipped asset.
@@ -113,12 +114,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FAirsideContentMigratesDeprecatedPlaceablesTest::RunTest(const FString& Parameters)
 {
 	UAirsideContent* Content = NewObject<UAirsideContent>();
-	UEntityDefinition* Stand = NewObject<UEntityDefinition>();
 	UEntityDefinition* Depot = NewObject<UEntityDefinition>();
 
-	// Simulate what a pre-migration asset deserialises as: only the two deprecated fields
-	// set, Placeables never authored at all.
-	Content->DefaultStand = TSoftObjectPtr<UEntityDefinition>(Stand);
+	// Simulate what a pre-migration asset deserialises as: only the deprecated field set,
+	// Placeables never authored at all. ONE FIELD since 2026-10-03: DefaultStand went with the
+	// retired DA_Stand_CodeC (stands are built at runtime), so only the depot migrates.
 	Content->DefaultFuelDepot = TSoftObjectPtr<UEntityDefinition>(Depot);
 
 	if (!TestEqual(TEXT("nothing authored into Placeables yet"), Content->Placeables.Num(), 0))
@@ -128,14 +128,12 @@ bool FAirsideContentMigratesDeprecatedPlaceablesTest::RunTest(const FString& Par
 
 	Content->PostLoad();
 
-	if (!TestEqual(TEXT("PostLoad maps both kinds from the two deprecated slots"),
-		Content->Placeables.Num(), 2))
+	if (!TestEqual(TEXT("PostLoad maps the depot from its deprecated slot, and nothing for a stand"),
+		Content->Placeables.Num(), 1))
 	{
 		return false;
 	}
 
-	TestEqual(TEXT("Stand resolves from the deprecated stand definition"),
-		Content->Placeables.FindRef(EPlaceableEntity::Stand), Content->DefaultStand);
 	TestEqual(TEXT("FuelDepot resolves from the deprecated fuel depot definition"),
 		Content->Placeables.FindRef(EPlaceableEntity::FuelDepot), Content->DefaultFuelDepot);
 
@@ -155,17 +153,18 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FAirsideContentPlaceablesPostLoadDoesNotClobberAuthoredSlotTest::RunTest(const FString& Parameters)
 {
 	UAirsideContent* Content = NewObject<UAirsideContent>();
-	UEntityDefinition* AuthoredStand = NewObject<UEntityDefinition>();
-	UEntityDefinition* DeprecatedStand = NewObject<UEntityDefinition>();
+	UEntityDefinition* AuthoredDepot = NewObject<UEntityDefinition>();
+	UEntityDefinition* DeprecatedDepot = NewObject<UEntityDefinition>();
 
-	Content->Placeables.Add(EPlaceableEntity::Stand, TSoftObjectPtr<UEntityDefinition>(AuthoredStand));
-	Content->DefaultStand = TSoftObjectPtr<UEntityDefinition>(DeprecatedStand);
+	// THE DEPOT since 2026-10-03 (was the stand, whose deprecated field went with DA_Stand_CodeC).
+	Content->Placeables.Add(EPlaceableEntity::FuelDepot, TSoftObjectPtr<UEntityDefinition>(AuthoredDepot));
+	Content->DefaultFuelDepot = TSoftObjectPtr<UEntityDefinition>(DeprecatedDepot);
 
 	Content->PostLoad();
 
 	TestEqual(TEXT("an already-authored kind survives PostLoad untouched"),
-		Content->Placeables.FindRef(EPlaceableEntity::Stand),
-		TSoftObjectPtr<UEntityDefinition>(AuthoredStand));
+		Content->Placeables.FindRef(EPlaceableEntity::FuelDepot),
+		TSoftObjectPtr<UEntityDefinition>(AuthoredDepot));
 
 	return true;
 }

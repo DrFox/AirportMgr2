@@ -84,7 +84,6 @@ namespace ReadoutCacheTestFixture
 			Actor = TestWorld.Actor;
 			if (!Test.TestNotNull(TEXT("a target actor"), Actor)) { return false; }
 			Actor->ClearNetwork();
-			Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 			IRoadEditTarget* Edit = Actor;
 			Edit->ConnectNodes(Edit->PlaceNode(FVector2D(-10000.0, 0.0)), Edit->PlaceNode(FVector2D(10000.0, 0.0)),
 				ERoadKind::Taxiway, INDEX_NONE);

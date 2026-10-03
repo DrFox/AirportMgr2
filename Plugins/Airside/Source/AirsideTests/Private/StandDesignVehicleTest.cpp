@@ -1,7 +1,9 @@
 #include "CoreMinimal.h"
 #include "Content/AirsideSettings.h"
+#include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/Vehicle.h"
+#include "Model/VehicleEnvelope.h"
 #include "Model/VehicleFit.h"
 #include "Solve/IcaoCode.h"
 #include "Solve/TowReverse.h"
@@ -34,6 +36,86 @@ bool FStandDesignVehiclePerLetterTest::RunTest(const FString& Parameters)
 		TestEqual(FString::Printf(TEXT("%s is the truck's"), IcaoCode::ToLetter(L)),
 			UAirsideSettings::ResolveStandDesignVehicle(L).TypeCode, Truck);
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStandAdmitsEverySmallerLetterTest,
+	"Airside.Content.StandDesignVehicle.EveryLetterAdmitsEverySmallerLetter",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FStandAdmitsEverySmallerLetterTest::RunTest(const FString& Parameters)
+{
+	// THE USER'S RULING 2026-10-03: "A stand should not refuse the lower vehicles; they are just less
+	// efficient at doing their job." Every letter's stand - the transient template the drawn-stand tool
+	// places, asked through the production reader the bid's hook calls - admits its own letter's design
+	// vehicle AND every smaller letter's. Measured on the stand, not on the resolve: a set that only
+	// the resolve knew about would admit a tow onto lanes nobody laid for it.
+	//
+	// RED BEFORE THE FIX: a C-F stand was laid for and admitted only the truck, and the utility tow's
+	// chain (575) is longer than the truck's wheelbase (355) - VehicleTooLarge on every C-F stand,
+	// "Accept (no fuel)" on every C+ offer in PIE with a depot full of fuel (2026-10-03).
+	const FVehicle Tow = UAirsideSettings::ResolveUtilityTowVehicle();
+	const FVehicle Truck = UAirsideSettings::ResolveDefaultVehicle();
+	for (int32 Index = 0; Index <= static_cast<int32>(EIcaoCode::F); ++Index)
+	{
+		const EIcaoCode Letter = static_cast<EIcaoCode>(Index);
+		const UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(Letter);
+		const TArray<FVehicle> Admitted = UAirsideSettings::ResolveStandVehiclesOf(Stand, Letter);
+		const FVehicleEnvelope Ceiling = FVehicleEnvelope::Of(Admitted);
+		if (!TestTrue(*FString::Printf(TEXT("Code %s: the stand carries its admitted set"), IcaoCode::ToLetter(Letter)),
+			Stand->AdmittedVehicles.Num() > 0))
+		{
+			continue;
+		}
+		TestEqual(*FString::Printf(TEXT("Code %s: its design vehicle is the set's first"), IcaoCode::ToLetter(Letter)),
+			Stand->AdmittedVehicles[0].TypeCode, Stand->DesignVehicle.TypeCode);
+		for (int32 Smaller = 0; Smaller <= Index; ++Smaller)
+		{
+			const FVehicle Kind = UAirsideSettings::ResolveStandDesignVehicle(static_cast<EIcaoCode>(Smaller));
+			TestTrue(*FString::Printf(TEXT("Code %s's stand admits Code %s's design vehicle, %s"), IcaoCode::ToLetter(Letter),
+				IcaoCode::ToLetter(static_cast<EIcaoCode>(Smaller)), *Kind.TypeCode.ToString()), Ceiling.Admits(Kind));
+		}
+		// AND STILL REFUSES WHAT IT WAS NOT LAID FOR: a B stand's lanes are the tow's, and the truck turns wider and is
+		// wider - the ruling admits SMALLER vehicles, not every vehicle.
+		if (Letter <= EIcaoCode::B)
+		{
+			TestFalse(*FString::Printf(TEXT("Code %s's stand still refuses the truck"), IcaoCode::ToLetter(Letter)),
+				Ceiling.Admits(Truck));
+		}
+	}
+	// NOT VACUOUS: the case the report was about, by name.
+	TestTrue(TEXT("a Code C stand admits the utility tow"),
+		FVehicleEnvelope::Of(UAirsideSettings::ResolveStandVehiclesOf(UEntityDefinition::MakeStandTransient(EIcaoCode::C), EIcaoCode::C)).Admits(Tow));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FEnvelopeHoldsRigidChainApartTest,
+	"Airside.Model.VehicleEnvelope.RigidChainIsItsOwnAxis",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FEnvelopeHoldsRigidChainApartTest::RunTest(const FString& Parameters)
+{
+	// REVIEW 2026-10-03: with ONE chain axis maxed over every member, a C stand's envelope (truck 355,
+	// tow 575) admitted a RIGID kind with a 455 wheelbase - no rigid that long was ever laid for. A rigid
+	// kind is held to the longest RIGID member, a towing one to the longest TOWING member. The long
+	// rigid here is the truck with its steered axle 100 uu further forward and a near-90 degree lock, so
+	// its turning circles stay inside the truck's and the chain is the only axis that can refuse it.
+	const FVehicle Truck = UAirsideSettings::ResolveDefaultVehicle();
+	FVehicle LongRigid = Truck;
+	LongRigid.TypeCode = TEXT("LONGRIGID");
+	LongRigid.Chassis.SteerAxleX += LongRigid.Chassis.SteerAxleX >= LongRigid.Chassis.FixedAxleX ? 100.0 : -100.0;
+	LongRigid.Chassis.Ground.MaxSteerDegrees = 89.0;
+	const FVehicleEnvelope C = FVehicleEnvelope::Of(UAirsideSettings::ResolveStandVehicles(EIcaoCode::C));
+	if (!TestTrue(TEXT("setup: the long rigid turns no wider than the truck forward"),
+			LongRigid.Chassis.TightestFollowableRadius() <= C.ForwardRadius)
+		|| !TestTrue(TEXT("setup: nor in reverse"), VehicleFit::TightestReverseRadius(LongRigid) <= C.ReverseRadius)
+		|| !TestTrue(TEXT("setup: its chain is between the truck's and the tow's"),
+			VehicleFit::ChainLength(LongRigid) > C.RigidChain && VehicleFit::ChainLength(LongRigid) < C.TrailerChain))
+	{
+		return false;
+	}
+	TestFalse(*FString::Printf(TEXT("a rigid kind longer (%.0f) than any rigid the C stand was laid for (%.0f) is refused"),
+		VehicleFit::ChainLength(LongRigid), C.RigidChain), C.Admits(LongRigid));
+	TestTrue(TEXT("the truck itself still is admitted"), C.Admits(Truck));
+	TestTrue(TEXT("and the tow"), C.Admits(UAirsideSettings::ResolveUtilityTowVehicle()));
 	return true;
 }
 

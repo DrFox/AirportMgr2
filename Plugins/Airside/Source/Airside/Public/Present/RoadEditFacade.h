@@ -60,7 +60,8 @@ enum class EInteractiveEdit : uint8
  * GetWorld() (UObject's default walks GetOuter()->GetWorld()), which is what HistoryForEdit
  * needs to tell an editor world from a game one without being handed a world explicitly.
  *
- * PlacementLimits, MinimumRunwayLength and StandDefinition are read the same way: they are
+ * PlacementLimits and MinimumRunwayLength are read the same way (StandDefinition was too, until it
+ * was retired 2026-10-03 - stands are built at runtime): they are
  * level-authored tunables on the actor (RoadBuildController writes PlacementLimits on the
  * actor directly, every frame), not facts this facade owns, so it asks for them rather than
  * caching them.
@@ -448,7 +449,7 @@ public:
 	 * Snap and placement tunables, for a driver-supplied view scale, as one bundle - see
 	 * FBuildSessionTunables. Moved off ARoadNetworkActor by issue #298: it COMPOSES
 	 * PlacementLimits/Snap/GuideSources (level-authored tunables this facade already reads
-	 * through Actor(), the same pattern as MinimumRunwayLength/StandDefinition - see the class
+	 * through Actor(), the same pattern as MinimumRunwayLength - see the class
 	 * comment) with ResolveProfile - a resolve this class is the right place for, not a
 	 * level-authored UPROPERTY only an AActor could hold. THE ONE PLACE both drivers assemble
 	 * this now: before issue #93, ARoadBuildController filled Tunables.Snap/Limits from its own

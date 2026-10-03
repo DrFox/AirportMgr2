@@ -118,7 +118,6 @@ bool FStandPlotPlacesCodeCTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 
 	// The taxiway at Y = 0; the stand's entrance edge a full 1000 uu clear of it, so the
 	// entrance edge and the taxiway's own centreline never touch, let alone cross.
@@ -240,7 +239,6 @@ bool FStandPlotRefusesOverlapTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 	LayTaxiway(Actor, 0.0);
 
 	FVector2D A, B;
@@ -286,7 +284,6 @@ bool FStandPlotAllowsServiceRoadInBackStripTest::RunTest(const FString& Paramete
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 
 	FVector2D A, B;
 	const TArray<FVector2D> Rect = FloorRect(EIcaoCode::C, 0.0, A, B);
@@ -323,7 +320,6 @@ bool FStandPlotRefusesTaxiwayThroughInteriorTest::RunTest(const FString& Paramet
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 
 	FVector2D A, B;
 	const TArray<FVector2D> Rect = FloorRect(EIcaoCode::C, 0.0, A, B);
@@ -363,7 +359,6 @@ bool FStandPlotUndoRemovesTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 	LayTaxiway(Actor, 0.0);
 
 	FVector2D A, B;
@@ -480,7 +475,6 @@ bool FStandOutlineLegacyGetsCodeCBoxTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
 
 	IRoadEditTarget* Target = Actor;
@@ -552,7 +546,6 @@ bool FStandOutlinePointPlacedStandGetsOutlineTest::RunTest(const FString& Parame
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
 
 	IRoadEditTarget* Target = Actor;
@@ -589,7 +582,7 @@ bool FStandOutlinePointPlacedStandGetsOutlineTest::RunTest(const FString& Parame
 /**
  * FINAL REVIEW I5: A DRAWN STAND'S LEAD-IN IS SIZED BY ITS OWN LETTER. D, E and F have no
  * design aircraft (UAirsideSettings::ResolveLargestAircraftOfLetter returns null for every
- * letter today), and FAnchorLink read both the lead-in's radius and its span limit off that
+ * letter but C since 2026-10-03), and FAnchorLink read both the lead-in's radius and its span limit off that
  * aircraft - so a drawn F stand was painted with Code C's 25 m radius and no span limit at
  * all. The letter the stand was drawn as is captured (DesignWingspan), and is what admission
  * reads; the lead-in now reads it too.
@@ -719,7 +712,6 @@ bool FStandPlotDepotRefusesStandOverlapTest::RunTest(const FString& Parameters)
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
 
 	FVector2D A, B;
@@ -1454,7 +1446,6 @@ bool FStandRefusedInsideStripTest::RunTest(const FString& Parameters)
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 	IRoadEditTarget* Target = Actor;
 	const int32 W = Target->PlaceNode(FVector2D(-10000.0, 0.0));
 	const int32 E = Target->PlaceNode(FVector2D(10000.0, 0.0));

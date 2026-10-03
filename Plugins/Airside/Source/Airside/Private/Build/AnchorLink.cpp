@@ -92,7 +92,7 @@ namespace
 	 *
 	 * FROM THE CAPTURED DesignWingspan, not the definition's design aircraft (final review
 	 * I5). A drawn D, E or F stand has NO design aircraft (UAirsideSettings::
-	 * ResolveLargestAircraftOfLetter returns null for every letter today), and reading the
+	 * ResolveLargestAircraftOfLetter returns null for every letter but C), and reading the
 	 * aircraft gave it Code C's 25 m radius and no span limit at all. And even with one,
 	 * the aircraft's RAW span was a second rule disagreeing with the first: a Code C stand
 	 * designed around the A320 (34.1 m) limited its lead-in to 34.1 m, so a 737-800 (35.8 m,
@@ -683,10 +683,16 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// no vehicle on them needed and warned "a truck will cut that corner" on stands no truck
 	// serves. Every other link, and a definition saved before DesignVehicle existed (TypeCode
 	// None), keeps the caller's largest vehicle.
+	//
+	// THE WIDEST-TURNING VEHICLE THE STAND ADMITS since 2026-10-03, not the design vehicle by name:
+	// a stand now admits every smaller letter's vehicle too (UEntityDefinition::AdmittedVehicles),
+	// and its link must be filleted for whichever of them turns widest - the truck on C-F today,
+	// which is also their design vehicle, so no join moved. The envelope is the one the layout and
+	// the bid read, so the three cannot size for different vehicles.
 	const FEntityInstance* LaneStand = Link.LaneOwner.IsSet() ? Network.GetEntity(Link.LaneOwner) : nullptr;
-	const FChassis& Drives = LaneStand != nullptr && LaneStand->Definition != nullptr
-			&& !LaneStand->Definition->DesignVehicle.TypeCode.IsNone()
-		? LaneStand->Definition->DesignVehicle.Chassis : LargestServiceVehicle;
+	const FVehicleEnvelope StandAdmits = LaneStand != nullptr && LaneStand->Definition != nullptr
+		? LaneStand->Definition->AdmittedEnvelope() : FVehicleEnvelope();
+	const FChassis& Drives = !StandAdmits.bEmpty ? StandAdmits.WidestTurning : LargestServiceVehicle;
 	double LaneRadius = 0.0;
 	if (Link.Class == ETraversalClass::GroundVehicle)
 	{

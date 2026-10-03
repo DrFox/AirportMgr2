@@ -275,6 +275,11 @@ namespace IcaoCode
 		return RowFor(Code).Letter;
 	}
 
+	FString StandNameForLetter(EIcaoCode Code)
+	{
+		return FString::Printf(TEXT("Code %s stand"), ToLetter(Code));
+	}
+
 	EIcaoCode CodeForWingspan(double WingspanUu)
 	{
 		for (int32 Index = 0; Index < UE_ARRAY_COUNT(Rows); ++Index)

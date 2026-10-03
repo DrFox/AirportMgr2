@@ -262,6 +262,12 @@ namespace VehicleFit
 	 * inefficient but legal; the reverse is never true, which is why this is one AND of four
 	 * one-way comparisons rather than a single size ordering - two vehicles that differ (a wide,
 	 * tight-turning tug against a narrow, wide-turning rig) can fail it BOTH ways.
+	 *
+	 * NO PRODUCTION CALLER SINCE 2026-10-03, kept on purpose: stand admission is FVehicleEnvelope::Admits
+	 * over the stand's whole admitted set (one vehicle's figures refused the tow on every C-F stand), and
+	 * Check-Architecture rule 105 fails any AirportOps call of this. It stays as the pairwise question
+	 * the envelope generalises - Airside.Model.VehicleFit.NoLargerThanChecksEveryAxis pins the measured
+	 * tow/truck facts with it, and the shop's tests use it to build a vehicle no letter admits.
 	 */
 	AIRSIDE_API bool NoLargerThan(const FVehicle& A, const FVehicle& B);
 

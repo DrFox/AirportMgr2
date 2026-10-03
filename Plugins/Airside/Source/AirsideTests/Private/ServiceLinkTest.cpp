@@ -949,6 +949,60 @@ bool FFarRoadWinsOverSideRoadTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandLinkFilletsForTheWidestTurningAdmittedTest,
+	"Airside.Build.StandEntry.LinkFilletsForTheWidestTurningAdmitted",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandLinkFilletsForTheWidestTurningAdmittedTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// FAnchorLink FILLETS A STAND'S ENTRY FOR THE WIDEST-TURNING VEHICLE THE STAND ADMITS
+	// (UEntityDefinition::AdmittedEnvelope().WidestTurning, 2026-10-03), not for its design vehicle by
+	// name. On every shipped letter the two are the same vehicle, so the output alone cannot tell them
+	// apart - this builds a SYNTHETIC B stand whose design vehicle is the tow (lock 211) but whose
+	// admitted set also holds the truck (lock 502), and measures the link's tightest curve against the
+	// same stand admitting the tow alone. Red if AnchorLink reads DesignVehicle.Chassis again.
+	const FVehicle Tow = UAirsideSettings::ResolveUtilityTowVehicle();
+	const FVehicle Truck = UAirsideSettings::ResolveDefaultVehicle();
+	auto TightestLink = [this](const TArray<FVehicle>& Admitted, double& OutTightest) -> bool
+	{
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(EIcaoCode::B);
+		Stand->AdmittedVehicles = Admitted;
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		double FarEdgeX = 0.0;
+		const FEntityInstanceId Placed = PlaceDrawnStand(*Net, *Stand, EIcaoCode::B, 0.0, FarEdgeX);
+		FGuidelineNodeId End;
+		// LONG, and 1500 beyond the far edge, so the sweeps onto it are fillets at the link's own radius
+		// rather than clamped by the road running out - the fixture FarRoadWinsOverSideRoad uses.
+		const double FarRoadX = FarEdgeX + 1500.0;
+		Lay(*Net, FVector2D(FarRoadX, -60000.0), FVector2D(FarRoadX, 60000.0), ETraversalClass::GroundVehicle, End);
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
+		OutTightest = TNumericLimits<double>::Max();
+		int32 Curves = 0;
+		for (const FGuidelineNodeId& Entry : EntriesOf(*Net, Placed))
+		{
+			// THE TWO SWEEPS ONTO THE ROAD, AS LAID (DeliveredRadius - the radius in the graph, never
+			// the one requested): the curves FAnchorLink fillets at ServiceLaneRadius(Drives).
+			const TArray<FGuidelineEdgeId> Link = LinkEdgesAt(*Net, Entry);
+			if (Link.Num() < 3) { continue; }
+			OutTightest = FMath::Min(OutTightest, FMath::Min(DeliveredRadius(*Net, Link[1]), DeliveredRadius(*Net, Link[2])));
+			++Curves;
+		}
+		return TestTrue(TEXT("setup: the stand's entries were linked with curves to measure"), Curves > 0);
+	};
+	double TowOnly = 0.0;
+	double WithTruck = 0.0;
+	if (!TightestLink({ Tow }, TowOnly) || !TightestLink({ Tow, Truck }, WithTruck)) { return false; }
+	AddInfo(FString::Printf(TEXT("tightest link curve: %.0f uu admitting the tow, %.0f admitting tow + truck"), TowOnly, WithTruck));
+	TestTrue(*FString::Printf(TEXT("admitting the truck as well widens the link (%.0f -> %.0f)"), TowOnly, WithTruck),
+		WithTruck > TowOnly + 1.0);
+	TestTrue(*FString::Printf(TEXT("to at least the truck's lock (%.0f >= %.0f)"), WithTruck, Truck.Chassis.TightestFollowableRadius()),
+		WithTruck >= Truck.Chassis.TightestFollowableRadius() - 0.5);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FDrawnDeepStandJoinsItsFarEdgeTest,
 	"Airside.Build.StandEntry.DrawnDeepStandJoinsItsFarEdge",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

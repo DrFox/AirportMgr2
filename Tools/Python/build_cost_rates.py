@@ -70,9 +70,15 @@ def shipped_profiles():
 # What placing one costs. A stand and a depot are single objects rather than lengths, so
 # these are authored directly - there is no width to derive them from.
 ENTITIES = [
-    ("/Game/Entities/DA_Stand_CodeC", 40000.0 * BUILD_SCALE),
     ("/Game/Entities/DA_FuelDepot", 120000.0 * BUILD_SCALE),
 ]
+
+# A STAND IS NOT AN ASSET SINCE 2026-10-03 - every letter's template is built at runtime - so its
+# prices are a row of the content set's StandLetters (by ICAO letter ordinal, A..F), which
+# UStandDefinitionCache stamps onto the template it builds. Code C's figure is unchanged from when it
+# lived on DA_Stand_CodeC; the other letters were never priced and still are not.
+STAND_LETTER_C = 2
+STAND_PLACEMENT_C = 40000.0 * BUILD_SCALE
 
 
 def say(msg):
@@ -133,6 +139,20 @@ def main():
         unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
         say("%s: %.0f to place, %.0f per day"
             % (path, placement_cost, placement_cost * UPKEEP_FRACTION))
+        priced += 1
+
+    content = unreal.EditorAssetLibrary.load_asset(CONTENT_SET)
+    if content is None:
+        fail("%s not found - no stand row to price" % CONTENT_SET)
+    else:
+        rows = list(content.get_editor_property("stand_letters"))
+        while len(rows) <= STAND_LETTER_C:
+            rows.append(unreal.StandLetterDefaults())
+        rows[STAND_LETTER_C].set_editor_property("placement_cost", STAND_PLACEMENT_C)
+        rows[STAND_LETTER_C].set_editor_property("upkeep_per_day", STAND_PLACEMENT_C * UPKEEP_FRACTION)
+        content.set_editor_property("stand_letters", rows)
+        unreal.EditorAssetLibrary.save_asset(CONTENT_SET, only_if_is_dirty=False)
+        say("stand row C: %.0f to place, %.0f per day" % (STAND_PLACEMENT_C, STAND_PLACEMENT_C * UPKEEP_FRACTION))
         priced += 1
 
     say("priced %d asset(s)" % priced)

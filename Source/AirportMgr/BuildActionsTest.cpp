@@ -1385,7 +1385,6 @@ bool FUndoDropsASelectionTest::RunTest(const FString& Parameters)
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 	IRoadEditTarget* Edit = Actor;
 	const int32 Stand = Edit->PlaceStand(FVector2D(0.0, 0.0), 0.0);
 	if (!TestTrue(TEXT("setup: a stand placed"), Stand != INDEX_NONE)) { return false; }

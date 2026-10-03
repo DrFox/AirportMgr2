@@ -151,17 +151,18 @@ public:
 	ARoadNetworkActor* GetTarget() const { return Target; }
 
 	/**
-	 * What Stand was built for: UAirsideSettings::ResolveStandDesignVehicleOf on its definition and
-	 * its outline's letter. The ONE reader Attach hands UJobBoard::DesignVehicleOf, and the one
-	 * the world-free fuel fixture hands it too, so the two cannot read a stand differently. A
-	 * forwarder, not logic - the reading lives in Content/.
+	 * Every vehicle Stand was laid for, its design vehicle first: UAirsideSettings::ResolveStandVehiclesOf
+	 * on its definition and its outline's letter. The ONE reader Attach hands UJobBoard::StandVehiclesOf,
+	 * and the one the world-free fuel fixture hands it too, so the two cannot read a stand differently. A
+	 * forwarder, not logic - the reading lives in Content/. It was StandDesignVehicleOf, returning the
+	 * design vehicle alone, until 2026-10-03 (user ruling: a stand admits every smaller vehicle).
 	 */
-	static FVehicle StandDesignVehicleOf(const FEntityInstance& Stand);
+	static TArray<FVehicle> StandVehiclesOf(const FEntityInstance& Stand);
 
 	/**
 	 * Board's vehicle catalogue and starter fleet, resolved from Scenario's rows and Content's chassis
 	 * (UAirsideSettings::ResolveVehicle) through FServiceFleet::ResolveCatalogue (#430). THE ONE RESOLVE the runtime runs -
-	 * at attach and after every load, by ApplyScenarioFigures (#449) - and the one the world-free fixtures run, so a test's catalogue is the game's - the same reason StandDesignVehicleOf is
+	 * at attach and after every load, by ApplyScenarioFigures (#449) - and the one the world-free fixtures run, so a test's catalogue is the game's - the same reason StandVehiclesOf is
 	 * a static here. A forwarder, not logic: the join is the fleet's, the chassis Content's.
 	 * ENFORCED BY: AirportOps.Fleet.EveryBuyableTypeHasAChassis (walks the attached runtime's catalogue)
 	 */

@@ -342,9 +342,9 @@ void UOpsRuntime::OfferTick()
 	}
 }
 
-FVehicle UOpsRuntime::StandDesignVehicleOf(const FEntityInstance& Stand)
+TArray<FVehicle> UOpsRuntime::StandVehiclesOf(const FEntityInstance& Stand)
 {
-	return UAirsideSettings::ResolveStandDesignVehicleOf(Stand.Definition.Get(), UJobBoard::LetterOfStand(Stand));
+	return UAirsideSettings::ResolveStandVehiclesOf(Stand.Definition.Get(), UJobBoard::LetterOfStand(Stand));
 }
 
 void UOpsRuntime::ResolveVehicleCatalogue(UJobBoard& Board, const UScenario& Scenario)
@@ -1058,11 +1058,11 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// ENFORCED BY: AirportOps.Fuel.RuntimeResolvesPerStand
 	JobBoard->ResolveVehicles([](EIcaoCode Letter) { return UAirsideSettings::ResolveStandDesignVehicle(Letter); });
 	// AND WHAT EACH STAND WAS BUILT FOR, read off its own definition when the guard asks - see
-	// UJobBoard::DesignVehicleOf for why the read is handed down rather than made there.
+	// UJobBoard::StandVehiclesOf for why the read is handed down rather than made there.
 	// ENFORCED BY: AirportOps.Fuel.RuntimeResolvesPerStand (A sent the truck still reads as tow-built)
-	JobBoard->DesignVehicleOf = &UOpsRuntime::StandDesignVehicleOf;
+	JobBoard->StandVehiclesOf = &UOpsRuntime::StandVehiclesOf;
 
-	// THE PURCHASE SERVICE'S TWO WORLD HOOKS (facility-upgrades spec §3; UJobBoard::DesignVehicleOf's
+	// THE PURCHASE SERVICE'S TWO WORLD HOOKS (facility-upgrades spec §3; UJobBoard::StandVehiclesOf's
 	// pattern): the plot's ceiling from Airside's one solve, and the module write through the facade's one
 	// door - which rebuilds the yard and checkpoints undo. `this` for the ceiling, which the runtime memoises
 	// and outlives nothing; weak for the actor, the dispatcher's reason below.

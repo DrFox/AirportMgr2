@@ -128,7 +128,7 @@ struct FFacilityUpkeep
  *
  * WORLD-FREE (Model/): the reserved-slot ceiling (a plot solve in Airside Build/) and the module write
  * (a facade edit with a rebuild and an undo checkpoint) come in as TFunction hooks set by UOpsRuntime at
- * attach - UJobBoard::DesignVehicleOf's pattern. The network is passed PER CALL, not held: the actor's
+ * attach - UJobBoard::StandVehiclesOf's pattern. The network is passed PER CALL, not held: the actor's
  * network object is replaced by a clear, a load and every undo (§6 deviation 3).
  */
 UCLASS()

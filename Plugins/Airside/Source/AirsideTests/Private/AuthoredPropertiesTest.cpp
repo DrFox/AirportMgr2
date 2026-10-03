@@ -50,7 +50,7 @@ bool FAuthoredPropertiesTest::RunTest(const FString& Parameters)
 		TestNull(TEXT("no surface material"), Actor->SurfaceMaterial.Get());
 		TestNull(TEXT("no apron material"), Actor->ApronMaterial.Get());
 		TestNull(TEXT("no ghost material"), Actor->GhostMaterial.Get());
-		TestNull(TEXT("no stand definition"), Actor->StandDefinition.Get());
+		// (NO StandDefinition to check since 2026-10-03: the property is retired, Code C is built at runtime.)
 		TestNull(TEXT("and no profile"), Actor->Profile.Get());
 	}
 
@@ -73,7 +73,6 @@ bool FAuthoredPropertiesTest::RunTest(const FString& Parameters)
 		TestNull(TEXT("nor a surface material"), Actor->SurfaceMaterial.Get());
 		TestNull(TEXT("nor an apron material"), Actor->ApronMaterial.Get());
 		TestNull(TEXT("nor a ghost material"), Actor->GhostMaterial.Get());
-		TestNull(TEXT("nor a stand definition"), Actor->StandDefinition.Get());
 
 		// THE ONE THAT ACTUALLY HAPPENED. Drawing a road resolves a profile for the new
 		// segment; it must not write that profile onto the actor, which is what silently

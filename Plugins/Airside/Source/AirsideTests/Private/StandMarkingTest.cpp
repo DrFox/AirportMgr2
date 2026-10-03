@@ -655,7 +655,6 @@ namespace StandTurnOffTest
 	bool PlaceBesideTaxiway(FAutomationTestBase& Test, ARoadNetworkActor* Actor, int32& OutIndex, double& OutHalfWidth, double& OutStrip)
 	{
 		Actor->ClearNetwork();
-		Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 		IRoadEditTarget* Target = Actor;
 		const int32 West = Target->PlaceNode(FVector2D(-10000.0, 0.0));
 		const int32 East = Target->PlaceNode(FVector2D(10000.0, 0.0));
@@ -1319,7 +1318,6 @@ bool FStandFrontageStoredEdgeTest::RunTest(const FString& Parameters)
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 	IRoadEditTarget* Target = Actor;
 
 	// FOUR WAYS TO DRAW EACH LETTER, chosen so the edge the facade STORES is not always the same index (a pin whose fixtures all store edge 0 cannot tell a
@@ -1471,7 +1469,6 @@ bool FStandFrontageReadersTest::RunTest(const FString& Parameters)
 		ARoadNetworkActor* Actor = TestWorld.Actor;
 		if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 		Actor->ClearNetwork();
-		Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 		IRoadEditTarget* Target = Actor;
 		const double Width = IcaoCode::StandWidthForLetter(EIcaoCode::C);
 		const double Depth = IcaoCode::StandDepthForLetter(EIcaoCode::C);
@@ -1596,7 +1593,6 @@ bool FStandFrontageRefusesNonEdgeTest::RunTest(const FString& Parameters)
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 	IRoadEditTarget* Target = Actor;
 
 	const double Width = IcaoCode::StandWidthForLetter(EIcaoCode::C);

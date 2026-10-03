@@ -376,7 +376,6 @@ bool FStandPlotRefusalMemoIsSharedAcrossCallersTest::RunTest(const FString& Para
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 	LayRoad(Actor, 0.0, ERoadKind::Taxiway);
 
 	FStandPlotTool Tool;
@@ -457,7 +456,6 @@ bool FStandPlotEntranceStageAsksNoRefusalTest::RunTest(const FString& Parameters
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 	LayRoad(Actor, 0.0, ERoadKind::Taxiway);
 
 	FStandPlotTool Tool;

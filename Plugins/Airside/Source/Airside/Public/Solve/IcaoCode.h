@@ -73,6 +73,16 @@ namespace IcaoCode
 	AIRSIDE_API const TCHAR* ToLetter(EIcaoCode Code);
 
 	/**
+	 * What a player is shown for a stand of Code - "Code C stand". THE ONE PLACE a stand's letter is
+	 * NAMED for the player (2026-10-03): every stand template is an unnamed runtime object since
+	 * DA_Stand_CodeC was retired, and an unnamed definition's label fell back to its object name,
+	 * "EntityDefinition_N" (EntityNaming::Describe). UEntityDefinition::BuildStandFor writes it to
+	 * DisplayName.
+	 * ENFORCED BY: Airside.Present.StandLabelIsPlayerFacing
+	 */
+	AIRSIDE_API FString StandNameForLetter(EIcaoCode Code);
+
+	/**
 	 * The code for a wingspan, uu: under 15 m is A, under 24 m B, under 36 m C, under
 	 * 52 m D, under 65 m E, anything wider F.
 	 *

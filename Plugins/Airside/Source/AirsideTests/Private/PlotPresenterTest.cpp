@@ -961,7 +961,6 @@ bool FStandOutlineIsNotADepotTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("a plot presenter"), TestWorld.Buildings->GetPlotPresenter())) { return false; }
 
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 
 	// PLACED THROUGH THE REAL TOOL PATH, not a hand-built FEntityPlacement like PlaceDepot
 	// above: PoseRole has to come from IRoadEditTarget::PlaceEntity resolving

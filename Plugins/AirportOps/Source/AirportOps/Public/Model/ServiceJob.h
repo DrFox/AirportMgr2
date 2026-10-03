@@ -114,9 +114,10 @@ enum class EServiceRefusal : uint8
 
 	/**
 	 * A depot is on a road with a pump, but every vehicle it has is LARGER than the stand was built
-	 * for (VehicleFit::NoLargerThan against the vehicle its definition's lanes were proven for,
-	 * UEntityDefinition::DesignVehicle - spec 2026-09-26 section 2). A stand's lane legs are only
-	 * proven drivable by that vehicle and anything no larger, so sending a bigger one would strand it
+	 * for (outside FVehicleEnvelope::Of the vehicles its definition's lanes were proven for,
+	 * UEntityDefinition::AdmittedVehicles - spec 2026-09-26 section 2; a set, not the design vehicle
+	 * alone, since 2026-10-03). A stand's lane legs are only proven drivable by those vehicles and
+	 * anything inside their envelope, so sending a bigger one would strand it
 	 * on a leg it cannot take. ITS OWN REFUSAL AND NOT TooNarrow: nothing about the ROAD is wrong,
 	 * and a player widening one would fix nothing.
 	 * ENFORCED BY: AirportOps.Fuel.VehicleTooLargeRefused

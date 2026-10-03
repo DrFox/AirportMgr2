@@ -173,7 +173,6 @@ bool FEveryPlacementToolHonoursTheStripTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	Actor->ClearNetwork();
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 	IRoadEditTarget* Target = Actor;
 	Target->ConnectNodes(Target->PlaceNode(FVector2D(-30000.0, 0.0)), Target->PlaceNode(FVector2D(30000.0, 0.0)),
 		ERoadKind::Taxiway, INDEX_NONE);

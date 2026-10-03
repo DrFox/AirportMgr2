@@ -723,7 +723,7 @@ bool FFacilityNoStandAdmitsTest::RunTest(const FString&)
 	// AND A PLACED STAND'S OWN DESIGN VEHICLE COUNTS, not only the letters' (a definition may author a bigger one): a stand built
 	// for a vehicle that large admits the giant, so it is for sale - the refusal is "no stand admits it", and one does.
 	const FVehicle GiantVehicle = F.Board->GetCatalogue().FindChecked(Giant).Vehicle;
-	F.Board->DesignVehicleOf = [GiantVehicle](const FEntityInstance&) { return GiantVehicle; };
+	F.Board->StandVehiclesOf = [GiantVehicle](const FEntityInstance&) { return TArray<FVehicle>{ GiantVehicle }; };
 	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
 	const FEntityInstanceId Stand = F.Net->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(-8000.0, 0.0), 0.0, 3600.0,
 		StandDef->PoseRole, StandDef->Trucks);

@@ -30,6 +30,7 @@
 #include "Tool/PavementAxis.h"
 #include "Tool/PlotGesture.h"
 #include "Tool/RoadEditTarget.h"
+#include "Tool/SnapGuideChain.h"
 #include "Tool/StandPlotTool.h"
 #include "Tool/ToolReadout.h"
 
@@ -142,7 +143,6 @@ namespace StandPlotToolFixture
 	void TaxiwayWorld(ARoadNetworkActor* Actor)
 	{
 		Actor->ClearNetwork();
-		Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 		LayRoad(Actor, 0.0, ERoadKind::Taxiway);
 	}
 
@@ -861,7 +861,6 @@ namespace StandPlotToolFixture
 	void DiagonalWorld(ARoadNetworkActor* Actor, const FVector2D& A, const FVector2D& B)
 	{
 		Actor->ClearNetwork();
-		Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 		IRoadEditTarget* Target = Actor;
 		const int32 NodeA = Target->PlaceNode(A);
 		const int32 NodeB = Target->PlaceNode(B);
@@ -975,10 +974,8 @@ bool FStandPlotDesignAircraftIsNotTheStandTest::RunTest(const FString& Parameter
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
 
-	// THROUGH THE RESOLVER, not the raw property. StandDefinition stays null unless somebody
-	// authored one: the actor used to have the content default written INTO it, which is what
-	// silently gave every level a material set and a stand it never asked for. Asking the
-	// resolver is now the only way to know what the actor will actually place.
+	// THROUGH THE RESOLVER, the only way to know what the actor will actually place - Code C's
+	// runtime template since 2026-10-03, when the actor's StandDefinition property was retired.
 	UEntityDefinition* Stand = Actor->ResolveStandDefinition();
 	if (!TestNotNull(TEXT("the actor resolves a stand definition"), Stand)) { return false; }
 	TestTrue(TEXT("and its anchors are all named and distinct"),
@@ -1310,12 +1307,6 @@ bool FStandPlotDrawnStandTakesAnArrivalTest::RunTest(const FString& Parameters)
 	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 	if (!TestNotNull(TEXT("the actor has a network"), Actor->Network.Get())) { return false; }
 
-	// A CODE C DEFINITION WITH NO CONTENT ASSET: ResolveStandDefinitionFor(C) forwards to
-	// ResolveStandDefinition() unchanged (ARoadNetworkActor's own comment on why), which reads
-	// this property - the same fixture every other test in this file uses, so drawing a Code C
-	// stand needs no DA_Stand_CodeC to be loaded in a bare automation run.
-	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
-
 	// THE AIRPORT: a runway sized to the 737, one exit, a taxiway south of it - NOT derived yet
 	// (bDerived=false, matching ArrivalDispatchTest's own "world variant") and NO STAND
 	// (StandCount=0): the stand under test is drawn through the tool below, not FTestAirport's
@@ -1459,7 +1450,12 @@ bool FGhostCommitAndPointPlacedAgreeTest::RunTest(const FString& Parameters)
 		TEXT("DA_Aircraft_EnvelopeProbe"), RF_Public | RF_Standalone);
 	Probe->Code = FName(TEXT("C"));
 	Probe->SteerAxleX = 0.0;
-	Probe->Footprint.NoseX = FloorC.MaxNoseFwd + 3000.0;   // 30 m past what the floor admits
+	// 10 m PAST WHAT THE FLOOR ADMITS - 30 m until 2026-10-03. At 30 m the nose reaches past a C
+	// stand's far edge (front x 2512 against a floor nose of 509), so Code C's template, built at runtime
+	// since DA_Stand_CodeC was retired, no longer fits its own floor and is refused by FitsItsLetter, as
+	// any letter's is - the saved asset, laid with the FLOOR envelope when it was authored, had masked
+	// that. 10 m still raises the envelope past the floor, which is all this test needs.
+	Probe->Footprint.NoseX = FloorC.MaxNoseFwd + 1000.0;
 	Probe->Footprint.TailX = -FloorC.MaxTailAft;            // unchanged - only NoseFwd moves
 
 	ON_SCOPE_EXIT
@@ -1482,7 +1478,7 @@ bool FGhostCommitAndPointPlacedAgreeTest::RunTest(const FString& Parameters)
 
 	const FLetterEnvelope Raised = UAirsideSettings::ResolveLetterEnvelope(EIcaoCode::C);
 	if (!TestTrue(TEXT("the probe actually raised Code C's MaxNoseFwd"),
-		Raised.MaxNoseFwd > FloorC.MaxNoseFwd + 2999.0))
+		Raised.MaxNoseFwd > FloorC.MaxNoseFwd + 999.0))
 	{
 		return false;
 	}
@@ -1971,6 +1967,74 @@ bool FStandPlotStartsAtTheKerbTest::RunTest(const FString& Parameters)
 	if (!TestEqual(TEXT("a whole box was drawn"), Whole.Num(), 4)) { return false; }
 	TestFalse(TEXT("the drawn box intrudes on no strip"),
 		TaxiwayStrip::WorstIntrusion(*Actor->Network, Whole).IsSet());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandLabelIsPlayerFacingTest,
+	"Airside.Present.StandLabelIsPlayerFacing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandLabelIsPlayerFacingTest::RunTest(const FString& Parameters)
+{
+	// EVERY STAND TEMPLATE IS AN UNNAMED RUNTIME OBJECT since DA_Stand_CodeC was retired (2026-10-03), and
+	// EntityNaming::Describe falls back to the definition's OBJECT name when DisplayName is unset - so every
+	// snap-guide label on a stand read "EntityDefinition_N" (review, 2026-10-03). Placed the way the game
+	// places one, through the actor, and asked through the label's own function.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World) || !TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	Actor->ClearNetwork();
+	IRoadEditTarget* Target = Actor;
+	const int32 Placed = Target->PlaceEntity(FVector2D(30000.0, 30000.0), 0.0, EPlaceableEntity::Stand);
+	if (!TestTrue(TEXT("a Code C stand places"), Placed != INDEX_NONE)) { return false; }
+	const FString Label = EntityNaming::Describe(Actor->Network->GetEntities()[Placed]);
+	TestFalse(*FString::Printf(TEXT("its label '%s' is not an object name"), *Label), Label.StartsWith(TEXT("EntityDefinition")));
+	TestEqual(TEXT("it is the letter's player-facing name"), Label, IcaoCode::StandNameForLetter(EIcaoCode::C));
+	TestEqual(TEXT("which reads as a person would say it"), Label, FString(TEXT("Code C stand")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandRefusalNamesTheTemplateTest,
+	"Airside.Present.StandPlacementRefusalNamesTheTemplate",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandRefusalNamesTheTemplateTest::RunTest(const FString& Parameters)
+{
+	// A POINT-PLACED STAND REFUSED, AND WHY (review, 2026-10-03). A stand is no longer content - Code C is
+	// built at runtime - so the only way its definition is null is a template that does not fit its own
+	// letter's floor, and URoadEditFacade::PlaceEntity's refusal must say THAT, not "author DA_Stand_CodeC".
+	// Forced as GhostCommitAndPointPlacedAgree's probe forces it: a synthetic Code C type whose nose reaches
+	// 30 m past the floor raises the letter envelope until C's template outgrows its box.
+	IAssetRegistry& Registry = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+	const FLetterEnvelope FloorC = IcaoCode::FloorEnvelopeForLetter(EIcaoCode::C);
+	UPackage* ProbePackage = CreatePackage(TEXT("/Temp/AirsideStandRefusalTest/DA_Aircraft_RefusalProbe"));
+	UAircraftType* Probe = NewObject<UAircraftType>(ProbePackage, TEXT("DA_Aircraft_RefusalProbe"), RF_Public | RF_Standalone);
+	Probe->Code = FName(TEXT("C"));
+	Probe->SteerAxleX = 0.0;
+	Probe->Footprint.NoseX = FloorC.MaxNoseFwd + 3000.0;
+	Probe->Footprint.TailX = -FloorC.MaxTailAft;
+	ON_SCOPE_EXIT
+	{
+		if (Probe->IsAsset()) { Registry.AssetDeleted(Probe); }
+		Probe->ClearFlags(RF_Public | RF_Standalone);
+		Probe->MarkAsGarbage();
+		UAirsideSettings::ResetLetterEnvelopeCacheForTest();
+	};
+	if (!TestTrue(TEXT("the probe registers as a real asset, or this test proves nothing"), Probe->IsAsset())) { return false; }
+	Registry.AssetCreated(Probe);
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World) || !TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	TestWorld.Actor->ClearNetwork();
+	AddExpectedMessagePlain(TEXT("Code C's own template does not fit its letter's floor"), ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains, 1);
+	AddExpectedMessagePlain(TEXT("PlaceEntity refused: no Code C stand template (it does not fit its letter's floor"),
+		ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 1);
+	IRoadEditTarget* Target = TestWorld.Actor;
+	TestEqual(TEXT("the point-placed stand is refused"),
+		Target->PlaceEntity(FVector2D(30000.0, 30000.0), 0.0, EPlaceableEntity::Stand), static_cast<int32>(INDEX_NONE));
 	return true;
 }
 

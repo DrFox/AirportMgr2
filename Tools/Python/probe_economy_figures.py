@@ -38,7 +38,13 @@ def main():
                 prop, profile.get_name(), profile.get_editor_property("cost_per_metre"),
                 profile.get_editor_property("upkeep_per_metre_per_day")))
 
-    for path in ("/Game/Entities/DA_Stand_CodeC", "/Game/Entities/DA_FuelDepot"):
+    # THE STAND ROWS, not an asset since 2026-10-03 (the content set's StandLetters, A..F).
+    for index, row in enumerate(content.get_editor_property("stand_letters")):
+        say("stand letter %s placement_cost %.0f upkeep %.0f aircraft %s" % (
+            "ABCDEF"[index], row.get_editor_property("placement_cost"), row.get_editor_property("upkeep_per_day"),
+            row.get_editor_property("design_aircraft")))
+
+    for path in ("/Game/Entities/DA_FuelDepot",):
         entity = unreal.EditorAssetLibrary.load_asset(path)
         say("%s placement_cost %.0f upkeep %.0f" % (
             path, entity.get_editor_property("placement_cost"), entity.get_editor_property("upkeep_per_day")))

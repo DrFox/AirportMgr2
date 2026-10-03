@@ -12,40 +12,24 @@
 
 UEntityDefinition* UEntityDefinition::MakeStandTransient()
 {
-	// BUILT FIRST, because the layout is measured FROM it: this used to be set after
-	// BuildCodeCStand had already run, which was harmless only for as long as nothing in the
-	// layout depended on it.
-	//
-	// AND BECAUSE THE FIXTURE HAS TO BE THE SHIPPING STAND. A definition with no design
-	// aircraft is SUPPORTED - it gets a lane whose crossings are placed off the anchors alone
-	// rather than pushed clear of a nose and a tail that are not there, which is what a stand
-	// with no envelope wants, and BuildCodeCStandFor's header says so. It is simply a
-	// different stand from the one the suite is about: without an envelope the tail clamp
-	// that puts the aft crossing at x = -3550 never binds and the fuselage the lane is
-	// asserted to clear does not exist, so every figure measured here would be another
-	// layout's.
-	UAircraftType* A320 = NewObject<UAircraftType>(GetTransientPackage());
-	UAircraftType::BuildA320(A320);
-
-	UEntityDefinition* Definition = NewObject<UEntityDefinition>(GetTransientPackage());
-	BuildCodeCStand(Definition, A320);
-
-	return Definition;
+	// THE SHIPPING CODE C STAND, EXACTLY: the letter overload, which is what UStandDefinitionCache places
+	// (2026-10-03). It built its own paper A320 here (UAircraftType::BuildA320) - a SECOND source for C's
+	// aircraft beside the content set's StandLetters row, the pairing the retired DA_Stand_CodeC carried -
+	// so the suite's fixture and the game's stand could have been drawn with different aircraft. One
+	// resolver now. A run with no content set gets a null aircraft, which BuildStandFor supports and which
+	// changes no leg, pose or extent (RuntimeCodeCStandEqualsTheRetiredAsset holds the layout bitwise).
+	// ENFORCED BY: Airside.Content.CodeCStandDrawsTheRetiredAssetsAircraft (the fixture's aircraft is the content row's)
+	return MakeStandTransient(EIcaoCode::C);
 }
 
 UEntityDefinition* UEntityDefinition::MakeStandTransient(EIcaoCode Letter, UObject* Outer)
 {
-	// THE SAME A320 THE ZERO-ARG OVERLOAD USES, and only for Code C - see the header. No
-	// shipped UAircraftType is sized for D, E or F yet (that is Task 5's job in the
-	// drawn-stands plan); a null design aircraft is supported by BuildStandFor and does not
-	// change RequiredExtent, which is all a caller measuring "does the letter's floor fit"
-	// needs.
-	UAircraftType* Aircraft = nullptr;
-	if (Letter == EIcaoCode::C)
-	{
-		Aircraft = NewObject<UAircraftType>(Outer);
-		UAircraftType::BuildA320(Aircraft);
-	}
+	// THE LETTER'S AUTHORED DESIGN AIRCRAFT, through the one resolver (the content set's StandLetters):
+	// C's A320 - the pairing DA_Stand_CodeC carried until it was retired, 2026-10-03 - and null for
+	// every other letter. It was an `if (Letter == EIcaoCode::C)` that built a paper A320 here, a
+	// per-letter branch beside the table; Check-Architecture rule 106 now refuses one. A null design
+	// aircraft is supported by BuildStandFor and does not change RequiredExtent or any leg.
+	UAircraftType* Aircraft = UAirsideSettings::ResolveLargestAircraftOfLetter(Letter);
 
 	UEntityDefinition* Definition = NewObject<UEntityDefinition>(Outer);
 	//
@@ -57,6 +41,13 @@ UEntityDefinition* UEntityDefinition::MakeStandTransient(EIcaoCode Letter, UObje
 		UAirsideSettings::ResolveLetterEnvelope(Letter));
 
 	return Definition;
+}
+
+FVehicleEnvelope UEntityDefinition::AdmittedEnvelope() const
+{
+	// EMPTY WITHOUT A SET, never the letter's: this answers for the lanes as laid, and a definition
+	// BuildStandTemplate never ran on has none - FAnchorLink then keeps its caller's largest vehicle.
+	return FVehicleEnvelope::Of(AdmittedVehicles);
 }
 
 bool UEntityDefinition::FitsItsLetter(const UEntityDefinition& Stand, EIcaoCode Letter)
@@ -244,7 +235,7 @@ void UEntityDefinition::BuildCodeCStandFor(
 {
 	// A ONE-LINE FORWARDER - see the header. The body used to live here with Letter pinned to
 	// C as a local const; it is now BuildStandFor's body with Letter a parameter, so this name
-	// keeps compiling for build_stand_asset.py and the tests that measure Code C's derivation.
+	// keeps compiling for the tests that measure Code C's derivation.
 	BuildStandFor(Definition, Aircraft, EIcaoCode::C, Design, Envelope);
 }
 
@@ -264,6 +255,11 @@ void UEntityDefinition::BuildStandFor(
 	// stand's own inspect panel both read it, and a definition that names no design aircraft is
 	// a stand nothing can be shown parked on.
 	Definition->DesignAircraft = Aircraft;
+
+	// ITS NAME FOR THE PLAYER, by letter (IcaoCode::StandNameForLetter, 2026-10-03). The retired
+	// DA_Stand_CodeC never set one and was labelled by its asset name; a runtime template's object name is
+	// "EntityDefinition_N", which is what every snap-guide and inspector label would otherwise say.
+	Definition->DisplayName = FText::FromString(IcaoCode::StandNameForLetter(Letter));
 
 	// A contact stand: the ground half of a turnaround. This function now takes Letter as a
 	// parameter rather than pinning it to C: the wing-relative fixtures below (hydrant, hold,
@@ -362,10 +358,10 @@ void UEntityDefinition::BuildStandFor(
 		EServiceRole::Tug, EServiceRole::GPU, EServiceRole::Passenger, EServiceRole::Crew };
 
 	// EVERY FIELD THIS BUILDER OWNS, SET, including the three that happen to want the
-	// constructor default. Not decoration: build_stand_asset.py re-authors an EXISTING asset
-	// in place (it must - deleting one that a level and another asset reference fails), so a
-	// field the builder leaves alone keeps whatever was last saved into it. Stating them is
-	// what makes "re-run the script" mean the same thing as "make it from scratch".
+	// constructor default. Written when build_stand_asset.py re-authored DA_Stand_CodeC IN PLACE, so a
+	// field the builder left alone kept whatever was last saved into it; the asset is retired
+	// (2026-10-03) and every template is a fresh NewObject now, but a builder that states every field
+	// it owns stays correct for any caller that hands it a used definition.
 	Definition->PoseRole = EServiceRole::Aircraft;   // the nose gear stop mark
 	Definition->FootprintExtent = FVector2D::ZeroVector;   // the stand's extent IS its aircraft's
 	Definition->Trucks = 0;                          // nothing is based here; a depot has the fleet
@@ -387,8 +383,20 @@ void UEntityDefinition::BuildStandTemplate(
 	const double Depth = IcaoCode::StandDepthForLetter(Letter);
 	const double NoseFwd = Envelope.MaxNoseFwd;
 
-	// WHAT EVERY LANE BELOW IS LAID FOR, kept with them - see DesignVehicle.
+	// WHAT EVERY LANE BELOW IS LAID FOR, kept with them - see DesignVehicle and AdmittedVehicles.
+	//
+	// EVERY VEHICLE THE STAND ADMITS, not Design alone, since 2026-10-03 (user ruling: "A stand should
+	// not refuse the lower vehicles; they are just less efficient"): Design first, then every smaller
+	// letter's design vehicle, and each figure below is the MAXIMUM over that set (FVehicleEnvelope) -
+	// the truck's radii and the tow's settle straight on one Code C lane. Design still only RAISES the
+	// set: a test or an asset naming a bigger vehicle widens the corners, and the smaller letters'
+	// vehicles stay admitted whatever it names. The bid admits through FVehicleEnvelope::Of the same
+	// stored set, so what is laid and what is sent cannot disagree.
+	// ENFORCED BY: Airside.Entities.EveryAdmittedTowSettlesOnItsLanes,
+	// Airside.Content.StandDesignVehicle.EveryLetterAdmitsEverySmallerLetter
 	Definition.DesignVehicle = Design;
+	Definition.AdmittedVehicles = VehicleEnvelope::WithDesignFirst(Design, UAirsideSettings::ResolveStandVehicles(Letter));
+	const FVehicleEnvelope Laid = FVehicleEnvelope::Of(Definition.AdmittedVehicles);
 
 	// THE STAND BOX, in the definition's own local space. The back edge is the ENTRANCE, on the
 	// taxiway, EntranceSetback behind the stop mark - the ONE figure StandBox::PoseFor places the
@@ -404,13 +412,14 @@ void UEntityDefinition::BuildStandTemplate(
 	const double BackX = -StandBox::EntranceSetback(Letter, Envelope);
 	const double FrontX = BackX + Depth;
 
-	// The two limits, resolved once, off the LETTER'S DESIGN VEHICLE (ResolveStandDesignVehicle,
-	// user 2026-09-26) - the largest vehicle the letter admits, not the largest there is.
+	// The two limits, resolved once, off the LETTER'S ADMITTED SET (the design vehicle until
+	// 2026-10-03, user 2026-09-26) - the vehicles the letter admits, not the largest there is.
 	// Forward is L/sin(lock) and reverse L/tan(lock) - about 30% tighter, because a reversing
 	// vehicle pivots about its FIXED axle; a tow's reverse is VehicleFit::TightestReverseRadius's
-	// larger figure, where its trailer's steady hitch angle stays clear of the fold.
-	const double Radius = Design.Chassis.TightestFollowableRadius();
-	const double ReverseRadius = VehicleFit::TightestReverseRadius(Design);
+	// larger figure, where its trailer's steady hitch angle stays clear of the fold. Each is the
+	// widest over the set - the truck's on C-F (502, 355 on 2026-10-03), whose tow turns tighter.
+	const double Radius = Laid.ForwardRadius;
+	const double ReverseRadius = Laid.ReverseRadius;
 
 	// THE LANE DOWN EACH SIDE, outboard of the wingtip because nothing may pass under a wing.
 	// Its own width is what the stand's minimum width was derived from, so this sits exactly
@@ -504,9 +513,12 @@ void UEntityDefinition::BuildStandTemplate(
 	// the outermost thing on the stand. So a tow's lane sits at whichever is further out, the
 	// boundary's or the settle's, and a stand that needs the second is WIDER than its floor -
 	// RequiredExtent measures it below, FitsItsLetter judges it, and the floors stay the user's.
-	// Zero for a rigid design vehicle, so the truck's C-F layouts are exactly what they were.
-	const double TowSettle =
-		Design.Tow.IsEmpty() ? 0.0 : TowSettleChains * VehicleFit::ChainLength(Design);
+	// Zero when nothing admitted tows. FOR THE LONGEST TOWING CHAIN THE STAND ADMITS since 2026-10-03
+	// (FVehicleEnvelope::TrailerChain) - it was the design vehicle's, zero for the truck, so a C-F
+	// stand had no straight for the tow and refused it. Measured that day, no C-F box grew: C's lane
+	// wants 700 + 1150 + 781 = 2631 against the 2750 its boundary already gives (D-F have more), and
+	// the reverse settle fits inside every C-F box ahead of the entrance edge.
+	const double TowSettle = TowSettleChains * Laid.TrailerChain;
 	double SettleLaneY = 0.0;
 	for (const FEntityAnchor* Anchor : Serviced)
 	{
@@ -608,7 +620,10 @@ void UEntityDefinition::BuildStandTemplate(
 		// ContactSpan between them and the band outboard of the wingtip is not that wide, so they
 		// share one. The lane is two-way in consequence - which it already was, since every depart
 		// leg on a side ran back down the lane its serve legs had come up - and making two vehicles
-		// take turns over it is ClaimServiceBay's job rather than the geometry's.
+		// take turns over it is a TRAFFIC rule's job rather than the geometry's. NO SUCH RULE EXISTS
+		// (checked 2026-10-03: this named a ClaimServiceBay that was never written), so two vehicles
+		// meeting head-on on one side's lane can deadlock; the multi-trip deadlock measured that day was
+		// on a fixture's single-guideline access road, not here - see AirportOps.Fuel.BigLoadTakesTrips.
 		//
 		// STRAIGHT IN AND STRAIGHT OUT, because the heading is exactly what the road corner is
 		// measured against. Square to the front edge is square to a road drawn ahead of the nose,
@@ -677,7 +692,9 @@ void UEntityDefinition::BuildStandTemplate(
 		// reverse on the lane's line, inside 3 degrees, and a trailer backed round a corner
 		// comes out of it bent the same way one driven round it does. Measured 2026-09-26 on
 		// the utility tow: with the corner's own run and no straight after it the solve ended
-		// 11.3 degrees off. Zero for a rigid vehicle, whose FReverseRun ends on the curve.
+		// 11.3 degrees off - and 6.9 off on a Code C bay's truck-radius corner (2026-10-03,
+		// before C-F were laid for the tow). Zero when nothing admitted tows, whose FReverseRun
+		// ends on the curve.
 		//
 		// CAPPED AT THE ENTRANCE EDGE, per bay (controller ruling 2026-09-26): the ground aft of
 		// BackX is the taxiway's, and Code A's hydrant, 100 uu from a -1300 edge, would have
@@ -752,12 +769,18 @@ void UEntityDefinition::BuildStandTemplate(
 
 	// READ THESE RATHER THAN TRUST THEM. The poses are written from the geometry and the
 	// figures they imply are what say whether that geometry was right.
+	// AND WHAT IT ADMITS, by name: the set every figure here is the maximum over (2026-10-03).
+	FString AdmitsNames;
+	for (const FVehicle& Admitted : Definition.AdmittedVehicles)
+	{
+		AdmitsNames += (AdmitsNames.IsEmpty() ? TEXT("") : TEXT("+")) + Admitted.TypeCode.ToString();
+	}
 	UE_LOG(LogAirside, Log,
-		TEXT("Stand template '%s': design vehicle %s, box %.0f x %.0f (x %.0f..%.0f), radius fwd %.1f rev %.1f, "
+		TEXT("Stand template '%s': design vehicle %s (admits %s), box %.0f x %.0f (x %.0f..%.0f), radius fwd %.1f rev %.1f, "
 		     "corner square %.0f diagonal %.0f back %.0f, lane y %.0f (tow settle %.0f), branch pitch %.0f, "
 		     "contact y %.0f (band %.0f..%.0f), park run %.0f (band %.0f..%.0f), %d bay(s), "
 		     "needs %.0f x %.0f"),
-		IcaoCode::ToLetter(Letter), *Design.TypeCode.ToString(), Width, Depth, BackX, FrontX,
+		IcaoCode::ToLetter(Letter), *Design.TypeCode.ToString(), *AdmitsNames, Width, Depth, BackX, FrontX,
 		Radius, ReverseRadius,
 		Square, Diagonal, SquareBack, LaneY, TowSettle, BranchPitch,
 		ContactMag, ContactFloor, ContactCeiling,
