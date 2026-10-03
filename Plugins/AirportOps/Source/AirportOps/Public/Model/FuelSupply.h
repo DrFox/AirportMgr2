@@ -69,6 +69,12 @@ public:
 	double Available() const { return FMath::Max(StockLitres, 0.0); }
 	/** Room for a delivery; zero, never negative, while the stock is above a capacity that shrank. */
 	double FreeSpace() const { return FMath::Max(Capacity() - StockLitres, 0.0); }
+	/**
+	 * What the FuelLow alert asks: tanks seated, nothing contracted, and stock plus spot orders on the way under a quarter of
+	 * capacity. A question the supply answers rather than OpsAlerts re-deriving from four of its members (and Check-Architecture's
+	 * 'vehicle row capacity' rule, which reads any `->Capacity` outside two files as a vehicle row's, would otherwise fire).
+	 */
+	bool IsLow() const;
 	/** Below the half-litre a fuel job is judged done within - FFuelRolePolicy::FuelledWithinLitres, the ONE tolerance. */
 	bool IsDry() const;
 

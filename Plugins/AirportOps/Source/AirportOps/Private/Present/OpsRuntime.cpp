@@ -245,17 +245,25 @@ FPurchaseResult UOpsRuntime::SellVehicle(int32 VehicleId)
 // and a refusal is returned for the caller to word.
 EFuelOrderRefusal UOpsRuntime::OrderSpotFuel(double Litres)
 {
-	return FuelSupply->OrderSpot(Litres, Clock->Now());
+	const EFuelOrderRefusal Why = FuelSupply->OrderSpot(Litres, Clock->Now());
+	// THE ORDER ON ITS WAY COUNTS AS STOCK to FuelLow; the money post wakes the pass too, but a free fuel price would not.
+	if (Why == EFuelOrderRefusal::None) { Bus.MarkDirty(TEXT("Alerts")); }
+	return Why;
 }
 
 EFuelOrderRefusal UOpsRuntime::SignFuelContract(int32 Tier)
 {
-	return FuelSupply->SignContract(Tier, Clock->Now());
+	const EFuelOrderRefusal Why = FuelSupply->SignContract(Tier, Clock->Now());
+	// A SIGNING POSTS NOTHING and publishes nothing (the charge comes at day end), yet it is what silences FuelLow.
+	if (Why == EFuelOrderRefusal::None) { Bus.MarkDirty(TEXT("Alerts")); }
+	return Why;
 }
 
 EFuelOrderRefusal UOpsRuntime::CancelFuelContract()
 {
-	return FuelSupply->CancelContract(Clock->Now());
+	const EFuelOrderRefusal Why = FuelSupply->CancelContract(Clock->Now());
+	if (Why == EFuelOrderRefusal::None) { Bus.MarkDirty(TEXT("Alerts")); }   // a cancel may post nothing (CancelFraction 0)
+	return Why;
 }
 
 int32 UOpsRuntime::ReservedSlotsOf(FEntityInstanceId Id, const FEntityInstance& Depot, EDepotModule Module)
@@ -691,6 +699,15 @@ void UOpsRuntime::WireBus()
 	// AN AIRLINE'S VERDICT MOVED (#446): the one condition the offer-minute catch-all was for. Published by the generator's own judgement.
 	// ENFORCED BY: AirportOps.Model.Offers.AdmissionChangeIsAnnounced, AirportOps.Present.Alerts.QuietMinutesRunNoAlertsPass
 	Bus.Subscribe<FAirlineAdmissionChangedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FAirlineAdmissionChangedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
+	// FUEL LOW (spec 2026-10-02 §7) reads stock, orders on the way, contract and tank capacity. WHAT WAKES IT, one line each: a
+	// FALLING STOCK is the job board's own pass, which marks Alerts after every Step and so after every BeginFacility refill draw
+	// (no event of its own - a Draw publishes nothing); a delivery is the event below; a contract signed or cancelled is the
+	// forwarders (OrderSpotFuel, SignFuelContract, CancelFuelContract); a tank bought or lost is FFacilityUpgradedEvent, FModulesRefundedEvent and the network
+	// change above. Every one is a Reaction-tier mark on a coalesced pass, so a refill-heavy minute costs one recompute.
+	// ENFORCED BY: AirportOps.Present.Fuel.FuelLowIsWokenByFuelEvents
+	Bus.Subscribe<FFuelDeliveredEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FFuelDeliveredEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
+	Bus.Subscribe<FFacilityUpgradedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FFacilityUpgradedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
+	Bus.Subscribe<FModulesRefundedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FModulesRefundedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 
 	// PRESENTATION: the new UOpsEvents faces.
 	Bus.Subscribe<FAlertRaisedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
@@ -774,6 +791,7 @@ void UOpsRuntime::RecomputeAlerts()
 	Sources.Offers = OfferGenerator;
 	Sources.Ledger = Ledger;
 	Sources.Airport = Airport;
+	Sources.FuelSupply = FuelSupply;
 	Sources.Airlines = AirlineOffers;
 	Alerts->Recompute(Sources, Clock->Now());
 	// THE NEXT LOOK AT A STALL, booked from what is on the ground NOW - after every run, whatever woke it.

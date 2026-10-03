@@ -11,6 +11,7 @@
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
 #include "Model/OpsDefinition.h"
+#include "Model/OpsAlerts.h"
 #include "Model/OpsEvents.h"
 #include "Model/VehicleCodes.h"
 #include "Model/RoadEntity.h"
@@ -989,6 +990,55 @@ bool FFuelDeliveryReopensWiredTest::RunTest(const FString&)
 	TestTrue(TEXT("CONTROL: no sooner than the order was due"), Runtime->GetClock()->Now() >= Due);
 	TestEqual(TEXT("CONTROL: the order arrived"), Supply->SpotOrders.Num(), 0);
 	TestFalse(TEXT("the refused job was re-opened by the delivery"), Refused());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelLowWokenTest, "AirportOps.Present.Fuel.FuelLowIsWokenByFuelEvents",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelLowWokenTest::RunTest(const FString&)
+{
+	// THE SEAM AT THE COMPOSITION: FuelLow is derived from the supply, and the alerts pass runs only when something marks it.
+	// The model test hands Recompute a supply by hand, so it passes with every runtime link cut. Measured as the pass running
+	// (RecomputeCountForTest) and as the alert standing, because a recompute that is woken but not given the supply raises
+	// nothing, and a supply that is given but never woken is read once and goes stale.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = nullptr;
+	if (!TestTrue(TEXT("setup: the starter depot is placed"), FacilityWiredDepot(TestWorld, Runtime).IsSet())) { return false; }
+	UFuelSupply* Supply = FacilityWiredBoardSupply(*Runtime);
+	if (!TestNotNull(TEXT("setup: the board holds the supply"), Supply)) { return false; }
+	UOpsAlerts* Alerts = Runtime->GetAlerts();
+	auto Standing = [Alerts]() { return Alerts->GetAlerts().ContainsByPredicate([](const FOpsAlert& A) { return A.Key.Kind == EAlertKind::FuelLow; }); };
+	for (int32 Settle = 0; Settle < 3; ++Settle) { Runtime->Tick(0.0); }
+	TestFalse(TEXT("CONTROL: a full tank raises nothing"), Standing());
+
+	// A SIGNING publishes nothing and posts nothing, so only its forwarder can wake the pass. Cancelling it wakes by its own forwarder
+	// (the refund of a cancel is a post, but a free one is not).
+	Supply->StockLitres = 0.1 * Supply->Capacity();   // no wake yet: a Draw publishes nothing
+	TestFalse(TEXT("CONTROL: nothing woke the pass, so the alert is not up yet"), Standing());
+	int32 Count = Alerts->RecomputeCountForTest();
+	if (!TestEqual(TEXT("a contract is signed through the forwarder"), Runtime->SignFuelContract(0), EFuelOrderRefusal::None)) { return false; }
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("signing ran the alerts pass"), Alerts->RecomputeCountForTest(), Count + 1);
+	TestFalse(TEXT("and a contracted airport is not low"), Standing());
+	Supply->Figures.CancelFraction = 0.0;
+	Count = Alerts->RecomputeCountForTest();
+	TestEqual(TEXT("cancelled through the forwarder"), Runtime->CancelFuelContract(), EFuelOrderRefusal::None);
+	Runtime->Tick(0.0);
+	TestTrue(TEXT("cancelling ran the alerts pass"), Alerts->RecomputeCountForTest() > Count);
+	TestTrue(TEXT("and the low stock, uncontracted, is an alert"), Standing());
+
+	// A SPOT ORDER AND ITS DELIVERY: the order counts as stock, the delivery is the event the pass is subscribed to.
+	Supply->Figures.SpotDelaySeconds = 60.0;
+	if (!TestEqual(TEXT("fuel is ordered through the forwarder"), Runtime->OrderSpotFuel(0.3 * Supply->Capacity()), EFuelOrderRefusal::None)) { return false; }
+	Runtime->Tick(0.0);
+	TestFalse(TEXT("an order on its way clears it"), Standing());
+	Count = Alerts->RecomputeCountForTest();
+	const double Due = Supply->SpotOrders[0].DueAt;
+	for (int32 Tick = 0; Tick < 2000 && Supply->SpotOrders.Num() > 0; ++Tick) { Runtime->Tick(10.0); }
+	TestTrue(TEXT("CONTROL: the order was delivered"), Supply->SpotOrders.Num() == 0 && Runtime->GetClock()->Now() >= Due);
+	TestTrue(TEXT("the delivery ran the alerts pass"), Alerts->RecomputeCountForTest() > Count);
+	TestFalse(TEXT("and 40% of the tanks is not low"), Standing());
 	return true;
 }
 

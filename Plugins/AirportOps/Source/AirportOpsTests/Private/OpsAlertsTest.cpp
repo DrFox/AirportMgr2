@@ -5,6 +5,7 @@
 #include "Model/Flight.h"
 #include "Model/Airport.h"
 #include "Model/FlightBoard.h"
+#include "Model/FuelSupply.h"
 #include "Model/GroundTraffic.h"
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
@@ -50,6 +51,8 @@ namespace
 		TArray<FOpsAlertKey> Changed;
 		/** The airport status the recompute reads; null reads as open, as in a runtime before attach. */
 		const UAirport* Status = nullptr;
+		/** The fuel the recompute reads; null skips FuelLow, as a runtime before attach does. */
+		const UFuelSupply* Fuel = nullptr;
 		UFlight* Flight = nullptr;
 		int32 Plane = 0;
 
@@ -116,6 +119,7 @@ namespace
 			Sources.Offers = Offers;
 			Sources.Ledger = Ledger;
 			Sources.Airport = Status;
+			Sources.FuelSupply = Fuel;
 			// THE PHASES FIRST, as production's drain has them: the Sim tier settles the boards before the alerts pass
 			// reads them.
 			Bus.Drain();
@@ -438,6 +442,58 @@ bool FOpsAlertsNoRunwayTest::RunTest(const FString&)
 	F.Recompute();
 	TestEqual(TEXT("open with a runway: the airline's verdict is an alert again"), F.RaisedOf(EAlertKind::AirlineCannotCome), 1);
 	TestEqual(TEXT("and no runway alert"), F.RaisedOf(EAlertKind::NoRunway), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsAlertsFuelLowTest, "AirportOps.Model.Alerts.FuelLowWhenUnderAQuarter",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsAlertsFuelLowTest::RunTest(const FString&)
+{
+	// SPEC 2026-10-02 §7: under a quarter of the tanks with nothing contracted is the moment ordering still helps. Each
+	// clause of the condition is pinned by a case that differs from the raising one in that clause alone.
+	FAlertsField F;
+	if (!TestTrue(TEXT("a field"), F.Build())) { return false; }
+	UFuelSupply* Supply = NewObject<UFuelSupply>(GetTransientPackage());
+	Supply->CapacityOf = []() { return 100000.0; };
+	F.Fuel = Supply;
+
+	Supply->StockLitres = 30000.0;
+	F.Recompute();
+	TestEqual(TEXT("30% of the tanks: nothing"), F.RaisedOf(EAlertKind::FuelLow), 0);
+
+	Supply->StockLitres = 20000.0;
+	F.Recompute();
+	if (!TestEqual(TEXT("20% of the tanks and no contract: raised"), F.RaisedOf(EAlertKind::FuelLow), 1)) { return false; }
+	const FOpsAlert* Alert = F.Alerts->GetAlerts().FindByPredicate([](const FOpsAlert& A) { return A.Key.Kind == EAlertKind::FuelLow; });
+	if (!TestNotNull(TEXT("and held"), Alert)) { return false; }
+	TestEqual(TEXT("with nowhere in the world to look"), Alert->Focus.Kind, EAlertFocusKind::None);
+
+	// A SPOT ORDER ON ITS WAY IS STOCK: the player has acted, so the alert clears for the delivery delay.
+	FFuelSpotOrder Order;
+	Order.Litres = 10000.0;
+	Supply->SpotOrders.Add(Order);
+	F.Recompute();
+	TestEqual(TEXT("20% held plus 10% on its way: cleared"), F.ClearedOf(EAlertKind::FuelLow), 1);
+	Supply->SpotOrders.Reset();
+	F.Recompute();
+	TestEqual(TEXT("the order gone, the stock still low: raised again"), F.RaisedOf(EAlertKind::FuelLow), 2);
+
+	Supply->Contract.Tier = 0;
+	F.Recompute();
+	TestEqual(TEXT("20% WITH a contract: cleared - deliveries are on the way"), F.ClearedOf(EAlertKind::FuelLow), 2);
+	Supply->Contract = FFuelContract();
+
+	// NO TANKS IS NOT LOW FUEL: 0 of 0 is under a quarter of nothing, and the missing tank is the player's other problem.
+	Supply->CapacityOf = []() { return 0.0; };
+	Supply->StockLitres = 0.0;
+	F.Recompute();
+	TestEqual(TEXT("capacity 0: not raised"), F.RaisedOf(EAlertKind::FuelLow), 2);
+	TestEqual(TEXT("and none standing"), F.Alerts->GetAlerts().Num(), 0);
+
+	// A SUPPLY WITH NO CAPACITY HOOK is a detached runtime's: unbounded, so every stock is "under a quarter" of it.
+	Supply->CapacityOf = nullptr;
+	F.Recompute();
+	TestEqual(TEXT("no capacity hook: not raised"), F.RaisedOf(EAlertKind::FuelLow), 2);
 	return true;
 }
 

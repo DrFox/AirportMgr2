@@ -17,6 +17,18 @@ double UFuelSupply::Capacity() const
 	return CapacityOf ? FMath::Max(CapacityOf(), 0.0) : TNumericLimits<double>::Max();
 }
 
+bool UFuelSupply::IsLow() const
+{
+	// CAPACITY 0 IS NO TANKS, NOT LOW FUEL (0 is under a quarter of nothing); an unbounded supply (no CapacityOf) is huge, so
+	// its stock is under a quarter of it, and a detached runtime (CapacityOf cleared) must not raise an alert for tanks nobody asked
+	// about - so no hook is never low. A contract means deliveries are
+	// already coming; the spot orders on the way are stock the player has paid for.
+	// ENFORCED BY: AirportOps.Model.Alerts.FuelLowWhenUnderAQuarter
+	if (!CapacityOf) { return false; }
+	const double Cap = Capacity();
+	return Cap > 0.0 && Contract.Tier == INDEX_NONE && Available() + PendingSpotLitres() < 0.25 * Cap;
+}
+
 bool UFuelSupply::IsDry() const
 {
 	return Available() < FFuelRolePolicy::FuelledWithinLitres;
