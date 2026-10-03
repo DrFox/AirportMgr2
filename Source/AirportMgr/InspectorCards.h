@@ -342,10 +342,15 @@ struct FAircraftDisplay
 	FString Status;
 	/** Status IS the hold line (FAgentFacts::bStatusIsHold): the card re-says it with a name (InspectFacts::HoldLine). */
 	bool bStatusIsHold = false;
-	/** The hold's kind and runway pair - HoldLine's words - and whom it waits for (0 for nobody). */
-	EHoldAt HoldAt = EHoldAt::None;
-	FString HoldRunwayPair;
-	int32 WaitedForId = 0;
+	/**
+	 * THE HOLD, WHOLE - HoldLine's words and whom it waits for (WaitingOn, 0 for nobody). ONE STRUCT, not its fields copied
+	 * in and copied back out (review of #542, 2026-10-03): the copy named At, RunwayPair and WaitingOn, and the stand-lane
+	 * hold's StandNumber, added later, was dropped on the way - the card said "Waiting for the stand's lane" with no number.
+	 * StalledSeconds is ZEROED here: it moves every frame and would defeat this gate; the duration the card prints is
+	 * Waited, already rounded to what it says.
+	 * ENFORCED BY: AirportMgr.Inspector.StandLaneHoldNamesTheStand
+	 */
+	FAgentHold Hold;
 	/** Whole degrees, as printed ("%03d"). */
 	int32 HeadingDegrees = 0;
 	/** Tenths of m/s of the speed's MAGNITUDE (FAgentMotion::GroundSpeed is signed since 2026-09-20 so the view can roll a

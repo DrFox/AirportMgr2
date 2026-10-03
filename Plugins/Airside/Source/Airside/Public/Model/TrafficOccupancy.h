@@ -268,6 +268,12 @@ struct AIRSIDE_API FTrafficOccupancy
 	 * rolling out or lined up would show its strip free for as long as it took the player to
 	 * click, and a landing could be cleared onto it. Clear() is still the right call for a
 	 * session ending; this one is the right call for a graph changing under a running airport.
+	 *
+	 * STAND LANES SURVIVE IT TOO (#540): a StandLanes claim names a stand ENTITY, which a guideline rebuild does not
+	 * touch, and a vehicle on a stand's lanes is still on them after the rebuild. It is not trusted blindly: every
+	 * claim pass re-derives it from the step the agent stands on and ReleaseExcept drops it the next pass if the
+	 * rebuilt graph no longer puts the agent on that stand's lanes (a stand deleted under it).
+	 * ENFORCED BY: Airside.Model.Traffic.StandLanes.SurvivesARebuild, Airside.Model.Traffic.StandLanes.StandDeletedFreesThem
 	 */
 	void ReleaseGuidelineClaims();
 
@@ -286,6 +292,11 @@ struct AIRSIDE_API FTrafficOccupancy
 	 * NOT ReleaseGuidelineClaims: that one is a rebuild, where the resources themselves have
 	 * ceased to exist for everybody. This one is one agent giving back the lines it will
 	 * never drive, on a graph everyone else is still using.
+	 *
+	 * AND ITS STAND LANES, for the same reason as above (#540): kept here, re-derived next pass from where the body is
+	 * (FClaimPass::HoldRunwayOnly for a stranded vehicle), dropped then if it is not on them. A stranded holder on a
+	 * stand's lanes therefore keeps them, and the next vehicle waits - true of the body, and silent (no alert yet).
+	 * ENFORCED BY: Airside.Model.Traffic.StandLanes.StrandedHolderKeepsThem, Airside.Model.Traffic.StandLanes.DeadPlanWaiterHoldsNothing
 	 */
 	void ReleaseGuidelineClaimsOf(int32 AgentId);
 

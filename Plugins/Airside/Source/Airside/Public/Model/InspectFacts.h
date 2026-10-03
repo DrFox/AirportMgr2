@@ -51,6 +51,9 @@ struct FAgentHold
 	double StalledSeconds = 0.0;
 
 	bool IsSet() const { return WaitingOn != 0; }
+
+	/** Whole-struct equality, for a display gate that carries the hold whole (FAircraftDisplay). */
+	bool operator==(const FAgentHold& Other) const = default;
 };
 
 /**

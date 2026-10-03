@@ -2432,15 +2432,25 @@ namespace FuelServiceTest
 		const int32 Second = Fixture.Traffic->DispatchAgent(Fixture.Net, Plan, Tow, ETraversalClass::GroundVehicle, 0.0);
 		if (!Test.TestTrue(TEXT("setup: the second vehicle is dispatched"), Second != 0)) { return false; }
 
-		if (bRetireHolder)
-		{
-			// LET IT GET TO THE STAND'S DOOR FIRST, so the release is what lets it in rather than an empty stand.
-			Fixture.Advance(60.0);
-			Fixture.Traffic->RetireAgent(Holder);
-		}
-
 		int32 WorstOnLanes = 0;
 		TArray<int32> WorstWho;
+		if (bRetireHolder)
+		{
+			// HELD AT THE DOOR FIRST, MEASURED (review of #542, M2): this test passed with the claim unwired, because a
+			// second vehicle that simply drove in beside the first reached the hydrant all the same. So it must be SEEN
+			// held by the stand's lanes - and never two on them - before the holder is retired, or the release is not
+			// what let it in.
+			const bool bHeldAtDoor = Fixture.AdvanceUntil([&]
+			{
+				WorstOnLanes = FMath::Max(WorstOnLanes, VehiclesOnStandLanes(*Fixture.Traffic, *Fixture.Net, Fixture.Stand, &WorstWho));
+				const FRoadAgent* Waiting = Fixture.Traffic->FindAgent(Second);
+				return Waiting != nullptr && Waiting->GetWaitingOn() != 0
+					&& Waiting->GetBlockedResource().Kind == ETrafficResourceKind::StandLanes;
+			}, 600.0);
+			if (!Test.TestTrue(TEXT("holder retired: before the retire, the second vehicle is held at the stand's door"), bHeldAtDoor)) { return false; }
+			Test.TestTrue(*FString::Printf(TEXT("holder retired: and before it, never two on the lanes (worst %d)"), WorstOnLanes), WorstOnLanes <= 1);
+			Fixture.Traffic->RetireAgent(Holder);
+		}
 		FString WaitLine;
 		bool bWaitOnRoadLane = false;
 		const bool bArrived = Fixture.AdvanceUntil([&]

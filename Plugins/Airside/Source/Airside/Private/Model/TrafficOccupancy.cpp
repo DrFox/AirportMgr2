@@ -1,5 +1,7 @@
 #include "Model/TrafficOccupancy.h"
 
+#include "Model/StandLaneClaim.h"
+
 FTrafficResource FTrafficResource::OfEdge(FGuidelineEdgeId Id)
 {
 	FTrafficResource R; R.Kind = ETrafficResourceKind::Edge; R.Edge = Id; return R;
@@ -295,6 +297,9 @@ void FTrafficOccupancy::ReleaseAgentWhere(int32 AgentId, TFunctionRef<bool(const
 
 void FTrafficOccupancy::ReleaseAll(int32 AgentId)
 {
+	// A VEHICLE LEAVING THE TABLE LEAVES ITS STAND'S LANES, and says so (#540 review): the claim pass's own entered/left
+	// line never runs for an agent retired or removed - it has no more passes.
+	StandLaneClaim::LogChange(AgentId, StandLanesOccupiedBy(AgentId), FEntityInstanceId());
 	ReleaseAgentWhere(AgentId, [](const FTrafficClaim&) { return true; });
 }
 

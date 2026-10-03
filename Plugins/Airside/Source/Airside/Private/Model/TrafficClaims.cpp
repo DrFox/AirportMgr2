@@ -311,9 +311,8 @@ void FClaimPass::HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Network)
 
 	// AND THE STAND LANES THE BODY IS ON (#540): parked at a hydrant it still OCCUPIES them, or the next vehicle
 	// would drive in to meet it head-on as it left.
-	const FEntityInstanceId OnLanes = Agent.Class == ETraversalClass::GroundVehicle
-		? StandLaneClaim::Of(Network, Agent.PlanInProgress(), UGroundTraffic::CurrentStep(Agent.PlanInProgress(), Agent.Follower.Travelled))
-		: FEntityInstanceId();
+	const FEntityInstanceId OnLanes = StandLaneClaim::OnStep(Agent, Network, Agent.PlanInProgress(),
+		UGroundTraffic::CurrentStep(Agent.PlanInProgress(), Agent.Follower.Travelled));
 	if (OnLanes.IsSet())
 	{
 		Surfaces.AddUnique(FTrafficResource::OfStandLanes(OnLanes));
@@ -1221,8 +1220,7 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 		bBoxEntryTaken = bBoxEntryTaken || bBoxEntry;
 
 		// ON A STAND'S LANES (#540, StandLaneClaim): the step stood on OCCUPIES them, whole. Ground vehicles only.
-		const FEntityInstanceId OnLanes = Index == Current && Agent.Class == ETraversalClass::GroundVehicle
-			? StandLaneClaim::Of(Network, Plan, Index) : FEntityInstanceId();
+		const FEntityInstanceId OnLanes = Index == Current ? StandLaneClaim::OnStep(Agent, Network, Plan, Index) : FEntityInstanceId();
 		if (OnLanes.IsSet())
 		{
 			FWantedClaim Hold;
@@ -1337,17 +1335,9 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 			Want.StepEnd = End;
 			Want.EdgeLength = Length;
 			Want.bReversed = Step.bReversed;
-			// A CONFLICT NODE ALREADY WANTED OCCUPIED - a committed vehicle's hold on the crossing
-			// it is in (steps 0' and the stop line) - is not asked for again as a reservation: the
-			// table would write the reservation over the occupancy (see WantedOccupied) and hand
-			// the conflict to the next aircraft to ask. Measured: once step 0'' stretched a
-			// vehicle's window to the far strip edge, every committed truck downgraded its own
-			// hold this way, and at 3-4 s behind it the aircraft drove into the crossing with the
-			// truck still on it.
 			// THE DOOR TO A STAND'S LANES (#540, StandLaneClaim) - a reservation asked BEFORE this node, so a refusal
 			// stops the vehicle short of the node on the ROAD lane, not on the link it would share head-on.
-			const FEntityInstanceId Door = Agent.Class == ETraversalClass::GroundVehicle
-				? StandLaneClaim::EnteredAfter(Network, Plan, Index) : FEntityInstanceId();
+			const FEntityInstanceId Door = StandLaneClaim::DoorAfter(Agent, Network, Plan, Index);
 			if (Door.IsSet() && !WantedOccupied(FTrafficResource::OfStandLanes(Door)))
 			{
 				FWantedClaim Gate = Want;
@@ -1356,6 +1346,13 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 				Pending.Add(Gate);
 			}
 
+			// A CONFLICT NODE ALREADY WANTED OCCUPIED - a committed vehicle's hold on the crossing
+			// it is in (steps 0' and the stop line) - is not asked for again as a reservation: the
+			// table would write the reservation over the occupancy (see WantedOccupied) and hand
+			// the conflict to the next aircraft to ask. Measured: once step 0'' stretched a
+			// vehicle's window to the far strip edge, every committed truck downgraded its own
+			// hold this way, and at 3-4 s behind it the aircraft drove into the crossing with the
+			// truck still on it.
 			if (Want.Claim.bOccupied || !WantedOccupied(Want.Claim.Resource))
 			{
 				Pending.Add(Want);
@@ -1876,8 +1873,10 @@ void FClaimPass::Run(FRoadAgent& Agent, const URoadNetwork& Network)
 	++RunCallCountForTest;
 
 	// A STAND'S LANES ENTERED OR LEFT (#540), compared across the pass and said once (StandLaneClaim::LogChange).
-	const FEntityInstanceId LanesBefore = Table.StandLanesOccupiedBy(Agent.Id);
-	ON_SCOPE_EXIT { StandLaneClaim::LogChange(Agent.Id, LanesBefore, Table.StandLanesOccupiedBy(Agent.Id)); };
+	// Ground vehicles only: an aircraft never holds a stand's lanes, and every aircraft runs this pass every substep.
+	const bool bVehicle = Agent.Class == ETraversalClass::GroundVehicle;
+	const FEntityInstanceId LanesBefore = bVehicle ? Table.StandLanesOccupiedBy(Agent.Id) : FEntityInstanceId();
+	ON_SCOPE_EXIT { if (bVehicle) { StandLaneClaim::LogChange(Agent.Id, LanesBefore, Table.StandLanesOccupiedBy(Agent.Id)); } };
 
 	// NOT TAXIING: hold the runway and nothing else. An arrival on the roll and a departure
 	// lining up own the strip; whatever either held on the taxiway before the handover is
