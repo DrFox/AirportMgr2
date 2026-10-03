@@ -86,10 +86,12 @@ is worth +65%. Whether a newly opened class also brings a new airline is §5's b
 
 ## 7. Fuel supply
 
-### Today
+### Before (to 2026-10-02)
+
+Superseded by Ruled below.
 
 The depot holds unlimited fuel for free: a returning bowser refills at the pump rate
-(`ServiceRolePolicy.cpp:42`) and nothing is bought. Fuel is pure margin at 1.5 per litre,
+(`ServiceRolePolicy.cpp:42`) and nothing is bought. Fuel is pure margin at 1.5 per litre (the first draft's price; shipped 2.0),
 about 75% of a small airport's income.
 
 ### Ruled
@@ -118,7 +120,7 @@ about 75% of a small airport's income.
 The skill this creates is forecasting: too large a contract pays for fuel poured away, too
 small a contract pays spot prices or loses sales.
 
-Shipped prices: sell 2.0 (model), contract 0.9, spot 1.2 per litre.
+Shipped prices: sell 2.0 (UPricing::FuelPricePerLitre; the model takes it via --fuel-price), contract 0.9, spot 1.2 per litre.
 
 ### Later
 
