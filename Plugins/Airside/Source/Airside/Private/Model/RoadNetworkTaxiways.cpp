@@ -5,6 +5,7 @@
 #include "Model/TaxiwayStrip.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RoadGeom.h"
+#include "Solve/TaxiwayLetters.h"
 
 // TAXIWAY NAMES (spec docs/superpowers/specs/2026-10-02-taxiway-naming-design.md): URoadNetwork's members that judge
 // geometry and name segments, in a file of their own. RoadNetwork.cpp is held to its line figure by Check-Architecture
