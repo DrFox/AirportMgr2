@@ -7,8 +7,9 @@ Run build_ground_material.py FIRST: it is what wires the owned-rect clip into M_
 Builds M_Diorama, a copy of M_Test_Small, with:
 - the Landscape on MI_Ground_Diorama: MI_Ground's child with the blend mode overridden to
   Masked, so it honours the clip (M_Ground itself stays Opaque, so no other map changes);
-- one AAirsideOwnedLandActor holding the owned rectangle. It - not this script - writes the clip
-  (MPC_OwnedLand) and lays the strata walls, and the camera and grass read it too;
+- the airport's starting land (FLandGrid on its network: 600 m tiles, 8x8, a 1x2 at the bottom centre),
+  authored through one AAirsideOwnedLandActor, which then DRAWS it - writes the clip (MPC_OwnedLand) and lays
+  the strata walls. The camera, the grass and every build refusal read the same grid;
 - the content set's owned-land rows (collection, wall mesh, M_DioramaStrata's instance);
 - NO backdrop. A first pass put an unlit plane 600 m under the plinth so the void would be a
   chosen colour rather than the SkyAtmosphere's navy ground (env spec section 10, Slice D). Set
@@ -19,8 +20,8 @@ Builds M_Diorama, a copy of M_Test_Small, with:
 Everything is a first guess to be judged on a 20/150/600 m screenshot. The tunables live on
 MI_DioramaStrata / MI_Ground_Diorama so they can be changed live.
 
-The rectangle is the road network's footprint plus MARGIN_M, chosen here once and then owned by
-the actor - edit it there. Land purchase, when it exists, moves it through SetOwnedLand.
+The start tiles are centred on the road network's footprint (plus MARGIN_M), once. After that the land
+is the airport's: the Buy land tool grows it, and the level's saved network carries it.
 
 Every result line is prefixed DIORAMA: so it can be grepped out of the log.
 """
@@ -47,6 +48,11 @@ FALLBACK_HALF_M = 600.0
 
 # Plinth depth below the ground, metres. Exaggerated on purpose - a diorama base, not geology.
 DEPTH_M = 40.0
+
+# The land grid (land purchase spec R1-R3): 600 m tiles, 8x8, a 1x2 start at the bottom centre.
+TILE = 60000.0
+COLUMNS, ROWS = 8, 8
+START = [(0, 3), (0, 4)]
 WALL_THICK_M = 1.0
 # Fraction of the strata colour added as emissive. The walls facing away from the sun are lit
 # only by a blue sky and fog, and at 0 they rendered as navy slabs with the bands invisible
@@ -250,7 +256,12 @@ def run():
     edge.set_editor_property("wall_thickness", WALL_THICK_M * 100)
     # Last, through the UFUNCTION: it lays the walls and writes the clip. A bare property write
     # reruns no construction headlessly.
-    edge.set_owned_land(unreal.Vector2D(x0, y0), unreal.Vector2D(x1, y1))
+    # THE LAND LIVES ON THE AIRPORT (land purchase spec 2); the edge authors it once and draws it. R3: the 1x2 start
+    # sits at the bottom centre - column 0 is the default camera's bottom edge (it looks along +X), rows 3-4 the
+    # middle of eight - centred on the road network's footprint.
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    origin = unreal.Vector2D(cx - 0.5 * TILE, cy - 4.0 * TILE)
+    edge.author_starting_land(origin, TILE, COLUMNS, ROWS, [unreal.IntPoint(c, r) for c, r in START])
 
     if not levels.save_current_level():
         fail("save_current_level returned False")
@@ -262,7 +273,7 @@ def run():
     loose = [a for a in after if TAG in [str(t) for t in a.tags]]
     if len(edges) == 1 and not loose:
         e = edges[0]
-        say("PASS one owned-land actor after reload: %s - %s" % (e.get_editor_property("owned_min"), e.get_editor_property("owned_max")))
+        say("PASS one owned-land actor after reload; grep the log for 'OwnedLand: 2 tile(s), 4 wall run(s)'")
     else:
         fail("%d owned-land actors and %d loose walls after reload" % (len(edges), len(loose)))
     land = [a for a in after if isinstance(a, unreal.Landscape)][0]

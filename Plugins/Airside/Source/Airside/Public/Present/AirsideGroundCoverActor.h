@@ -6,7 +6,9 @@
 
 class ARoadNetworkActor;
 class UGroundCoverPresenter;
+class URoadEditFacade;
 class URoadNetwork;
+struct FLandGrid;
 struct FGroundCoverKit;
 // OPAQUE, NOT INCLUDED, for AAirsideBuildingsActor's reason: one enum, a dozen Model/ headers.
 enum class EChangeKind : uint8;
@@ -59,6 +61,9 @@ public:
 
 private:
 	void OnNetworkChanged(EChangeKind Kind, const URoadNetwork& Network);
+
+	/** A purchase (or a load) moved the owned land: rebuild the mask at once - see RebuildMask. */
+	void OnOwnedLandChanged(const FLandGrid& Land);
 	void RebuildMask();
 	void Unbind();
 
@@ -72,6 +77,8 @@ private:
 
 	TWeakObjectPtr<ARoadNetworkActor> Bound;
 	FDelegateHandle BoundHandle;
+	TWeakObjectPtr<URoadEditFacade> BoundFacade;
+	FDelegateHandle LandHandle;
 
 	bool bMaskDirty = false;
 	double DirtySinceSeconds = 0.0;
