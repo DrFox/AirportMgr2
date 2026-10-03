@@ -4,6 +4,7 @@
 #include "Algo/Reverse.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RouteEdgeFilter.h"
 #include "Model/TrafficOccupancy.h"
 #include "Model/TrafficRules.h"
 #include "Model/Vehicle.h"
@@ -20,25 +21,8 @@ namespace
 	 */
 	int32 GSearchCallCountForTest = 0;
 
-	/**
-	 * See RouteSearch::RunwaySeedResolveCountForTest. Bumped once per seed actually resolved -
-	 * a memo hit does not count, which is what makes the count measure the memo rather than
-	 * the traffic through it.
-	 */
-	int32 GRunwaySeedResolveCountForTest = 0;
-
 	/** See RouteSearch::TowCheckCountForTest. Bumped once per VehicleFit::JudgePlan Find runs. */
 	int32 GTowCheckCountForTest = 0;
-
-	/**
-	 * The strongest pavement any road or taxiway profile may offer - the ceiling the taxiing
-	 * gate clamps an aircraft's need to (see the gate). Tarmac on 2026-09-27: every road and
-	 * taxiway profile carries { Tarmac, Grass }. A profile that one day offers concrete raises
-	 * this with it, or a concrete taxiway would be judged as tarmac.
-	 * ENFORCED BY: Airside.Content.RoadProfilesOfferTarmacAndGrass (goes red if any road or
-	 * taxiway profile offers more), Airside.Model.RoutePavementGate
-	 */
-	constexpr EPavement TaxiwayPavementCeiling = EPavement::Tarmac;
 
 	/** See RouteSearch::TowCheckSecondsForTest: wall-clock seconds spent in those checks. */
 	double GTowCheckSecondsForTest = 0.0;
@@ -115,61 +99,6 @@ namespace
 		return Length;
 	}
 
-	/**
-	 * Is this query answerable at all? Logged and refused rather than best-guessed.
-	 *
-	 * ONE FUNCTION, TWO ENTRY POINTS, AND NOT IN RunSearch. RunSearch looks like the single
-	 * choke point and is not: Find returns early for NoStart, NoGoal and SameNode BEFORE
-	 * reaching it, so a bad query with a dead start handle would be refused for the wrong
-	 * reason and never logged - and on the TooWide path Find calls RunSearch TWICE, which
-	 * would log one refusal twice. Find and FindToGoals are the consumers; they guard.
-	 *
-	 * ERROR, NOT WARNING: FAutomationTestBase's warning-fails-the-test flag is false in this
-	 * project and nothing sets it, so a Warning would let a silently permissive route ship
-	 * green - which is the exact failure this whole design exists to delete.
-	 */
-	bool IsQueryAnswerable(const FRouteQuery& Query)
-	{
-		if (Query.Errand == ERouteErrand::Unset)
-		{
-			UE_LOG(LogAirside, Error,
-				TEXT("Route query has no errand (node %d -> %d); refusing. See FRoutePolicy."),
-				Query.Start.Index, Query.Goal.Index);
-			return false;
-		}
-
-		const bool bWants = Query.Policy.Occupancy == EOccupancyUse::Required;
-		const bool bHas = Query.Occupancy != nullptr;
-		if (bWants != bHas)
-		{
-			// BOTH WAYS. Required-without-a-table is the obvious half; Never-WITH-one is the
-			// more useful, because a caller that went to the trouble of supplying occupancy
-			// believes it is being weighted by it, and silently dropping the pointer leaves
-			// that caller reasoning about a cost term the search never applied.
-			UE_LOG(LogAirside, Error,
-				TEXT("Route errand %d %s the occupancy table but %s given one; refusing."),
-				static_cast<int32>(Query.Errand),
-				bWants ? TEXT("requires") : TEXT("must not read"),
-				bHas ? TEXT("was") : TEXT("was not"));
-			return false;
-		}
-
-		return true;
-	}
-
-	/**
-	 * Is this edge too narrow for the query's wingspan?
-	 *
-	 * MaxWingspan of 0 means UNLIMITED, so this is not a plain greater-than. Written once,
-	 * here, because the same test read backwards routes a widebody onto a link built for a
-	 * regional jet - and it would still find a route, which is the failure that never
-	 * reports itself.
-	 */
-	bool ExceedsWingspan(const FGuidelineEdge& Edge, double Wingspan)
-	{
-		return Edge.MaxWingspan > 0.0 && Wingspan > Edge.MaxWingspan;
-	}
-
 	/** Ordering for the open-list min-heap: cheapest estimated total first. Free rather than
 	 *  a lambda per search (#190), so RunSearch and FindToGoals's separate Open arrays share
 	 *  one definition instead of two lambdas that could drift. */
@@ -184,177 +113,29 @@ namespace
 	 * deferred from #171/#201) cannot drift into two different answers for what "may this
 	 * edge be crossed" means. Heuristic is the only thing that differs between the two searches
 	 * (distance to the one goal, or zero - see FindToGoals' own comment) and is threaded
-	 * through as a parameter instead. RunwayInUse is the caller's own map, threaded through by
-	 * reference, so its per-runway memo is paid once per SEARCH, not once per expansion.
+	 * through as a parameter instead. Filter is the caller's own, one per search, so its per-runway
+	 * memos are paid once per SEARCH, not once per expansion.
 	 */
-	void ExpandNode(const URoadNetwork& Network, const FRouteQuery& Query, bool bIgnoreSize,
+	void ExpandNode(FRouteEdgeFilter& Filter, const URoadNetwork& Network, const FRouteQuery& Query,
 		FGuidelineNodeId At, double Reached, const TSet<FGuidelineNodeId>& Closed,
-		TFunctionRef<double(const FVector2D&)> Heuristic, TMap<int32, bool>& RunwayInUse,
-		TMap<int32, bool>& RunwaySeeds,
+		TFunctionRef<double(const FVector2D&)> Heuristic,
 		TMap<FGuidelineNodeId, double>& Best, TMap<FGuidelineNodeId, FRouteStep>& Arrived,
-		TArray<TPair<double, FGuidelineNodeId>>& Open, const TSet<FGuidelineEdgeId>* Excluded = nullptr,
-		TMap<FGuidelineEdgeId, bool>* FitMemo = nullptr)
+		TArray<TPair<double, FGuidelineNodeId>>& Open)
 	{
-		// Whether an edge's source segment IS a runway, once per segment seen. A slot lookup
-		// plus a profile resolve, which the avoidance test below used to pay on EVERY relaxation
-		// of every edge - a node is relaxed several times before Closed catches it, so a long
-		// strip paid for the same unchanged answer again and again. This is #171's complaint
-		// about EdgeCost's re-sampling, in the one place that survived it.
-		//
-		// PER SEARCH, NOT CACHED ON THE EDGE: runway-ness depends on the PROFILE, which changes
-		// when a road is re-profiled - an open invalidation trigger with no writer positioned to
-		// catch it, unlike FGuidelineEdge::Length's closed set of three writers. A stale true
-		// would refuse taxiways for the rest of the session.
-		auto IsRunwayEdge = [&Network, &RunwaySeeds](FRoadSegmentId Seed)
+		// WHICH EDGES may be taken is FRouteEdgeFilter's (moved there 2026-10-02 with its comments, so the
+		// space-time planner asks the same rule); what they COST and how they relax stays here.
+		Filter.ForEachAdmitted(At, [&](const FAdmittedEdge& Admitted)
 		{
-			if (!Seed.IsSet())
-			{
-				return false;
-			}
-			if (const bool* Known = RunwaySeeds.Find(Seed.Index))
-			{
-				return *Known;
-			}
-			++GRunwaySeedResolveCountForTest;
-			const bool bRunway = Network.IsRunwaySegment(Seed);
-			RunwaySeeds.Add(Seed.Index, bRunway);
-			return bRunway;
-		};
-
-		// Whether a runway's chain is in use - held by somebody other than the querier, or
-		// occupied by the querier's own body (ERunwayAvoidance::Held says why both) - once
-		// per runway segment seen: the chain walk and the table scan are not free, and every
-		// edge along a long strip would otherwise pay for both.
-		auto IsRunwayHeld = [&Network, &Query, &RunwayInUse](FRoadSegmentId Seed)
-		{
-			if (const bool* Known = RunwayInUse.Find(Seed.Index))
-			{
-				return *Known;
-			}
-			// bCountOwnOccupied true: ERunwayAvoidance::Held's own comment (FRouteQuery)
-			// says why the querier's OWN occupied claim counts too.
-			const bool bHeld = Query.Occupancy != nullptr
-				&& Query.Occupancy->IsAnyHeld(Network.RunwaySurfaces(Seed), Query.QueryingAgent, /*bCountOwnOccupied*/ true);
-			RunwayInUse.Add(Seed.Index, bHeld);
-			return bHeld;
-		};
-
-		// Traffic class and one-way direction are already applied here - this is the
-		// network's own answer to "what may leave this node", so the search never
-		// re-implements the rule and cannot drift from it.
-		//
-		// ForEachOutgoingGuideline, not GetOutgoingGuidelines (#171): the array
-		// GetOutgoingGuidelines built was a fresh TArray thrown away at the end of every
-		// one of these node expansions, and a route search over a real airport expands
-		// many nodes. Each `continue` below becomes a `return` from this visitor - the
-		// same "skip this edge" the loop meant, since there is no outer loop left to
-		// continue.
-		Network.ForEachOutgoingGuideline(At, Query.Class, [&](FGuidelineEdgeId EdgeId)
-		{
-			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(EdgeId);
-			if (Edge == nullptr || Edge->A == Edge->B)
-			{
-				return;
-			}
-
-			if (Query.BannedEdge.IsSet() && EdgeId == Query.BannedEdge)
-			{
-				return;
-			}
-
-			// A TOW'S FOLD EXCLUSIONS, Find's own and per call - NOT BannedEdge, which is the
-			// deadlock resolver's one edge and must survive a tow retry untouched. A set, because
-			// each retry adds one and the earlier ones must stay out.
-			if (Excluded != nullptr && Excluded->Contains(EdgeId))
-			{
-				return;
-			}
-
-			// A banned NODE bans every edge INTO it, whichever arm - the deadlock replan's
-			// blocker is an aircraft standing on the node, and an edge-only ban lets the
-			// search re-enter round the back. See FRouteQuery::BannedNode.
-			if (Query.BannedNode.IsSet()
-				&& ((Edge->B == At ? Edge->A : Edge->B) == Query.BannedNode))
-			{
-				return;
-			}
-
-			// GROUND TOO WEAK for the traveller, by the SAME comparison runway and stand admission
-			// use (FPavementCheck) - not a grass test: #356 gated grass only, which would have
-			// passed a jet needing concrete down a tarmac taxiway. Asked only when the query needs
-			// more than grass, so a vehicle's or a grass-capable aircraft's search never pays the
-			// lookup. A turn path has no DerivedFrom and is not judged; the lanes either side of
-			// it are. RUNWAYS ARE NOT JUDGED HERE (!IsRunwaySegment) - a strip's surface is
-			// RunwayAdmission's. See FRouteQuery::MinimumPavement on why Find's size retry does
-			// not lift this.
-			//
-			// THE NEED IS CLAMPED TO WHAT A TAXIWAY CAN OFFER (R12, final review), TaxiwayPavementCeiling:
-			// real heavies taxi on asphalt, and RoadProfile.h's AllowedPavements says why no road
-			// or taxiway offers concrete - nothing rolls on one that grass and tarmac do not
-			// already tell apart. Unclamped, a Concrete-needing type could never reach a stand
-			// and was told to "build a taxiway" that no tool can build. Runway and stand
-			// admission keep the full need; only taxiing is clamped.
-			if (Query.MinimumPavement > EPavement::Grass && Edge->DerivedFrom.IsSet()
-				&& !Network.IsRunwaySegment(Edge->DerivedFrom)
-				&& !Pavement::Judge(Network.PavementOf(Edge->DerivedFrom),
-					FMath::Min(Query.MinimumPavement, TaxiwayPavementCeiling)).Passes())
-			{
-				return;
-			}
-
-			// ONE ANSWER, TWO READERS: the filter just below and the cost term inside
-			// EdgeCost. Asking the memo twice would be cheap, but reading it once is what
-			// guarantees the edge the filter judged is the edge the cost charged for.
-			const bool bRunwayEdge = IsRunwayEdge(Edge->DerivedFrom);
-
-			// Runway-derived edges are the strip itself. See ERunwayAvoidance for who may
-			// taxi along one and when.
-			if (Query.AvoidRunways != ERunwayAvoidance::None
-				&& bRunwayEdge
-				&& (Query.AvoidRunways == ERunwayAvoidance::All || IsRunwayHeld(Edge->DerivedFrom)))
-			{
-				return;
-			}
-
-			// SIZE: an aircraft's wingspan, and since 2026-09-23 a vehicle's body (VehicleFit).
-			// One flag for both, because Find's unconstrained retry lifts both to tell "too big"
-			// from "not connected".
-			//
-			// MEMOISED PER Find (review of aa90eec2): VehicleFit::Fits traces the vehicle round the
-			// curve (VehicleSweep::Trace), and an edge is relaxed from every node that reaches it,
-			// in every search one Find runs - the constrained pass, each tow retry. The answer
-			// depends on the edge and the vehicle alone, both fixed for the Find. Measured
-			// 2026-09-25: the rig course's cold plan spent ~1.9 s of 2.4 s re-tracing edges.
-			auto VehicleFits = [&]()
-			{
-				if (FitMemo != nullptr)
-				{
-					if (const bool* Known = FitMemo->Find(EdgeId))
-					{
-						return *Known;
-					}
-				}
-				const bool bFits = VehicleFit::Fits(*Edge, *Query.Vehicle, Network);
-				if (FitMemo != nullptr)
-				{
-					FitMemo->Add(EdgeId, bFits);
-				}
-				return bFits;
-			};
-			if (!bIgnoreSize && (ExceedsWingspan(*Edge, Query.Wingspan)
-				|| (Query.Vehicle != nullptr && !VehicleFits())))
-			{
-				return;
-			}
-
-			const double Cost = EdgeCost(*Edge, EdgeId, Query, bRunwayEdge);
+			const FGuidelineEdge* Edge = Admitted.Edge;
+			const FGuidelineEdgeId EdgeId = Admitted.Id;
+			const double Cost = EdgeCost(*Edge, EdgeId, Query, Admitted.bRunwayEdge);
 			if (Cost < 0.0)
 			{
 				return;
 			}
 
-			const bool bReversed = (Edge->B == At);
-			const FGuidelineNodeId Next = bReversed ? Edge->A : Edge->B;
+			const bool bReversed = Admitted.bReversed;
+			const FGuidelineNodeId Next = Admitted.Next;
 			if (Closed.Contains(Next))
 			{
 				return;
@@ -439,35 +220,7 @@ namespace
 			Walk = Step->bReversed ? Edge->B : Edge->A;
 		}
 		Algo::Reverse(Plan.Steps);
-
-		// One array for drawing and for driving. The weld is exact rather than tolerant:
-		// GuidelineGeom::Sample evaluates the endpoints at t=0 and t=1, which for a
-		// quadratic returns A and B themselves, so dropping each segment's first point
-		// leaves no gap and no duplicate.
-		Plan.Polyline.Add(StartNode.Position);
-		for (int32 Index = 0; Index < Plan.Steps.Num(); ++Index)
-		{
-			FRouteStep& Step = Plan.Steps[Index];
-			TArray<FVector2D> Points;
-			if (!Network.SampleGuideline(Step.Edge, Points, Step.bReversed))
-			{
-				continue;
-			}
-
-			for (int32 At = 1; At < Points.Num(); ++At)
-			{
-				Plan.Polyline.Add(Points[At]);
-			}
-
-			// Measured off the array just appended, not off Points: the two are the same
-			// numbers today, and reading the plan's own polyline is what keeps them the same
-			// if the weld rule above ever changes.
-			Step.EndVertex = Plan.Polyline.Num() - 1;
-			Step.EndDistance = GuidelineGeom::PolylineLength(Plan.Polyline);
-		}
-
-		Plan.Length = GuidelineGeom::PolylineLength(Plan.Polyline);
-		return Plan;
+		return RouteSearch::PlanFromSteps(Network, Start, MoveTemp(Plan.Steps));
 	}
 
 	FRoutePlan RunSearch(const URoadNetwork& Network, const FRouteQuery& Query, bool bIgnoreSize,
@@ -508,8 +261,7 @@ namespace
 		Arrived.Reserve(NumNodes);
 		TSet<FGuidelineNodeId> Closed;
 		Closed.Reserve(NumNodes);
-		TMap<int32, bool> RunwayInUse;
-		TMap<int32, bool> RunwaySeeds;
+		FRouteEdgeFilter Filter(Network, Query, bIgnoreSize, Excluded, FitMemo);
 		TArray<TPair<double, FGuidelineNodeId>> Open;
 		Open.Reserve(NumNodes);
 
@@ -545,8 +297,7 @@ namespace
 			}
 
 			const double Reached = Best.FindChecked(At);
-			ExpandNode(Network, Query, bIgnoreSize, At, Reached, Closed, Heuristic, RunwayInUse, RunwaySeeds, Best, Arrived, Open,
-				Excluded, FitMemo);
+			ExpandNode(Filter, Network, Query, At, Reached, Closed, Heuristic, Best, Arrived, Open);
 		}
 
 		if (Plan.Result != ERouteResult::Found)
@@ -797,15 +548,57 @@ namespace RouteSearch
 	int32 NodeVisitCountForTest() { return GNodeVisitCountForTest; }
 	void ResetNodeVisitCountForTest() { GNodeVisitCountForTest = 0; }
 
-	int32 RunwaySeedResolveCountForTest() { return GRunwaySeedResolveCountForTest; }
-	void ResetRunwaySeedResolveCountForTest() { GRunwaySeedResolveCountForTest = 0; }
-
 	int32 SearchCallCountForTest() { return GSearchCallCountForTest; }
 	void ResetSearchCallCountForTest() { GSearchCallCountForTest = 0; }
 
 	int32 TowCheckCountForTest() { return GTowCheckCountForTest; }
 	void ResetTowCheckCountForTest() { GTowCheckCountForTest = 0; GTowCheckSecondsForTest = 0.0; }
 	double TowCheckSecondsForTest() { return GTowCheckSecondsForTest; }
+
+	/**
+	 * Is this query answerable at all? Logged and refused rather than best-guessed.
+	 *
+	 * ONE FUNCTION, TWO ENTRY POINTS, AND NOT IN RunSearch. RunSearch looks like the single
+	 * choke point and is not: Find returns early for NoStart, NoGoal and SameNode BEFORE
+	 * reaching it, so a bad query with a dead start handle would be refused for the wrong
+	 * reason and never logged - and on the TooWide path Find calls RunSearch TWICE, which
+	 * would log one refusal twice. Find and FindToGoals are the consumers; they guard.
+	 *
+	 * PUBLIC SINCE 2026-10-02 for a third consumer, FTaxiPlanner, which runs neither search but
+	 * asks the same question of the same query - and must refuse an errand-less one the same way.
+	 *
+	 * ERROR, NOT WARNING: FAutomationTestBase's warning-fails-the-test flag is false in this
+	 * project and nothing sets it, so a Warning would let a silently permissive route ship
+	 * green - which is the exact failure this whole design exists to delete.
+	 */
+	bool IsQueryAnswerable(const FRouteQuery& Query)
+	{
+		if (Query.Errand == ERouteErrand::Unset)
+		{
+			UE_LOG(LogAirside, Error,
+				TEXT("Route query has no errand (node %d -> %d); refusing. See FRoutePolicy."),
+				Query.Start.Index, Query.Goal.Index);
+			return false;
+		}
+
+		const bool bWants = Query.Policy.Occupancy == EOccupancyUse::Required;
+		const bool bHas = Query.Occupancy != nullptr;
+		if (bWants != bHas)
+		{
+			// BOTH WAYS. Required-without-a-table is the obvious half; Never-WITH-one is the
+			// more useful, because a caller that went to the trouble of supplying occupancy
+			// believes it is being weighted by it, and silently dropping the pointer leaves
+			// that caller reasoning about a cost term the search never applied.
+			UE_LOG(LogAirside, Error,
+				TEXT("Route errand %d %s the occupancy table but %s given one; refusing."),
+				static_cast<int32>(Query.Errand),
+				bWants ? TEXT("requires") : TEXT("must not read"),
+				bHas ? TEXT("was") : TEXT("was not"));
+			return false;
+		}
+
+		return true;
+	}
 
 	FRoutePlan Find(const URoadNetwork& Network, const FRouteQuery& Query)
 	{
@@ -943,8 +736,7 @@ namespace RouteSearch
 		Result.Arrived.Reserve(NumNodes);
 		TSet<FGuidelineNodeId> Closed;
 		Closed.Reserve(NumNodes);
-		TMap<int32, bool> RunwayInUse;
-		TMap<int32, bool> RunwaySeeds;
+		FRouteEdgeFilter Filter(Network, Query);
 		TArray<TPair<double, FGuidelineNodeId>> Open;
 		Open.Reserve(NumNodes);
 
@@ -976,8 +768,7 @@ namespace RouteSearch
 			}
 
 			const double Reached = Result.Best.FindChecked(At);
-			ExpandNode(Network, Query, /*bIgnoreSize=*/false, At, Reached, Closed, Heuristic,
-				RunwayInUse, RunwaySeeds, Result.Best, Result.Arrived, Open);
+			ExpandNode(Filter, Network, Query, At, Reached, Closed, Heuristic, Result.Best, Result.Arrived, Open);
 		}
 
 		for (int32 Index = 0; Index < Goals.Num(); ++Index)
@@ -996,6 +787,55 @@ namespace RouteSearch
 		}
 
 		return Result;
+	}
+
+	/**
+	 * The weld half of BuildPlanFromArrival, split out 2026-10-02 so FTaxiPlanner - whose steps come from a
+	 * space-time search, not an arrival map - returns the SAME polyline a RouteSearch plan would. See the
+	 * declaration.
+	 */
+	FRoutePlan PlanFromSteps(const URoadNetwork& Network, FGuidelineNodeId Start, TArray<FRouteStep> Steps)
+	{
+		FRoutePlan Plan;
+		Plan.Start = Start;
+		const FGuidelineNode* StartNode = Network.GetGuidelineNode(Start);
+		if (StartNode == nullptr || Steps.Num() == 0)
+		{
+			Plan.Result = StartNode == nullptr ? ERouteResult::NoStart : ERouteResult::SameNode;
+			return Plan;
+		}
+		Plan.Result = ERouteResult::Found;
+		Plan.Steps = MoveTemp(Steps);
+
+
+		// One array for drawing and for driving. The weld is exact rather than tolerant:
+		// GuidelineGeom::Sample evaluates the endpoints at t=0 and t=1, which for a
+		// quadratic returns A and B themselves, so dropping each segment's first point
+		// leaves no gap and no duplicate.
+		Plan.Polyline.Add(StartNode->Position);
+		for (int32 Index = 0; Index < Plan.Steps.Num(); ++Index)
+		{
+			FRouteStep& Step = Plan.Steps[Index];
+			TArray<FVector2D> Points;
+			if (!Network.SampleGuideline(Step.Edge, Points, Step.bReversed))
+			{
+				continue;
+			}
+
+			for (int32 At = 1; At < Points.Num(); ++At)
+			{
+				Plan.Polyline.Add(Points[At]);
+			}
+
+			// Measured off the array just appended, not off Points: the two are the same
+			// numbers today, and reading the plan's own polyline is what keeps them the same
+			// if the weld rule above ever changes.
+			Step.EndVertex = Plan.Polyline.Num() - 1;
+			Step.EndDistance = GuidelineGeom::PolylineLength(Plan.Polyline);
+		}
+
+		Plan.Length = GuidelineGeom::PolylineLength(Plan.Polyline);
+		return Plan;
 	}
 
 	FRoutePlan Splice(const FRoutePlan& Head, int32 KeepSteps, const FRoutePlan& Tail)

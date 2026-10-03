@@ -292,6 +292,92 @@ bool FTaxiwayNamesBranchTest::RunTest(const FString&)
 	return true;
 }
 
+namespace TaxiwayNamesTest
+{
+	/** A at y 0 from x 0 to 1 km in six clicks - nodes P[0..6] at 0, 150, 300, 600, 700, 850, 1000 m - B far away (so a
+	 *  split-off is C, not B), then two 200 m dead-end stubs: A1 off P[1] (the near side) and A2 off P[5] (the far side).
+	 *  Deleting P[3]-P[4] leaves a 600 m piece that keeps A and a 300 m piece that becomes C. */
+	struct FStubbedA
+	{
+		FTaxiwayNamesNet N;
+		TArray<FRoadNodeId> P;
+		TArray<FRoadSegmentId> ASegs;
+		FRoadSegmentId Near, Far;
+
+		FStubbedA()
+		{
+			for (const double X : { 0.0, 15000.0, 30000.0, 60000.0, 70000.0, 85000.0, 100000.0 }) { P.Add(N.Node(X, 0.0)); }
+			for (int32 I = 0; I + 1 < P.Num(); ++I) { ASegs.Add(N.Click(P[I], P[I + 1])); }
+			N.Click(N.Node(0.0, 200000.0), N.Node(60000.0, 200000.0));
+			Near = N.Click(P[1], N.Node(15000.0, -20000.0));
+			Far = N.Click(P[5], N.Node(85000.0, -20000.0));
+		}
+	};
+}
+
+/**
+ * OWNER RULING 2026-10-02 (PR #524): a split takes the connectors that now touch only the split-off piece with it - re-
+ * parented and renumbered from the new parent (A2 -> C1), announced once each on the split's own event; one that still
+ * touches the original keeps its name; a player's override keeps its text and only its parent follows.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesSplitReparentsTest, "Airside.Model.TaxiwayNames.SplitReparentsConnectors",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesSplitReparentsTest::RunTest(const FString&)
+{
+	using namespace TaxiwayNamesTest;
+	const auto Said = [](const TArray<FTaxiwayRename>& Renames)
+	{
+		TArray<FString> Out;
+		for (const FTaxiwayRename& R : Renames) { Out.Add(R.SplitOff + TEXT("<") + R.From); }
+		return Out;
+	};
+	{
+		// DISCONNECTED: the middle goes; the far stub is left touching only the far piece.
+		FStubbedA S;
+		TestEqual(TEXT("setup: near stub A1"), S.N.NameOf(S.Near), FString(TEXT("A1")));
+		TestEqual(TEXT("setup: far stub A2"), S.N.NameOf(S.Far), FString(TEXT("A2")));
+		TestTrue(TEXT("the middle goes"), S.N.Net->RemoveSegment(S.ASegs[3]));
+		const TArray<FTaxiwayRename> Renames = S.N.Normalise();
+		TestEqual(TEXT("the far piece is C"), S.N.NameOf(S.ASegs[4]), FString(TEXT("C")));
+		TestEqual(TEXT("the far stub follows its piece: C1"), S.N.NameOf(S.Far), FString(TEXT("C1")));
+		TestEqual(TEXT("the near stub still touches A: A1"), S.N.NameOf(S.Near), FString(TEXT("A1")));
+		TestEqual(TEXT("the split and the rename, announced once each"), Said(Renames),
+			TArray<FString>{ TEXT("C<A"), TEXT("C1<A2") });
+		const FTaxiway* Far = S.N.Net->GetTaxiway(S.N.Net->TaxiwayOf(S.Far));
+		TestTrue(TEXT("parented on C"), Far != nullptr && Far->ParentId == S.N.Net->TaxiwayOf(S.ASegs[4]));
+		TestEqual(TEXT("A keeps one connector"), S.N.Net->TaxiwayConnectorCount(S.N.Net->TaxiwayOf(S.ASegs[0])), 1);
+		TestEqual(TEXT("a second normalise announces nothing"), S.N.Normalise().Num(), 0);
+		const FRoadSegmentId Next = S.N.Click(S.P[4], S.N.Node(70000.0, -20000.0));
+		TestEqual(TEXT("C's next connector is C2 - the number advanced"), S.N.NameOf(Next), FString(TEXT("C2")));
+	}
+	{
+		// BRANCH: A's far end merged onto P[2] - the 300 m tail P[0]-P[2] is the shortest branch (the loop is 1.1 km),
+		// and A1 rides on it.
+		FStubbedA S;
+		TestTrue(TEXT("A's far end merged onto P[2]"), S.N.Net->MergeNodes(S.P[2], S.P[6]));
+		const TArray<FTaxiwayRename> Renames = S.N.Normalise();
+		TestEqual(TEXT("the tail is C"), S.N.NameOf(S.ASegs[0]), FString(TEXT("C")));
+		TestEqual(TEXT("the loop keeps A"), S.N.NameOf(S.ASegs[3]), FString(TEXT("A")));
+		TestEqual(TEXT("the tail's stub follows it: C1"), S.N.NameOf(S.Near), FString(TEXT("C1")));
+		TestEqual(TEXT("the loop's stub stays A2"), S.N.NameOf(S.Far), FString(TEXT("A2")));
+		TestEqual(TEXT("the split and the rename, announced once each"), Said(Renames),
+			TArray<FString>{ TEXT("C<A"), TEXT("C1<A1") });
+	}
+	{
+		// OVERRIDE: the far stub renamed K7 by the player - the text stays, the parent follows, nothing to announce.
+		FStubbedA S;
+		const int32 FarId = S.N.Net->TaxiwayOf(S.Far);
+		TestTrue(TEXT("setup: renamed"), FRoadNetworkTestAccess(*S.N.Net).RenameTaxiwayForTest(FarId, TEXT("K7")));
+		S.N.Net->RemoveSegment(S.ASegs[3]);
+		const TArray<FTaxiwayRename> Renames = S.N.Normalise();
+		TestEqual(TEXT("still K7"), S.N.NameOf(S.Far), FString(TEXT("K7")));
+		const FTaxiway* Far = S.N.Net->GetTaxiway(FarId);
+		TestTrue(TEXT("but parented on C"), Far != nullptr && Far->ParentId == S.N.Net->TaxiwayOf(S.ASegs[4]));
+		TestEqual(TEXT("only the split is announced"), Said(Renames), TArray<FString>{ TEXT("C<A") });
+	}
+	return true;
+}
+
 /** Empty: a parent with surviving connectors keeps its letter reserved; with none it is retired and A returns to the pool. */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesReservationTest, "Airside.Model.TaxiwayNames.CollapseAndLetterReservation",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

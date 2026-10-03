@@ -7,6 +7,7 @@
 #include "Model/TrafficRules.h"
 
 class URoadNetwork;
+class UTaxiPlanning;
 
 /**
  * The graph, the rules, the occupancy table, and the two memoised caches over the graph -
@@ -49,4 +50,11 @@ struct FTrafficContext
 	 * vehicle on a lane running against it. FPlanReResolver rejoins it by heading instead.
 	 */
 	bool bLanesMirrored = false;
+
+	/**
+	 * The taxi planning owner (spec 2026-10-02), whose ORDER is the claim pass's one more refusal - "not my turn:
+	 * waiting for X" (FClaimPass::Run). Null for a pass with no planning (a bare test, the resolver's own context):
+	 * then no order is asked, exactly the claims there were before it existed.
+	 */
+	UTaxiPlanning* Planning = nullptr;
 };

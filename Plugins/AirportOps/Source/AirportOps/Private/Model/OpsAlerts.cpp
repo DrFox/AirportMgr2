@@ -6,6 +6,7 @@
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
+#include "Model/TaxiPlanning.h"
 #include "Model/InspectFacts.h"
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
@@ -87,6 +88,20 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 			{
 				FOpsAlert& Alert = Found.Add_GetRef(OpsAlertOf(EAlertKind::FlightStranded, Flight->Id, NAME_None,
 					FText::Format(NSLOCTEXT("OpsAlerts", "FlightStranded", "Flight {0} is stranded - retire or unstick it"),
+						FText::FromString(Flight->Callsign))));
+				OpsAlertFocusAgent(Alert, *Agent);
+			}
+
+			// A PLAN LOST TO A LAYOUT EDIT (taxi planning spec 2026-10-02 §3): one alert per aircraft, from Airside's unplanned
+			// record, so it clears however that ended - a new plan, or arrival. Lost for another reason (a route changed under
+			// it) is the inspector's to say, not an alert: only the edit is the player's doing.
+			// ENFORCED BY: AirportOps.Model.Alerts.LostTaxiPlanRaisesAndClears
+			const UTaxiPlanning* Planning = Sources.Traffic != nullptr ? Sources.Traffic->GetTaxiPlanning() : nullptr;
+			const FTaxiUnplanned* Unplanned = Agent != nullptr && Planning != nullptr ? Planning->FindUnplanned(Agent->Id) : nullptr;
+			if (Unplanned != nullptr && Unplanned->Cause == ETaxiUnplanned::LayoutEdit)
+			{
+				FOpsAlert& Alert = Found.Add_GetRef(OpsAlertOf(EAlertKind::FlightLostTaxiPlan, Flight->Id, NAME_None,
+					FText::Format(NSLOCTEXT("OpsAlerts", "FlightLostTaxiPlan", "{0} lost its plan after a layout edit - taxiing unplanned"),
 						FText::FromString(Flight->Callsign))));
 				OpsAlertFocusAgent(Alert, *Agent);
 			}

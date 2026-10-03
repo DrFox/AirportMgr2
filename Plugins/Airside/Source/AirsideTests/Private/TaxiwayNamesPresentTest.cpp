@@ -169,5 +169,56 @@ bool FTaxiwayNamesRenameUndoTest::RunTest(const FString&)
 	return true;
 }
 
+/**
+ * OWNER RULING 2026-10-02 (PR #524) AT THE COMPOSITION: a connector left on the split-off piece is re-parented AND the
+ * facade announces it on the split's own event ("C1<A2"); undo brings A2 back silently - the Memento carries ParentId and
+ * ConnectorNumber with the names; redo re-parents it again.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesReparentFacadeTest, "Airside.Present.TaxiwayNames.ReparentIsAnnouncedAndUndone",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesReparentFacadeTest::RunTest(const FString&)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	if (!TestNotNull(TEXT("its facade"), Facade)) { return false; }
+	TArray<FString> Heard;
+	const FDelegateHandle Handle = Facade->OnTaxiwaySplit.AddLambda([&Heard](const FString& SplitOff, const FString& From)
+		{ Heard.Add(SplitOff + TEXT("<") + From); });
+	const auto Connect = [this, Actor](int32 From, int32 To)
+	{
+		TestTrue(TEXT("a click"), Actor->ConnectNodes(From, To, ERoadKind::Taxiway, INDEX_NONE, EPavement::Tarmac));
+		return Actor->Network->GetSegments().Num() - 1;
+	};
+	const auto NameAt = [Actor](int32 Index) { return Actor->Network->TaxiwayDisplayName(Actor->Network->TaxiwayOf(Actor->Network->SegmentIdAt(Index))); };
+
+	// A: 600 m, a 100 m middle, 300 m; B far away; stubs A1 (near) and A2 (far) - the model test's FStubbedA, by actor.
+	TArray<int32> P;
+	for (const double X : { 0.0, 30000.0, 60000.0, 70000.0, 85000.0, 100000.0 }) { P.Add(Actor->PlaceNode({ X, 0.0 })); }
+	TArray<int32> ASegs;
+	for (int32 I = 0; I + 1 < P.Num(); ++I) { ASegs.Add(Connect(P[I], P[I + 1])); }
+	Connect(Actor->PlaceNode({ 0.0, 200000.0 }), Actor->PlaceNode({ 60000.0, 200000.0 }));
+	const int32 Near = Connect(P[1], Actor->PlaceNode({ 30000.0, -20000.0 }));
+	const int32 Far = Connect(P[4], Actor->PlaceNode({ 85000.0, -20000.0 }));
+	TestEqual(TEXT("setup: near stub A1"), NameAt(Near), FString(TEXT("A1")));
+	TestEqual(TEXT("setup: far stub A2"), NameAt(Far), FString(TEXT("A2")));
+	TestEqual(TEXT("setup: nothing announced while drawing"), Heard.Num(), 0);
+
+	TestTrue(TEXT("the middle is deleted"), Actor->DeleteSegment(ASegs[2]));
+	TestEqual(TEXT("the split, then the rename"), Heard, TArray<FString>{ TEXT("C<A"), TEXT("C1<A2") });
+	TestEqual(TEXT("the far stub is C1"), NameAt(Far), FString(TEXT("C1")));
+	TestEqual(TEXT("the near stub is still A1"), NameAt(Near), FString(TEXT("A1")));
+
+	TestTrue(TEXT("undo"), Facade->Undo());
+	TestEqual(TEXT("undo restores A2"), NameAt(Far), FString(TEXT("A2")));
+	TestEqual(TEXT("and A whole"), NameAt(ASegs[4]), FString(TEXT("A")));
+	TestEqual(TEXT("and announces nothing"), Heard.Num(), 2);
+
+	TestTrue(TEXT("redo"), Facade->Redo());
+	TestEqual(TEXT("redo re-parents it again"), NameAt(Far), FString(TEXT("C1")));
+	Facade->OnTaxiwaySplit.Remove(Handle);
+	return true;
+}
 
 #endif // WITH_DEV_AUTOMATION_TESTS

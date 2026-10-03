@@ -14,7 +14,15 @@
 #include "GroundTraffic.generated.h"
 
 class URoadNetwork;
+class UTaxiPlanning;
+struct FTaxiClearance;
+enum class ETaxiUnplanned : uint8;
+enum class ETaxiClearanceKind : uint8;
 enum class EDepartureRefusal : uint8;
+struct FDeparturePlan;
+struct FPushbackPlan;
+struct FTaxiPlan;
+struct FTaxiRequest;
 struct FDepartureAsk;
 
 // FTrafficRules, FPlanReResolver AND FDeadlockResolver MOVED OFF THIS HEADER (issue #175) to
@@ -90,7 +98,11 @@ struct FGraphRebuildSummary
  *                                the one retry pass for every stopped waiter, by FRoadAgent::GetWait;
  *   - GroundTrafficRejoin.cpp    the rejoin search (Model/GroundTrafficRejoin.h, a private header) and
  *                                RescueStranded, its third caller (#502): moved out of the rebuild's
- *                                file, whose re-resolve is the other two.
+ *                                file, whose re-resolve is the other two;
+ *   - GroundTrafficPlanning.cpp  the taxi plan clearances (arrival, departure, queue, push) asked of
+ *                                UTaxiPlanning (spec 2026-10-02);
+ *   - GroundTrafficReplan.cpp    a taxi plan the world changed: ReplanTaxi, the rebuild's re-plan in
+ *                                order, the unplanned retry (#534 review).
  *
  * UGroundTraffic keeps the registry, dispatch, tick order and events; it owns one FClaimPass
  * (constructed fresh per Arbitrate call - it carries no state of its own), one
@@ -163,6 +175,42 @@ public:
 
 	/** How many parked aircraft are on the push watch (see OnPushGroundFreed). */
 	int32 PushWatchCountForTest() const { return PushWatch.Num(); }
+
+	/**
+	 * Something an arrival was refused a taxi plan for may have freed: the taxi reservation table released a window
+	 * since an arrival was last refused one (TaxiInRefusal). Fired once, at the end of the DiffFreedom that saw it -
+	 * the arrival queue's wake-up for a flight holding "awaiting taxi-in route" (spec 2026-10-02 §2: event-driven,
+	 * not polled). Bound here, not relayed, like OnPushGroundFreed.
+	 * ENFORCED BY: AirportOps.Present.Bus.TaxiPlansFreedIsBridged
+	 */
+	DECLARE_MULTICAST_DELEGATE(FOnTaxiPlansFreed);
+	FOnTaxiPlansFreed OnTaxiPlansFreed;
+
+	/**
+	 * Which aircraft taxi UNPLANNED changed (taxi planning PR 3: one lost its plan, or regained one, or parked) - fired once,
+	 * at the end of the DiffFreedom that saw it. What the ops alert "lost its plan after a layout edit" is recomputed on;
+	 * bound here, not relayed, like OnTaxiPlansFreed. The retry runs before that diff, so a plan regained is said in its frame.
+	 * ENFORCED BY: Airside.Model.TaxiPlan.UnplannedChangeIsAnnouncedInItsFrame (fired by Advance), AirportOps.Present.Bus.TaxiUnplannedChangedIsBridged
+	 */
+	DECLARE_MULTICAST_DELEGATE(FOnTaxiUnplannedChanged);
+	FOnTaxiUnplannedChanged OnTaxiUnplannedChanged;
+
+	/** The taxi planning owner - its table, its clearances, the order the claim pass enforces. Null only on the CDO. */
+	const UTaxiPlanning* GetTaxiPlanning() const { return TaxiPlanning; }
+
+	/** Moves whenever the taxi reservation table does - a cached clearance's date (FArrivalQueue::ClearanceFor). */
+	uint32 TaxiPlanRevision() const;
+
+	/**
+	 * WHETHER AN ARRIVAL PLANNED AS Plan COULD BE GIVEN A TAXI-IN PLAN NOW (spec 2026-10-02 §1, arrival clearance):
+	 * None, or EArrivalRefusal::NoTaxiPlan - asked of the plan the caller already made (ArrivalPlanner::Plan), so the
+	 * arrival queue's clearance and this model's dispatch judge one plan. Revoking a departure that has not started
+	 * pushback counts as possible (ruling 2: arrivals first). Nothing booked or revoked here. NOT CONST (review of #528
+	 * finding 6): a refusal notes that an arrival is waiting, so the next release wakes the queue (OnTaxiPlansFreed).
+	 */
+	EArrivalRefusal TaxiInRefusal(const URoadNetwork& Network, const FArrivalPlan& Plan, const FAirframe& Airframe);
+
+	virtual void PostInitProperties() override;
 
 	// NO RunwayFreedCount (removed in ops batch 3 PR E's review, 2026-09-30): PR D added it for PR E's two pollers,
 	// and neither reads a held runway - a held taxi out's replan is only RANKED by one (see RetryWaiters'
@@ -955,6 +1003,95 @@ private:
 	/** Assigns the id, stores the agent, announces Gone -> its phase. The one place all three happen. */
 	int32 Admit(FRoadAgent&& Agent);
 
+	/**
+	 * THE TAXI PLANNING OWNER (spec 2026-10-02), made in PostInitProperties - for every instance but the CDO, a
+	 * duplicate included: a Transient pointer is reset to the CDO's (null) by a duplication, and the duplicate's
+	 * PostInitProperties then makes its own (memory: transient subobject pointers reset on duplication). Its state is
+	 * session state, like Agents.
+	 * ENFORCED BY: Airside.Model.TaxiPlan.PlanningIsTheTrafficsOwn
+	 */
+	UPROPERTY(Transient) TObjectPtr<UTaxiPlanning> TaxiPlanning;
+
+	/** Set when TaxiInRefusal refused an arrival a plan; cleared when OnTaxiPlansFreed fires for it. */
+	bool bArrivalAwaitsTaxiPlan = false;
+
+	/** The taxi-in request for an arrival planned as Plan (ArrivalPlanner::TaxiInRequest), timed from now by a flown landing. */
+	FTaxiRequest TaxiInRequestNow(const FArrivalPlan& Plan, const FAirframe& Airframe) const;
+
+	/** The taxi-out request for a departure planned as Departure: straight out from its stand (Push null), or Push and the taxi on. */
+	FTaxiRequest TaxiOutRequest(const FRoadAgent& Agent, const FAirframe& Aircraft, const FDeparturePlan& Departure,
+		const FPushbackPlan* Push) const;
+
+	/** AskDeparture's last step: the taxi plan a departure would be cleared on, or PushbackBlocked with bNoTaxiPlan. */
+	void PlanTaxiOut(const FRoadAgent& Agent, const FAirframe& Aircraft, const URoadNetwork& Network, FDepartureAsk& Ask) const;
+
+	/** DepartAgent's last step: Ask's taxi plan booked, and the departure started now or booked to start when it says. */
+	EDepartureRefusal ClearDeparture(int32 AgentId, const URoadNetwork& Network, const FDepartureAsk& Ask);
+
+	/** A departure refused for want of a taxi plan, put on the push watch keyed on the taxi table. PushbackBlocked. */
+	EDepartureRefusal WatchForTaxiPlan(int32 AgentId, const URoadNetwork& Network, const FRoutePlan& PushRoute);
+
+	/**
+	 * An arrival's taxi-in booked under the id it is about to be admitted with, revoking - in the same swap - the
+	 * unstarted departures its plan needs (ruling 2: arrivals first; only those still parked), and putting each of those
+	 * back on the push watch, so it re-plans when the table moves. False: nothing booked or revoked, and no arrival.
+	 */
+	bool BookTaxiIn(int32 Id, const URoadNetwork& Network, const FTaxiPlan& Taxi, const TArray<int32>& Revoke);
+
+	/** DispatchArrival's refusal for want of a taxi plan: worded, logged (Detail appended), noted as waiting, broadcast. 0. */
+	int32 RefuseNoTaxiPlan(const FAirframe& Airframe, const TCHAR* Detail);
+
+	/**
+	 * After the claim pass: every cleared aircraft tracked (release, entry, phase, re-time), the gone ones' plans dropped,
+	 * and one whose route changed under it re-planned along the new one (ReplanTaxi).
+	 */
+	void TrackTaxiPlans(const URoadNetwork& Network);
+
+	/**
+	 * RE-PLAN ALONG THE ROUTE IT DRIVES (taxi planning PR 3), from where it is: a Taxiing aircraft from the end of the step
+	 * it is on, an Arriving one from its exit at its planned vacate time, a pushing one from where its push ends; a parked
+	 * one re-holds its stand. Old: the clearance it had (its kind, stage, queue), or null. No plan fits: UNPLANNED, with
+	 * Cause and Why (UTaxiPlanning::MarkUnplanned). True when it holds a plan after.
+	 */
+	bool ReplanTaxi(const FRoadAgent& Agent, const URoadNetwork& Network, ETaxiUnplanned Cause, const TCHAR* Why,
+		const FTaxiClearance* Old, int32 Depth = 0);
+
+	/**
+	 * ReplanTaxi's TAXIING arm: from the end of the step it is on, along the rest of its route - and anyone booked on that step
+	 * who is not physically ahead of it, and whom the new plan would put before it there or at the step's end (or conflict
+	 * with anywhere), taken out and re-planned BEHIND it, nearest first (review of #534 finding 1). Depth bounds that chain:
+	 * past 3 the rest taxi unplanned. Fail marks it unplanned and returns false. True when it holds a plan after.
+	 * ENFORCED BY: Airside.Model.TaxiPlan.ReplanKeepsTheFollowerBehind
+	 */
+	bool ReplanTaxiing(const FRoadAgent& Agent, const URoadNetwork& Network, const FAirframe& Aircraft, ETaxiClearanceKind Kind,
+		FTaxiRequest Request, const FTaxiClearance* Old, double EntryHold, int32 Depth, TFunctionRef<bool()> Fail);
+
+	/**
+	 * A LAYOUT EDIT'S RE-PLAN, from OnGraphRebuilt after the re-resolve: every aircraft that held a plan, in the old
+	 * table's order (Order, from UTaxiPlanning::TakeAllForRebuild) - the moving ones first, along their re-resolved
+	 * routes, then the parked; a Booked departure back on the push watch. Nothing else is admitted in between.
+	 */
+	void ReplanAfterRebuild(const URoadNetwork& Network, const TArray<int32>& Order, const TMap<int32, FTaxiClearance>& Old);
+
+	/** After a re-plan: a departure that was queueing for its runway entry (Old.QueueFor) queues again, the entry re-found by position after a rebuild. */
+	void RequeueAfterReplan(const FRoadAgent& Agent, const URoadNetwork& Network, const FTaxiClearance& Old);
+
+	/** Every unplanned aircraft retried when the table has moved, and forgotten once it parks or goes. Per Advance. */
+	void RetryUnplanned(const URoadNetwork& Network);
+
+	/** Every queueing departure (FTaxiClearance::QueueFor) asked again for the rest of its way, when the table has moved. Per Advance. */
+	void ExtendQueuedDepartures(const URoadNetwork& Network);
+
+	/** A BOOKED departure whose push is due and whose turn it is starts it (StartPlannedDeparture). End of AdvanceOnce. */
+	void StartDuePushes(const URoadNetwork& Network);
+
+	/**
+	 * A cleared departure moves off its stand on its plan's routes: pushes (PushRoute valid) or drives straight out
+	 * (Plan.Route). The one start DepartAgent and StartDuePushes share. False when the agent cannot be started.
+	 */
+	bool StartPlannedDeparture(int32 AgentId, const URoadNetwork& Network, const FRoutePlan& PushRoute,
+		const FRoutePlan& TaxiRoute);
+
 	int32 FindIndex(int32 AgentId) const;
 
 	/**
@@ -1239,6 +1376,18 @@ private:
 		uint32 EditRevision = 0;
 		uint32 GuidelineRevision = 0;
 		TSet<FRoadSegmentId> RunwaysHeld;
+
+		/**
+		 * The taxi reservation table's revision when it was last asked (taxi planning PR 2): a refusal for want of a taxi
+		 * plan clears only when the table moves. Asked whole when it has - at most once a SIM SECOND (AskedAt): a busy
+		 * field releases windows every frame, and a departure re-planned per frame per release is a planner per frame,
+		 * which spec §2 rules out ("never per frame"). A second of lag on a push is nothing a player sees.
+		 */
+		uint32 TaxiRevision = 0;
+		double AskedAt = 0.0;
+
+		/** Refused for want of a taxi plan, not for the push ground - so only the taxi table moving can clear it. */
+		bool bTaxiBlocked = false;
 	};
 
 	/**
@@ -1402,6 +1551,10 @@ struct FGroundTrafficTestAccess
 	{
 		return Traffic.ReplanAt(AgentId, Network, SpliceStep, BannedEdge, FGuidelineNodeId());
 	}
+
+	/** The taxi planning owner, writable - so a test can book a stand-in's windows, clear agents on hand-made plans, or
+	 *  switch order enforcement off (the headline test's mutation proof). */
+	UTaxiPlanning* TaxiPlanning() { return Traffic.TaxiPlanning; }
 
 private:
 	UGroundTraffic& Traffic;

@@ -23,6 +23,18 @@ enum class EDriveDirection : uint8
 	Reverse,
 };
 
+/**
+ * How a PIECE of a route ends - see FSpeedProfile::BuildPiece. An enum and not a bool bStops,
+ * per this codebase's rule, and because "rolls" is not merely "does not stop": it means the
+ * piece's last vertex keeps the limit its own last span gives it.
+ */
+UENUM()
+enum class EPieceEnd : uint8
+{
+	Rolls,
+	Stops,
+};
+
 
 /**
  * How fast an aircraft MAY be at each point of a route. Built once, then read.
@@ -101,6 +113,30 @@ struct AIRSIDE_API FSpeedProfile
 	 */
 	double LimitAt(double Distance) const;
 
+	/**
+	 * The same rules over a PIECE of a route - one guideline edge - for the taxi planner
+	 * (FTaxiPlanner), which must time every edge before it knows the route they will be part of.
+	 *
+	 * TWO DIFFERENCES FROM Build, and only two. End says whether the piece ends at rest (the last
+	 * vertex limit is 0, as Build always has it) or ROLLS on at whatever its own last span allows.
+	 * And it is QUIET: no census line, no tighter-than-lock warning - those are one line per DRIVEN
+	 * route, and a planner builds pieces for every edge it expands, which would bury them. The
+	 * verdicts are still kept (WasTighterThanLock, HasSharpVertex), so nothing is lost but the log.
+	 * Forward only: aircraft taxi forwards, and a reverse leg is a service bay's.
+	 */
+	void BuildPiece(const TArray<FVector2D>& Points, const FChassis& Chassis, EPieceEnd End);
+
+	/**
+	 * Seconds to drive the whole built line from EntrySpeed (clamped to LimitAt(0)), accelerating
+	 * at the chassis' taxi Accel and never above LimitAt - the follower's own speed law
+	 * (FRouteFollower::Advance) with the crab term at rest, integrated rather than ticked.
+	 *
+	 * HERE, ON THE AUTHORITY, rather than in the planner: "how fast may it be here" and "so how long
+	 * does it take" are one judgement, and a planner that integrated LimitAt itself would be the
+	 * second copy this header warns about. 0 when nothing was built.
+	 */
+	double SecondsToDrive(double EntrySpeed) const;
+
 	bool IsEmpty() const { return Distances.Num() < 2; }
 
 	/**
@@ -161,6 +197,14 @@ struct AIRSIDE_API FSpeedProfile
 	double GetSharpestAt() const { return SharpestTurnAt; }
 
 private:
+	/**
+	 * Build and BuildPiece's one body - so a piece and a route are judged by ONE set of rules. bWholeRoute is
+	 * a route the follower will drive: it logs its census and warnings; a piece does not. End decides whether
+	 * the last vertex is a stop (a route always is).
+	 */
+	void BuildLimits(const TArray<FVector2D>& Points, const FChassis& Chassis,
+		TConstArrayView<EDriveDirection> SpanDirections, EPieceEnd End, bool bWholeRoute);
+
 	/** Cumulative distance to each vertex. Distances[0] is 0. */
 	UPROPERTY() TArray<double> Distances;
 
@@ -184,6 +228,9 @@ private:
 
 	/** Kept so LimitAt can shape the braking curve between vertices. */
 	UPROPERTY() double Decel = 200.0;
+
+	/** The taxi acceleration Build was given - SecondsToDrive's forward pass. */
+	UPROPERTY() double Accel = 100.0;
 
 	/** What LimitAt reports when nothing was built. */
 	UPROPERTY() double Fallback = 1000.0;

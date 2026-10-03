@@ -124,6 +124,12 @@ struct FAgentFacts
 
 	/** Where it is, in names - "A3", "A/B", "09/27" - or empty (InspectFacts::WhereIs). Taxiway naming spec 2026-10-02. */
 	FString On;
+
+	/**
+	 * Why it taxis WITHOUT A PLAN, or empty (taxi planning PR 3, UTaxiPlanning::FindUnplanned) - "Unplanned (layout edit)"
+	 * is PR 4's card line; this is the fact it reads. Empty too for an agent that never had a plan (a vehicle).
+	 */
+	FString TaxiUnplanned;
 };
 
 struct FStandFacts

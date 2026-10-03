@@ -70,6 +70,50 @@ struct AIRSIDE_API FTrafficRules
 	UPROPERTY(EditAnywhere) double VehicleGap = 300.0;
 
 	/**
+	 * Seconds of slack added before AND after every window a taxi plan books (FTaxiPlanner, spec 2026-10-02 §1),
+	 * so an aircraft a little early or late on its plan is still inside its own window rather than in the next
+	 * one's. HERE, beside the spacing figures, because it is the space-time twin of AircraftGap: the gap keeps two
+	 * aircraft apart in distance, this in time. Order, not time, is what is enforced at run time (spec §2), so this
+	 * shapes plans, never safety; 5 s is a starting figure, to be judged against M_ScaleGatwick in PR 2.
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0")) double TaxiPlanMargin = 5.0;
+
+	/**
+	 * The most edges one planner MOVE may run through nodes it may not stop at (FTaxiPlanner's chains). A junction's
+	 * turn path is one to three pieces (Chord, TaperS, BendArc), a crossing's split adds a piece per conflict; eight
+	 * covered the longest chain FRoadGuidelineBuilder lays, with room (2026-10-02). A longer chain is not explored -
+	 * the planner refuses (NoFreeWindow) rather than plan a stop inside a junction - and says so once, as a Warning
+	 * naming this knob. A KNOB, not a constant (review of #527), so a layout that hits it is one edit from working
+	 * rather than one build.
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "1")) int32 TaxiPlanMaxChainEdges = 8;
+
+	/**
+	 * How many holding nodes short of its runway entry a departure tries to queue at, latest first, when the entry itself
+	 * is booked ahead of it (UGroundTraffic::PlanTaxiOut). Each is one planner call, asked when the table moves; 6 reached
+	 * back past the queue of two or three departures M_ScaleGatwick built up at 80 mov/h (2026-10-02).
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0")) int32 TaxiPlanQueueCandidates = 6;
+
+	/**
+	 * How late on its plan an aircraft may run, seconds, before its remaining windows are RE-TIMED (spec 2026-10-02 §2,
+	 * "~15 s (knob)"): moved later, with every window booked behind them, in the same order (UTaxiPlanning::Retime). Order,
+	 * not time, keeps the field safe, so this shapes only how realistic the table stays for the next plan made round it.
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "1")) double TaxiPlanRetimeLag = 15.0;
+
+	/**
+	 * How long a departure's plan holds its RUNWAY ENTRY after reaching it, seconds - not for ever (taxi planning PR 3, the
+	 * 80 mov/h starvation): held for ever until it lined up, the entry turned every later departure into a queue at a
+	 * holding node, each held for ever too, and taxi-in routes through them found no window - arrivals held in the air.
+	 * Bounded, the next departure plans to the entry after it; one still there past it is ahead in the order and is
+	 * waited for, and a late one is re-timed. 0: for ever, PR 2's rule. Applied to every booking that ends AT an entry - the
+	 * first, the queue's rest, and a re-plan (UTaxiPlanning::CapEntryHold).
+	 * ENFORCED BY: Airside.Perf.TaxiPlan.NoPermanentDeadlock (80/h admitted floor), Airside.Model.TaxiPlan.ReplannedDepartureFreesItsEntry
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0")) double TaxiPlanEntryHold = 90.0;
+
+	/**
 	 * How fast a push off a stand runs, uu/s. 1 uu is 1 cm - see UAircraftType::MainWheelRadius.
 	 *
 	 * ON THE RULES AND NOT THE AIRFRAME, unlike the braking figure the claim window reads:
@@ -208,6 +252,17 @@ struct AIRSIDE_API FTrafficRules
 	 * separately until #502's review.
 	 */
 	double PushClearBy(ETraversalClass Class) const;
+
+	/**
+	 * Whether a step StepLength long is a BOX for this class: too short to stand on without still blocking the node
+	 * behind it - Length < FootprintFor + GapFor, which is every junction turn path (spec 2026-09-06 §3.1). ONE RULE,
+	 * TWO READERS: the claim pass's box-entry rule (FClaimPass) and the taxi planner's "never wait inside a junction"
+	 * (FTaxiPlanner::CanHoldAt). Spelled inline in the claim pass until 2026-10-02; a planner that copied it could
+	 * hold an aircraft where the claim pass would never let it stop.
+	 * ENFORCED BY: Airside.Model.Traffic.BoxEntryFirstOnly (the claim pass's reader), Airside.Model.TaxiPlan.WaitsAtPlainNodeNotInJunction
+	 * (the planner's, through CanHoldAt)
+	 */
+	bool IsBox(double StepLength, ETraversalClass Class) const;
 
 	/** Which of the three push speeds above applies. The ONE consumer that has to agree with
 	 *  EPushbackNeed - see its body for why that matters. */

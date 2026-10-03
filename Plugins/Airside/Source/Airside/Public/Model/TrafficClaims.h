@@ -10,6 +10,8 @@
 #include "Model/TrafficRules.h"
 
 class URoadNetwork;
+class UTaxiPlanning;
+struct FTaxiOrderHold;
 
 /**
  * One agent's claim pass, extracted off UGroundTraffic (issue #84) so the biggest single
@@ -49,7 +51,8 @@ class URoadNetwork;
 struct AIRSIDE_API FClaimPass
 {
 	explicit FClaimPass(const FTrafficContext& Context)
-		: Rules(Context.Rules), Table(Context.Occupancy), Reach(Context.Reach), Chains(Context.Chains)
+		: Rules(Context.Rules), Table(Context.Occupancy), Reach(Context.Reach), Chains(Context.Chains),
+		Planning(Context.Planning), SimSeconds(Context.SimSeconds)
 	{
 	}
 
@@ -66,6 +69,12 @@ struct AIRSIDE_API FClaimPass
 	 * further call - including every OTHER agent's pass this same tick - from a map lookup.
 	 */
 	FRunwayChainCache& Chains;
+
+	/** The taxi planning owner, or null - see FTrafficContext::Planning. Its order is Run's one more refusal. */
+	UTaxiPlanning* Planning = nullptr;
+
+	/** The sim clock this pass runs at - UTaxiPlanning::OrderHold's (a test's delay is timed on it). */
+	double SimSeconds = 0.0;
 
 	/**
 	 * ApplyClaims' scratch, PROMOTED FROM LOCALS (issue #168): one Arbitrate() call builds
@@ -362,7 +371,12 @@ struct AIRSIDE_API FClaimPass
 
 	/** Step 3: ask the table for each in turn, keep what was granted or occupied, and let
 	 *  the FIRST refusal write StopWithin, WaitingOn and BlockedStep. */
-	void ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window, const FPendingClaims& Pending);
+	void ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window, const FPendingClaims& Pending,
+		const FTaxiOrderHold& OrderHold);
+
+	/** The taxi plan's order refusing the agent (ApplyClaims): refused at OrderHold's move, logged on the transition. True. */
+	bool RefuseForOrder(FRoadAgent& Agent, const FClaimWindow& Window, const FTaxiOrderHold& OrderHold, int32 WasWaitingOn,
+		int32 WasBlockedStep, double ReachExcess);
 
 	/** How far a refused claim lets the agent go, in route distance from T. A pure function
 	 *  of the refusal's kind, the step it was raised on, and the window. */

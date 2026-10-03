@@ -233,6 +233,44 @@ bool FPushGroundFreedBridgedTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlansFreedBridgedTest, "AirportOps.Present.Bus.TaxiPlansFreedIsBridged",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiPlansFreedBridgedTest::RunTest(const FString&)
+{
+	// THE ARRIVAL QUEUE'S WAKE-UP FOR "AWAITING TAXI-IN ROUTE" (taxi planning PR 2): Airside's OnTaxiPlansFreed, bridged like
+	// the push watch's - through the model's own delegate, and unbound by a detach.
+	FPushRig Rig;
+	if (!TestTrue(TEXT("a field and an attached runtime"), Rig.Build(true, 5.0))) { return false; }
+	FOpsEventBus& Bus = Rig.Runtime->GetBus();
+	const int32 Before = Bus.QueuedCount();
+	Rig.Model->OnTaxiPlansFreed.Broadcast();
+	TestEqual(TEXT("freed taxi plans are published onto the bus"), Bus.QueuedCount(), Before + 1);
+	Rig.Runtime->Attach(nullptr);
+	const int32 Detached = Bus.QueuedCount();
+	Rig.Model->OnTaxiPlansFreed.Broadcast();
+	TestEqual(TEXT("detached: nothing more is published"), Bus.QueuedCount(), Detached);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiUnplannedBridgedTest, "AirportOps.Present.Bus.TaxiUnplannedChangedIsBridged",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiUnplannedBridgedTest::RunTest(const FString&)
+{
+	// THE ALERTS PASS'S WAKE-UP FOR "LOST ITS PLAN" (taxi planning PR 3): Airside's OnTaxiUnplannedChanged, bridged like
+	// TaxiPlansFreed - through the model's own delegate, and unbound by a detach.
+	FPushRig Rig;
+	if (!TestTrue(TEXT("a field and an attached runtime"), Rig.Build(true, 5.0))) { return false; }
+	FOpsEventBus& Bus = Rig.Runtime->GetBus();
+	const int32 Before = Bus.QueuedCount();
+	Rig.Model->OnTaxiUnplannedChanged.Broadcast();
+	TestEqual(TEXT("a change in who taxis unplanned is published onto the bus"), Bus.QueuedCount(), Before + 1);
+	Rig.Runtime->Attach(nullptr);
+	const int32 Detached = Bus.QueuedCount();
+	Rig.Model->OnTaxiUnplannedChanged.Broadcast();
+	TestEqual(TEXT("detached: nothing more is published"), Bus.QueuedCount(), Detached);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPushGroundFreedDepartsTest, "AirportOps.Present.PushGroundFreed.DepartsTheFrameAfter",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FPushGroundFreedDepartsTest::RunTest(const FString&)

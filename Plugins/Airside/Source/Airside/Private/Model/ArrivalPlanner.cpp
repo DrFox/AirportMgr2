@@ -135,6 +135,18 @@ namespace ArrivalPlanner
 		return Query;
 	}
 
+	FTaxiRequest TaxiInRequest(const FArrivalPlan& Plan, double DepartAt)
+	{
+		FTaxiRequest Out;
+		Out.Start = Plan.Exit;
+		Out.Goal = Plan.StandNode();
+		Out.Errand = ERouteErrand::ArrivalTaxiIn;
+		Out.DepartAt = DepartAt;
+		Out.bMayWaitAtStart = false;
+		Out.bStartsRolling = true;
+		return Out;
+	}
+
 	/**
 	 * ChooseStand, with the span the ROUTE is limited by apart from the airframe the STANDS are
 	 * judged for (review fix 2). EdgeSpan 0 is NarrowTaxiwayOnRoute's probe: "which stand this
@@ -785,6 +797,7 @@ namespace ArrivalPlanner
 		case EArrivalRefusal::RunwayOccupied:
 		case EArrivalRefusal::NoFreeStand:
 		case EArrivalRefusal::GraphBeingEdited:  // clears when the player lets go of the node
+		case EArrivalRefusal::NoTaxiPlan:        // clears when a booked taxi plan frees (taxi planning, 2026-10-02)
 			return false;
 
 		// A SERVICE THE AIRPORT CANNOT GIVE is the player's to accept badly (spec 2026-09-28
@@ -868,6 +881,9 @@ namespace ArrivalPlanner
 
 		case EArrivalRefusal::GraphBeingEdited:
 			return TEXT("Arrival waiting: the airport is being edited.");
+
+		case EArrivalRefusal::NoTaxiPlan:
+			return TEXT("Arrival holding: no taxi-in route from the exit to the stand is free yet - waiting for traffic to clear.");
 
 		case EArrivalRefusal::NoStandClearOfStrip:
 			return TEXT("Arrival refused: every stand that fits sits inside a taxiway's clearance strip - redraw one further back.");

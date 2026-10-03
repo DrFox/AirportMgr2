@@ -68,3 +68,10 @@ double FTrafficRules::PushSpeedFor(EPushbackNeed Need) const
 	return HandTugPushSpeed;
 }
 AIRSIDE_EXHAUSTIVE_SWITCH_END
+
+bool FTrafficRules::IsBox(double StepLength, ETraversalClass Class) const
+{
+	// THROUGH THE TWO LOOKUPS, so GapFor's floor holds here too - the same sum PushClearBy makes, asked a different
+	// question (a box is a step SHORTER than the body and its gap).
+	return StepLength < FootprintFor(Class) + GapFor(Class);
+}

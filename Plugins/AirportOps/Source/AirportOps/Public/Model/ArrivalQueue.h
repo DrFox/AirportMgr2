@@ -188,7 +188,7 @@ private:
 	void JudgeUnarrived(const UFlightBoard& Board, const URoadNetwork& Network);
 
 	/** See Clearances. Logs on a change of reason; never bumps the revision. */
-	EArrivalRefusal ClearanceFor(const UGroundTraffic& Traffic, const URoadNetwork& Network, const UFlight& Flight);
+	EArrivalRefusal ClearanceFor(UGroundTraffic& Traffic, const URoadNetwork& Network, const UFlight& Flight);
 
 	/** Release the hold and put it on final, Now being the game time the change is dated. False, flight still Inbound and
 	 *  stand re-held (Rehold), if refused. */
@@ -252,6 +252,8 @@ private:
 		uint32 GuidelineAt = 0;
 		uint32 OccupancyAt = 0;
 		uint32 StandChurnAt = 0;
+		/** UGroundTraffic::TaxiPlanRevision when judged: the taxi-in plan's date (taxi planning PR 2). */
+		uint32 TaxiPlansAt = 0;
 		bool bValid = false;
 		/** The plan's FArrivalPlan::UsableRunways: the strips TickQueue's live gate asks about. Dated with Why. */
 		TArray<FRunwayEnd> Usable;

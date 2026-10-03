@@ -453,6 +453,30 @@ struct AIRPORTOPS_API FPushGroundFreedEvent
 };
 
 /**
+ * The taxi reservation table released a window since an arrival was refused a taxi-in plan - Airside's
+ * UGroundTraffic::OnTaxiPlansFreed, bridged like FRunwayFreedEvent. What a flight holding "awaiting taxi-in route"
+ * (EArrivalRefusal::NoTaxiPlan) waits on: the arrival queue's pass is dirtied by it (taxi planning PR 2, 2026-10-02).
+ * ENFORCED BY: AirportOps.Present.Bus.TaxiPlansFreedIsBridged
+ */
+struct AIRPORTOPS_API FTaxiPlansFreedEvent
+{
+	static const TCHAR* EventName() { return TEXT("TaxiPlansFreed"); }
+	FString Describe() const;
+};
+
+/**
+ * Which aircraft taxi without a plan changed - Airside's UGroundTraffic::OnTaxiUnplannedChanged, bridged like
+ * FTaxiPlansFreedEvent. The Alerts pass is dirtied by it: "lost its plan after a layout edit" raises and clears on it
+ * (taxi planning PR 3, 2026-10-02).
+ * ENFORCED BY: AirportOps.Present.Bus.TaxiUnplannedChangedIsBridged
+ */
+struct AIRPORTOPS_API FTaxiUnplannedChangedEvent
+{
+	static const TCHAR* EventName() { return TEXT("TaxiUnplannedChanged"); }
+	FString Describe() const;
+};
+
+/**
  * A taxiway edit split a piece off a taxiway (URoadEditFacade::OnTaxiwaySplit, bridged) - "C split off from A".
  * ENFORCED BY: AirportOps.Present.Bus.ReattachDoesNotDouble, AirportOps.Present.TaxiwaySplitReachesUi
  */
@@ -533,7 +557,7 @@ using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChanged
 	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent, FOfferAcceptedEvent,
 	FTurnaroundEndedEvent, FAirportStatusChangedEvent, FFlightCancelledEvent, FRunwayFreedEvent, FStandsFreedEvent,
 	FFlightInboundEvent, FPushGroundFreedEvent, FModulesRefundedEvent, FAlertChangedEvent, FAirlineAdmissionChangedEvent,
-	FFlightPhaseChangedEvent, FTaxiwaySplitEvent>;
+	FFlightPhaseChangedEvent, FTaxiwaySplitEvent, FTaxiPlansFreedEvent, FTaxiUnplannedChangedEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec

@@ -79,6 +79,13 @@ struct AIRSIDE_API FPushbackRun
 		bool bInNeedsThrust);
 
 	/**
+	 * How long a push along InPlan takes, start to standing at its end - FLOWN by a probe of this run (the push's own
+	 * trapezoid), never estimated; thrust taken as there, since a powerback's spool-up is the engine's, not the push's.
+	 * What a departure plan books its push ground for (taxi planning, spec 2026-10-02). 0 for a route it cannot start.
+	 */
+	static double SecondsFor(const FRoutePlan& InPlan, double InPushSpeed, double InPushAccel);
+
+	/**
 	 * One frame. FALSE MEANS THE PUSH IS OVER and the caller should hand over - the same
 	 * contract FLandingRun::Advance uses, so FRoadAgent::Advance's arm for this phase reads
 	 * exactly like the arm for an arrival.

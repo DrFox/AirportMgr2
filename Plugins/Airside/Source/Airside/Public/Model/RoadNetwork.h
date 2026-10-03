@@ -903,7 +903,8 @@ public:
 	int32 GetNextDepotNumber() const { return NextDepotNumber; }
 
 	// --- Taxiway names (spec 2026-10-02-taxiway-naming) - bodies in RoadNetworkTaxiways.cpp, which rule 77's budget
-	// on this file's .cpp (33 lines to spare on 2026-10-02) and rule 103's single writer both send there. -------------
+	// on this file's .cpp (33 lines to spare on 2026-10-02) and rule 103's single writer both send there; the table's
+	// lookups, display names, issuing and retirement in RoadNetworkTaxiwayTable.cpp (rule 77's 800, 2026-10-02). ------
 
 	/** The live taxiway with this Id, or null - dead, never minted, or INDEX_NONE. */
 	const FTaxiway* GetTaxiway(int32 TaxiwayId) const;
@@ -1303,8 +1304,8 @@ private:
 	 * Name ONE unnamed chain (spec "Assignment rules"), in order:
 	 *   inherit - it carries on (RoadGeom::IsInLine at a junction, FTaxiwayNamingRules::BendDegrees at a bend, plan D1)
 	 *             from a node where a named taxiway ENDS -> that taxiway, then RejudgeTaxiway (plan D3);
-	 *   connector - shorter than ConnectorMaxLength, both ends anchored (a named taxiway, a runway, or a dead end - plan
-	 *             D2) and a named taxiway at one end -> a connector of the lettered taxiway at its FIRST end, else its other;
+	 *   connector - shorter than ConnectorMaxLength, both ends anchored (a taxiway - named, or unnamed and so named in
+	 *             this same pass - a runway, or a dead end - plan D2) and a named taxiway at one end -> a connector of the lettered taxiway at its FIRST end, else its other;
 	 *   letter - anything else -> the next free letter.
 	 * ENFORCED BY: Airside.Model.TaxiwayNames.Assign / .ClickByClickDrawing / .Connector
 	 */
@@ -1319,6 +1320,10 @@ private:
 	void SplitTaxiwayBranches(int32 TaxiwayId, TArray<FTaxiwayRename>& OutRenames);
 	/** Invariant step 3 (spec "Disconnected"): the longest piece keeps it (ties by lowest index); each other piece is a new letter. */
 	void SplitTaxiwayPieces(int32 TaxiwayId, TArray<FTaxiwayRename>& OutRenames);
+	/** After either split (owner ruling 2026-10-02): each connector of TaxiwayId touching only Fresh is re-parented onto it
+	 *  and renumbered from it; reported (new name, old name) unless a player's override keeps its text.
+	 *  ENFORCED BY: Airside.Model.TaxiwayNames.SplitReparentsConnectors */
+	void ReparentSplitConnectors(int32 TaxiwayId, int32 Fresh, TArray<FTaxiwayRename>& OutRenames);
 	/** Invariant step 4 (spec "Empty"): a taxiway with no segment and no live connector is retired; one with a
 	 *  connector stays, its letter reserved. Returns how many it retired. */
 	int32 RetireEmptyTaxiways();
@@ -1498,6 +1503,10 @@ struct AIRSIDE_API FRoadNetworkTestAccess
 	/** Every segment unnamed and every taxiway forgotten - a level as saved before 2026-10-02 loads
 	 *  (Airside.Model.TaxiwayNames.BackfillGatwickShape). */
 	void ClearTaxiwayNamesForTest();
+
+	/** A player's override name on a live taxiway, bPlayerNamed set - the inspector card's rename (PR 3) before it exists
+	 *  (Airside.Model.TaxiwayNames.SplitReparentsConnectors' override case). False for a dead id. */
+	bool RenameTaxiwayForTest(int32 TaxiwayId, const FString& Name);
 
 private:
 	URoadNetwork& Network;

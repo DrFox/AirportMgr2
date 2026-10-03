@@ -65,6 +65,34 @@ double FLandingRun::RequiredLandingDistance(const FGroundPerformance& InGround,
 	return FMath::Max(Probe.Travelled, 0.0);
 }
 
+double FLandingRun::SecondsToVacate(const FRunwayEnd& End, const FAirframe& Airframe, double VacateAt)
+{
+	FLandingRun Probe;
+	Probe.bQuiet = true;
+	if (!Probe.Begin(End, Airframe, VacateAt))
+	{
+		return 0.0;
+	}
+	FVector2D At = FVector2D::ZeroVector;
+	double Heading = 0.0;
+	double Altitude = 0.0;
+	double Pitch = 0.0;
+	// RequiredLandingDistance's fixed step and bound, for its reasons: the answer must not depend on who asks, and the
+	// guard is against numbers that never land, not against slow convergence.
+	constexpr double Step = 1.0 / 60.0;
+	constexpr int32 MaxSteps = 60 * 600;
+	double Seconds = 0.0;
+	for (int32 Guard = 0; Guard < MaxSteps && Probe.Phase != ELandingPhase::Vacated; ++Guard)
+	{
+		if (!Probe.Advance(Step, Airframe, At, Heading, Altitude, Pitch))
+		{
+			break;
+		}
+		Seconds += Step;
+	}
+	return Seconds;
+}
+
 bool FLandingRun::Start(const FRunwayEnd& InEnd, const FAirframe& InAirframe, double InVacateAt)
 {
 	Phase = ELandingPhase::Vacated;
@@ -131,7 +159,7 @@ bool FLandingRun::Begin(const FRunwayEnd& InEnd, const FAirframe& InAirframe, do
 
 	Phase = ELandingPhase::Approach;
 
-	UE_LOG(LogAirsideTraffic, Log,
+	UE_CLOG(!bQuiet, LogAirsideTraffic, Log,
 		TEXT("Arrival armed: %.0f uu runway, vacating at %.0f, Vref %.0f uu/s, joining %.0f uu out."),
 		End.Length, VacateAt, Speed, InApproach.FinalDistance());
 	return true;
@@ -246,7 +274,7 @@ bool FLandingRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 			TouchdownAt = Travelled;
 			bTouchedDown = true;
 
-			UE_LOG(LogAirsideTraffic, Log,
+			UE_CLOG(!bQuiet, LogAirsideTraffic, Log,
 				TEXT("Touchdown %.0f uu past the threshold at %.0f uu/s, %.1f deg nose-up."),
 				Travelled, Speed, Pitch);
 		}
@@ -275,7 +303,7 @@ bool FLandingRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 		if (Speed <= Floor && Travelled >= VacateAt)
 		{
 			Phase = ELandingPhase::Vacated;
-			UE_LOG(LogAirsideTraffic, Log,
+			UE_CLOG(!bQuiet, LogAirsideTraffic, Log,
 				TEXT("Vacated %.0f uu past the threshold of %.0f available."),
 				Travelled, End.Length);
 		}
