@@ -5,7 +5,9 @@
 #include "Model/DeparturePlanner.h"
 #include "Model/FacilityPurchases.h"
 #include "Model/FlightBoard.h"
+#include "Model/FuelSupply.h"
 #include "Model/InspectFacts.h"
+#include "Model/OpsDesignDefaults.h"
 #include "Model/Pricing.h"
 #include "Model/RoadNetwork.h"
 #include "OpsRuntimeResolver.h"
@@ -200,27 +202,115 @@ namespace
 			return Ctx.Runtime != nullptr && Id.IsSet() ? Ctx.Runtime->QuoteFacility(Id) : FFacilityQuote();
 		}
 
-		/** The quote's SHED row, by kind - the Buy Shed button. The tank is a second offer (2026-10-02), so "the first row" is
-		 *  no longer the shed; a per-module menu replaces this when the tank gets its own button. */
+		/**
+		 * The quote row the run's ARGUMENT names (DepotModuleCode) - the card has one Buy per module since the tank became a second
+		 * offer (2026-10-02), and the row it was clicked on is the only thing that knows which. NO ARGUMENT KEEPS THE SHED, found BY
+		 * KIND: a plain TryRun (a caller from before the tank) meant the shed, and Modules is in TMap order, so "the first row" is not
+		 * it. Unlike buy_vehicle, no argument is not refused - there was always exactly one thing it could mean.
+		 * ENFORCED BY: AirportMgr.Actions.BuyModuleUsesItsArgument
+		 */
+		const FModuleOfferQuote* ChosenModule(const FFacilityQuote& Quote, const FBuildActionArg& Arg)
+		{
+			if (Arg.Code.IsNone())
+			{
+				return Quote.FindModule(EDepotModule::Shed);
+			}
+			return Quote.Modules.FindByPredicate([&Arg](const FModuleOfferQuote& Row) { return DepotModuleCode(Row.Module) == Arg.Code; });
+		}
+
 		bool CanBuyModule(const FBuildActionContext& Ctx)
 		{
 			const FFacilityQuote Quote = QuoteSelectedFacility(Ctx);
-			const FModuleOfferQuote* Shed = Quote.FindModule(EDepotModule::Shed);
-			return Shed != nullptr && Shed->Refusal == EPurchaseRefusal::None;
+			const FModuleOfferQuote* Row = ChosenModule(Quote, Ctx.Arg);
+			return Row != nullptr && Row->Refusal == EPurchaseRefusal::None;
 		}
 
 		void BuyModule(const FBuildActionContext& Ctx)
 		{
 			const FFacilityQuote Quote = QuoteSelectedFacility(Ctx);
-			if (Ctx.Runtime == nullptr || Quote.FindModule(EDepotModule::Shed) == nullptr)
+			const FModuleOfferQuote* Row = ChosenModule(Quote, Ctx.Arg);
+			if (Ctx.Runtime == nullptr || Row == nullptr)
 			{
-				UE_LOG(LogRoadBuild, Warning, TEXT("Buy module: no depot selected, or no ops runtime."));
+				UE_LOG(LogRoadBuild, Warning, TEXT("Buy module: no depot selected, no such module offered, or no ops runtime."));
 				return;
 			}
 			// UFacilityPurchases logs the "Purchase: ..." line; this one says the click arrived.
 			const FEntityInstanceId Depot = ARoadBuildController::DepotForSelection(Ctx.Target, Ctx.Selection);
-			UE_LOG(LogRoadBuild, Log, TEXT("Buy module %s: depot %d"), *UEnum::GetValueAsString(EDepotModule::Shed), Depot.Index);
-			Ctx.Runtime->BuyModule(Depot, EDepotModule::Shed);
+			UE_LOG(LogRoadBuild, Log, TEXT("Buy module %s: depot %d"), *UEnum::GetValueAsString(Row->Module), Depot.Index);
+			Ctx.Runtime->BuyModule(Depot, Row->Module);
+		}
+
+		/**
+		 * THE FUEL ROW'S VERBS (2026-10-03), bound to UOpsRuntime's forwarders. Gated on the SUPPLY'S OWN QUOTE - the one the card's row
+		 * is worded from (FDepotCard::FuelViewOf) - so a lit button is an order the supply will take. A DEPOT MUST BE SELECTED, though the
+		 * fuel is the airport's: these are the depot card's buttons, and a selection verb that ran with nothing selected is a hotkey
+		 * waiting to happen. Logged here as the click arriving; the supply logs what it did.
+		 */
+		bool FuelQuoted(const FBuildActionContext& Ctx, FFuelQuote& Out)
+		{
+			const UFuelSupply* Supply = Ctx.Runtime != nullptr ? Ctx.Runtime->GetFuelSupply() : nullptr;
+			if (Supply == nullptr || !ARoadBuildController::DepotForSelection(Ctx.Target, Ctx.Selection).IsSet())
+			{
+				return false;
+			}
+			Out = Supply->Quote(OpsDesignDefaults::SpotOrderLitres);
+			return true;
+		}
+
+		bool CanOrderFuel(const FBuildActionContext& Ctx)
+		{
+			FFuelQuote Q;
+			return FuelQuoted(Ctx, Q) && Q.Spot == EFuelOrderRefusal::None;
+		}
+
+		void OrderFuel(const FBuildActionContext& Ctx)
+		{
+			if (Ctx.Runtime == nullptr)
+			{
+				UE_LOG(LogRoadBuild, Warning, TEXT("Fuel order: no ops runtime."));
+				return;
+			}
+			const EFuelOrderRefusal Why = Ctx.Runtime->OrderSpotFuel(OpsDesignDefaults::SpotOrderLitres);
+			UE_LOG(LogRoadBuild, Log, TEXT("Fuel order %.0f L: %s"), OpsDesignDefaults::SpotOrderLitres,
+				Why == EFuelOrderRefusal::None ? TEXT("taken") : *UFacilityPurchases::FuelOrderRefusalText(Why).ToString());
+		}
+
+		bool CanSignFuelContract(const FBuildActionContext& Ctx)
+		{
+			FFuelQuote Q;
+			return FuelQuoted(Ctx, Q) && Q.Sign == EFuelOrderRefusal::None;
+		}
+
+		/** Signs the quote's NextTier - the tier the button's caption named. */
+		void SignFuelContract(const FBuildActionContext& Ctx)
+		{
+			FFuelQuote Q;
+			if (!FuelQuoted(Ctx, Q))
+			{
+				UE_LOG(LogRoadBuild, Warning, TEXT("Fuel contract: no depot selected, or no ops runtime."));
+				return;
+			}
+			const EFuelOrderRefusal Why = Ctx.Runtime->SignFuelContract(Q.NextTier);
+			UE_LOG(LogRoadBuild, Log, TEXT("Fuel contract tier %d: %s"), Q.NextTier,
+				Why == EFuelOrderRefusal::None ? TEXT("signed") : *UFacilityPurchases::FuelOrderRefusalText(Why).ToString());
+		}
+
+		bool CanCancelFuelContract(const FBuildActionContext& Ctx)
+		{
+			FFuelQuote Q;
+			return FuelQuoted(Ctx, Q) && Q.Cancel == EFuelOrderRefusal::None;
+		}
+
+		void CancelFuelContract(const FBuildActionContext& Ctx)
+		{
+			if (Ctx.Runtime == nullptr)
+			{
+				UE_LOG(LogRoadBuild, Warning, TEXT("Fuel contract cancel: no ops runtime."));
+				return;
+			}
+			const EFuelOrderRefusal Why = Ctx.Runtime->CancelFuelContract();
+			UE_LOG(LogRoadBuild, Log, TEXT("Fuel contract cancel: %s"),
+				Why == EFuelOrderRefusal::None ? TEXT("cancelled") : *UFacilityPurchases::FuelOrderRefusalText(Why).ToString());
 		}
 
 		/** The kind the run's argument names is on offer at the selected depot and not refused. NO ARGUMENT, NO BUY: a run that names no kind
@@ -437,7 +527,8 @@ namespace
 			[](const FBuildActionContext& Ctx) { return BuildActionVerbs::CanUnstick(Ctx); }));
 
 		// FACILITY PURCHASES (spec 2026-09-29-facility-upgrades §4): the depot card's three verbs, INSPECTOR
-		// ONLY. Buy-vehicle and sell carry an ARGUMENT - the kind, the vehicle - and they carry it: the card runs the
+		// ONLY. Buy-vehicle and sell carry an ARGUMENT - the kind, the vehicle - and so, since the tank's own row (2026-10-03), does
+		// buy-module - the module (DepotModuleCode; none means the shed, ChosenModule's reason) - and they carry it: the card runs the
 		// row WITH it (FBuildAction::TryRunWith, #448), where it used to choose the type / arm the vehicle on the
 		// controller and then run the row, leaving a second caller to run with whatever was last armed. A sale still
 		// takes two clicks (a destructive gesture needs a deliberate second one - memory) - the first arms the ROW,
@@ -465,6 +556,33 @@ namespace
 				[](const FBuildActionContext& Ctx) { return BuildActionVerbs::CanSellVehicle(Ctx); });
 			Sell.bInspectorOnly = true;
 			Out.Add(MoveTemp(Sell));
+		}
+
+		// THE FUEL ROW (2026-10-03, fuel-supply spec §7): order a spot load, sign a contract, cancel it - the depot card's buttons,
+		// INSPECTOR ONLY and keyless for the purchases' reason (a key that spent money on whatever was selected is a misclick). No
+		// argument: the spot order is one fixed size (OpsDesignDefaults::SpotOrderLitres) and the contract the quote's next tier.
+		// ENFORCED BY: AirportMgr.Actions.FacilityVerbsRegistered, AirportMgr.Actions.FuelVerbsReachTheSupply
+		{
+			FBuildAction Spot = Make(TEXT("selection.fuel_spot"), EActionSection::Selection,
+				LOCTEXT("FuelSpot", "Order fuel"), EKeys::Invalid, false,
+				[](FBuildActionContext& Ctx) { BuildActionVerbs::OrderFuel(Ctx); }, Never,
+				[](const FBuildActionContext& Ctx) { return BuildActionVerbs::CanOrderFuel(Ctx); });
+			Spot.bInspectorOnly = true;
+			Out.Add(MoveTemp(Spot));
+
+			FBuildAction Sign = Make(TEXT("selection.fuel_contract_up"), EActionSection::Selection,
+				LOCTEXT("FuelContractUp", "Sign fuel contract"), EKeys::Invalid, false,
+				[](FBuildActionContext& Ctx) { BuildActionVerbs::SignFuelContract(Ctx); }, Never,
+				[](const FBuildActionContext& Ctx) { return BuildActionVerbs::CanSignFuelContract(Ctx); });
+			Sign.bInspectorOnly = true;
+			Out.Add(MoveTemp(Sign));
+
+			FBuildAction Cancel = Make(TEXT("selection.fuel_contract_cancel"), EActionSection::Selection,
+				LOCTEXT("FuelContractCancel", "Cancel fuel contract"), EKeys::Invalid, false,
+				[](FBuildActionContext& Ctx) { BuildActionVerbs::CancelFuelContract(Ctx); }, Never,
+				[](const FBuildActionContext& Ctx) { return BuildActionVerbs::CanCancelFuelContract(Ctx); });
+			Cancel.bInspectorOnly = true;
+			Out.Add(MoveTemp(Cancel));
 		}
 
 		// --- Game ---
@@ -729,6 +847,11 @@ bool FBuildAction::TryChoose(FBuildActionContext& Context, int32 Line, const TCH
 	UE_LOG(LogRoadBuild, Log, TEXT("%s: %s line %d"), Via, *Id.ToString(), Line);
 	Choose(Context, Line);
 	return true;
+}
+
+FName DepotModuleCode(EDepotModule Module)
+{
+	return FName(*StaticEnum<EDepotModule>()->GetNameStringByValue(static_cast<int64>(Module)));
 }
 
 const FBuildAction* FindAction(FName Id)

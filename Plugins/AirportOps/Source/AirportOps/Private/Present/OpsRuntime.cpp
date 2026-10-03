@@ -243,9 +243,25 @@ FPurchaseResult UOpsRuntime::SellVehicle(int32 VehicleId)
 // THE FUEL FORWARDERS: the clock's Now, and nothing else. No attach guard, unlike BuyModule's: an order needs no network (an
 // unattached supply has no CapacityOf and holds anything, which only a test reaches). No log: the supply logs what it did,
 // and a refusal is returned for the caller to word.
+//
+// A SUCCESS IS A PURCHASE TOAST (2026-10-03), through the face the vehicle and module purchases use (FOpsPurchase - the nouns here,
+// the sentence the toast widget's). HERE, not in the inspector's verbs: a caller that is not the card (a test, a future hotkey)
+// spends the same money and the player should hear of it the same way. Called directly rather than through a bus event because no
+// fuel ORDER event exists and nothing in the Sim tier would consume one - the bus carries deliveries, which are not purchases.
+// ENFORCED BY: AirportOps.Present.Fuel.OrdersAreToasted
 EFuelOrderRefusal UOpsRuntime::OrderSpotFuel(double Litres)
 {
-	return FuelSupply->OrderSpot(Litres, Clock->Now());
+	const EFuelOrderRefusal Why = FuelSupply->OrderSpot(Litres, Clock->Now());
+	if (Why == EFuelOrderRefusal::None)
+	{
+		FOpsPurchase Purchase;
+		Purchase.Kind = EOpsPurchaseKind::FuelOrdered;
+		Purchase.Name = FText::Format(NSLOCTEXT("AirportOps", "FuelOrderedName", "{0} L of fuel"), FText::AsNumber(FMath::RoundToInt64(Litres)));
+		Purchase.Amount = Litres * FuelSupply->Figures.SpotPricePerLitre;
+		Purchase.Money = Pricing->Format(Purchase.Amount);
+		Events->NotifyPurchase(Purchase);
+	}
+	return Why;
 }
 
 EFuelOrderRefusal UOpsRuntime::SignFuelContract(int32 Tier)
@@ -254,13 +270,37 @@ EFuelOrderRefusal UOpsRuntime::SignFuelContract(int32 Tier)
 	// A SIGNING POSTS NOTHING and publishes nothing (the charge comes at day end), yet it is what silences FuelLow - the one fuel
 	// door with no other wake (mutation-checked: without this line the alerts pass does not run).
 	// ENFORCED BY: AirportOps.Present.Fuel.FuelLowIsWokenByFuelEvents
-	if (Why == EFuelOrderRefusal::None) { Bus.MarkDirty(TEXT("Alerts")); }
+	if (Why == EFuelOrderRefusal::None)
+	{
+		Bus.MarkDirty(TEXT("Alerts"));
+		// THE DAY'S COST, not a total: nothing is charged now, and each day end charges this (take-or-pay, the first day whole).
+		const FFuelQuote Signed = FuelSupply->Quote(0.0);
+		FOpsPurchase Purchase;
+		Purchase.Kind = EOpsPurchaseKind::FuelContractSigned;
+		Purchase.Name = FText::Format(NSLOCTEXT("AirportOps", "FuelContractName", "fuel contract, {0} L a day for {1} {1}|plural(one=day,other=days)"),
+			FText::AsNumber(FMath::RoundToInt64(Signed.ContractLitresPerDay)), FText::AsNumber(Signed.ContractDaysLeft));
+		Purchase.Amount = Signed.ContractDailyCost;
+		Purchase.Money = Pricing->Format(Purchase.Amount);
+		Events->NotifyPurchase(Purchase);
+	}
 	return Why;
 }
 
 EFuelOrderRefusal UOpsRuntime::CancelFuelContract()
 {
-	return FuelSupply->CancelContract(Clock->Now());
+	// THE CHARGE AS QUOTED, read before the cancel clears the contract it is figured from - the one figure CancelContract posts.
+	const double Charge = FuelSupply->Quote(0.0).CancelCharge;
+	const EFuelOrderRefusal Why = FuelSupply->CancelContract(Clock->Now());
+	if (Why == EFuelOrderRefusal::None)
+	{
+		FOpsPurchase Purchase;
+		Purchase.Kind = EOpsPurchaseKind::FuelContractCancelled;
+		Purchase.Name = NSLOCTEXT("AirportOps", "FuelContractCancelledName", "fuel contract");
+		Purchase.Amount = Charge;
+		Purchase.Money = Pricing->Format(Charge);
+		Events->NotifyPurchase(Purchase);
+	}
+	return Why;
 }
 
 int32 UOpsRuntime::ReservedSlotsOf(FEntityInstanceId Id, const FEntityInstance& Depot, EDepotModule Module)

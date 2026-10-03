@@ -139,11 +139,58 @@ void UFuelSupply::DeliverContractDay(double Now)
 	if (--Contract.DaysLeft <= 0) { Contract = FFuelContract(); }
 }
 
+FFuelQuote UFuelSupply::Quote(double SpotLitres) const
+{
+	FFuelQuote Out;
+	Out.StockLitres = StockLitres;
+	Out.CapacityLitres = Capacity();
+	Out.bBounded = static_cast<bool>(CapacityOf);
+	Out.PendingLitres = PendingSpotLitres();
+	Out.SpotLitres = SpotLitres;
+	Out.SpotCost = SpotLitres * Figures.SpotPricePerLitre;
+	Out.SpotDelaySeconds = Figures.SpotDelaySeconds;
+	Out.TermDays = Figures.ContractTermDays;
+	// THE VERDICTS ARE THE JUDGES' OWN CALLS, not re-derived: the command runs the same Judge, so the card cannot light a refusal.
+	Out.Spot = JudgeSpot(SpotLitres);
+	const bool bRunning = Contract.Tier != INDEX_NONE && Figures.ContractTiers.IsValidIndex(Contract.Tier);
+	if (bRunning)
+	{
+		const FFuelContractTier& Tier = Figures.ContractTiers[Contract.Tier];
+		Out.ContractTier = Contract.Tier;
+		Out.ContractDaysLeft = Contract.DaysLeft;
+		Out.ContractLitresPerDay = Tier.LitresPerDay;
+		Out.ContractDailyCost = Tier.LitresPerDay * Tier.PricePerLitre;
+		Out.CancelCharge = CancelChargeOf(Contract);
+	}
+	Out.NextTier = Contract.Tier == INDEX_NONE ? 0 : Contract.Tier + 1;
+	if (Figures.ContractTiers.IsValidIndex(Out.NextTier))
+	{
+		const FFuelContractTier& Next = Figures.ContractTiers[Out.NextTier];
+		Out.NextLitresPerDay = Next.LitresPerDay;
+		Out.NextDailyCost = Next.LitresPerDay * Next.PricePerLitre;
+	}
+	else
+	{
+		Out.NextTier = INDEX_NONE;
+	}
+	// JudgeContract asks AlreadyContracted FIRST, so a running contract reads that whatever NextTier is - one at a time.
+	Out.Sign = JudgeContract(Out.NextTier);
+	Out.Cancel = bRunning ? EFuelOrderRefusal::None : EFuelOrderRefusal::NoContract;
+	return Out;
+}
+
+double UFuelSupply::CancelChargeOf(const FFuelContract& Of) const
+{
+	if (!Figures.ContractTiers.IsValidIndex(Of.Tier)) { return 0.0; }
+	const FFuelContractTier& Tier = Figures.ContractTiers[Of.Tier];
+	return Of.DaysLeft * Tier.LitresPerDay * Tier.PricePerLitre * Figures.CancelFraction;
+}
+
 EFuelOrderRefusal UFuelSupply::CancelContract(double Now)
 {
 	if (Contract.Tier == INDEX_NONE || !Figures.ContractTiers.IsValidIndex(Contract.Tier)) { return EFuelOrderRefusal::NoContract; }
-	const FFuelContractTier& Tier = Figures.ContractTiers[Contract.Tier];
-	const double Charge = Contract.DaysLeft * Tier.LitresPerDay * Tier.PricePerLitre * Figures.CancelFraction;
+	// ONE CHARGE: the quote's figure and the posted one are CancelChargeOf, so the card's tooltip is what the ledger takes.
+	const double Charge = CancelChargeOf(Contract);
 	if (Ledger != nullptr)
 	{
 		Ledger->Post(Now, ELedgerCategory::FuelPurchase, -Charge, NSLOCTEXT("Ledger", "FuelCancel", "Fuel contract cancelled"));

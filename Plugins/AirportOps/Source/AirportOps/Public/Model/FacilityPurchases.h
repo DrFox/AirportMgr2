@@ -9,6 +9,8 @@
 #include "FacilityPurchases.generated.h"
 
 class FOpsEventBus;
+/** UFuelSupply's (Model/FuelSupply.h) - a fixed underlying type, so declared here without dragging the supply into every quote reader. */
+enum class EFuelOrderRefusal : uint8;
 struct FServiceVehicle;
 class UJobBoard;
 class ULedger;
@@ -244,6 +246,13 @@ public:
 
 	/** "No space", "Can't afford" - the disabled button's reason. The wording is the contract. */
 	static FText RefusalText(EPurchaseRefusal Why);
+
+	/**
+	 * The fuel row's reason, one sentence per EFuelOrderRefusal (2026-10-03) - BESIDE RefusalText so the depot card's two kinds of
+	 * greyed button speak from one place, and Can't afford reads the same on a shed and on a spot order. Empty for None.
+	 * ENFORCED BY: AirportOps.Model.FuelSupply.EveryRefusalHasASentence
+	 */
+	static FText FuelOrderRefusalText(EFuelOrderRefusal Why);
 
 private:
 	/** Entity if it is a live facility on Network, else null. */

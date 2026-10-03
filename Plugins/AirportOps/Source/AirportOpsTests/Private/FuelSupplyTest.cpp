@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Model/FacilityPurchases.h"
 #include "Model/FuelSupply.h"
 #include "Model/Ledger.h"
 #include "Model/OpsEventBus.h"
@@ -265,6 +266,72 @@ bool FFuelSupplyPublishesTest::RunTest(const FString&)
 	TestEqual(TEXT("but only what fitted as added (15,000 L stocked of 30,000)"), Seen[0].Added, 15000.0, 1e-9);
 	TestTrue(TEXT("CONTROL: less than was sent"), Seen[0].Added < Seen[0].Litres);
 	TestTrue(TEXT("and a contract"), Seen[0].bContract);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelQuoteIsTheJudgesTest, "AirportOps.Model.FuelSupply.QuoteIsTheJudges",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelQuoteIsTheJudgesTest::RunTest(const FString&)
+{
+	// THE CARD RENDERS THE QUOTE, the commands run the judges: the two must be one answer, in every state the card can be in -
+	// full tanks, broke, no contract, a contract running. Each case asks the quote, then the command, and they must agree.
+	UFuelSupply* Supply = SupplyWithLedger(12000.0, 30000.0, 100000.0);
+	const FFuelSupplyFigures& Fig = Supply->Figures;
+	FFuelQuote Q = Supply->Quote(10000.0);
+	TestEqual(TEXT("the stock as held"), Q.StockLitres, 12000.0, 1e-9);
+	TestEqual(TEXT("the capacity as wired"), Q.CapacityLitres, 30000.0, 1e-9);
+	TestTrue(TEXT("and bounded - a reader is wired"), Q.bBounded);
+	TestEqual(TEXT("a spot order that fits is offered"), Q.Spot, EFuelOrderRefusal::None);
+	TestEqual(TEXT("at the spot price"), Q.SpotCost, 10000.0 * Fig.SpotPricePerLitre, 1e-6);
+	TestEqual(TEXT("no contract: the next tier is the smallest"), Q.NextTier, 0);
+	TestEqual(TEXT("its day as the tier prices it"), Q.NextDailyCost, Fig.ContractTiers[0].LitresPerDay * Fig.ContractTiers[0].PricePerLitre, 1e-6);
+	TestEqual(TEXT("for the term"), Q.TermDays, Fig.ContractTermDays);
+	TestEqual(TEXT("which may be signed"), Q.Sign, EFuelOrderRefusal::None);
+	TestEqual(TEXT("and nothing to cancel"), Q.Cancel, EFuelOrderRefusal::NoContract);
+	TestEqual(TEXT("CONTROL: the cancel command agrees"), Supply->CancelContract(0.0), EFuelOrderRefusal::NoContract);
+
+	// A CONTRACT RUNNING: one at a time, so Sign is refused whatever tier is next, and Cancel quotes what the command posts.
+	TestEqual(TEXT("the smallest tier signs"), Supply->SignContract(Q.NextTier, 0.0), EFuelOrderRefusal::None);
+	Q = Supply->Quote(10000.0);
+	TestEqual(TEXT("the running tier is quoted"), Q.ContractTier, 0);
+	TestEqual(TEXT("with its days"), Q.ContractDaysLeft, Fig.ContractTermDays);
+	TestEqual(TEXT("and its day's litres"), Q.ContractLitresPerDay, Fig.ContractTiers[0].LitresPerDay, 1e-9);
+	TestEqual(TEXT("a running contract refuses a second"), Q.Sign, EFuelOrderRefusal::AlreadyContracted);
+	TestEqual(TEXT("CONTROL: and so does the command, for the tier the quote names"), Supply->SignContract(1, 0.0), EFuelOrderRefusal::AlreadyContracted);
+	TestEqual(TEXT("it may be cancelled"), Q.Cancel, EFuelOrderRefusal::None);
+	const double Before = Supply->Ledger->Balance();
+	TestEqual(TEXT("the cancel runs"), Supply->CancelContract(0.0), EFuelOrderRefusal::None);
+	TestEqual(TEXT("and charges exactly the quoted figure"), Before - Supply->Ledger->Balance(), Q.CancelCharge, 1e-6);
+	TestTrue(TEXT("CONTROL: a figure that is not zero"), Q.CancelCharge > 0.0);
+
+	// FULL TANKS AND AN EMPTY PURSE: each refusal the quote names is the one the command returns.
+	Supply->StockLitres = 30000.0;
+	TestEqual(TEXT("full tanks: the spot order is quoted NoRoom"), Supply->Quote(10000.0).Spot, EFuelOrderRefusal::NoRoom);
+	TestEqual(TEXT("CONTROL: and the command agrees"), Supply->OrderSpot(10000.0, 0.0), EFuelOrderRefusal::NoRoom);
+	Supply->StockLitres = 0.0;
+	Supply->Ledger->Post(0.0, ELedgerCategory::FuelPurchase, -Supply->Ledger->Balance(), FText::FromString(TEXT("test: spent")));
+	TestEqual(TEXT("broke: quoted CannotAfford"), Supply->Quote(10000.0).Spot, EFuelOrderRefusal::CannotAfford);
+	TestEqual(TEXT("CONTROL: and the command agrees"), Supply->OrderSpot(10000.0, 0.0), EFuelOrderRefusal::CannotAfford);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelRefusalSentencesTest, "AirportOps.Model.FuelSupply.EveryRefusalHasASentence",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelRefusalSentencesTest::RunTest(const FString&)
+{
+	// A GREYED BUTTON SAYS WHY: every refusal but None has words, and no two share them (a reason that reads like another teaches
+	// the wrong fix). Walked by value, so an enumerator appended without a case goes red here.
+	TestTrue(TEXT("None says nothing"), UFacilityPurchases::FuelOrderRefusalText(EFuelOrderRefusal::None).IsEmpty());
+	TSet<FString> Seen;
+	for (uint8 Value = 1; Value <= static_cast<uint8>(EFuelOrderRefusal::NoContract); ++Value)
+	{
+		const FString Words = UFacilityPurchases::FuelOrderRefusalText(static_cast<EFuelOrderRefusal>(Value)).ToString();
+		TestFalse(FString::Printf(TEXT("refusal %d has words"), Value), Words.IsEmpty());
+		TestFalse(FString::Printf(TEXT("refusal %d's words are its own ('%s')"), Value, *Words), Seen.Contains(Words));
+		Seen.Add(Words);
+	}
+	TestEqual(TEXT("Can't afford reads as the shed's does"), UFacilityPurchases::FuelOrderRefusalText(EFuelOrderRefusal::CannotAfford).ToString(),
+		UFacilityPurchases::RefusalText(EPurchaseRefusal::CannotAfford).ToString());
 	return true;
 }
 

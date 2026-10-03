@@ -28,6 +28,48 @@ struct AIRPORTOPS_API FFuelSpotOrder
 };
 
 /**
+ * EVERYTHING THE DEPOT CARD'S FUEL ROW SHOWS, AND NOTHING IT COMPUTES - FFacilityQuote's rule (facility-upgrades spec §3: the UI
+ * renders only the quote), for the supply. The card's three buttons and the three BuildActions rows behind them read their
+ * refusals from HERE, so a button cannot be lit for an order the rules would refuse. A PLAIN STRUCT, rebuilt on every ask; ==
+ * defaulted, so the inspector's card key can hold one whole and a field added here is compared without anyone remembering to.
+ * ENFORCED BY: AirportOps.Model.FuelSupply.QuoteIsTheJudges
+ */
+struct FFuelQuote
+{
+	double StockLitres = 0.0;
+	/** Capacity(); bBounded false while no capacity reader is wired (unbounded - a bare test's supply). */
+	double CapacityLitres = 0.0;
+	bool bBounded = false;
+	double PendingLitres = 0.0;
+
+	/** The running contract - Tier INDEX_NONE for none - and its day as the tier prices it. */
+	int32 ContractTier = INDEX_NONE;
+	int32 ContractDaysLeft = 0;
+	double ContractLitresPerDay = 0.0;
+	double ContractDailyCost = 0.0;
+	/** What a cancel would charge now: CancelContract's own figure. */
+	double CancelCharge = 0.0;
+
+	/** The spot order the card offers: its litres, what it costs now, and how long it takes. */
+	double SpotLitres = 0.0;
+	double SpotCost = 0.0;
+	double SpotDelaySeconds = 0.0;
+
+	/** The tier the card's Sign button would sign (see Quote), its day, and the term it signs for; INDEX_NONE past the last. */
+	int32 NextTier = INDEX_NONE;
+	double NextLitresPerDay = 0.0;
+	double NextDailyCost = 0.0;
+	int32 TermDays = 0;
+
+	/** The three verbs' verdicts: JudgeSpot, JudgeContract(NextTier), and NoContract with nothing to cancel. */
+	EFuelOrderRefusal Spot = EFuelOrderRefusal::None;
+	EFuelOrderRefusal Sign = EFuelOrderRefusal::None;
+	EFuelOrderRefusal Cancel = EFuelOrderRefusal::None;
+
+	bool operator==(const FFuelQuote& Other) const = default;
+};
+
+/**
  * The airport's fuel: what it holds, what it has contracted, what it has ordered (spec 2026-10-02-progression-and-
  * fuel-supply §7). Before this the depot held unlimited fuel for free.
  *
@@ -103,4 +145,16 @@ public:
 
 	/** Adds up to Litres, stopping at capacity; returns what was added. TAKE-OR-PAY: the caller has already paid. */
 	double Receive(double Litres);
+
+	/**
+	 * The card's row, with a spot order of SpotLitres on offer - see FFuelQuote. THE NEXT TIER is the one after the running
+	 * contract, the smallest while none runs; since one contract runs at a time (JudgeContract's AlreadyContracted), a running one
+	 * makes the Sign verdict AlreadyContracted whatever the tier, and the card's Sign is in practice the smallest tier. Larger
+	 * tiers wait for a tier picker (2026-10-03: the brief's ruling, said in the task report).
+	 */
+	FFuelQuote Quote(double SpotLitres) const;
+
+private:
+	/** What cancelling Of would charge: the days left at the tier's daily cost, times CancelFraction. Quote and CancelContract both. */
+	double CancelChargeOf(const FFuelContract& Of) const;
 };

@@ -1052,4 +1052,48 @@ bool FFuelLowWokenTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelOrdersAreToastedTest, "AirportOps.Present.Fuel.OrdersAreToasted",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelOrdersAreToastedTest::RunTest(const FString&)
+{
+	// A FUEL ORDER SPENDS MONEY, AND THE PLAYER HEARS OF IT the way a shed or a bowser is heard of: one purchase toast per success
+	// through the runtime's forwarders, the nouns and the figure on it, and none for a refusal.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = nullptr;
+	if (!TestTrue(TEXT("setup: the starter depot is placed"), FacilityWiredDepot(TestWorld, Runtime).IsSet())) { return false; }
+	UFuelSupply* Supply = FacilityWiredBoardSupply(*Runtime);
+	if (!TestNotNull(TEXT("setup: the board holds the supply"), Supply)) { return false; }
+	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
+	Runtime->GetEvents()->OnPurchase.AddDynamic(Listener, &UOpsEventsTestListener::OnPurchase);
+	Supply->Draw(Supply->StockLitres);
+
+	if (!TestEqual(TEXT("a spot order is taken"), Runtime->OrderSpotFuel(10000.0), EFuelOrderRefusal::None)) { return false; }
+	if (TestEqual(TEXT("and toasted once"), Listener->CountOf(TEXT("buy:FuelOrdered")), 1))
+	{
+		const FOpsPurchase& Ordered = Listener->Purchases.Last();
+		TestEqual(TEXT("at what it cost"), Ordered.Amount, 10000.0 * Supply->Figures.SpotPricePerLitre, 1e-6);
+		TestTrue(FString::Printf(TEXT("naming the litres ('%s')"), *Ordered.Name.ToString()), Ordered.Name.ToString().Contains(TEXT("10,000")));
+		TestFalse(TEXT("with the money worded"), Ordered.Money.IsEmpty());
+	}
+	if (!TestEqual(TEXT("the smallest contract signs"), Runtime->SignFuelContract(0), EFuelOrderRefusal::None)) { return false; }
+	if (TestEqual(TEXT("and is toasted once"), Listener->CountOf(TEXT("buy:FuelContractSigned")), 1))
+	{
+		const FFuelContractTier& Tier = Supply->Figures.ContractTiers[0];
+		TestEqual(TEXT("at ONE DAY's cost - the day end charges it"), Listener->Purchases.Last().Amount, Tier.LitresPerDay * Tier.PricePerLitre, 1e-6);
+	}
+	const int32 Before = Listener->Purchases.Num();
+	TestEqual(TEXT("a second contract is refused"), Runtime->SignFuelContract(1), EFuelOrderRefusal::AlreadyContracted);
+	TestEqual(TEXT("and toasts nothing"), Listener->Purchases.Num(), Before);
+	const double Charge = Supply->Quote(0.0).CancelCharge;
+	if (!TestEqual(TEXT("the contract cancels"), Runtime->CancelFuelContract(), EFuelOrderRefusal::None)) { return false; }
+	if (TestEqual(TEXT("and is toasted once"), Listener->CountOf(TEXT("buy:FuelContractCancelled")), 1))
+	{
+		TestEqual(TEXT("at the charge it was quoted"), Listener->Purchases.Last().Amount, Charge, 1e-6);
+	}
+	TestEqual(TEXT("a cancel with nothing running is refused"), Runtime->CancelFuelContract(), EFuelOrderRefusal::NoContract);
+	TestEqual(TEXT("and toasts nothing"), Listener->CountOf(TEXT("buy:FuelContractCancelled")), 1);
+	return true;
+}
+
 #endif

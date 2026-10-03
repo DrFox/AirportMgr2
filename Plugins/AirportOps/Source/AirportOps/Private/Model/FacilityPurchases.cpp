@@ -1,6 +1,7 @@
 #include "Model/FacilityPurchases.h"
 
 #include "AirportOpsLog.h"
+#include "Model/FuelSupply.h"
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
 #include "Model/OpsEventBus.h"
@@ -22,6 +23,22 @@ FText UFacilityPurchases::RefusalText(EPurchaseRefusal Why)
 	case EPurchaseRefusal::UnknownType:    return LOCTEXT("UnknownType", "Not for sale");
 	case EPurchaseRefusal::VehicleBusy:    return LOCTEXT("VehicleBusy", "Busy");
 	case EPurchaseRefusal::NoStandAdmits:  return LOCTEXT("NoStandAdmits", "Too large for any stand");
+	}
+	return FText::GetEmpty();
+}
+
+FText UFacilityPurchases::FuelOrderRefusalText(EFuelOrderRefusal Why)
+{
+	// RefusalText's CannotAfford words, said again by name rather than by calling it with a cast: the two enums are different
+	// types, and a reordered value would silently borrow the wrong sentence.
+	switch (Why)
+	{
+	case EFuelOrderRefusal::None:              return FText::GetEmpty();
+	case EFuelOrderRefusal::NoRoom:            return LOCTEXT("FuelNoRoom", "No room in the tanks - buy a tank");
+	case EFuelOrderRefusal::CannotAfford:      return LOCTEXT("CannotAfford", "Can't afford");
+	case EFuelOrderRefusal::UnknownTier:       return LOCTEXT("FuelUnknownTier", "No larger contract");
+	case EFuelOrderRefusal::AlreadyContracted: return LOCTEXT("FuelAlreadyContracted", "Already under contract");
+	case EFuelOrderRefusal::NoContract:        return LOCTEXT("FuelNoContract", "No contract");
 	}
 	return FText::GetEmpty();
 }

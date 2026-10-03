@@ -214,6 +214,21 @@ void UToastStackWidget::OnPurchase(const FOpsPurchase& Purchase)
 				FText::AsNumber(Purchase.Count), Purchase.Name),
 			ENotificationSeverity::Warning);
 		return;
+	case EOpsPurchaseKind::FuelOrdered:
+		Notifications->PostFeed(FText::Format(NSLOCTEXT("AirportMgr", "FuelOrdered", "Ordered {0} — {1}"), Purchase.Name, Purchase.Money),
+			ENotificationSeverity::Info);
+		return;
+	case EOpsPurchaseKind::FuelContractSigned:
+		// "A DAY", because nothing was charged at the signing: the figure is what each day end will take, the first day whole.
+		Notifications->PostFeed(FText::Format(NSLOCTEXT("AirportMgr", "FuelContractSigned", "Signed {0} — {1} a day"), Purchase.Name, Purchase.Money),
+			ENotificationSeverity::Info);
+		return;
+	case EOpsPurchaseKind::FuelContractCancelled:
+		Notifications->PostFeed(bPaid
+			? FText::Format(NSLOCTEXT("AirportMgr", "FuelContractCancelled", "Cancelled {0} — {1} charged"), Purchase.Name, Purchase.Money)
+			: FText::Format(NSLOCTEXT("AirportMgr", "FuelContractCancelledFree", "Cancelled {0}"), Purchase.Name),
+			ENotificationSeverity::Info);
+		return;
 	}
 }
 AIRSIDE_EXHAUSTIVE_SWITCH_END

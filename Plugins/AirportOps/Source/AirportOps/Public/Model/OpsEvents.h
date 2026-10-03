@@ -38,7 +38,13 @@ enum class EOpsPurchaseKind : uint8
 	VehicleWithdrawn,
 	ModuleBought,
 	/** #266's repair: modules with no room left on the plot, removed and refunded - the game's doing, not the player's. */
-	ModulesRefunded
+	ModulesRefunded,
+	/** A spot fuel order paid for (UOpsRuntime::OrderSpotFuel). Name is the litres; Amount the price, paid now. */
+	FuelOrdered,
+	/** A fuel contract signed. Name says the tier and term; Amount is ONE DAY's cost, charged at each day end - signing pays nothing. */
+	FuelContractSigned,
+	/** A fuel contract cancelled. Amount is the cancellation charge, 0 when the term had run out. */
+	FuelContractCancelled
 };
 
 /**
