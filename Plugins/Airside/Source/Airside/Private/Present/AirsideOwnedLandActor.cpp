@@ -61,8 +61,12 @@ AAirsideOwnedLandActor* AAirsideOwnedLandActor::Find(const UWorld* World)
 void AAirsideOwnedLandActor::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
-	// THE EDITOR SHOWS THE LEVEL'S AUTHORED LAND: no BeginPlay binds there, so construction draws what the network holds.
-	Apply(LandOf(GetWorld()));
+	// BOUND AT CONSTRUCTION, NOT ONLY AT PLAY (final review 2026-10-03): the editor's Road Build mode offers Buy land
+	// and undoes land through its transaction, and no BeginPlay ever runs there - an edge bound only in BeginPlay kept
+	// its walls and clip on the old outline. Bind draws the current land as its catch-up, so the editor shows the
+	// level's authored land as before.
+	// ENFORCED BY: Airside.Present.OwnedLand.WallsFollowWithoutPlay
+	Bind();
 }
 
 void AAirsideOwnedLandActor::BeginPlay()
@@ -123,7 +127,8 @@ void AAirsideOwnedLandActor::AuthorStartingLand(FVector2D Origin, double TileSiz
 		return;
 	}
 	Facade->AuthorOwnedLand(FLandGrid::Make(Origin, TileSize, Columns, Rows, StartTiles));
-	// The editor has no binding (BeginPlay never ran there), so draw what was just authored.
+	// Bound since construction, so the facade's broadcast has already redrawn; this is the catch-up for an actor whose
+	// airport registered after it was constructed.
 	Apply(LandOf(GetWorld()));
 }
 

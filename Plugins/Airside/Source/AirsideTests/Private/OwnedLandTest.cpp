@@ -174,4 +174,26 @@ bool FOwnedLandWiredTest::RunTest(const FString&)
 	return true;
 }
 
+
+/**
+ * THE EDITOR DRIVER TOO (final review 2026-10-03, Important 2): URoadBuildEdMode offers Buy land, and in the editor no
+ * BeginPlay ever runs - an edge bound only there left its walls and clip on the old outline after an editor purchase or
+ * undo. Spawned and NOT begun, as a level-placed actor sits in the editor.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOwnedLandWallsFollowWithoutPlay, "Airside.Present.OwnedLand.WallsFollowWithoutPlay",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOwnedLandWallsFollowWithoutPlay::RunTest(const FString&)
+{
+	FAirsideTestWorld Fixture;
+	Fixture.Actor->GetEditFacade()->AuthorOwnedLand(OlStart());
+	AAirsideOwnedLandActor* Edge = Fixture.World->SpawnActor<AAirsideOwnedLandActor>(FVector::ZeroVector, FRotator::ZeroRotator);
+	if (!TestNotNull(TEXT("edge spawned"), Edge)) { return false; }
+	TestEqual(TEXT("construction draws the 1x2"), Edge->NumWalls(), 4);
+	FLandGrid Grown = Fixture.Actor->Network->GetOwnedLand();
+	Grown.SetTileOwned(FIntPoint(1, 3), true);
+	Fixture.Actor->GetEditFacade()->AuthorOwnedLand(Grown);
+	TestEqual(TEXT("an editor-time change redraws at once, with no BeginPlay"), Edge->NumWalls(), 6);
+	return true;
+}
+
 #endif

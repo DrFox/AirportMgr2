@@ -6,6 +6,7 @@
 #include "Tool/GridFrameSource.h"
 #include "Tool/GuidelineDrawTool.h"
 #include "Tool/HoldingPointTool.h"
+#include "Tool/LandBuyTool.h"
 #include "Tool/PlotPlaceTool.h"
 #include "Tool/RoadDrawTool.h"
 #include "Tool/RoadEditTarget.h"
@@ -94,6 +95,13 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 			LOCTEXT("FuelDepotTooltip", "Place a fuel depot: click a service road to anchor it, drag along the road for width, away from it for depth, then press Build."),
 			[] { return MakeUnique<FPlotPlaceTool>(EPlaceableEntity::FuelDepot); },
 			EEditHandleKind::None, /*bShowsRoadNodes*/ false, /*bShowsPlotGhosts*/ true },
+
+		// BUY LAND (land purchase spec R6). T, because every digit is taken and "Land" is aircraft.land's label
+		// (BuildActions.cpp) - a second "Land" on the bar would read as the same action.
+		{ EKeys::T,     TEXT("BuyLand"), LOCTEXT("BuyLand", "Buy land"),
+			LOCTEXT("BuyLandTooltip", "Buy a 600 m tile of land next to yours: click a priced tile past the edge."),
+			[] { return MakeUnique<FLandBuyTool>(); },
+			EEditHandleKind::None },
 	};
 	return TConstArrayView<FToolRegistration>(Registry);
 }

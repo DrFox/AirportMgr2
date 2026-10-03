@@ -98,6 +98,12 @@ upkeep, fuel deliveries — runs on game time, never wall time.
 The player gets a flat plot with one road leading off-map. Starting money buys a basic
 kit: grass runway, taxiway, roads, one stand, a goods depot, a Control building.
 
+**The plot is owned land** (2026-10-02): 600 m tiles on an 8x8 grid, starting with 1x2 at
+the bottom centre, shown as a diorama cut with earth strata at its edge. More land is bought
+a tile at a time with the Buy land tool (T), each tile dearer than the last; nothing is built
+past the edge. See `docs/superpowers/specs/2026-10-02-land-purchase-design.md`. The off-map
+road link is deferred to the deliveries feature (spec section 8).
+
 1. Drag out a runway to the desired length.
 2. Place a stand sized for a small aircraft.
 3. Draw a taxiway from runway to stand.

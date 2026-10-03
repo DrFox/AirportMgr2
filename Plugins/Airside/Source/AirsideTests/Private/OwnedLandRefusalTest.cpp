@@ -150,4 +150,34 @@ bool FOwnedLandPreviewsSayOutside::RunTest(const FString&)
 	return true;
 }
 
+
+/**
+ * A DRAG IS A BUILD (final review 2026-10-03, Important 1): moving a node or an apron corner past the cut must be
+ * refused like placing one there - otherwise one drag in the Select tool puts built road over the void that PlaceNode
+ * refuses at the very same point.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOwnedLandDragsStayOnTheLand, "Airside.Present.OwnedLand.DragsStayOnTheLand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOwnedLandDragsStayOnTheLand::RunTest(const FString&)
+{
+	FAirsideTestWorld Fixture;
+	ARoadNetworkActor* Actor = Fixture.Actor;
+	Actor->GetEditFacade()->AuthorOwnedLand(RefusalStart());
+
+	const int32 A = Actor->PlaceNode(FVector2D(0.0, -50000.0));
+	const int32 B = Actor->PlaceNode(FVector2D(0.0, 50000.0));
+	if (!TestTrue(TEXT("setup: a taxiway on owned land"), Actor->ConnectNodes(A, B, ERoadKind::Taxiway))) { return false; }
+	TestFalse(TEXT("dragging its end into the void is refused"), Actor->GetEditFacade()->MoveNode(B, FVector2D(90000.0, 50000.0)));
+	TestEqual(TEXT("and the node stays put"), Actor->Network->GetNodes()[B].Position, FVector2D(0.0, 50000.0));
+	TestTrue(TEXT("a drag within the land still works"), Actor->GetEditFacade()->MoveNode(B, FVector2D(0.0, 40000.0)));
+
+	const int32 Apron = Actor->AddApron(RefusalSquare(FVector2D(5000.0, 10000.0), 10000.0));
+	if (!TestNotEqual(TEXT("setup: an apron on owned land"), Apron, int32(INDEX_NONE))) { return false; }
+	TestFalse(TEXT("dragging its corner across the cut is refused"),
+		Actor->GetEditFacade()->MoveApronCorner(Apron, 1, FVector2D(40000.0, 10000.0)));
+	TestTrue(TEXT("a corner dragged within the land still moves"),
+		Actor->GetEditFacade()->MoveApronCorner(Apron, 1, FVector2D(20000.0, 10000.0)));
+	return true;
+}
+
 #endif

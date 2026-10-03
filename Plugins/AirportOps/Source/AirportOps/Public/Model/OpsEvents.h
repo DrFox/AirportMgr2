@@ -38,7 +38,9 @@ enum class EOpsPurchaseKind : uint8
 	VehicleWithdrawn,
 	ModuleBought,
 	/** #266's repair: modules with no room left on the plot, removed and refunded - the game's doing, not the player's. */
-	ModulesRefunded
+	ModulesRefunded,
+	/** A land tile bought (land purchase spec R10). APPENDED, so no other value moves. */
+	LandBought
 };
 
 /**

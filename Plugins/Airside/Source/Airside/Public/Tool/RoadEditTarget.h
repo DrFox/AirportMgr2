@@ -272,6 +272,15 @@ public:
 	 */
 	virtual FString WhyRunwayRefused(FVector2D From, FVector2D To, const URoadProfile* Profile) const = 0;
 
+	/**
+	 * Buying land (land purchase spec R5, R6), for the Buy land tool. The quote prices the tile at the current number
+	 * owned; the Why says why a tile cannot be bought now ("" = it can); Buy charges the purse and grows the land.
+	 * Defaults are a target with no land: nothing to sell. ENFORCED BY: Airside.Present.OwnedLand.BuyRefusals
+	 */
+	virtual FBuildQuote QuoteLandTile(FIntPoint Tile) const { return FBuildQuote(); }
+	virtual FString WhyLandTileRefused(FIntPoint Tile) const { return TEXT("No land here"); }
+	virtual bool BuyLandTile(FIntPoint Tile) { return false; }
+
 	/** Why an apron with this outline may not be laid - today only owned land. Empty = allowed. The apron tool's
 	 *  ghost and AddApron both ask it. ENFORCED BY: Airside.Present.OwnedLand.EveryBuildAsksTheLand */
 	virtual FString WhyApronRefused(TArrayView<const FVector2D> Outline) const = 0;

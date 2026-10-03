@@ -375,6 +375,14 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|OwnedLand")
 	TSoftObjectPtr<UMaterialInterface> PlinthWallMaterial;
 
+	/** A land tile's price with no tiles owned. Land purchase spec R5; first guess 2026-10-02, tune in play. */
+	UPROPERTY(EditAnywhere, Category = "Airside|OwnedLand", meta = (ClampMin = "0"))
+	double LandTileBase = 150000.0;
+
+	/** Each tile already owned adds this fraction of Base to the next: Base x (1 + Growth x Owned). */
+	UPROPERTY(EditAnywhere, Category = "Airside|OwnedLand", meta = (ClampMin = "0"))
+	double LandTileGrowth = 0.5;
+
 	/**
 	 * A RIGGED ground vehicle. Preferred over VehicleMesh; null falls back to it.
 	 *
