@@ -358,6 +358,7 @@ struct FAircraftDisplay
 	int32 VerticalFpm = 0;
 	int32 AltitudeMetres = 0;
 	FString Destination;
+	FString On;
 	bool bEngineRunning = false;
 	FString Fuel;
 	FString Pushback;

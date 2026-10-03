@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
+#include "Solve/RoadGeom.h"
 
 class URoadNetwork;
 
@@ -83,8 +84,10 @@ namespace ExitGeometry
 	 * be solved as straight through (IsInLineAtRunwayEnd). 10 degrees, set 2026-10-01: the
 	 * reported layout was 1.95 degrees off, grid and direction snaps leave a few, and at 10 the
 	 * runway's end edge, squared to the taxiway, moves under 1.8 m on a 20 m runway.
+	 * THE VALUE IS RoadGeom::InLineDegrees since 2026-10-02 (taxiway names read it from Model/).
+	 * ENFORCED BY: Airside.Solve.InLineIsOneDefinition
 	 */
-	constexpr double InLineEndDegrees = 10.0;
+	constexpr double InLineEndDegrees = RoadGeom::InLineDegrees;
 
 	/**
 	 * A runway ending at a node whose one other arm is a taxiway carrying on within

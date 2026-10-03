@@ -1038,4 +1038,20 @@ bool FInspectorLocateMovesTheCameraTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorAircraftOnTest, "AirportMgr.Inspector.Card.AircraftSaysWhereItIs",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FInspectorAircraftOnTest::RunTest(const FString&)
+{
+	// "On: A3" (taxiway naming spec, "First consumers"): the line appears when the facts know where, and not otherwise.
+	FAgentFacts Facts;
+	Facts.On = TEXT("A3");
+	FInspectorCardView View;
+	FAircraftCard::Compose(FAircraftCard::DisplayOf(Facts, FAircraftNames()), View);
+	TestTrue(FString::Printf(TEXT("the card says where ('%s')"), *View.Facts), View.Facts.Contains(TEXT("\nOn: A3")));
+	Facts.On.Reset();
+	FAircraftCard::Compose(FAircraftCard::DisplayOf(Facts, FAircraftNames()), View);
+	TestFalse(TEXT("and says nothing when it does not know"), View.Facts.Contains(TEXT("On:")));
+	return true;
+}
+
 #endif

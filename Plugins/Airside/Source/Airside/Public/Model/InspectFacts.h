@@ -121,6 +121,9 @@ struct FAgentFacts
 	 * and the alert cannot disagree about whether this aircraft is deadlocked.
 	 */
 	TArray<int32> DeadlockedWith;
+
+	/** Where it is, in names - "A3", "A/B", "09/27" - or empty (InspectFacts::WhereIs). Taxiway naming spec 2026-10-02. */
+	FString On;
 };
 
 struct FStandFacts
@@ -239,6 +242,16 @@ namespace InspectFacts
 	 * branches on it.
 	 */
 	AIRSIDE_API FString StatusOf(const FRoadAgent& Agent);
+
+	/**
+	 * Where Agent is, in the words a controller uses (taxiway naming spec 2026-10-02, plan D13): the edge it is on now
+	 * (UGroundTraffic::CurrentStep at DistanceAlongPlan - the map the claim pass uses, so it cannot disagree with where
+	 * the follower is) - a lane derived from a runway -> its pair ("09/27", DescribeRunway's); from a taxiway -> its name
+	 * (URoadNetwork::TaxiwayDisplayName); a turn path -> its junction's name ("A/B"); anything else - a stand lead-in, a
+	 * hand-laid line, an unnamed network - empty. ONE answer for the aircraft card's "On:" and the Deadlock alert.
+	 * ENFORCED BY: Airside.Model.TaxiwayNames.WhereIsAnAgent, AirportOps.Model.Alerts.DeadlockSaysWhere
+	 */
+	AIRSIDE_API FString WhereIs(const FRoadAgent& Agent, const URoadNetwork& Network);
 
 	/**
 	 * False when SegmentIndex is not a live runway segment. The direction is the RESOLVED one

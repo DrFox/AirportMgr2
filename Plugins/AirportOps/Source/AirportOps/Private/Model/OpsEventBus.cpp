@@ -182,6 +182,11 @@ FString FPushGroundFreedEvent::Describe() const
 	return FString::Printf(TEXT("aircraft %d"), AgentId);
 }
 
+FString FTaxiwaySplitEvent::Describe() const
+{
+	return FString::Printf(TEXT("%s split off from %s"), *SplitOff, *From);
+}
+
 FString FFlightInboundEvent::Describe() const
 {
 	return FString::Printf(TEXT("flight %d, airline %s"), FlightId, *AirlineId.ToString());

@@ -419,6 +419,13 @@ enum class EPreviewStyle : uint8
 	 */
 	GridMinor,
 	GridMajor,
+
+	/**
+	 * A taxiway's name (spec 2026-10-02 "Labels") - context, like Guideline: true whatever the gesture. Drawn as a
+	 * fixed-pixel tag (FPreviewLook::bTag), never sized against the road. AT THE END, for ServiceEdge's reason: this is a
+	 * UENUM and renumbering it repoints any value already serialised against it.
+	 */
+	TaxiwayName,
 };
 
 /**

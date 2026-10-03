@@ -13,6 +13,7 @@
 #include "Model/GroundTraffic.h"
 
 #include "AirsideLog.h"
+#include "Model/InspectFacts.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TrafficClaims.h"
 #include "Model/TrafficContext.h"
@@ -630,8 +631,14 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const TMap<int32, in
 		{
 			if (!LogAirsideTraffic.IsSuppressed(ELogVerbosity::Warning))
 			{
-				UE_LOG(LogAirsideTraffic, Warning, TEXT("%sDeadlock among agents [%s]: no member can turn; retrying in %.0f s"),
-					bAllAircraft ? TEXT("All-aircraft ") : TEXT(""), *JoinCycleMembers(Cycle, Agents, AgentIndex), Rules.RetrySeconds);
+				// WHERE, by its lowest member (the alert's key), in names (taxiway naming spec: "the deadlock alert/log
+				// says where") - empty on an unnamed network, which reads as it always did.
+				const FRoadAgent* Lowest = FindAgentIn(Agents, AgentIndex, Key);
+				const FString Where = Lowest != nullptr ? InspectFacts::WhereIs(*Lowest, Network) : FString();
+				const FString OnWhere = Where.IsEmpty() ? FString() : FString::Printf(TEXT(" on %s"), *Where);
+				UE_LOG(LogAirsideTraffic, Warning, TEXT("%sDeadlock among agents [%s]%s: no member can turn; retrying in %.0f s"),
+					bAllAircraft ? TEXT("All-aircraft ") : TEXT(""), *JoinCycleMembers(Cycle, Agents, AgentIndex), *OnWhere,
+					Rules.RetrySeconds);
 			}
 		}
 

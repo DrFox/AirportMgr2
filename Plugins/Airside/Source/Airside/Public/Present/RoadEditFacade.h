@@ -234,6 +234,16 @@ public:
 	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnBuildRefused, const FBuildQuote& /*Quote*/, EBuildRefusal /*Why*/);
 	FOnBuildRefused OnRefused;
 
+	/**
+	 * "C split off from A" - one broadcast per split NotifyChanged's normalise made (URoadNetwork::NormaliseTaxiways,
+	 * spec "Each rename emits ONE event the game turns into a toast"). NATIVE, OnRefused's reason; the layer with a UI
+	 * bridges it (the ops runtime's "TaxiwaySplit" bridge) - Airside never names that layer's types (rule 1b). The
+	 * editor mode has no such layer: the model's own log line is the record there.
+	 * ENFORCED BY: Airside.Present.TaxiwayNames.SplitIsAnnouncedAndUndone, AirportOps.Present.Bus.ReattachDoesNotDouble
+	 */
+	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnTaxiwaySplit, const FString& /*SplitOff*/, const FString& /*From*/);
+	FOnTaxiwaySplit OnTaxiwaySplit;
+
 	// --- IRoadEditTarget ---------------------------------------------------------------
 
 	virtual const URoadNetwork* GetNetwork() const override;
@@ -610,6 +620,9 @@ private:
 	 * forget to defer.
 	 */
 	void NotifyChanged(EChangeKind Kind = EChangeKind::Topology);
+
+	/** NotifyChanged's naming half - see the call there. */
+	void NormaliseTaxiwayNames();
 
 	/**
 	 * THE single OnReplaced.Broadcast() call site, NotifyChanged's shape for the replacement notice. Called by Undo and
