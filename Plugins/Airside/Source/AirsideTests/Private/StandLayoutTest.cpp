@@ -11,6 +11,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/SpeedProfile.h"
 #include "Model/Vehicle.h"
+#include "Model/VehicleEnvelope.h"
 #include "Model/VehicleFit.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/IcaoCode.h"
@@ -253,25 +254,27 @@ bool FEveryTemplateLegIsDrivableByEveryVehicleTest::RunTest(const FString& Param
 	// of FReverseRun::Start, which already refuses what it cannot hold. Restating a JUDGEMENT
 	// in a test is what let four attempts ship green and crab in PIE.
 	//
-	// PER LETTER, BY ITS DESIGN VEHICLE AND EVERY VEHICLE NO LARGER (user 2026-09-26): each
-	// letter's template is laid for UAirsideSettings::ResolveStandDesignVehicle(Letter), and a
-	// smaller vehicle may serve it too. "Smaller" is VehicleFit::NoLargerThan, strict on all four
-	// axes - so the tow (chain 575) is NOT smaller than the truck (355) and is not asked to drive
-	// a C-F stand here. A TOW is judged through VehicleFit::JudgePlan over the whole bay - arrive,
-	// serve, reverse, depart - because a trailer's fold is a property of the chain it arrives
-	// with, which no one leg on its own can show.
+	// PER LETTER, BY EVERY VEHICLE THE STAND ADMITS (user 2026-09-26, widened 2026-10-03): each
+	// letter's template is laid for its admitted set - its own design vehicle and every smaller
+	// letter's (UEntityDefinition::AdmittedVehicles) - and admits whatever is inside that set's
+	// FVehicleEnvelope, the bid's own ceiling. So since 2026-10-03 the tow IS asked to drive every
+	// C-F stand here: it was refused them (VehicleFit::NoLargerThan the truck, strict on its 575
+	// chain) and is admitted now because the lanes carry its settle straight. A TOW is judged
+	// through VehicleFit::JudgePlan over the whole bay - arrive, serve, reverse, depart - because
+	// a trailer's fold is a property of the chain it arrives with, which no one leg can show.
 	const TArray<FVehicle> Fleet = {
 		UAirsideSettings::ResolveUtilityTowVehicle(), UAirsideSettings::ResolveDefaultVehicle() };
 	URoadNetwork* Network = NewObject<URoadNetwork>();
+	TSet<EIcaoCode> TowJudgedOn;
 
 	for (const EIcaoCode StandLetter : AllLetters())
 	{
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(StandLetter);
-		const FVehicle Design = UAirsideSettings::ResolveStandDesignVehicle(StandLetter);
+		const FVehicleEnvelope Admits = FVehicleEnvelope::Of(UAirsideSettings::ResolveStandVehiclesOf(Stand, StandLetter));
 
 		for (const FVehicle& Vehicle : Fleet)
 		{
-			if (!VehicleFit::NoLargerThan(Vehicle, Design))
+			if (!Admits.Admits(Vehicle))
 			{
 				continue;
 			}
@@ -320,6 +323,7 @@ bool FEveryTemplateLegIsDrivableByEveryVehicleTest::RunTest(const FString& Param
 			{
 				continue;
 			}
+			TowJudgedOn.Add(StandLetter);
 			for (const FServiceBay& Bay : Stand->ServiceBays)
 			{
 				const FVerdictAndPlan Judged = JudgeBay(Bay, Vehicle, *Network);
@@ -327,19 +331,16 @@ bool FEveryTemplateLegIsDrivableByEveryVehicleTest::RunTest(const FString& Param
 					*Bay.AnchorId.ToString(), *Judged.Verdict.Describe()), Judged.Verdict.Fits());
 			}
 		}
+	}
 
-		// A MEASUREMENT, NOT AN ASSERTION (controller ruling 2026-09-26): whether the tow could
-		// serve a C stand anyway. NoLargerThan says it may not be sent; this says whether the
-		// ground would have held it, for the PR to report.
-		if (StandLetter == EIcaoCode::C)
-		{
-			for (const FServiceBay& Bay : Stand->ServiceBays)
-			{
-				const FFitVerdict Measured = JudgeBay(Bay, Fleet[0], *Network).Verdict;
-				AddInfo(FString::Printf(TEXT("MEASURED tow on Code C bay '%s': fits %d - %s"),
-					*Bay.AnchorId.ToString(), Measured.Fits() ? 1 : 0, *Measured.Describe()));
-			}
-		}
+	// NOT VACUOUS, AND THE RULING ITSELF: the tow was driven through every letter's bays, C-F
+	// included. Until 2026-10-03 this block only MEASURED the tow on C, because it was refused there:
+	// every bay "ended 12 uu / 6.9 deg off the end pose (limits 20 uu / 3.0 deg)" of the reverse,
+	// with no straight after the reverse corner for the trailer to settle on.
+	for (const EIcaoCode StandLetter : AllLetters())
+	{
+		TestTrue(*FString::Printf(TEXT("Code %s: the stand admits the utility tow, so its bays were judged with it"),
+			IcaoCode::ToLetter(StandLetter)), TowJudgedOn.Contains(StandLetter));
 	}
 
 	return true;
@@ -367,11 +368,15 @@ bool FEveryBayHoldsATowArrivingBentTest::RunTest(const FString& Parameters)
 	for (const EIcaoCode StandLetter : AllLetters())
 	{
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(StandLetter);
-		const FVehicle Design = UAirsideSettings::ResolveStandDesignVehicle(StandLetter);
-		const double Radius = 1.1 * Design.Chassis.TightestFollowableRadius();
+		const FVehicleEnvelope Admits = FVehicleEnvelope::Of(UAirsideSettings::ResolveStandVehiclesOf(Stand, StandLetter));
+		// THE ROAD JOIN'S OWN RADIUS: FAnchorLink fillets a stand's entry for the widest-turning vehicle it
+		// admits (FVehicleEnvelope::WidestTurning) - the truck on C-F, so a tow arriving there turns at
+		// the truck's radius, not its own. Was the design vehicle's radius, the same figure for every
+		// letter today.
+		const double Radius = 1.1 * Admits.ForwardRadius;
 		for (const FVehicle& Vehicle : Fleet)
 		{
-			if (Vehicle.Tow.IsEmpty() || !VehicleFit::NoLargerThan(Vehicle, Design))
+			if (Vehicle.Tow.IsEmpty() || !Admits.Admits(Vehicle))
 			{
 				continue;
 			}
@@ -401,6 +406,72 @@ bool FEveryBayHoldsATowArrivingBentTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("NOT VACUOUS: some tow bay was judged"), Judged > 0);
 	TestTrue(*FString::Printf(TEXT("NOT VACUOUS: the lead-in really bends the chain (worst %.1f deg before the bay)"),
 		FMath::RadiansToDegrees(WorstLeadIn)), FMath::RadiansToDegrees(WorstLeadIn) > 10.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEveryAdmittedTowSettlesOnItsLanesTest,
+	"Airside.Entities.EveryAdmittedTowSettlesOnItsLanes",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEveryAdmittedTowSettlesOnItsLanesTest::RunTest(const FString& Parameters)
+{
+	using namespace StandLayoutFixture;
+
+	// THE GEOMETRY HALF OF 2026-10-03's RULING, measured off the laid legs rather than read off the
+	// log: a stand that admits a tow carries, for the LONGEST towing chain it admits, the two
+	// straights UEntityDefinition's TowSettleChains (2.0, user ruling 2026-09-26) asks for - into the
+	// service point at the end of the serve leg, and after the reverse corner at the end of the
+	// reverse leg. Admission alone (EveryLetterAdmitsEverySmallerLetter) could pass on lanes with
+	// neither; the drivability test judges the result; this pins the CAUSE, so a C-F stand laid for
+	// the truck alone again goes red here by name, with the length it is short.
+	//
+	// C-F FOR THE REVERSE STRAIGHT: there it is never cut short. On A and B it is capped at the
+	// entrance edge by design (BuildStandTemplate's Cleared - Code A's hydrant keeps 976 of 1150),
+	// and the whole-bay judge, not a length, is what admits those.
+	constexpr double TowSettleChains = 2.0;
+	int32 Measured = 0;
+	for (const EIcaoCode StandLetter : AllLetters())
+	{
+		const UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient(StandLetter);
+		const FVehicleEnvelope Admits = FVehicleEnvelope::Of(UAirsideSettings::ResolveStandVehiclesOf(Stand, StandLetter));
+		if (Admits.TrailerChain <= 0.0)
+		{
+			continue;
+		}
+		const double Wants = TowSettleChains * Admits.TrailerChain;
+		for (const FServiceBay& Bay : Stand->ServiceBays)
+		{
+			// THE LEG'S LAST SPAN, which BuildLeg always lays straight (its control on its midpoint) -
+			// asserted, so a curve there cannot be measured as if it were a straight.
+			auto LastStraight = [this, &Bay, StandLetter](const FStandLeg& Leg, const TCHAR* What) -> double
+			{
+				const int32 N = Leg.Points.Num();
+				if (!TestTrue(*FString::Printf(TEXT("Code %s '%s' %s has a span"), IcaoCode::ToLetter(StandLetter),
+					*Bay.AnchorId.ToString(), What), N >= 2 && Leg.Controls.Num() == N - 1))
+				{
+					return 0.0;
+				}
+				const FVector2D Mid = 0.5 * (Leg.Points[N - 2] + Leg.Points[N - 1]);
+				TestTrue(*FString::Printf(TEXT("Code %s '%s' %s ends on a straight"), IcaoCode::ToLetter(StandLetter),
+					*Bay.AnchorId.ToString(), What), Leg.Controls.Last().Equals(Mid, 0.01));
+				return FVector2D::Distance(Leg.Points[N - 2], Leg.Points[N - 1]);
+			};
+			const double Into = LastStraight(Bay.ServeLeg, TEXT("serve"));
+			TestTrue(*FString::Printf(TEXT("Code %s '%s': %.0f uu of straight into the service point, the tow wants %.0f (%.1f chains of %.0f)"),
+				IcaoCode::ToLetter(StandLetter), *Bay.AnchorId.ToString(), Into, Wants, TowSettleChains, Admits.TrailerChain),
+				Into >= Wants - 0.5);
+			if (StandLetter >= EIcaoCode::C)
+			{
+				const double After = LastStraight(Bay.ReverseLeg, TEXT("reverse"));
+				TestTrue(*FString::Printf(TEXT("Code %s '%s': %.0f uu of straight after the reverse corner, the tow wants %.0f"),
+					IcaoCode::ToLetter(StandLetter), *Bay.AnchorId.ToString(), After, Wants),
+					After >= Wants - 0.5);
+			}
+			++Measured;
+		}
+	}
+	TestTrue(TEXT("NOT VACUOUS: every letter's bays were measured (6 letters x 3 bays)"), Measured >= 18);
 	return true;
 }
 
@@ -858,6 +929,18 @@ bool FShippedCodeCStandMatchesTheBuilderTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("the shipped stand's design vehicle is the one the builder lays C for"),
 		Shipped->DesignVehicle.TypeCode, Built->DesignVehicle.TypeCode);
+	// AND THE SET IT ADMITS (2026-10-03): the bid reads AdmittedVehicles off the shipped asset, so an
+	// asset authored before the field existed admits its design vehicle alone in PIE while every
+	// transient-template test here says the tow is admitted - the exact report this field fixes.
+	{
+		auto Names = [](const UEntityDefinition& Stand)
+		{
+			FString Out;
+			for (const FVehicle& Vehicle : Stand.AdmittedVehicles) { Out += Vehicle.TypeCode.ToString() + TEXT(" "); }
+			return Out;
+		};
+		TestEqual(TEXT("the shipped stand admits the vehicles the builder lays C for"), Names(*Shipped), Names(*Built));
+	}
 	TestTrue(*FString::Printf(TEXT("the shipped extent (%.0f x %.0f) is the builder's (%.0f x %.0f)"),
 			Shipped->RequiredExtent.X, Shipped->RequiredExtent.Y, Built->RequiredExtent.X, Built->RequiredExtent.Y),
 		Shipped->RequiredExtent.Equals(Built->RequiredExtent, 0.5));
@@ -888,6 +971,30 @@ bool FShippedCodeCStandMatchesTheBuilderTest::RunTest(const FString& Parameters)
 		TestEqual(*FString::Printf(TEXT("'%s' entry heading"), *Who), Have->EntryHeading, Want.EntryHeading, 1.0e-6);
 		TestEqual(*FString::Printf(TEXT("'%s' exit heading"), *Who), Have->ExitHeading, Want.ExitHeading, 1.0e-6);
 		TestEqual(*FString::Printf(TEXT("'%s' park heading"), *Who), Have->ParkHeading, Want.ParkHeading, 1.0e-6);
+
+		// AND EVERY LEG, POINT FOR POINT (2026-10-03): the poses above do not move when a leg's own shape
+		// does - the reverse leg's settle straight for the tow changed only where the reverse ENDS, and
+		// this test stayed green on an asset still carrying the truck-only reverse legs.
+		struct FLegPair { const TCHAR* What; const FStandLeg* HaveLeg; const FStandLeg* WantLeg; };
+		const FLegPair Legs[] = {
+			{ TEXT("arrive"), &Have->ArriveLeg, &Want.ArriveLeg }, { TEXT("serve"), &Have->ServeLeg, &Want.ServeLeg },
+			{ TEXT("reverse"), &Have->ReverseLeg, &Want.ReverseLeg }, { TEXT("depart"), &Have->DepartLeg, &Want.DepartLeg } };
+		for (const FLegPair& Leg : Legs)
+		{
+			const FStandLeg& HaveLeg = *Leg.HaveLeg;
+			const FStandLeg& WantLeg = *Leg.WantLeg;
+			if (!TestEqual(*FString::Printf(TEXT("'%s' %s leg has the builder's point count"), *Who, Leg.What),
+				HaveLeg.Points.Num(), WantLeg.Points.Num()))
+			{
+				continue;
+			}
+			for (int32 At = 0; At < WantLeg.Points.Num(); ++At)
+			{
+				TestTrue(*FString::Printf(TEXT("'%s' %s leg point %d at (%.0f, %.0f), builder (%.0f, %.0f)"), *Who, Leg.What, At,
+						HaveLeg.Points[At].X, HaveLeg.Points[At].Y, WantLeg.Points[At].X, WantLeg.Points[At].Y),
+					HaveLeg.Points[At].Equals(WantLeg.Points[At], 0.5));
+			}
+		}
 	}
 	return true;
 }

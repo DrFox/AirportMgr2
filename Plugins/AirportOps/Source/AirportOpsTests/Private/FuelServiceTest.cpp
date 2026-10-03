@@ -419,7 +419,7 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 	// acceleration, not the one every other caller of DispatchAgent gets. THE SAME RESOLVE,
 	// through the same loop, so the fixture's letters get the vehicles the game's do.
 	Service->ResolveVehicles([](EIcaoCode Letter) { return UAirsideSettings::ResolveStandDesignVehicle(Letter); });
-	Service->DesignVehicleOf = &UOpsRuntime::StandDesignVehicleOf;
+	Service->StandVehiclesOf = &UOpsRuntime::StandVehiclesOf;
 
 	// THE SCENARIO'S CATALOGUE, resolved as UOpsRuntime::Attach resolves it (#430) - the same static, so the fixture's
 	// kinds are the game's: the depot's placeholder fleet has a tow AND a bowser (spec
@@ -941,7 +941,7 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 		FVehicle& Sent = Fixture.Service->CatalogueRowForTest(Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode).Vehicle;
 		Sent.BodyWidth = 2000.0;
 		const FVehicle Wide = Sent;
-		Fixture.Service->DesignVehicleOf = [Wide](const FEntityInstance&) { return Wide; };
+		Fixture.Service->StandVehiclesOf = [Wide](const FEntityInstance&) { return TArray<FVehicle>{ Wide }; };
 		// AND THE DEPOT HAS ONLY THAT VEHICLE. The placeholder fleet would also give it the utility
 		// tow, which fits these roads and would simply be sent - true, and not this case.
 		Fixture.Service->StarterFleet = { Wide.TypeCode };
@@ -1642,8 +1642,12 @@ namespace FuelServiceTest
 	 * merge, Task 7 of the shared-pavement plan): a stand drawn "at A's floor" reads back as
 	 * Code B now (IcaoCode::StandLetterFor), so only TowServesCodeB calls this any more - see
 	 * that test's own deletion note where TowServesCodeA used to be.
+	 *
+	 * AND CODE C SINCE 2026-10-03 (user ruling: a stand does not refuse a smaller vehicle), with
+	 * bTowOnly: the depot holds the tow and nothing else, so the bid has no truck to prefer and the
+	 * tow is sent to a stand designed for the truck - the case PIE refused as VehicleTooLarge.
 	 */
-	bool TowServesLetter(FAutomationTestBase& Test, EIcaoCode Letter)
+	bool TowServesLetter(FAutomationTestBase& Test, EIcaoCode Letter, bool bTowOnly = false)
 	{
 		const TCHAR* Code = IcaoCode::ToLetter(Letter);
 		FFuelFixture Fixture;
@@ -1652,6 +1656,11 @@ namespace FuelServiceTest
 		Fixture.TurnaroundSeconds = 1800.0;
 		Fixture.bWithRunway = true;
 		Fixture.Build(/*bWithRoad=*/true);
+		if (bTowOnly)
+		{
+			// AFTER Build, which makes the service, and before the first park - VehicleTooLargeRefused's order.
+			Fixture.Service->StarterFleet = { UAirsideSettings::ResolveUtilityTowVehicle().TypeCode };
+		}
 
 		const FEntityInstance* Stand = Fixture.Net->GetEntity(Fixture.Stand);
 		if (!Test.TestNotNull(*FString::Printf(TEXT("the %s stand is placed"), Code), Stand)) { return false; }
@@ -1702,7 +1711,7 @@ namespace FuelServiceTest
 
 		if (!Test.TestTrue(*FString::Printf(TEXT("an aircraft parked at the %s stand"), Code), Aircraft != 0)) { return false; }
 		Test.TestTrue(TEXT("a vehicle was dispatched"), TruckId != 0);
-		Test.TestEqual(*FString::Printf(TEXT("and it is the utility tow, %s's design vehicle"), Code), SentType, Tow.TypeCode);
+		Test.TestEqual(*FString::Printf(TEXT("and it is the utility tow, which Code %s's stand admits"), Code), SentType, Tow.TypeCode);
 		Test.TestTrue(TEXT("dispatched as the whole chain - one laid axle per tow link"), bWholeChain);
 		Test.TestTrue(TEXT("and departed"), bDeparted);
 
@@ -1837,6 +1846,20 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FFuelTowServesCodeBTest::RunTest(const FString& Parameters)
 {
 	return FuelServiceTest::TowServesLetter(*this, EIcaoCode::B);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelTowServesCodeCTest, "AirportOps.Fuel.TowServesCodeC",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelTowServesCodeCTest::RunTest(const FString& Parameters)
+{
+	// THE REPORT, END TO END (preview/all PIE on M_ScaleGatwick, 2026-10-03): every Code C+ stand refused
+	// the utility tow as VehicleTooLarge, so offers read "Accept (no fuel)" with 30k L in the depot. A C
+	// stand served by a depot holding ONLY the tow: sent, the whole chain, fuels the aircraft, backs off
+	// the service point and gets home - the composition the envelope's two consumers (the layout and the
+	// bid) must agree for. Red before the fix with VehicleTooLarge and no vehicle sent.
+	return FuelServiceTest::TowServesLetter(*this, EIcaoCode::C, /*bTowOnly=*/true);
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -2053,7 +2076,7 @@ bool FFuelRuntimeResolvesPerStandTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and C's with the truck"),
 		Runtime->GetJobBoard()->VehicleFor(*Net.GetEntity(StandC)).TypeCode, Truck);
 	// THE BUILT-FOR READ IS WIRED, and measured so it can tell: with A's table entry made the
-	// truck, an unwired DesignVehicleOf falls back to what the table sends (the truck), while the
+	// truck, an unwired StandVehiclesOf falls back to what the table sends (the truck), while the
 	// wired one still reads A's definition (the tow) - the fact the VehicleTooLarge guard compares
 	// against. Asking with the table left alone could not tell the two apart: both answer tow.
 	Runtime->GetJobBoard()->VehiclesFor(EIcaoCode::A) = UAirsideSettings::ResolveStandDesignVehicle(EIcaoCode::C);
@@ -2234,6 +2257,13 @@ bool FFuelBigLoadTakesTripsTest::RunTest(const FString& Parameters)
 	FFuelFixture Fixture;
 	Fixture.FixtureLitres = 2500.0;
 	Fixture.Build(/*bWithRoad=*/true);
+	// ONE VEHICLE, THE BOWSER (2026-10-03): since a C stand admits the utility tow as well, the default
+	// starter fleet's two vehicles may split this job's trips - and two vehicles splitting one stand's trips
+	// deadlock head-on as the first leaves and the second arrives ("Deadlock among agents [2, 3]: no member
+	// can turn"). That deadlock is OLDER than the tow's admission: two trucks on a C stand, or two tows on a
+	// B stand, do the same (probed 2026-10-03; no ClaimServiceBay exists, though EntityDefinition.cpp's lane
+	// comment names one). This test is about trips, not about which vehicle, so it keeps one.
+	Fixture.Service->StarterFleet = { Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode };
 	// EVERY VEHICLE A 1000 L TANK AT A QUICK 600 L/MIN, so three trips fit the test's patience.
 	Fixture.EveryKindCarries(FFuelVehicleSpec(1000.0, 600.0));
 	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
@@ -2388,6 +2418,8 @@ bool FFuelZeroCapacitySpecTest::RunTest(const FString& Parameters)
 	FFuelFixture Fixture;
 	Fixture.FixtureLitres = 3.0;
 	Fixture.Build(/*bWithRoad=*/true);
+	// ONE VEHICLE, for BigLoadTakesTrips' reason (the two-vehicle head-on deadlock it names).
+	Fixture.Service->StarterFleet = { Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode };
 	Fixture.EveryKindCarries(FFuelVehicleSpec(0.0, 600.0));
 	Fixture.Service->RefillLitresPerMinutePerPump = 100000.0;
 	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }

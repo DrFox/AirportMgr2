@@ -59,6 +59,18 @@ UEntityDefinition* UEntityDefinition::MakeStandTransient(EIcaoCode Letter, UObje
 	return Definition;
 }
 
+FVehicleEnvelope UEntityDefinition::AdmittedEnvelope() const
+{
+	// A DEFINITION SAVED BEFORE AdmittedVehicles EXISTED was laid for DesignVehicle alone, so that is
+	// all its envelope may claim - never the letter's set, which would size a road join for a layout
+	// the asset does not carry.
+	if (AdmittedVehicles.Num() > 0)
+	{
+		return FVehicleEnvelope::Of(AdmittedVehicles);
+	}
+	return DesignVehicle.TypeCode.IsNone() ? FVehicleEnvelope() : FVehicleEnvelope::Of(MakeArrayView(&DesignVehicle, 1));
+}
+
 bool UEntityDefinition::FitsItsLetter(const UEntityDefinition& Stand, EIcaoCode Letter)
 {
 	// THE TOOL TRUSTS THIS RATHER THAN RE-DERIVING IT - see the header. Both halves: the raw
@@ -387,8 +399,20 @@ void UEntityDefinition::BuildStandTemplate(
 	const double Depth = IcaoCode::StandDepthForLetter(Letter);
 	const double NoseFwd = Envelope.MaxNoseFwd;
 
-	// WHAT EVERY LANE BELOW IS LAID FOR, kept with them - see DesignVehicle.
+	// WHAT EVERY LANE BELOW IS LAID FOR, kept with them - see DesignVehicle and AdmittedVehicles.
+	//
+	// EVERY VEHICLE THE STAND ADMITS, not Design alone, since 2026-10-03 (user ruling: "A stand should
+	// not refuse the lower vehicles; they are just less efficient"): Design first, then every smaller
+	// letter's design vehicle, and each figure below is the MAXIMUM over that set (FVehicleEnvelope) -
+	// the truck's radii and the tow's settle straight on one Code C lane. Design still only RAISES the
+	// set: a test or an asset naming a bigger vehicle widens the corners, and the smaller letters'
+	// vehicles stay admitted whatever it names. The bid admits through FVehicleEnvelope::Of the same
+	// stored set, so what is laid and what is sent cannot disagree.
+	// ENFORCED BY: Airside.Entities.EveryAdmittedTowSettlesOnItsLanes,
+	// Airside.Content.StandDesignVehicle.EveryLetterAdmitsEverySmallerLetter
 	Definition.DesignVehicle = Design;
+	Definition.AdmittedVehicles = VehicleEnvelope::WithDesignFirst(Design, UAirsideSettings::ResolveStandVehicles(Letter));
+	const FVehicleEnvelope Laid = FVehicleEnvelope::Of(Definition.AdmittedVehicles);
 
 	// THE STAND BOX, in the definition's own local space. The back edge is the ENTRANCE, on the
 	// taxiway, EntranceSetback behind the stop mark - the ONE figure StandBox::PoseFor places the
@@ -404,13 +428,14 @@ void UEntityDefinition::BuildStandTemplate(
 	const double BackX = -StandBox::EntranceSetback(Letter, Envelope);
 	const double FrontX = BackX + Depth;
 
-	// The two limits, resolved once, off the LETTER'S DESIGN VEHICLE (ResolveStandDesignVehicle,
-	// user 2026-09-26) - the largest vehicle the letter admits, not the largest there is.
+	// The two limits, resolved once, off the LETTER'S ADMITTED SET (the design vehicle until
+	// 2026-10-03, user 2026-09-26) - the vehicles the letter admits, not the largest there is.
 	// Forward is L/sin(lock) and reverse L/tan(lock) - about 30% tighter, because a reversing
 	// vehicle pivots about its FIXED axle; a tow's reverse is VehicleFit::TightestReverseRadius's
-	// larger figure, where its trailer's steady hitch angle stays clear of the fold.
-	const double Radius = Design.Chassis.TightestFollowableRadius();
-	const double ReverseRadius = VehicleFit::TightestReverseRadius(Design);
+	// larger figure, where its trailer's steady hitch angle stays clear of the fold. Each is the
+	// widest over the set - the truck's on C-F (502, 355 on 2026-10-03), whose tow turns tighter.
+	const double Radius = Laid.ForwardRadius;
+	const double ReverseRadius = Laid.ReverseRadius;
 
 	// THE LANE DOWN EACH SIDE, outboard of the wingtip because nothing may pass under a wing.
 	// Its own width is what the stand's minimum width was derived from, so this sits exactly
@@ -504,9 +529,12 @@ void UEntityDefinition::BuildStandTemplate(
 	// the outermost thing on the stand. So a tow's lane sits at whichever is further out, the
 	// boundary's or the settle's, and a stand that needs the second is WIDER than its floor -
 	// RequiredExtent measures it below, FitsItsLetter judges it, and the floors stay the user's.
-	// Zero for a rigid design vehicle, so the truck's C-F layouts are exactly what they were.
-	const double TowSettle =
-		Design.Tow.IsEmpty() ? 0.0 : TowSettleChains * VehicleFit::ChainLength(Design);
+	// Zero when nothing admitted tows. FOR THE LONGEST TOWING CHAIN THE STAND ADMITS since 2026-10-03
+	// (FVehicleEnvelope::TrailerChain) - it was the design vehicle's, zero for the truck, so a C-F
+	// stand had no straight for the tow and refused it. Measured that day, no C-F box grew: C's lane
+	// wants 700 + 1150 + 781 = 2631 against the 2750 its boundary already gives (D-F have more), and
+	// the reverse settle fits inside every C-F box ahead of the entrance edge.
+	const double TowSettle = TowSettleChains * Laid.TrailerChain;
 	double SettleLaneY = 0.0;
 	for (const FEntityAnchor* Anchor : Serviced)
 	{
@@ -677,7 +705,9 @@ void UEntityDefinition::BuildStandTemplate(
 		// reverse on the lane's line, inside 3 degrees, and a trailer backed round a corner
 		// comes out of it bent the same way one driven round it does. Measured 2026-09-26 on
 		// the utility tow: with the corner's own run and no straight after it the solve ended
-		// 11.3 degrees off. Zero for a rigid vehicle, whose FReverseRun ends on the curve.
+		// 11.3 degrees off - and 6.9 off on a Code C bay's truck-radius corner (2026-10-03,
+		// before C-F were laid for the tow). Zero when nothing admitted tows, whose FReverseRun
+		// ends on the curve.
 		//
 		// CAPPED AT THE ENTRANCE EDGE, per bay (controller ruling 2026-09-26): the ground aft of
 		// BackX is the taxiway's, and Code A's hydrant, 100 uu from a -1300 edge, would have
@@ -752,12 +782,18 @@ void UEntityDefinition::BuildStandTemplate(
 
 	// READ THESE RATHER THAN TRUST THEM. The poses are written from the geometry and the
 	// figures they imply are what say whether that geometry was right.
+	// AND WHAT IT ADMITS, by name: the set every figure here is the maximum over (2026-10-03).
+	FString AdmitsNames;
+	for (const FVehicle& Admitted : Definition.AdmittedVehicles)
+	{
+		AdmitsNames += (AdmitsNames.IsEmpty() ? TEXT("") : TEXT("+")) + Admitted.TypeCode.ToString();
+	}
 	UE_LOG(LogAirside, Log,
-		TEXT("Stand template '%s': design vehicle %s, box %.0f x %.0f (x %.0f..%.0f), radius fwd %.1f rev %.1f, "
+		TEXT("Stand template '%s': design vehicle %s (admits %s), box %.0f x %.0f (x %.0f..%.0f), radius fwd %.1f rev %.1f, "
 		     "corner square %.0f diagonal %.0f back %.0f, lane y %.0f (tow settle %.0f), branch pitch %.0f, "
 		     "contact y %.0f (band %.0f..%.0f), park run %.0f (band %.0f..%.0f), %d bay(s), "
 		     "needs %.0f x %.0f"),
-		IcaoCode::ToLetter(Letter), *Design.TypeCode.ToString(), Width, Depth, BackX, FrontX,
+		IcaoCode::ToLetter(Letter), *Design.TypeCode.ToString(), *AdmitsNames, Width, Depth, BackX, FrontX,
 		Radius, ReverseRadius,
 		Square, Diagonal, SquareBack, LaneY, TowSettle, BranchPitch,
 		ContactMag, ContactFloor, ContactCeiling,

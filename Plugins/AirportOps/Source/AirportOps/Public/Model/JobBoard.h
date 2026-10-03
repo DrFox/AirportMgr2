@@ -240,15 +240,22 @@ public:
 	const FVehicle& VehiclesFor(EIcaoCode Letter) const { return VehiclesByLetter[static_cast<uint8>(Letter)]; }
 
 	/**
-	 * What Stand's lanes were proven drivable by - UEntityDefinition::DesignVehicle, read by whoever
-	 * set it (UOpsRuntime::Attach, through UAirsideSettings::ResolveStandDesignVehicleOf): this layer
-	 * may not dereference a UEntityDefinition, so the read is handed in, the same way ResolveVehicles'
-	 * resolve is. UNSET in a bare NewObject, and then DesignVehicleFor answers the letter's table entry.
-	 * ENFORCED BY: AirportOps.Fuel.RuntimeResolvesPerStand (A's table entry made the truck, the runtime still reads A's stand as tow-built)
+	 * Every vehicle Stand's lanes were laid for and proven drivable by, its design vehicle first -
+	 * UEntityDefinition::AdmittedVehicles, read by whoever set it (UOpsRuntime::Attach, through
+	 * UAirsideSettings::ResolveStandVehiclesOf): this layer may not dereference a UEntityDefinition,
+	 * so the read is handed in, the same way ResolveVehicles' resolve is. UNSET in a bare NewObject,
+	 * and then StandVehiclesFor answers the letter table's (VehicleEnvelope::AdmittedUpTo over it).
+	 * A SET, not one design vehicle, since 2026-10-03 (user ruling: a stand does not refuse a smaller
+	 * vehicle) - it was DesignVehicleOf, returning the one, and the tow was refused every C-F stand.
+	 * ENFORCED BY: AirportOps.Fuel.RuntimeResolvesPerStand (A's table entry made the truck, the runtime still reads A's stand as tow-built),
+	 * AirportOps.Fuel.TowServesCodeC
 	 */
-	TFunction<FVehicle(const FEntityInstance&)> DesignVehicleOf;
+	TFunction<TArray<FVehicle>(const FEntityInstance&)> StandVehiclesOf;
 
-	/** DesignVehicleOf(Stand), or VehicleFor(Stand) with nothing set. The bid's eligibility ceiling. */
+	/** StandVehiclesOf(Stand), or the letter table's set for Stand's letter with nothing set. Never empty once letters resolve. */
+	TArray<FVehicle> StandVehiclesFor(const FEntityInstance& Stand) const;
+
+	/** StandVehiclesFor(Stand)'s first - what the stand was DESIGNED for, the name a refusal line gives. */
 	FVehicle DesignVehicleFor(const FEntityInstance& Stand) const;
 
 	/**

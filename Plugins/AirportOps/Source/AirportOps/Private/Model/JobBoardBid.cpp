@@ -10,7 +10,14 @@
 #include "Model/RouteSearch.h"
 #include "Model/SimClock.h"
 #include "Model/StandAdmission.h"
+#include "Model/VehicleEnvelope.h"
 #include "Model/VehicleFit.h"
+
+FVehicle UJobBoard::DesignVehicleFor(const FEntityInstance& Stand) const
+{
+	const TArray<FVehicle> Admitted = StandVehiclesFor(Stand);
+	return Admitted.Num() > 0 ? Admitted[0] : VehicleFor(Stand);
+}
 
 FRoutePlan UJobBoard::DepotRoute(const URoadNetwork& Network, FGuidelineNodeId DepotPose, FGuidelineNodeId Goal,
 	const FVehicle& Vehicle, bool* bOutTooNarrow, FGuidelineEdgeId* OutNarrowAt) const
@@ -114,8 +121,14 @@ TArray<UJobBoard::FCandidate> UJobBoard::Judge(const URoadNetwork& Network, ESer
 	// A STAND DELETED UNDER ITS JOB is asked as Code C's, like an outline reading as no letter - the
 	// aircraft's own leaving drops the job a moment later.
 	const FEntityInstance* StandInstance = Network.GetEntity(Stand);
-	const FVehicle Design = StandInstance != nullptr ? DesignVehicleFor(*StandInstance) : VehiclesFor(EIcaoCode::C);
-	Out.DesignType = Design.TypeCode;
+	//
+	// EVERY VEHICLE THE STAND WAS LAID FOR, not its design vehicle alone (user ruling 2026-10-03): the ceiling is the per-axis
+	// envelope of that set - the figures UEntityDefinition::BuildStandTemplate laid the lanes from - so a utility tow is
+	// admitted to a C stand whose lanes carry its settle straight, and nothing is admitted that the lanes were not laid for.
+	const TArray<FVehicle> Admitted = StandInstance != nullptr ? StandVehiclesFor(*StandInstance)
+		: VehicleEnvelope::AdmittedUpTo(EIcaoCode::C, [this](EIcaoCode Letter) { return VehiclesFor(Letter); });
+	const FVehicleEnvelope Ceiling = FVehicleEnvelope::Of(Admitted);
+	Out.DesignType = Admitted.Num() > 0 ? Admitted[0].TypeCode : NAME_None;
 
 	for (const FCandidate& Candidate : Candidates)
 	{
@@ -137,8 +150,9 @@ TArray<UJobBoard::FCandidate> UJobBoard::Judge(const URoadNetwork& Network, ESer
 		}
 
 		// NO LARGER THAN THE STAND WAS BUILT FOR (spec 2026-09-26 section 2): the stand's lane legs are
-		// proven drivable by its definition's design vehicle and anything VehicleFit::NoLargerThan it,
-		// and nothing else. PER VEHICLE - a typed fleet makes the vehicle a fact about this candidate,
+		// proven drivable by every vehicle its definition was laid for and anything inside their envelope
+		// (FVehicleEnvelope::Admits, since 2026-10-03 - it was VehicleFit::NoLargerThan the design vehicle
+		// alone), and nothing else. PER VEHICLE - a typed fleet makes the vehicle a fact about this candidate,
 		// and a depot with a bowser AND a tow is too large for an A stand only through its bowser.
 		const FServiceVehicleType Type = TypeFor(Candidate.TypeCode);
 		// A KIND WITH NO CATALOGUE ROW IS NO CANDIDATE (#430): its chassis is empty, and an empty chassis is NoLargerThan
@@ -157,7 +171,7 @@ TArray<UJobBoard::FCandidate> UJobBoard::Judge(const URoadNetwork& Network, ESer
 			continue;
 		}
 		++Out.KnownKinds;
-		if (!VehicleFit::NoLargerThan(Type.Vehicle, Design))
+		if (!Ceiling.Admits(Type.Vehicle))
 		{
 			Out.bAnyTooLarge = true;
 			Out.TooLargeType = Type.TypeCode;

@@ -5385,6 +5385,41 @@ else {
 }
 $ranRules.Add('relay-adds-behaviour')
 
+# --- 103. A STAND ADMITS BY THE ENVELOPE IT WAS LAID FOR, NEVER BY ONE VEHICLE (2026-10-03) ---------------------------
+# User ruling 2026-10-03: a stand admits every smaller letter's vehicle. Admission was VehicleFit::NoLargerThan against the
+# stand's design vehicle alone, in JobBoard.cpp and JobBoardBid.cpp, while the layout read that one vehicle's figures - so the
+# utility tow (chain 575) was refused every C-F stand laid for the truck (355). Both now read FVehicleEnvelope::Of the stand's
+# AdmittedVehicles, the set BuildStandTemplate laid the lanes from. The SHAPE removed is a stand admission compared against a
+# single vehicle: no production .cpp under AirportOps calls NoLargerThan( (comments and strings stripped), and the bid's body
+# still names FVehicleEnvelope - so the rule fails rather than passing on a bid that compares nothing.
+# WHAT NO REGEX SEES: that the envelope is OF the stand's set and not of something else - pinned by
+# AirportOps.Fuel.TowServesCodeC (a C stand served by a tow-only depot, end to end) and
+# Airside.Content.StandDesignVehicle.EveryLetterAdmitsEverySmallerLetter.
+# RED against main 858b1145 by construction (NoLargerThan( at JobBoard.cpp AnyStandAdmits x2 and JobBoardBid.cpp's bid), and
+# mutation-checked 2026-10-03: the bid's Ceiling.Admits put back as NoLargerThan against Admitted[0] fails here alone.
+$admitBid = Join-Path $ops 'Private\Model\JobBoardBid.cpp'
+if (-not (Test-Path $admitBid)) {
+    $failures.Add("stand-admits-by-envelope: $admitBid is named by rule 103 but does not exist - update the rule, do not let it check nothing")
+}
+else {
+    $admitBidNames = $false
+    foreach ($file in (Get-ChildItem -LiteralPath (Join-Path $ops 'Private') -Recurse -File -Include '*.cpp', '*.h')) {
+        $inBlock = $false
+        $lines = @(Get-Content -LiteralPath $file.FullName)
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            if ($code -match '\bNoLargerThan\s*\(') {
+                $failures.Add("stand-admits-by-envelope: $($file.Name):$($i + 1) admits by VehicleFit::NoLargerThan - one vehicle's figures; a stand admits by FVehicleEnvelope::Of its AdmittedVehicles, the set its lanes were laid for (rule 103): $($lines[$i].Trim())")
+            }
+            if ($file.FullName -ieq $admitBid -and $code -match '\bFVehicleEnvelope\b') { $admitBidNames = $true }
+        }
+    }
+    if (-not $admitBidNames) {
+        $failures.Add("stand-admits-by-envelope: JobBoardBid.cpp no longer names FVehicleEnvelope - the bid's stand ceiling moved or went; update rule 103, do not let it check nothing")
+    }
+}
+$ranRules.Add('stand-admits-by-envelope')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

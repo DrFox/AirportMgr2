@@ -277,6 +277,25 @@ public:
 	static FVehicle ResolveStandDesignVehicleOf(const UEntityDefinition* Definition, EIcaoCode Letter);
 
 	/**
+	 * EVERY vehicle a stand of Letter is laid for and admits (user ruling 2026-10-03): its own
+	 * letter's design vehicle first, then every smaller letter's - VehicleEnvelope::AdmittedUpTo over
+	 * ResolveStandDesignVehicle, so the rule lives there and the table here. What BuildStandTemplate
+	 * lays a letter's lanes for.
+	 * ENFORCED BY: Airside.Content.StandDesignVehicle.EveryLetterAdmitsEverySmallerLetter
+	 */
+	static TArray<FVehicle> ResolveStandVehicles(EIcaoCode Letter);
+
+	/**
+	 * What a PLACED stand admits: its definition's AdmittedVehicles, the set BuildStandTemplate laid
+	 * its lanes for. An asset saved before that field existed admits its DesignVehicle alone (it was
+	 * laid for that one) and says so once; a definition with neither falls back through
+	 * ResolveStandDesignVehicleOf to the letter's set. The fuel bid's eligibility ceiling, through
+	 * FVehicleEnvelope::Of, read via the ops runtime's stand hook.
+	 * ENFORCED BY: AirportOps.Fuel.TowServesCodeC
+	 */
+	static TArray<FVehicle> ResolveStandVehiclesOf(const UEntityDefinition* Definition, EIcaoCode Letter);
+
+	/**
 	 * THE ONE PLACE a service-road width tier names its design vehicle (user ruling 2026-09-25,
 	 * see FRoadDesignVehicles): the Wide tier - ServiceRoadProfiles[WideServiceTier] - is
 	 * designed for the articulated rig (ResolveRigVehicle), and every other tier is left to the

@@ -11,7 +11,7 @@
  * shop - and FDepotCapability then takes the owned list as it stands (see FDepotCapability::Of).
  *
  * IN Model/ AS A TYPE ONLY: Model/ may not call the plot solve (Build/), so the answer is handed in, the way
- * UJobBoard::DesignVehicleOf hands in the design vehicle.
+ * UJobBoard::StandVehiclesOf hands in the vehicles a stand was laid for.
  */
 using FModuleCeilingFn = TFunction<int32(FEntityInstanceId Id, const FEntityInstance& Depot, EDepotModule Module)>;
 

@@ -6,6 +6,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RouteSearch.h"
 #include "Model/Vehicle.h"
+#include "Model/VehicleEnvelope.h"
 #include "Solve/IcaoCode.h"
 #include "Solve/LetterEnvelope.h"
 #include "EntityDefinition.generated.h"
@@ -252,7 +253,7 @@ public:
 	/**
 	 * The vehicle ServiceBays' lanes were laid for and proven drivable by - BuildStandTemplate's
 	 * Design argument, stored as it was built, so a service asking "may this vehicle serve here"
-	 * (VehicleFit::NoLargerThan against it) asks THIS definition and not a resolve that could have
+	 * (through AdmittedVehicles below, which it heads) asks THIS definition and not a resolve that could have
 	 * moved on since (2026-09-27: a per-letter table beside it held the same fact twice).
 	 *
 	 * COMPUTED, like ServiceBays and RequiredExtent, never authored. An asset saved before this
@@ -261,6 +262,26 @@ public:
 	 * ENFORCED BY: AirportOps.Fuel.StandDesignVehicleFallsBackWhenUnauthored
 	 */
 	UPROPERTY(VisibleAnywhere) FVehicle DesignVehicle;
+
+	/**
+	 * EVERY vehicle ServiceBays' lanes were laid for - DesignVehicle at index 0, then every smaller
+	 * letter's design vehicle (VehicleEnvelope::AdmittedUpTo), each TypeCode once. User ruling
+	 * 2026-10-03: a stand does not refuse a smaller vehicle, it is only served less efficiently -
+	 * so a Code C stand's lanes carry the utility tow's settle straight as well as the truck's
+	 * radii, and the bid admits by FVehicleEnvelope::Of(this), the figures they were laid from.
+	 *
+	 * COMPUTED by BuildStandTemplate, like DesignVehicle. An asset saved before this field existed
+	 * loads it empty; UAirsideSettings::ResolveStandVehiclesOf falls back to the letter's set then.
+	 * ENFORCED BY: Airside.Content.StandDesignVehicle.EveryLetterAdmitsEverySmallerLetter
+	 */
+	UPROPERTY(VisibleAnywhere) TArray<FVehicle> AdmittedVehicles;
+
+	/**
+	 * FVehicleEnvelope::Of(AdmittedVehicles), or of DesignVehicle alone for a definition saved before
+	 * AdmittedVehicles existed; empty when neither is set. What a consumer that holds the
+	 * definition sizes by (FAnchorLink's stand entry links).
+	 */
+	FVehicleEnvelope AdmittedEnvelope() const;
 
 	/**
 	 * What the ground here can provide at all, whether from fixed plant or from equipment
@@ -459,7 +480,9 @@ public:
 	/**
 	 * Lay the layout template - entry, staging rank, a bay per service anchor, and the legs
 	 * between them - for a stand of this ICAO code Letter, sized for Design, the letter's own
-	 * design vehicle (UAirsideSettings::ResolveStandDesignVehicle).
+	 * design vehicle (UAirsideSettings::ResolveStandDesignVehicle), AND every smaller letter's
+	 * (UAirsideSettings::ResolveStandVehicles, since 2026-10-03): each figure is the maximum over
+	 * that set, stored as AdmittedVehicles.
 	 *
 	 * EVERY CONTACT IS ON THE FAR EDGE, the one opposite the taxiway (user 2026-09-26): the box
 	 * runs from the entrance, StandBox::EntranceSetback behind the stop mark, to Depth beyond

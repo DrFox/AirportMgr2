@@ -9,6 +9,7 @@
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/VehicleCodes.h"
+#include "Model/VehicleEnvelope.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/IcaoCode.h"
 
@@ -175,6 +176,39 @@ FVehicle UAirsideSettings::ResolveStandDesignVehicleOf(const UEntityDefinition* 
 			*Who, IcaoCode::ToLetter(Letter), *ResolveStandDesignVehicle(Letter).TypeCode.ToString());
 	}
 	return ResolveStandDesignVehicle(Letter);
+}
+
+TArray<FVehicle> UAirsideSettings::ResolveStandVehicles(EIcaoCode Letter)
+{
+	return VehicleEnvelope::AdmittedUpTo(Letter, [](EIcaoCode Each) { return ResolveStandDesignVehicle(Each); });
+}
+
+TArray<FVehicle> UAirsideSettings::ResolveStandVehiclesOf(const UEntityDefinition* Definition, EIcaoCode Letter)
+{
+	if (Definition != nullptr && Definition->AdmittedVehicles.Num() > 0)
+	{
+		return Definition->AdmittedVehicles;
+	}
+	// A DEFINITION WITH A DesignVehicle BUT NO SET was laid before 2026-10-03, for that one vehicle -
+	// so it admits that one, as UEntityDefinition::AdmittedEnvelope sizes its road joins for that one.
+	// Claiming the letter's set would send a tow onto lanes with no settle straight. Said once per
+	// definition, as the no-DesignVehicle case below is, for the same reason.
+	if (Definition != nullptr && !Definition->DesignVehicle.TypeCode.IsNone())
+	{
+		static TSet<FString> Warned;
+		const FString Who = Definition->GetPathName();
+		if (!Warned.Contains(Who))
+		{
+			Warned.Add(Who);
+			UE_LOG(LogAirsideContent, Warning,
+				TEXT("Stand definition %s carries no AdmittedVehicles (saved before 2026-10-03?); it admits only its DesignVehicle, %s. Re-author it (Tools/Python/build_stand_asset.py)."),
+				*Who, *Definition->DesignVehicle.TypeCode.ToString());
+		}
+		return { Definition->DesignVehicle };
+	}
+	// NOTHING AUTHORED AT ALL: assumed built today for its letter, as ResolveStandDesignVehicleOf
+	// assumes (and logs) - its design vehicle first, the letter's smaller ones after it.
+	return VehicleEnvelope::WithDesignFirst(ResolveStandDesignVehicleOf(Definition, Letter), ResolveStandVehicles(Letter));
 }
 
 namespace AirsideSettingsTierCache

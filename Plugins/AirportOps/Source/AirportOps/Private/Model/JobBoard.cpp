@@ -12,7 +12,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
 #include "Model/SimClock.h"
-#include "Model/VehicleFit.h"
+#include "Model/VehicleEnvelope.h"
 #include "Solve/StandBox.h"
 
 // The literal VehiclesByLetter[6] in the header, which UHT has to parse, against the enum.
@@ -82,30 +82,26 @@ FVehicle UJobBoard::VehicleFor(const FEntityInstance& Stand) const
 	return VehiclesFor(LetterOfStand(Stand));
 }
 
-FVehicle UJobBoard::DesignVehicleFor(const FEntityInstance& Stand) const
+TArray<FVehicle> UJobBoard::StandVehiclesFor(const FEntityInstance& Stand) const
 {
-	return DesignVehicleOf ? DesignVehicleOf(Stand) : VehicleFor(Stand);
+	return StandVehiclesOf ? StandVehiclesOf(Stand)
+		: VehicleEnvelope::AdmittedUpTo(LetterOfStand(Stand), [this](EIcaoCode Letter) { return VehiclesFor(Letter); });
 }
 
 bool UJobBoard::AnyStandAdmits(const FVehicle& Kind, const URoadNetwork& Network) const
 {
-	// THE LETTERS FIRST: a stand with no authored design vehicle is built for its letter's, and there are six entries and no
-	// network walk to read them - so a kind any letter admits never pays for the placed stands.
-	for (const FVehicle& Design : VehiclesByLetter)
+	// THE LETTERS FIRST: a stand with no authored set is built for its letter's, and there are six of them and no network
+	// walk - so a kind any letter admits never pays for the placed stands. Through the bid's own FVehicleEnvelope.
+	for (int32 Index = 0; Index < LetterCount; ++Index)
 	{
-		if (VehicleFit::NoLargerThan(Kind, Design))
-		{
-			return true;
-		}
+		if (FVehicleEnvelope::Of(VehicleEnvelope::AdmittedUpTo(static_cast<EIcaoCode>(Index),
+			[this](EIcaoCode Letter) { return VehiclesFor(Letter); })).Admits(Kind)) { return true; }
 	}
 	// THEN EACH LIVE STAND'S OWN, which a definition may author bigger than its letter's (UEntityDefinition::DesignVehicle):
 	// a kind one placed stand admits is never refused, whatever the letter table says. The same ceiling Judge applies.
 	for (const FEntityInstance& Stand : Network.GetEntities())
 	{
-		if (Stand.bAlive && Stand.IsStandCandidate() && VehicleFit::NoLargerThan(Kind, DesignVehicleFor(Stand)))
-		{
-			return true;
-		}
+		if (Stand.bAlive && Stand.IsStandCandidate() && FVehicleEnvelope::Of(StandVehiclesFor(Stand)).Admits(Kind)) { return true; }
 	}
 	return false;
 }
