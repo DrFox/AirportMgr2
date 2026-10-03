@@ -1,6 +1,9 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "Model/FuelSupply.h"
+#include "Model/Ledger.h"
+#include "Model/OpsSave.h"
+#include "Model/RoadNetwork.h"
 #include "Model/ServiceRolePolicy.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -68,6 +71,115 @@ bool FFuelSupplyUnwiredTest::RunTest(const FString&)
 	UFuelSupply* Supply = NewObject<UFuelSupply>(GetTransientPackage());
 	TestTrue(TEXT("no capacity reader: capacity unbounded"), Supply->Capacity() > 1e12);
 	TestEqual(TEXT("so a delivery is taken whole"), Supply->Receive(1e6), 1e6, 1e-6);
+	return true;
+}
+
+namespace
+{
+	UFuelSupply* SupplyWithLedger(double Stock, double Capacity, double Balance)
+	{
+		UFuelSupply* Supply = SupplyHolding(Stock, Capacity);
+		Supply->Figures = FFuelSupplyFigures();
+		Supply->Ledger = NewObject<ULedger>(GetTransientPackage());
+		Supply->Ledger->Open(Balance);
+		return Supply;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelSpotTest, "AirportOps.Model.FuelSupply.SpotPaysNowArrivesLater",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelSpotTest::RunTest(const FString&)
+{
+	UFuelSupply* Supply = SupplyWithLedger(0.0, 30000.0, 100000.0);
+	const FFuelSupplyFigures& Fig = Supply->Figures;
+	TestEqual(TEXT("an order that fits is taken"), Supply->OrderSpot(10000.0, 0.0), EFuelOrderRefusal::None);
+	TestEqual(TEXT("paid at once, at the spot price"), Supply->Ledger->Balance(), 100000.0 - 10000.0 * Fig.SpotPricePerLitre, 1e-6);
+	TestEqual(TEXT("nothing in the tanks yet"), Supply->StockLitres, 0.0, 1e-9);
+	TestEqual(TEXT("an hour early, nothing arrives"), Supply->ReceiveDueSpot(Fig.SpotDelaySeconds - 3600.0), 0);
+	TestEqual(TEXT("at the delay, it does"), Supply->ReceiveDueSpot(Fig.SpotDelaySeconds), 1);
+	TestEqual(TEXT("and fills the tanks"), Supply->StockLitres, 10000.0, 1e-9);
+	TestEqual(TEXT("an order bigger than the room left (counting orders on the way) is refused"),
+		Supply->OrderSpot(25000.0, Fig.SpotDelaySeconds), EFuelOrderRefusal::NoRoom);
+	TestEqual(TEXT("CONTROL: and charged nothing"), Supply->Ledger->Balance(), 100000.0 - 10000.0 * Fig.SpotPricePerLitre, 1e-6);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelContractTest, "AirportOps.Model.FuelSupply.ContractIsTakeOrPay",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelContractTest::RunTest(const FString&)
+{
+	UFuelSupply* Supply = SupplyWithLedger(28000.0, 30000.0, 100000.0);
+	const FFuelContractTier Tier = Supply->Figures.ContractTiers[0];
+	TestEqual(TEXT("the smallest tier is signed"), Supply->SignContract(0, 0.0), EFuelOrderRefusal::None);
+	TestEqual(TEXT("signing costs nothing - each day is paid on delivery"), Supply->Ledger->Balance(), 100000.0, 1e-6);
+	Supply->DeliverContractDay(86400.0);
+	TestEqual(TEXT("TAKE-OR-PAY: the whole day is charged"), Supply->Ledger->Balance(), 100000.0 - Tier.LitresPerDay * Tier.PricePerLitre, 1e-6);
+	TestEqual(TEXT("but only what fitted was added"), Supply->StockLitres, 30000.0, 1e-9);
+	TestEqual(TEXT("a day of the term is used"), Supply->Contract.DaysLeft, Supply->Figures.ContractTermDays - 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelContractEndsTest, "AirportOps.Model.FuelSupply.ContractEndsAndCancels",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelContractEndsTest::RunTest(const FString&)
+{
+	UFuelSupply* Supply = SupplyWithLedger(0.0, 1e9, 1e9);
+	const FFuelSupplyFigures& Fig = Supply->Figures;
+	Supply->SignContract(1, 0.0);
+	for (int32 Day = 1; Day <= Fig.ContractTermDays; ++Day) { Supply->DeliverContractDay(Day * 86400.0); }
+	TestEqual(TEXT("at the end of its term the contract is over"), Supply->Contract.Tier, INDEX_NONE);
+	const double Stock = Supply->StockLitres;
+	Supply->DeliverContractDay((Fig.ContractTermDays + 1) * 86400.0);
+	TestEqual(TEXT("and delivers nothing after"), Supply->StockLitres, Stock, 1e-9);
+
+	Supply->SignContract(0, 0.0);
+	Supply->DeliverContractDay(86400.0);
+	const double Before = Supply->Ledger->Balance();
+	TestEqual(TEXT("a running contract may be cancelled"), Supply->CancelContract(86400.0), EFuelOrderRefusal::None);
+	const FFuelContractTier& T0 = Fig.ContractTiers[0];
+	TestEqual(TEXT("for CancelFraction of the days left at the daily cost"), Before - Supply->Ledger->Balance(),
+		(Fig.ContractTermDays - 1) * T0.LitresPerDay * T0.PricePerLitre * Fig.CancelFraction, 1e-6);
+	TestEqual(TEXT("and nothing is left to cancel"), Supply->CancelContract(86400.0), EFuelOrderRefusal::NoContract);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelContractTierTest, "AirportOps.Model.FuelSupply.TierNeedsTheTanksForADay",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelContractTierTest::RunTest(const FString&)
+{
+	// STORAGE GATES THE TIERS (spec §7): a tier whose daily delivery the tanks cannot hold is refused - it would pour
+	// fuel away from the first day.
+	UFuelSupply* Supply = SupplyWithLedger(0.0, 30000.0, 1e9);
+	TestEqual(TEXT("20,000 L a day fits 30,000 L of tanks"), Supply->JudgeContract(2), EFuelOrderRefusal::None);
+	TestEqual(TEXT("40,000 does not"), Supply->JudgeContract(3), EFuelOrderRefusal::NoRoom);
+	TestEqual(TEXT("there is no fifth tier"), Supply->JudgeContract(4), EFuelOrderRefusal::UnknownTier);
+	Supply->SignContract(0, 0.0);
+	TestEqual(TEXT("one contract at a time"), Supply->JudgeContract(1), EFuelOrderRefusal::AlreadyContracted);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelSupplySaveTest, "AirportOps.Model.FuelSupply.ContractAndOrdersSurviveASave",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelSupplySaveTest::RunTest(const FString&)
+{
+	// A load mid-delay must still deliver what was paid for, and a running contract must still run: both are state, not figures.
+	UFuelSupply* Supply = SupplyWithLedger(500.0, 30000.0, 1e6);
+	Supply->SignContract(1, 0.0);
+	Supply->OrderSpot(4000.0, 100.0);
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	FOpsSnapshot Snapshot;
+	TArray<IOpsPersistent*> Saved = { Supply };
+	OpsSave::Capture(Saved, *Net, Snapshot);
+
+	UFuelSupply* Loaded = NewObject<UFuelSupply>(GetTransientPackage());
+	TArray<IOpsPersistent*> Into = { Loaded };
+	if (!TestTrue(TEXT("restore succeeds"), OpsSave::Restore(Snapshot, Into, *Net))) { return false; }
+	TestEqual(TEXT("stock"), Loaded->StockLitres, 500.0, 1e-9);
+	TestEqual(TEXT("contract tier"), Loaded->Contract.Tier, 1);
+	TestEqual(TEXT("contract days left"), Loaded->Contract.DaysLeft, Supply->Figures.ContractTermDays);
+	if (!TestEqual(TEXT("the order on the way"), Loaded->SpotOrders.Num(), 1)) { return false; }
+	TestEqual(TEXT("with its litres"), Loaded->SpotOrders[0].Litres, 4000.0, 1e-9);
+	TestEqual(TEXT("and its due time"), Loaded->SpotOrders[0].DueAt, 100.0 + Supply->Figures.SpotDelaySeconds, 1e-9);
 	return true;
 }
 

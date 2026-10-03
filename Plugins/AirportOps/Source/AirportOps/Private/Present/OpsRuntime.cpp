@@ -20,6 +20,7 @@
 #include "Model/FlightBoard.h"
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
+#include "Model/FuelSupply.h"
 #include "Model/OfferGenerator.h"
 #include "Model/StandAllocator.h"
 #include "Model/OpsEvents.h"
@@ -70,6 +71,7 @@ UOpsRuntime::UOpsRuntime()
 	FlightBoard->Sequencer = CreateDefaultSubobject<UArrivalSequencer>(TEXT("ArrivalSequencer"));
 	OfferGenerator = CreateDefaultSubobject<UOfferGenerator>(TEXT("OfferGenerator"));
 	FlightBoard->Generator = OfferGenerator;
+	FuelSupply = CreateDefaultSubobject<UFuelSupply>(TEXT("FuelSupply"));
 
 	// The money, and the same forwarding shape: this class gains two pointers and the wiring
 	// below, and every decision about what things cost lives in UPricing, not here.
@@ -436,6 +438,11 @@ void UOpsRuntime::WireBus()
 	// board's pass is where a changed depot is looked at, and a repair is rare enough that asking costs nothing.
 	Bus.Subscribe<FModulesRefundedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
 		[this](const FModulesRefundedEvent&) { Bus.MarkDirty(TEXT("JobBoard")); });
+	// FUEL ARRIVED: a flight refused NoFuelStock is re-offered (UJobBoard::ReopenStockRefusals, Task 4). Added here with the event
+	// because the bus-subscribed lint requires one; task 6 wires the rest of the supply.
+	// ENFORCED BY: AirportOps.Present.Bus.EveryEventHasASubscriber
+	Bus.Subscribe<FFuelDeliveredEvent>(EOpsTier::Sim, TEXT("JobBoard"),
+		[this](const FFuelDeliveredEvent&) { JobBoard->ReopenStockRefusals(); Bus.MarkDirty(TEXT("JobBoard")); });
 	// A PUSH NO LONGER BLOCKED (Airside's push watch, bridged in Attach): the refused departure it names can go now.
 	// What bDepartureWaiting used to find by re-running the whole Step every frame (ops push-ground-freed).
 	// ENFORCED BY: AirportOps.Present.PushGroundFreed.DepartsTheFrameAfter
@@ -1472,6 +1479,7 @@ TArray<UOpsRuntime::FOpsBusPublisher> UOpsRuntime::Publishers()
 	Out.Add({ TEXT("Airport"), &Airport->Bus });
 	Out.Add({ TEXT("FacilityPurchases"), &FacilityPurchases->Bus });
 	Out.Add({ TEXT("OfferGenerator"), &OfferGenerator->Bus });
+	Out.Add({ TEXT("FuelSupply"), &FuelSupply->Bus });
 	return Out;
 }
 

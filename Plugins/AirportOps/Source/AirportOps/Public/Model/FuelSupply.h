@@ -3,7 +3,29 @@
 #include "CoreMinimal.h"
 #include "Model/OpsDefinition.h"
 #include "Model/OpsSave.h"
+#include "Model/Ledger.h"
 #include "FuelSupply.generated.h"
+
+/** Why a fuel order was refused. None is the only success. */
+enum class EFuelOrderRefusal : uint8 { None, NoRoom, CannotAfford, UnknownTier, AlreadyContracted, NoContract };
+
+/** The running contract: which tier, and how much of the term is left. Tier INDEX_NONE = none. Saved. */
+USTRUCT()
+struct AIRPORTOPS_API FFuelContract
+{
+	GENERATED_BODY()
+	UPROPERTY() int32 Tier = INDEX_NONE;
+	UPROPERTY() int32 DaysLeft = 0;
+};
+
+/** A spot order paid for and on its way. Saved: a load mid-delay must still deliver. */
+USTRUCT()
+struct AIRPORTOPS_API FFuelSpotOrder
+{
+	GENERATED_BODY()
+	UPROPERTY() double Litres = 0.0;
+	UPROPERTY() double DueAt = 0.0;
+};
 
 /**
  * The airport's fuel: what it holds, what it has contracted, what it has ordered (spec 2026-10-02-progression-and-
@@ -44,6 +66,27 @@ public:
 
 	/** Takes up to Litres from the stock; returns what was granted. */
 	double Draw(double Litres);
+	/** The running contract, if any. Saved. */
+	UPROPERTY() FFuelContract Contract;
+	/** Spot orders paid and not yet delivered. Saved. */
+	UPROPERTY() TArray<FFuelSpotOrder> SpotOrders;
+
+	/** The books fuel is paid from. Transient, set by the runtime; null (a bare test) buys for free. */
+	UPROPERTY(Transient) TObjectPtr<ULedger> Ledger;
+	/** Set and cleared with the runtime's other publishers (UOpsRuntime::Publishers). Null in a bare NewObject. */
+	class FOpsEventBus* Bus = nullptr;
+
+	double PendingSpotLitres() const;
+	EFuelOrderRefusal JudgeSpot(double Litres) const;
+	EFuelOrderRefusal OrderSpot(double Litres, double Now);
+	int32 ReceiveDueSpot(double Now);
+
+	EFuelOrderRefusal JudgeContract(int32 Tier) const;
+	EFuelOrderRefusal SignContract(int32 Tier, double Now);
+	EFuelOrderRefusal CancelContract(double Now);
+	/** One day of the contract: charged whole (take-or-pay), added as far as the tanks allow. Called at day end. */
+	void DeliverContractDay(double Now);
+
 	/** Adds up to Litres, stopping at capacity; returns what was added. TAKE-OR-PAY: the caller has already paid. */
 	double Receive(double Litres);
 };

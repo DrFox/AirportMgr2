@@ -24,6 +24,7 @@ class UJobBoard;
 class UScenario;
 class UFlightBoard;
 class UOfferGenerator;
+class UFuelSupply;
 class ULedger;
 class UPricing;
 struct FAirframe;
@@ -313,6 +314,8 @@ private:
 	UPROPERTY() TObjectPtr<UJobBoard> JobBoard;
 	UPROPERTY() TObjectPtr<UFlightBoard> FlightBoard;
 	UPROPERTY() TObjectPtr<UOfferGenerator> OfferGenerator;
+	/** The airport's fuel pool. Created here so its Bus is a listed publisher (rule 71); NOT yet wired to the job board, the ledger or the day beat - that is task 6. */
+	UPROPERTY() TObjectPtr<UFuelSupply> FuelSupply;
 	UPROPERTY() TObjectPtr<ULedger> Ledger;
 	UPROPERTY() TObjectPtr<UPricing> Pricing;
 	UPROPERTY() TObjectPtr<UAgentRescue> AgentRescue;
