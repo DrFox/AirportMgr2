@@ -31,6 +31,7 @@
 #include "Present/OpsRuntime.h"
 #include "Present/RoadNetworkActor.h"
 #include "Testing/AirsideTestGraph.h"
+#include "Model/InspectFacts.h"
 #include "Testing/AirsideTestWorld.h"
 #include "OpsTransitionTestHelpers.h"
 
@@ -464,9 +465,8 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 			FarEdge = FMath::Max(FarEdge, Corner.X);
 		}
 		FarRoadX = FarEdge + FarRoadClearance;
-		FGuidelineNodeId RoadSouth, RoadNorth;
-		LayLine(*Net, FVector2D(FarRoadX, -10000.0), FVector2D(FarRoadX, 10000.0),
-			ETraversalClass::GroundVehicle, RoadSouth, RoadNorth);
+		// TWO LANES, ONE EACH WAY, as the game lays every road (TestGraph::LayServiceRoads, #540).
+		TestGraph::LayServiceRoads(*Net, { TPair<FVector2D, FVector2D>(FVector2D(FarRoadX, -10000.0), FVector2D(FarRoadX, 10000.0)) });
 	}
 
 	if (bSecondStand)
@@ -636,32 +636,23 @@ void FFuelFixture::LaySouthRoad(double FromX)
 	}
 	SpurXs.Sort();
 
-	// ONE NODE PER JOIN, shared by the road either side of it and the spur, so the truck can turn
-	// off the road onto the spur - LayLine's fresh nodes would leave three lines that only touch.
-	auto Edge = [this](FGuidelineNodeId A, FGuidelineNodeId B)
-	{
-		const FGuidelineNode* NodeA = Net->GetGuidelineNode(A);
-		const FGuidelineNode* NodeB = Net->GetGuidelineNode(B);
-		FGuidelineEdge Line;
-		Line.A = A;
-		Line.B = B;
-		Line.Control = (NodeA->Position + NodeB->Position) * 0.5;
-		Line.AllowedTraffic = FTrafficMask::Only(ETraversalClass::GroundVehicle);
-		Line.AllowedTraffic.Add(ETraversalClass::Emergency);
-		Line.Direction = EGuidelineDir::Bidirectional;
-		Line.Width = 600.0;
-		Line.bDerived = true;
-		Net->AddGuidelineEdge(MoveTemp(Line));
-	};
-	FGuidelineNodeId West = Net->AddGuidelineNode(FVector2D(FromX, RoadY));
+	// TWO LANES, ONE EACH WAY, as the game lays every road (owner ruling 2026-10-03, #540): the road and its
+	// spurs are road SEGMENTS of the shipping service-road profile, each spur meeting the road at a shared
+	// road node, and the lanes and junction turn paths DERIVED by the production builder
+	// (TestGraph::LayServiceRoads). It was one hand-laid two-way guideline per piece, and two service
+	// vehicles met head-on on it ("Deadlock among agents [2, 3]", measured on the spur up x = 2932) - a road
+	// shape no player can draw.
+	TArray<TPair<FVector2D, FVector2D>> Pieces;
+	FVector2D West(FromX, RoadY);
 	for (const double SpurX : SpurXs)
 	{
-		const FGuidelineNodeId Join = Net->AddGuidelineNode(FVector2D(SpurX, RoadY));
-		Edge(West, Join);
-		Edge(Join, Net->AddGuidelineNode(FVector2D(SpurX, 10000.0)));
+		const FVector2D Join(SpurX, RoadY);
+		Pieces.Emplace(West, Join);
+		Pieces.Emplace(Join, FVector2D(SpurX, 10000.0));
 		West = Join;
 	}
-	Edge(West, Net->AddGuidelineNode(FVector2D(20000.0, RoadY)));
+	Pieces.Emplace(West, FVector2D(20000.0, RoadY));
+	TestGraph::LayServiceRoads(*Net, Pieces);
 }
 
 int32 FFuelFixture::ParkAircraft()
@@ -1996,7 +1987,7 @@ bool FFuelRuntimeResolvesPerStandTest::RunTest(const FString& Parameters)
 	// both stands facing +X off it (A at the origin, C 9000 north, clear of A's 5000 width), and
 	// one north-south road beyond BOTH far edges - C's is the deeper - with a depot east of it
 	// per stand, south of both, so neither aircraft has to wait for the other's truck.
-	FGuidelineNodeId TaxiSouth, TaxiNorth, RoadSouth, RoadNorth;
+	FGuidelineNodeId TaxiSouth, TaxiNorth;
 	LayLine(Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 20000.0),
 		ETraversalClass::Aircraft, TaxiSouth, TaxiNorth);
 
@@ -2011,8 +2002,8 @@ bool FFuelRuntimeResolvesPerStandTest::RunTest(const FString& Parameters)
 		}
 	}
 	const double RoadX = FarEdge + FFuelFixture::FarRoadClearance;
-	LayLine(Net, FVector2D(RoadX, -10000.0), FVector2D(RoadX, 20000.0),
-		ETraversalClass::GroundVehicle, RoadSouth, RoadNorth);
+	// TWO LANES, ONE EACH WAY (#540) - see FFuelFixture::LaySouthRoad.
+	TestGraph::LayServiceRoads(Net, { TPair<FVector2D, FVector2D>(FVector2D(RoadX, -10000.0), FVector2D(RoadX, 20000.0)) });
 
 	UEntityDefinition* DepotDef = UEntityDefinition::MakeFuelDepotTransient();
 	for (const double Y : { -6000.0, -3000.0 })
@@ -2250,15 +2241,8 @@ bool FFuelBigLoadTakesTripsTest::RunTest(const FString& Parameters)
 	FFuelFixture Fixture;
 	Fixture.FixtureLitres = 2500.0;
 	Fixture.Build(/*bWithRoad=*/true);
-	// ONE VEHICLE, THE BOWSER (2026-10-03): since a C stand admits the utility tow as well, the default
-	// starter fleet's two vehicles may split this job's trips, and the second then meets the first head-on
-	// ("Deadlock among agents [2, 3]: no member can turn"). MEASURED WHERE, 2026-10-03: on this FIXTURE'S
-	// access road - edge 2, the single two-way guideline LaySouthRoad lays up x = 2932 from the road at
-	// y = -4000, no stand geometry (StandGeometryOwner unset) and ~5 km of the tow's way home - not inside the
-	// stand. Every road here is one LayLine, a single bidirectional guideline, where a played service road is
-	// two lanes one each way (build_road_profiles.py). Two trucks on C, or two tows on B, meet the same way.
-	// This test is about trips, not about which vehicle, so it keeps one.
-	Fixture.Service->StarterFleet = { Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode };
+	// THE DEFAULT FLEET AGAIN (#540): pinned to the bowser for one day because its two vehicles split the trips
+	// and met head-on on the fixture's single two-way road - a fixture artefact, gone with two-lane roads.
 	// EVERY VEHICLE A 1000 L TANK AT A QUICK 600 L/MIN, so three trips fit the test's patience.
 	Fixture.EveryKindCarries(FFuelVehicleSpec(1000.0, 600.0));
 	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }
@@ -2277,6 +2261,241 @@ bool FFuelBigLoadTakesTripsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("nothing is owed"), Demand.QuantityOwed, 0.0, 0.5);
 	TestTrue(TEXT("and the depot refilled a truck between trips"), bSawRefill);
 	return true;
+}
+
+namespace FuelServiceTest
+{
+	/**
+	 * A MULTI-TRIP LOAD SPLIT BETWEEN TWO VEHICLES (#540): Kinds are the depot's fleet, every kind a 1000 L tank
+	 * at a quick pump, and 2500 L owed - three trips, which the finish-time bid hands to whichever vehicle is
+	 * free soonest, so the second arrives while the first is still on the stand's lanes or leaving them. The
+	 * job must finish, BOTH vehicles must have served it, and no deadlock may be declared.
+	 */
+	bool SplitLoadFinishes(FAutomationTestBase& Test, TOptional<EIcaoCode> Letter, const TArray<FName>& Kinds)
+	{
+		FFuelFixture Fixture;
+		Fixture.FixtureLitres = 2500.0;
+		if (Letter.IsSet())
+		{
+			Fixture.StandLetter = Letter;
+			Fixture.bFarEdgeRoad = true;
+		}
+		Fixture.Build(/*bWithRoad=*/true);
+		Fixture.Service->StarterFleet = { Kinds[0] };
+		Fixture.EveryKindCarries(FFuelVehicleSpec(1000.0, 600.0));
+		Fixture.Service->SeedStarterFleets(*Fixture.Net, *Fixture.Clock);
+		for (int32 Index = 1; Index < Kinds.Num(); ++Index)
+		{
+			Fixture.Service->Fleet().Add(Kinds[Index], Fixture.Depot, EFleetOrigin::Bought, 0.0);
+		}
+		if (!Test.TestEqual(TEXT("setup: the depot holds the fleet asked for"), Fixture.Service->VehiclesAt(Fixture.Depot), Kinds.Num())) { return false; }
+
+		const int32 Aircraft = Fixture.ParkAircraft();
+		TSet<int32> Served;
+		const bool bDone = Aircraft != 0 && Fixture.AdvanceUntil([&]
+		{
+			for (const FServiceVehicle& Vehicle : Fixture.Service->GetVehicles())
+			{
+				if (Vehicle.State == EServiceVehicleState::Serving) { Served.Add(Vehicle.Id); }
+			}
+			return Fixture.Service->GetJobs().Num() == 1 && Fixture.Service->GetJobs()[0].State == EServiceJobState::Done;
+		}, 1800.0);
+		const FString Who = FString::Printf(TEXT("Code %s, %d vehicle(s)"), Letter.IsSet() ? IcaoCode::ToLetter(*Letter) : TEXT("C"), Kinds.Num());
+		Test.TestTrue(*FString::Printf(TEXT("%s: the split load finishes"), *Who), bDone);
+		Test.TestTrue(*FString::Printf(TEXT("%s: and BOTH vehicles served it - or this measured one vehicle (%d served)"), *Who, Served.Num()),
+			Served.Num() >= 2);
+		// THE RESOLVER'S OWN COUNT - "Deadlock among agents" is a Warning, which FLogLineSpy does not capture.
+		Test.TestEqual(*FString::Printf(TEXT("%s: no deadlock was declared"), *Who), Fixture.Traffic->GetDeadlockLogLinesForTest(), 0);
+		return true;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelSplitLoadDefaultFleetTest, "AirportOps.Fuel.SplitLoad.DefaultFleetOnC",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelSplitLoadDefaultFleetTest::RunTest(const FString& Parameters)
+{
+	// THE DEFAULT STARTER FLEET (the tow and the bowser) on the shipping Code C stand, which since #539 admits both.
+	return FuelServiceTest::SplitLoadFinishes(*this, TOptional<EIcaoCode>(),
+		{ UAirsideSettings::ResolveUtilityTowVehicle().TypeCode, UAirsideSettings::ResolveDefaultVehicle().TypeCode });
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelSplitLoadTwoTrucksTest, "AirportOps.Fuel.SplitLoad.TwoTrucksOnC",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelSplitLoadTwoTrucksTest::RunTest(const FString& Parameters)
+{
+	const FName Truck = UAirsideSettings::ResolveDefaultVehicle().TypeCode;
+	return FuelServiceTest::SplitLoadFinishes(*this, TOptional<EIcaoCode>(), { Truck, Truck });
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelSplitLoadTwoTowsTest, "AirportOps.Fuel.SplitLoad.TwoTowsOnB",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelSplitLoadTwoTowsTest::RunTest(const FString& Parameters)
+{
+	const FName Tow = UAirsideSettings::ResolveUtilityTowVehicle().TypeCode;
+	return FuelServiceTest::SplitLoadFinishes(*this, EIcaoCode::B, { Tow, Tow });
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelFixtureRoadsAreTwoLaneTest, "AirportOps.Fuel.FixtureRoadsAreTwoLane",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelFixtureRoadsAreTwoLaneTest::RunTest(const FString& Parameters)
+{
+	// OWNER RULING 2026-10-03 (#540): roads are two lanes in the game, one each way; only a stand's own lanes
+	// are single and two-way. Both fixture road shapes - the south road with its spur, the far-edge road - are
+	// measured: every lane a road derives is ONE-WAY, there are both directions, and no long two-way vehicle
+	// line remains outside a stand (a link's short lead-in and sweeps are two-way by design, and unowned).
+	for (const bool bFarEdge : { false, true })
+	{
+		FFuelFixture Fixture;
+		Fixture.bFarEdgeRoad = bFarEdge;
+		Fixture.Build(/*bWithRoad=*/true);
+		int32 AToB = 0, BToA = 0, LongTwoWay = 0;
+		for (const FGuidelineEdge& Edge : Fixture.Net->GetGuidelineEdges())
+		{
+			if (!Edge.bAlive || !Edge.AllowedTraffic.Allows(ETraversalClass::GroundVehicle) || Edge.StandGeometryOwner.IsSet()) { continue; }
+			if (Edge.DerivedFrom.IsSet())
+			{
+				AToB += Edge.Direction == EGuidelineDir::AToB ? 1 : 0;
+				BToA += Edge.Direction == EGuidelineDir::BToA ? 1 : 0;
+				TestFalse(TEXT("a road lane is never two-way"), Edge.Direction == EGuidelineDir::Bidirectional);
+			}
+			// LONGER THAN ANY LINK CAN BE: a lead-in reaches at most FAnchorLink::DefaultServiceLinkRadius, and the
+			// single two-way roads this replaced were 14000 (the spur) to 23000 uu (the south road) long.
+			else if (Edge.Direction == EGuidelineDir::Bidirectional && !Edge.AtJunction.IsSet()
+				&& Edge.Length > FAnchorLink::DefaultServiceLinkRadius + 500.0)
+			{
+				++LongTwoWay;
+			}
+		}
+		const TCHAR* Shape = bFarEdge ? TEXT("far-edge road") : TEXT("south road and spur");
+		TestTrue(*FString::Printf(TEXT("%s: lanes run both ways (%d A->B, %d B->A)"), Shape, AToB, BToA), AToB > 0 && BToA > 0);
+		TestEqual(*FString::Printf(TEXT("%s: no long two-way vehicle line outside a stand"), Shape), LongTwoWay, 0);
+	}
+	return true;
+}
+
+namespace FuelServiceTest
+{
+	/** How many ground vehicles are on Stand's lanes - the lanes, its link and sweeps (FGuidelineEdge::StandLanesOf) -
+	 *  judged by the step each one's centre is on, parked or driving. */
+	int32 VehiclesOnStandLanes(const UGroundTraffic& Traffic, const URoadNetwork& Net, FEntityInstanceId Stand, TArray<int32>* OutWho = nullptr)
+	{
+		int32 Count = 0;
+		for (const FRoadAgent& Agent : Traffic.GetAgents())
+		{
+			if (Agent.Class != ETraversalClass::GroundVehicle || !Agent.Follower.Plan.IsValid()) { continue; }
+			const int32 Step = UGroundTraffic::CurrentStep(Agent.Follower.Plan, Agent.Follower.Travelled);
+			const FGuidelineEdge* Edge = Agent.Follower.Plan.Steps.IsValidIndex(Step)
+				? Net.GetGuidelineEdge(Agent.Follower.Plan.Steps[Step].Edge) : nullptr;
+			if (Edge != nullptr && Edge->StandLanesOf() == Stand)
+			{
+				++Count;
+				if (OutWho != nullptr) { OutWho->Add(Agent.Id); }
+			}
+		}
+		return Count;
+	}
+
+	/**
+	 * THE FORCED CASE (#540): one vehicle serving at a stand's hydrant, and a SECOND sent to the same hydrant while
+	 * it serves, so the second arrives while the first is on the lanes and the first leaves while the second wants
+	 * in - the one-leaving-one-arriving shape a split load only reaches by timing. A stand's contact spur and lead-in
+	 * are ONE two-way strip (EntityDefinition.cpp's contact comment), so two vehicles on it head-on can only deadlock.
+	 * bRetireHolder retires the serving vehicle's agent instead of letting it finish - the claim must come free on
+	 * that exit too.
+	 */
+	bool SecondVehicleWaitsForTheLanes(FAutomationTestBase& Test, bool bRetireHolder)
+	{
+		FFuelFixture Fixture;
+		Fixture.StandLetter = EIcaoCode::B;
+		Fixture.bFarEdgeRoad = true;
+		Fixture.FixtureLitres = 300.0;
+		Fixture.Build(/*bWithRoad=*/true);
+		const FVehicle Tow = UAirsideSettings::ResolveUtilityTowVehicle();
+		Fixture.Service->StarterFleet = { Tow.TypeCode };
+
+		const int32 Aircraft = Fixture.ParkAircraft();
+		if (!Test.TestTrue(TEXT("setup: an aircraft parked at the B stand"), Aircraft != 0)) { return false; }
+		int32 Holder = 0;
+		if (!Test.TestTrue(TEXT("setup: the tow reaches the hydrant and serves"), Fixture.AdvanceUntil([&]
+			{
+				for (const FServiceVehicle& Vehicle : Fixture.Service->GetVehicles())
+				{
+					if (Vehicle.State == EServiceVehicleState::Serving) { Holder = Vehicle.AgentId; return true; }
+				}
+				return false;
+			}, 600.0))) { return false; }
+
+		const FResolvedAnchor* Anchor = Fixture.Net->FindResolvedAnchor(Fixture.Stand, Fixture.Net->FirstAnchorIdForRole(Fixture.Stand, EServiceRole::Fuel));
+		const FGuidelineNodeId Hydrant = Anchor != nullptr ? Anchor->Node : FGuidelineNodeId();
+		const FRoutePlan Plan = TestGraph::Probe(*Fixture.Net, Fixture.DepotPose, Hydrant, ETraversalClass::GroundVehicle);
+		if (!Test.TestTrue(TEXT("setup: a route from the depot to the same hydrant"), Plan.IsValid())) { return false; }
+		const int32 Second = Fixture.Traffic->DispatchAgent(Fixture.Net, Plan, Tow, ETraversalClass::GroundVehicle, 0.0);
+		if (!Test.TestTrue(TEXT("setup: the second vehicle is dispatched"), Second != 0)) { return false; }
+
+		if (bRetireHolder)
+		{
+			// LET IT GET TO THE STAND'S DOOR FIRST, so the release is what lets it in rather than an empty stand.
+			Fixture.Advance(60.0);
+			Fixture.Traffic->RetireAgent(Holder);
+		}
+
+		int32 WorstOnLanes = 0;
+		TArray<int32> WorstWho;
+		FString WaitLine;
+		bool bWaitOnRoadLane = false;
+		const bool bArrived = Fixture.AdvanceUntil([&]
+		{
+			// WHAT THE INSPECTOR SAYS WHILE IT WAITS - InspectFacts' own hold, the card's one source of words.
+			if (const FRoadAgent* Waiting = Fixture.Traffic->FindAgent(Second); Waiting != nullptr && WaitLine.IsEmpty()
+				&& Waiting->GetBlockedResource().Kind == ETrafficResourceKind::StandLanes && Waiting->GetWaitingOn() != 0)
+			{
+				WaitLine = InspectFacts::HoldLine(InspectFacts::HoldOf(*Waiting, Fixture.Net), TEXT("the tow"), FString());
+				// AND WHERE IT WAITS: the step its centre is on is a ROAD LANE (derived from a road segment, one-way),
+				// outside the stand's lanes and their link - queued on the road like any vehicle turning off it.
+				const FRoutePlan& WaitPlan = Waiting->Follower.Plan;
+				const int32 WaitStep = UGroundTraffic::CurrentStep(WaitPlan, Waiting->Follower.Travelled);
+				const FGuidelineEdge* WaitEdge = WaitPlan.Steps.IsValidIndex(WaitStep) ? Fixture.Net->GetGuidelineEdge(WaitPlan.Steps[WaitStep].Edge) : nullptr;
+				bWaitOnRoadLane = WaitEdge != nullptr && WaitEdge->DerivedFrom.IsSet() && !WaitEdge->StandLanesOf().IsSet()
+					&& WaitEdge->Direction != EGuidelineDir::Bidirectional;
+				Test.AddInfo(FString::Printf(TEXT("MEASURED: the second vehicle waits at %s, on a %s"), *Waiting->GroundPosition().ToString(),
+					bWaitOnRoadLane ? TEXT("one-way road lane") : TEXT("NOT a road lane")));
+			}
+			TArray<int32> Who;
+			const int32 On = VehiclesOnStandLanes(*Fixture.Traffic, *Fixture.Net, Fixture.Stand, &Who);
+			if (On > WorstOnLanes) { WorstOnLanes = On; WorstWho = Who; }
+			const FRoadAgent* Agent = Fixture.Traffic->FindAgent(Second);
+			return Agent != nullptr && Agent->Phase == EAgentPhase::Parked;
+		}, 1800.0);
+
+		const TCHAR* Case = bRetireHolder ? TEXT("holder retired") : TEXT("holder finishes");
+		Test.TestTrue(*FString::Printf(TEXT("%s: the second vehicle reaches the hydrant"), Case), bArrived);
+		Test.TestTrue(*FString::Printf(TEXT("%s: never two vehicles on the stand's lanes at once (worst %d: agents %s)"), Case, WorstOnLanes,
+				*FString::JoinBy(WorstWho, TEXT(", "), [](int32 Id) { return FString::FromInt(Id); })),
+			WorstOnLanes <= 1);
+		Test.TestEqual(*FString::Printf(TEXT("%s: no deadlock was declared"), Case), Fixture.Traffic->GetDeadlockLogLinesForTest(), 0);
+		if (!bRetireHolder)
+		{
+			// THE WAIT IS SAID - and is the stand's lanes, not a queue behind someone: the claim, not geometry, held it.
+			Test.TestTrue(*FString::Printf(TEXT("%s: the waiting vehicle says it waits for the stand's lane ('%s')"), Case, *WaitLine),
+				WaitLine.StartsWith(TEXT("Waiting for stand")));
+			Test.TestTrue(*FString::Printf(TEXT("%s: and it waits on the road lane, not on the stand's link"), Case), bWaitOnRoadLane);
+		}
+		return true;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelStandLanesOneAtATimeTest, "AirportOps.Fuel.StandLanes.OneVehicleAtATime",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelStandLanesOneAtATimeTest::RunTest(const FString& Parameters)
+{
+	return FuelServiceTest::SecondVehicleWaitsForTheLanes(*this, /*bRetireHolder=*/false);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelStandLanesReleasedOnRetireTest, "AirportOps.Fuel.StandLanes.ReleasedWhenTheHolderIsRetired",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelStandLanesReleasedOnRetireTest::RunTest(const FString& Parameters)
+{
+	return FuelServiceTest::SecondVehicleWaitsForTheLanes(*this, /*bRetireHolder=*/true);
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -2413,8 +2632,6 @@ bool FFuelZeroCapacitySpecTest::RunTest(const FString& Parameters)
 	FFuelFixture Fixture;
 	Fixture.FixtureLitres = 3.0;
 	Fixture.Build(/*bWithRoad=*/true);
-	// ONE VEHICLE, for BigLoadTakesTrips' reason (the two-vehicle head-on deadlock it names).
-	Fixture.Service->StarterFleet = { Fixture.Service->VehiclesFor(EIcaoCode::C).TypeCode };
 	Fixture.EveryKindCarries(FFuelVehicleSpec(0.0, 600.0));
 	Fixture.Service->RefillLitresPerMinutePerPump = 100000.0;
 	if (!TestTrue(TEXT("an aircraft parked"), Fixture.ParkAircraft() != 0)) { return false; }

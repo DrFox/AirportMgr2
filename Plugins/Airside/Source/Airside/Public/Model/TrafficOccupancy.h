@@ -15,6 +15,13 @@ enum class ETrafficResourceKind : uint8
 	/** One segment of a runway. A landing holds every segment of the chain; a holding-position
 	 *  node names one and the arbiter expands it. */
 	Surface,
+	/**
+	 * ONE STAND'S SERVICE LANES, whole - its own geometry and the link into it (FGuidelineEdge::StandLanesOf).
+	 * A stand's contact spur and lead-in are one two-way strip (owner ruling 2026-10-03: roads are two-lane,
+	 * only the stand's lanes are not), so one service vehicle at a time: the next waits on the road (#540).
+	 * Appended last: the enum's values are stable for anything that wrote one down.
+	 */
+	StandLanes,
 };
 
 /**
@@ -35,8 +42,11 @@ struct AIRSIDE_API FTrafficResource
 	UPROPERTY() FGuidelineEdgeId Edge;
 	UPROPERTY() FGuidelineNodeId Node;
 	UPROPERTY() FRoadSegmentId Surface;
+	/** StandLanes kind only: the stand ENTITY whose lanes these are - an entity id, not the player's stand number. */
+	UPROPERTY() FEntityInstanceId LanesOf;
 
 	static FTrafficResource OfEdge(FGuidelineEdgeId Id);
+	static FTrafficResource OfStandLanes(FEntityInstanceId Id);
 	static FTrafficResource OfNode(FGuidelineNodeId Id);
 	static FTrafficResource OfSurface(FRoadSegmentId Id);
 
@@ -60,6 +70,7 @@ FORCEINLINE uint32 GetTypeHash(const FTrafficResource& Resource)
 	case ETrafficResourceKind::Edge:    return HashCombine(GetTypeHash(Resource.Kind), GetTypeHash(Resource.Edge));
 	case ETrafficResourceKind::Node:    return HashCombine(GetTypeHash(Resource.Kind), GetTypeHash(Resource.Node));
 	case ETrafficResourceKind::Surface: return HashCombine(GetTypeHash(Resource.Kind), GetTypeHash(Resource.Surface));
+	case ETrafficResourceKind::StandLanes: return HashCombine(GetTypeHash(Resource.Kind), GetTypeHash(Resource.LanesOf));
 	default:                            return GetTypeHash(Resource.Kind);
 	}
 }
@@ -233,6 +244,13 @@ struct AIRSIDE_API FTrafficOccupancy
 	 * reserved it - the difference between a jam and a yield. See ResolveDeadlocks.
 	 */
 	const FTrafficClaim* FindClaim(int32 AgentId, const FTrafficResource& Resource) const;
+
+	/**
+	 * The stand whose lanes AgentId OCCUPIES, or unset (#540). What FClaimPass::Run compares before and after a
+	 * pass to say, once, that a vehicle has entered or left a stand's lanes - a reservation is the door being
+	 * held for it, not the vehicle being in.
+	 */
+	FEntityInstanceId StandLanesOccupiedBy(int32 AgentId) const;
 
 	/**
 	 * Drops every EDGE and NODE claim, whoever holds it, and KEEPS every SURFACE claim.

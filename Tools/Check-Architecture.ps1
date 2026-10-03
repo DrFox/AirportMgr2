@@ -4960,7 +4960,10 @@ $modelLineBudget = [ordered]@{
     # splitting it would scatter one invariant across files. RAISED 1898 -> 1963 by #502 (2026-10-01): a push held on a dead
     # plan claims the ground its body stands on (HoldBodyFootprint, a geometric claim for a body on no route) - what a body
     # holds is the claim pass's own question, so it lives beside HoldRunwayOnly; with its reason and pin.
-    'Plugins\Airside\Source\Airside\Private\Model\TrafficClaims.cpp'          = 1963
+    # RAISED 1963 -> 2004 by #540 (2026-10-03): the one-vehicle-per-stand-lane claim is a resource this pass asks for -
+    # an occupancy on the step stood on, a door before the node that enters the lanes, the same on the parked arm, and
+    # one entered/left line. The rules themselves live in Model/StandLaneClaim.cpp; these are the call sites, with why.
+    'Plugins\Airside\Source\Airside\Private\Model\TrafficClaims.cpp'          = 2004
     # 2026-10-01: the flight registry and the one transition owner - the save, the indices, TransitionTo and every door that names a
     # transition (the cancels, OnAgentPhase's mapping, the load's steps) and the quote both owners ask. LOWERED 1803 -> 1112 the same
     # day by #442 item 4: the offers went to FOfferInbox (OfferInbox.cpp), the arrival queue, its clearances, the dispatch and every

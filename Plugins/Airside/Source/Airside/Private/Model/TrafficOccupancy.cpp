@@ -13,6 +13,11 @@ FTrafficResource FTrafficResource::OfSurface(FRoadSegmentId Id)
 	FTrafficResource R; R.Kind = ETrafficResourceKind::Surface; R.Surface = Id; return R;
 }
 
+FTrafficResource FTrafficResource::OfStandLanes(FEntityInstanceId Id)
+{
+	FTrafficResource R; R.Kind = ETrafficResourceKind::StandLanes; R.LanesOf = Id; return R;
+}
+
 bool FTrafficResource::operator==(const FTrafficResource& Other) const
 {
 	if (Kind != Other.Kind) { return false; }
@@ -21,6 +26,7 @@ bool FTrafficResource::operator==(const FTrafficResource& Other) const
 	case ETrafficResourceKind::Edge:    return Edge == Other.Edge;
 	case ETrafficResourceKind::Node:    return Node == Other.Node;
 	case ETrafficResourceKind::Surface: return Surface == Other.Surface;
+	case ETrafficResourceKind::StandLanes: return LanesOf == Other.LanesOf;
 	default: return false;
 	}
 }
@@ -32,8 +38,25 @@ FString FTrafficResource::Describe() const
 	case ETrafficResourceKind::Edge:    return FString::Printf(TEXT("edge %d"), Edge.Index);
 	case ETrafficResourceKind::Node:    return FString::Printf(TEXT("node %d"), Node.Index);
 	case ETrafficResourceKind::Surface: return FString::Printf(TEXT("runway segment %d"), Surface.Index);
+	case ETrafficResourceKind::StandLanes: return FString::Printf(TEXT("the stand lanes of entity %d"), LanesOf.Index);
 	default: return TEXT("?");
 	}
+}
+
+FEntityInstanceId FTrafficOccupancy::StandLanesOccupiedBy(int32 AgentId) const
+{
+	if (const TArray<int32>* Mine = ByAgent.Find(AgentId))
+	{
+		for (const int32 Index : *Mine)
+		{
+			const FTrafficClaim& Claim = Claims[Index];
+			if (Claim.bOccupied && Claim.Resource.Kind == ETrafficResourceKind::StandLanes)
+			{
+				return Claim.Resource.LanesOf;
+			}
+		}
+	}
+	return FEntityInstanceId();
 }
 
 bool FTrafficClaim::Conflicts(const FTrafficClaim& Other) const

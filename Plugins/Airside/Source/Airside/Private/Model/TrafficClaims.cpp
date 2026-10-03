@@ -13,9 +13,12 @@
 
 #include "Model/TrafficClaims.h"
 
+#include "Misc/ScopeExit.h"
+
 #include "AirsideLog.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadNetwork.h"
+#include "Model/StandLaneClaim.h"
 #include "Solve/GuidelineGeom.h"
 
 // GroundTraffic.h ABOVE IS FOR UGroundTraffic::StepStart/StepFromNode/CurrentStep ONLY
@@ -304,6 +307,16 @@ void FClaimPass::HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Network)
 		{
 			Surfaces.AddUnique(FTrafficResource::OfSurface(Segment));
 		}
+	}
+
+	// AND THE STAND LANES THE BODY IS ON (#540): parked at a hydrant it still OCCUPIES them, or the next vehicle
+	// would drive in to meet it head-on as it left.
+	const FEntityInstanceId OnLanes = Agent.Class == ETraversalClass::GroundVehicle
+		? StandLaneClaim::Of(Network, Agent.PlanInProgress(), UGroundTraffic::CurrentStep(Agent.PlanInProgress(), Agent.Follower.Travelled))
+		: FEntityInstanceId();
+	if (OnLanes.IsSet())
+	{
+		Surfaces.AddUnique(FTrafficResource::OfStandLanes(OnLanes));
 	}
 
 	Table.ReleaseExcept(Agent.Id, Surfaces);
@@ -1207,6 +1220,18 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 		const bool bBoxEntry = bBox && T <= Start && !bBoxEntryTaken;
 		bBoxEntryTaken = bBoxEntryTaken || bBoxEntry;
 
+		// ON A STAND'S LANES (#540, StandLaneClaim): the step stood on OCCUPIES them, whole. Ground vehicles only.
+		const FEntityInstanceId OnLanes = Index == Current && Agent.Class == ETraversalClass::GroundVehicle
+			? StandLaneClaim::Of(Network, Plan, Index) : FEntityInstanceId();
+		if (OnLanes.IsSet())
+		{
+			FWantedClaim Hold;
+			Hold.Claim = FTrafficClaim::Make(Agent.Id, FTrafficResource::OfStandLanes(OnLanes), /*bOccupied*/ true,
+				RankAt(Network, UGroundTraffic::StepFromNode(Plan, Current), Agent.Class));
+			Hold.Step = Index;
+			Pending.Add(Hold);
+		}
+
 		const double Lo = FMath::Max(Tail, Start);
 		const double Hi = FMath::Min(Head, End);
 		if (Hi > Lo)
@@ -1319,6 +1344,18 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 			// vehicle's window to the far strip edge, every committed truck downgraded its own
 			// hold this way, and at 3-4 s behind it the aircraft drove into the crossing with the
 			// truck still on it.
+			// THE DOOR TO A STAND'S LANES (#540, StandLaneClaim) - a reservation asked BEFORE this node, so a refusal
+			// stops the vehicle short of the node on the ROAD lane, not on the link it would share head-on.
+			const FEntityInstanceId Door = Agent.Class == ETraversalClass::GroundVehicle
+				? StandLaneClaim::EnteredAfter(Network, Plan, Index) : FEntityInstanceId();
+			if (Door.IsSet() && !WantedOccupied(FTrafficResource::OfStandLanes(Door)))
+			{
+				FWantedClaim Gate = Want;
+				Gate.Claim.Resource = FTrafficResource::OfStandLanes(Door);
+				Gate.Claim.bOccupied = false;
+				Pending.Add(Gate);
+			}
+
 			if (Want.Claim.bOccupied || !WantedOccupied(Want.Claim.Resource))
 			{
 				Pending.Add(Want);
@@ -1837,6 +1874,10 @@ void FClaimPass::Run(FRoadAgent& Agent, const URoadNetwork& Network)
 	// question this answers is "how many times did Run actually get called", not "how many
 	// of those calls reached the bottom" - see RunCallCountForTest's own comment.
 	++RunCallCountForTest;
+
+	// A STAND'S LANES ENTERED OR LEFT (#540), compared across the pass and said once (StandLaneClaim::LogChange).
+	const FEntityInstanceId LanesBefore = Table.StandLanesOccupiedBy(Agent.Id);
+	ON_SCOPE_EXIT { StandLaneClaim::LogChange(Agent.Id, LanesBefore, Table.StandLanesOccupiedBy(Agent.Id)); };
 
 	// NOT TAXIING: hold the runway and nothing else. An arrival on the roll and a departure
 	// lining up own the strip; whatever either held on the taxiway before the handover is

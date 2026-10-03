@@ -23,6 +23,8 @@ enum class EHoldAt : uint8
 	Behind,
 	/** A guideline node - a junction or crossing someone else holds. */
 	Crossing,
+	/** A stand's service lanes - another service vehicle is on them (#540: one at a time). */
+	StandLanes,
 };
 
 /**
@@ -38,6 +40,8 @@ struct FAgentHold
 	EHoldAt At = EHoldAt::None;
 	/** "09/27" when At is Runway and a network was given to name the strip; empty otherwise. */
 	FString RunwayPair;
+	/** The stand's number (FEntityInstance::StandNumber) when At is StandLanes and a network was given; 0 otherwise. */
+	int32 StandNumber = 0;
 	/**
 	 * FRoadAgent::GetStalledSeconds - how long it has stood waiting, in MOVEMENT seconds: real
 	 * time x the speed multiplier, what agents run on (USimClock's header). NOT game time - the
