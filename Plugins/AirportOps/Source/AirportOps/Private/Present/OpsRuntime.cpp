@@ -94,6 +94,11 @@ UOpsRuntime::UOpsRuntime()
 	JobBoard->Pricing = Pricing;
 	Ledger->Pricing = Pricing;
 	Ledger->Clock = Clock;
+	// AND THE FUEL BOUGHT IN (spec 2026-10-02 §7), the same breath and the same reason: the supply pays from this ledger, and
+	// the board draws its refills from this supply - unset, the board's FuelSupply is null and fuel is free and unlimited.
+	// ENFORCED BY: AirportOps.Present.Fuel.AttachWiresTheSupply
+	FuelSupply->Ledger = Ledger;
+	JobBoard->FuelSupply = FuelSupply;
 
 	// The airlines' mood - the bus's first Reaction (spec 2026-09-29 §3), forwarded like the rest.
 	Airlines = CreateDefaultSubobject<UAirlineRoster>(TEXT("Airlines"));
@@ -233,6 +238,24 @@ FPurchaseResult UOpsRuntime::BuyVehicle(FEntityInstanceId Entity, FName TypeCode
 FPurchaseResult UOpsRuntime::SellVehicle(int32 VehicleId)
 {
 	return FacilityPurchases->SellVehicle(VehicleId);
+}
+
+// THE FUEL FORWARDERS: the clock's Now, and nothing else. No attach guard, unlike BuyModule's: an order needs no network (an
+// unattached supply has no CapacityOf and holds anything, which only a test reaches). No log: the supply logs what it did,
+// and a refusal is returned for the caller to word.
+EFuelOrderRefusal UOpsRuntime::OrderSpotFuel(double Litres)
+{
+	return FuelSupply->OrderSpot(Litres, Clock->Now());
+}
+
+EFuelOrderRefusal UOpsRuntime::SignFuelContract(int32 Tier)
+{
+	return FuelSupply->SignContract(Tier, Clock->Now());
+}
+
+EFuelOrderRefusal UOpsRuntime::CancelFuelContract()
+{
+	return FuelSupply->CancelContract(Clock->Now());
 }
 
 int32 UOpsRuntime::ReservedSlotsOf(FEntityInstanceId Id, const FEntityInstance& Depot, EDepotModule Module)
@@ -438,11 +461,16 @@ void UOpsRuntime::WireBus()
 	// board's pass is where a changed depot is looked at, and a repair is rare enough that asking costs nothing.
 	Bus.Subscribe<FModulesRefundedEvent>(EOpsTier::Sim, TEXT("JobBoard"),
 		[this](const FModulesRefundedEvent&) { Bus.MarkDirty(TEXT("JobBoard")); });
-	// FUEL ARRIVED: a flight refused NoFuelStock is re-offered (UJobBoard::ReopenStockRefusals, Task 4). Added here with the event
-	// because the bus-subscribed lint requires one; task 6 wires the rest of the supply.
-	// ENFORCED BY: AirportOps.Present.Bus.EveryEventHasASubscriber
+	// FUEL ARRIVED: a flight refused NoFuelStock is re-offered (UJobBoard::ReopenStockRefusals). Stock arriving changes no graph
+	// revision, so without this the refusal - terminal until the graph changes - would outlast the fuel that cures it.
+	// ENFORCED BY: AirportOps.Present.Bus.EveryEventHasASubscriber, AirportOps.Present.Fuel.DeliveryReopensARefusedJob
 	Bus.Subscribe<FFuelDeliveredEvent>(EOpsTier::Sim, TEXT("JobBoard"),
 		[this](const FFuelDeliveredEvent&) { JobBoard->ReopenStockRefusals(); Bus.MarkDirty(TEXT("JobBoard")); });
+	// THE CONTRACT'S DAY, on the day's end the upkeep beat announces - not a third daily timer, for RollUp's reason (#188).
+	// SIM, NOT REACTION: it moves stock and money, and the delivery it publishes re-opens jobs in the Sim tier above.
+	// ENFORCED BY: AirportOps.Present.Fuel.DayEndDeliversTheContract
+	Bus.Subscribe<FDayEndedEvent>(EOpsTier::Sim, TEXT("FuelSupply"),
+		[this](const FDayEndedEvent&) { FuelSupply->DeliverContractDay(Clock->Now()); });
 	// A PUSH NO LONGER BLOCKED (Airside's push watch, bridged in Attach): the refused departure it names can go now.
 	// What bDepartureWaiting used to find by re-running the whole Step every frame (ops push-ground-freed).
 	// ENFORCED BY: AirportOps.Present.PushGroundFreed.DepartsTheFrameAfter
@@ -989,6 +1017,7 @@ void UOpsRuntime::ApplyScenarioFigures(const UScenario& Scenario)
 	FacilityPurchases->ModuleOffers = Scenario.ModuleOffers;
 	OfferGenerator->MaxPendingOffers = Scenario.MaxPendingOffers;
 	Airlines->Tuning = Scenario.AirlineSatisfaction;
+	FuelSupply->Figures = Scenario.FuelSupply;
 }
 
 void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
@@ -1047,6 +1076,11 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		// overwrites it moments later from the saved entries, which is why Open is safe here:
 		// it is the new-game path, and OpsSave::Restore is the other one.
 		Ledger->Open(Scenario->StartingBalance);
+		// AND THE FUEL A NEW GAME OPENS WITH, here and nowhere else, for the same reason: a load overwrites it from the
+		// "FuelSupply" blob moments later. NOT in ApplyScenarioFigures, which a load runs again after the restore - there it
+		// would refill the tanks on every load.
+		// ENFORCED BY: AirportOps.Present.Fuel.AttachWiresTheSupply, AirportOps.Present.Fuel.SpotOrderSurvivesASave (not after a load)
+		FuelSupply->StockLitres = Scenario->FuelSupply.StartingStockLitres;
 
 		UE_LOG(LogAirportOps, Log,
 			TEXT("Scenario '%s': %.0f/%.0f real s day/night (%02.0f-%02.0f), starts %02.0f:00, %d fuel vehicle kind(s), refill %.0f L/min/pump, opens at %.0f"),
@@ -1081,6 +1115,21 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// THE BOARD SEATS A DEPOT'S MODULES AGAINST THE SAME CEILING (#443, ruled 2026-09-30): its pumps are the placed ones,
 	// as the shop's bays are. Copied from the shop's, so the two cannot read two plots.
 	JobBoard->ModuleCeilingOf = FacilityPurchases->ReservedSlotsOf;
+	// THE TANKS' CAPACITY, ASKED AND NEVER STORED (UFuelSupply's class comment): the board's seated-tank count on the attached
+	// network, read every time - so a bulldozed depot or an undo shrinks it with no mutator having to remember. Weak, for the
+	// dispatcher's reason below; Target->Network rather than a captured network, because a clear or an undo REPLACES that
+	// object. After ModuleCeilingOf, which the board's seat count reads.
+	// ENFORCED BY: AirportOps.Present.Fuel.AttachWiresTheSupply
+	{
+		TWeakObjectPtr<UOpsRuntime> WeakThis = this;
+		FuelSupply->CapacityOf = [WeakThis]()
+		{
+			const UOpsRuntime* Self = WeakThis.Get();
+			return Self != nullptr && Self->Target != nullptr && Self->Target->Network != nullptr
+				? Self->JobBoard->FuelCapacityLitres(*Self->Target->Network, Self->FuelSupply->Figures.LitresPerTank)
+				: 0.0;
+		};
+	}
 	{
 		TWeakObjectPtr<ARoadNetworkActor> WeakActor = Target;
 		FacilityPurchases->ApplyModulePurchase = [WeakActor](FEntityInstanceId Id, EDepotModule Module)
@@ -1223,6 +1272,7 @@ void UOpsRuntime::RearmRepeatingSchedules()
 {
 	if (UpkeepHandle != INDEX_NONE) { Clock->Cancel(UpkeepHandle); }
 	if (OfferHandle != INDEX_NONE) { Clock->Cancel(OfferHandle); }
+	if (FuelSpotHandle != INDEX_NONE) { Clock->Cancel(FuelSpotHandle); }
 
 	// ONE ENTRY A DAY, not one per object: a hundred-stand airport would otherwise write a
 	// hundred rows a day into a saved array, and RollUp would spend its life folding them.
@@ -1236,6 +1286,12 @@ void UOpsRuntime::RearmRepeatingSchedules()
 	// ONE GENERATOR MINUTE, every game minute - see Attach for why this replaced a single
 	// fixed-interval timer.
 	OfferHandle = Clock->Every(UOfferGenerator::TickSeconds, [this]() { OfferTick(); });
+
+	// THE SPOT ORDERS' POLL, a game minute apart (review focus 3): an order's due time is SAVED and the clock's queue is not,
+	// so a clock entry per order would be gone after a load and the fuel paid for would never come. One repeating poll is
+	// re-armed here with the rest and needs no handle per order; a minute late at most, against a two-hour delay.
+	// ENFORCED BY: AirportOps.Present.Fuel.SpotOrderSurvivesASave, AirportOps.Present.Fuel.DeliveryReopensARefusedJob
+	FuelSpotHandle = Clock->Every(FuelSpotPollSeconds, [this]() { FuelSupply->ReceiveDueSpot(Clock->Now()); });
 }
 
 void UOpsRuntime::Detach()
@@ -1278,6 +1334,11 @@ void UOpsRuntime::Detach()
 		Clock->Cancel(OfferHandle);
 		OfferHandle = INDEX_NONE;
 	}
+	if (FuelSpotHandle != INDEX_NONE)
+	{
+		Clock->Cancel(FuelSpotHandle);
+		FuelSpotHandle = INDEX_NONE;
+	}
 	AirlineOffers.Reset();
 	if (JobBoardDeadlineHandle != INDEX_NONE)
 	{
@@ -1310,6 +1371,9 @@ void UOpsRuntime::Detach()
 	// detach would build into a field this runtime no longer drives.
 	FacilityPurchases->ReservedSlotsOf = nullptr;
 	JobBoard->ModuleCeilingOf = nullptr;
+	// AND THE TANKS WITH THEM: the capacity read the old actor's network. Unset is "unbounded" (UFuelSupply::Capacity), which
+	// only an unattached runtime - a test - ever sees.
+	FuelSupply->CapacityOf = nullptr;
 	FacilityPurchases->ApplyModulePurchase = nullptr;
 	FacilityPurchases->ApplyModuleRemoval = nullptr;
 	ReservationMemo.Reset();
@@ -1500,6 +1564,7 @@ TArray<IOpsPersistent*> UOpsRuntime::Persistents() const
 	Out.Add(OfferGenerator);
 	Out.Add(Airlines);
 	Out.Add(Airport);
+	Out.Add(FuelSupply);
 	return Out;
 }
 

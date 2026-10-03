@@ -47,6 +47,14 @@ class AIRPORTOPS_API UFuelSupply : public UObject, public IOpsPersistent
 public:
 	virtual FName SaveBlobName() const override { return TEXT("FuelSupply"); }
 	virtual UObject& AsPersistentObject() override { return *this; }
+	/**
+	 * BACK TO THE CLASS DEFAULTS BEFORE ANY RESTORE, blob or none (UAirport::OnBeforeRestore's shape): tagged serialisation
+	 * writes no property equal to its default, so a save holding an empty tank, no orders and no contract carries none of
+	 * them, and the restore left this session's stock, order and contract standing. A snapshot from before fuel had a blob
+	 * loads dry, which no player save can be (2026-10-03: there are none).
+	 * ENFORCED BY: AirportOps.Model.FuelSupply.RestoreClearsTheSession, AirportOps.Present.Fuel.LoadReplacesTheSessionsFuel
+	 */
+	virtual void OnBeforeRestore() override;
 
 	/** Litres held. May exceed Capacity() after a tank is sold - see FreeSpace. */
 	UPROPERTY() double StockLitres = 0.0;

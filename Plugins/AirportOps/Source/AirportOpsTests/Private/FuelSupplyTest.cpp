@@ -2,6 +2,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/FuelSupply.h"
 #include "Model/Ledger.h"
+#include "Model/OpsEventBus.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadNetwork.h"
 #include "Model/ServiceRolePolicy.h"
@@ -180,6 +181,90 @@ bool FFuelSupplySaveTest::RunTest(const FString&)
 	if (!TestEqual(TEXT("the order on the way"), Loaded->SpotOrders.Num(), 1)) { return false; }
 	TestEqual(TEXT("with its litres"), Loaded->SpotOrders[0].Litres, 4000.0, 1e-9);
 	TestEqual(TEXT("and its due time"), Loaded->SpotOrders[0].DueAt, 100.0 + Supply->Figures.SpotDelaySeconds, 1e-9);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelSupplyRestoreClearsTest, "AirportOps.Model.FuelSupply.RestoreClearsTheSession",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelSupplyRestoreClearsTest::RunTest(const FString&)
+{
+	// THE MIRROR OF THE TEST ABOVE: a save whose fuel is all at its defaults - dry, nothing ordered, no contract - writes
+	// none of it, so restoring it into a supply that holds this session's fuel must still leave none of that standing.
+	UFuelSupply* Empty = NewObject<UFuelSupply>(GetTransientPackage());
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	FOpsSnapshot Snapshot;
+	TArray<IOpsPersistent*> Saved = { Empty };
+	OpsSave::Capture(Saved, *Net, Snapshot);
+
+	UFuelSupply* Session = SupplyWithLedger(5000.0, 30000.0, 1e6);
+	Session->SignContract(0, 0.0);
+	Session->OrderSpot(4000.0, 0.0);
+	TArray<IOpsPersistent*> Into = { Session };
+	if (!TestTrue(TEXT("restore succeeds"), OpsSave::Restore(Snapshot, Into, *Net))) { return false; }
+	TestEqual(TEXT("the save's empty tank"), Session->StockLitres, 0.0, 1e-9);
+	TestEqual(TEXT("no contract the save did not have"), Session->Contract.Tier, static_cast<int32>(INDEX_NONE));
+	TestEqual(TEXT("no order the save did not make"), Session->SpotOrders.Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelSpotRefusalsChargeNothingTest, "AirportOps.Model.FuelSupply.SpotRefusalsChargeNothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelSpotRefusalsChargeNothingTest::RunTest(const FString&)
+{
+	// A SPOT ORDER IS PAID AT ONCE, so a refusal must leave the books alone: the player who cannot afford it keeps what
+	// they had, and no order is put on the way that nobody paid for.
+	UFuelSupply* Supply = SupplyWithLedger(0.0, 30000.0, 100.0);
+	const int32 Rows = Supply->Ledger->Entries().Num();
+	TestEqual(TEXT("an order dearer than the balance is refused CannotAfford"), Supply->OrderSpot(10000.0, 0.0), EFuelOrderRefusal::CannotAfford);
+	TestEqual(TEXT("the balance is untouched"), Supply->Ledger->Balance(), 100.0, 1e-9);
+	TestEqual(TEXT("no ledger row was posted"), Supply->Ledger->Entries().Num(), Rows);
+	TestEqual(TEXT("and nothing is on the way"), Supply->SpotOrders.Num(), 0);
+	// NaN COMPARES FALSE BOTH WAYS: `Litres <= 0.0` let it through, and so did `Litres > FreeSpace() - Pending` - an
+	// order of NaN litres at NaN cost.
+	TestEqual(TEXT("NaN litres are refused NoRoom"), Supply->OrderSpot(std::numeric_limits<double>::quiet_NaN(), 0.0), EFuelOrderRefusal::NoRoom);
+	TestEqual(TEXT("and charged nothing"), Supply->Ledger->Entries().Num(), Rows);
+	TestEqual(TEXT("CONTROL: an affordable order is taken"), Supply->OrderSpot(10.0, 0.0), EFuelOrderRefusal::None);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelSupplyPublishesTest, "AirportOps.Model.FuelSupply.EveryDeliveryIsPublished",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelSupplyPublishesTest::RunTest(const FString&)
+{
+	// THE EVENT IS WHAT RE-OPENS A NoFuelStock JOB (UOpsRuntime::WireBus), so every delivery must publish one - spot and
+	// contract alike - and say what it ADDED, not only what was sent: a contract day poured partly away is still a delivery.
+	FOpsEventBus Bus;
+	TArray<FFuelDeliveredEvent> Seen;
+	Bus.BeginWiring();
+	Bus.Subscribe<FFuelDeliveredEvent>(EOpsTier::Sim, TEXT("test"), [&Seen](const FFuelDeliveredEvent& E) { Seen.Add(E); });
+	Bus.EndWiring();
+
+	UFuelSupply* Supply = SupplyWithLedger(0.0, 30000.0, 1e9);
+	Supply->Bus = &Bus;
+	const FFuelSupplyFigures& Fig = Supply->Figures;
+	Supply->OrderSpot(10000.0, 0.0);
+	Supply->OrderSpot(5000.0, 0.0);
+	TestEqual(TEXT("both spot orders arrive"), Supply->ReceiveDueSpot(Fig.SpotDelaySeconds), 2);
+	Bus.Drain();
+	if (!TestEqual(TEXT("one event per spot order"), Seen.Num(), 2)) { return false; }
+	Seen.Sort([](const FFuelDeliveredEvent& A, const FFuelDeliveredEvent& B) { return A.Litres < B.Litres; });
+	TestEqual(TEXT("the 5,000 L order"), Seen[0].Litres, 5000.0, 1e-9);
+	TestEqual(TEXT("added whole"), Seen[0].Added, 5000.0, 1e-9);
+	TestFalse(TEXT("and not a contract"), Seen[0].bContract);
+	TestEqual(TEXT("the 10,000 L order"), Seen[1].Litres, 10000.0, 1e-9);
+	TestEqual(TEXT("added whole"), Seen[1].Added, 10000.0, 1e-9);
+	TestFalse(TEXT("and not a contract"), Seen[1].bContract);
+
+	Seen.Reset();
+	const FFuelContractTier& Tier = Fig.ContractTiers[2];
+	if (!TestEqual(TEXT("setup: the 20,000 L tier is signed"), Supply->SignContract(2, 0.0), EFuelOrderRefusal::None)) { return false; }
+	Supply->DeliverContractDay(86400.0);
+	Bus.Drain();
+	if (!TestEqual(TEXT("one event for the contract day"), Seen.Num(), 1)) { return false; }
+	TestEqual(TEXT("naming the day's litres"), Seen[0].Litres, Tier.LitresPerDay, 1e-9);
+	TestEqual(TEXT("but only what fitted as added (15,000 L stocked of 30,000)"), Seen[0].Added, 15000.0, 1e-9);
+	TestTrue(TEXT("CONTROL: less than was sent"), Seen[0].Added < Seen[0].Litres);
+	TestTrue(TEXT("and a contract"), Seen[0].bContract);
 	return true;
 }
 

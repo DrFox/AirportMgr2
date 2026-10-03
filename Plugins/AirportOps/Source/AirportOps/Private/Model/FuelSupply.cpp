@@ -5,6 +5,13 @@
 #include "Model/OpsEventBus.h"
 #include "Model/ServiceRolePolicy.h"
 
+void UFuelSupply::OnBeforeRestore()
+{
+	StockLitres = 0.0;
+	Contract = FFuelContract();
+	SpotOrders.Reset();
+}
+
 double UFuelSupply::Capacity() const
 {
 	return CapacityOf ? FMath::Max(CapacityOf(), 0.0) : TNumericLimits<double>::Max();
@@ -39,8 +46,10 @@ double UFuelSupply::PendingSpotLitres() const
 EFuelOrderRefusal UFuelSupply::JudgeSpot(double Litres) const
 {
 	// ROOM COUNTS WHAT IS ON THE WAY: two orders that each fit alone must not together overflow - a spot order is not
-	// take-or-pay, and refusing at the order is the only place the player can still change their mind.
-	if (Litres <= 0.0 || Litres > FreeSpace() - PendingSpotLitres()) { return EFuelOrderRefusal::NoRoom; }
+	// take-or-pay, and refusing at the order is the only place the player can still change their mind. `!(Litres > 0)`, not
+	// `Litres <= 0`: NaN compares false both ways, so the latter - and the room test after it - let a NaN order through.
+	// ENFORCED BY: AirportOps.Model.FuelSupply.SpotRefusalsChargeNothing
+	if (!(Litres > 0.0) || Litres > FreeSpace() - PendingSpotLitres()) { return EFuelOrderRefusal::NoRoom; }
 	if (Ledger != nullptr && Ledger->Balance() < Litres * Figures.SpotPricePerLitre) { return EFuelOrderRefusal::CannotAfford; }
 	return EFuelOrderRefusal::None;
 }

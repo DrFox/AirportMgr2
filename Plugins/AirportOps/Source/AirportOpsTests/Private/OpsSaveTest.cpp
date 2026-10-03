@@ -4,6 +4,7 @@
 #include "Model/AirsideCapability.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
+#include "Model/FuelSupply.h"
 #include "Model/JobBoard.h"
 #include "Model/OpsSave.h"
 #include "Model/Pricing.h"
@@ -536,6 +537,22 @@ bool FOpsSaveDesignFiguresAreNotSavedTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("CONTROL: the dropped offers came back"), Loaded->DroppedOffers, 5);
 		TestEqual(TEXT("the inbox cap is the design's, not the save's"), Loaded->MaxPendingOffers,
 			GetDefault<UOfferGenerator>()->MaxPendingOffers);
+	}
+	{
+		// THE FUEL SUPPLY (spec 2026-10-02 §7): the stock is the game; prices, delays and tiers are the design. The loaded
+		// object holds a CONTROL figure of its own before the read, so a blob that carried the save's figures - or wrote
+		// the class default over the control - both read as a change here.
+		UFuelSupply* Saved = NewObject<UFuelSupply>(GetTransientPackage());
+		Saved->StockLitres = 12345.0;
+		Saved->Figures.SpotPricePerLitre = 9.0;
+		Saved->Figures.ContractTermDays = 99;
+		UFuelSupply* Loaded = NewObject<UFuelSupply>(GetTransientPackage());
+		Loaded->Figures.SpotPricePerLitre = 4.5;
+		Loaded->Figures.ContractTermDays = 3;
+		RoundTrip(*Saved, *Loaded);
+		TestEqual(TEXT("CONTROL: the stock came back"), Loaded->StockLitres, 12345.0, 1e-9);
+		TestEqual(TEXT("the spot price is the design's, not the save's"), Loaded->Figures.SpotPricePerLitre, 4.5, 1e-12);
+		TestEqual(TEXT("and so is the contract term"), Loaded->Figures.ContractTermDays, 3);
 	}
 	return true;
 }
