@@ -1179,14 +1179,15 @@ $AllowedCallers = @(
         ProdReason  = 'ask ULedger::IsOverdrawn - a second `Balance() < 0` is a second definition of overdrawn, which a change to the lock would leave behind (#447)'
     },
     @{
-        # The contract's left/late was `AirborneBy() - Now` in the arrivals row, the aircraft card's turnaround line and its gate, and #398 changes what
-        # "late" means. UFlight::ContractSecondsLeft / IsLate is the one subtraction. (FlightBoard scores a flight at its AirborneAt - `AirborneAt -
-        # AirborneBy()` - a different instant, not matched here.)
+        # The contract's left/late was `AirborneBy() - Now` in the arrivals row, the aircraft card's turnaround line and its gate, and #398 changed what
+        # "late" means (on-blocks to off-blocks; AirborneBy became OffBlocksBy). UFlight::ContractSecondsLeft / IsLate is the one subtraction - and
+        # since #398 the board's lateness at off-blocks asks it too (`-ContractSecondsLeft(OffBlocksAt)`), where it used to write `AirborneAt -
+        # AirborneBy()`. So both sides are matched now: `OffBlocksBy() - x` and `x - Flight.OffBlocksBy()`.
         Name        = 'contract left is the flight''s'
-        Pattern     = '\bAirborneBy\s*\(\s*\)\s*-'
+        Pattern     = '\bOffBlocksBy\s*\(\s*\)\s*-|-\s*[\w.>]*\bOffBlocksBy\s*\('
         ProdAllowed = @('Public\Model\Flight.h')
         TestExempt  = $true
-        ProdReason  = 'ask UFlight::ContractSecondsLeft(Now) or IsLate(Now) - a second `AirborneBy() -` is a second rule for what late means (#447, #398)'
+        ProdReason  = 'ask UFlight::ContractSecondsLeft(Now) or IsLate(Now) - a second `OffBlocksBy() -` is a second rule for what late means (#447, #398)'
     },
     @{
         # MOVEMENT SECONDS -> GAME SECONDS is USimClock::GameSecondsOfMovement (#447): a public static on a widget and the job board's bid each wrote

@@ -1,5 +1,6 @@
 #include "Model/Flight.h"
 
+#include "AirportOpsLog.h"
 #include "Model/ExhaustiveSwitch.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
@@ -8,6 +9,47 @@ FEntityInstanceId StandAtNode(const URoadNetwork& Network, FGuidelineNodeId Node
 {
 	const int32 Index = Network.FindEntityIndexByPoseNode(Node);
 	return Index != INDEX_NONE && Network.GetEntities()[Index].IsStand() ? Network.EntityIdAt(Index) : FEntityInstanceId();
+}
+
+bool UFlight::MarkOnBlocks(double At)
+{
+	// TAKEN ONCE (#398): a flight that somehow parks on a stand again after its turnaround does not get a fresh contract.
+	if (HasContractStarted())
+	{
+		return false;
+	}
+	OnBlocksAt = At;
+	UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s): on blocks at %.0f, turnaround contract %.0f s - off blocks by %.0f"),
+		Id, *Callsign, OnBlocksAt, ContractSeconds, OffBlocksBy());
+	return true;
+}
+
+TOptional<double> UFlight::MarkOffBlocks(double At)
+{
+	// THE FIRST LEAVING AFTER ON-BLOCKS is the aeroplane off its stand, by a push (Manoeuvring) or driven forward (TaxiOut). Taken once, so
+	// the push's own Manoeuvring -> TaxiOut does not score again. A flight that never reached Turnaround (the fallback junction's depart,
+	// #405) STARTED NO CONTRACT and is not scored: there is nothing to be late against, and scoring it from the accept was the rule #398
+	// replaced.
+	if (!HasContractStarted() || OffBlocksAt > 0.0)
+	{
+		return {};
+	}
+	OffBlocksAt = At;
+	if (ContractSeconds <= 0.0)
+	{
+		// NO CONTRACT, NO SCORE: a flight never offered (the debug land key's) has a zero-length contract, and "late by its whole stand
+		// time" would be an artefact of that, not a verdict. The old airborne score was saved from it only by such a flight having no
+		// airline; a flight with an airline and no contract (a test's, or an airline authored with 0) is the case this guards.
+		UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s): off blocks at %.0f after %.0f s on stand, no contract to score"),
+			Id, *Callsign, OffBlocksAt, OffBlocksAt - OnBlocksAt);
+		return {};
+	}
+	// LATENESS AGAINST THE CONTRACT the row showed at the offer: OffBlocksAt - (OnBlocksAt + ContractSeconds), asked of the one subtraction
+	// (frozen at OffBlocksAt, so it is exactly that) rather than written a second time.
+	const double LateBy = -ContractSecondsLeft(OffBlocksAt);
+	UE_LOG(LogAirportOps, Log, TEXT("Flight %d (%s): off blocks at %.0f after %.0f s on stand, %+.0f s against its %.0f s contract"),
+		Id, *Callsign, OffBlocksAt, OffBlocksAt - OnBlocksAt, LateBy, ContractSeconds);
+	return LateBy;
 }
 
 // A MISSING CASE BELOW IS A BUILD ERROR - see ExhaustiveSwitch.h for why it would not be otherwise.

@@ -55,7 +55,7 @@ FString FOfferDeclinedEvent::Describe() const
 	return FString::Printf(TEXT("flight %d, airline %s"), FlightId, *AirlineId.ToString());
 }
 
-FString FFlightAirborneEvent::Describe() const
+FString FFlightOffBlocksEvent::Describe() const
 {
 	return FString::Printf(TEXT("flight %d, airline %s, %+.0f s against its contract"), FlightId, *AirlineId.ToString(), LateBySeconds);
 }

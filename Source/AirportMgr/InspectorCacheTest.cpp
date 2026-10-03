@@ -492,6 +492,8 @@ bool FInspectorCacheTurnaroundTest::RunTest(const FString&)
 	using namespace InspectorCacheTest;
 	FAircraftRig Rig;
 	if (!TestTrue(TEXT("the rig"), Rig.Ok())) { return false; }
+	// ON BLOCKS (#398): the contract only counts down from there - before it, the line says "starts on stand" and does not tick.
+	Rig.Flight->OnBlocksAt = FMath::Max(Rig.Runtime->GetClock()->Now(), 1.0);
 	Rig.Frame();
 	const FString Was = Rig.Line(TEXT("Turnaround"));
 	if (!TestFalse(TEXT("a turnaround line"), Was.IsEmpty())) { return false; }

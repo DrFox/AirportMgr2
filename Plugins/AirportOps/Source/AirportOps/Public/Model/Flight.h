@@ -355,9 +355,10 @@ public:
 	UPROPERTY() double LeadTimeSeconds = 0.0;
 
 	/**
-	 * The turnaround contract: GAME seconds from the accept to airborne again. Fixed at the
-	 * offer (the airline's own UAirlineDefinition::ContractSeconds) so the row can show it
-	 * BEFORE the player accepts. C scores AirborneAt against it.
+	 * The turnaround contract: GAME seconds ON THE STAND, on-blocks to off-blocks (#398 - it was accept to
+	 * airborne; see OnBlocksAt for why). Fixed at the offer (the airline's own
+	 * UAirlineDefinition::ContractSeconds) so the row can show it BEFORE the player accepts. The airline
+	 * scores OffBlocksAt against it.
 	 */
 	UPROPERTY() double ContractSeconds = 0.0;
 
@@ -395,34 +396,72 @@ public:
 	/** USimClock::Now at which it joined the arrival queue, or 0. See UFlightBoard::Queue. */
 	UPROPERTY() double HoldingSince = 0.0;
 
-	/** USimClock::Now of the accept, or 0 if never accepted. The contract runs from here. */
+	/** USimClock::Now of the accept, or 0 if never accepted. The lead time runs from here; the contract no longer does (#398). */
 	UPROPERTY() double AcceptedAt = 0.0;
 
 	/**
-	 * USimClock::Now at which it reached Departing, or 0 if it has not. C scores this against
-	 * AirborneBy(); recorded now so C needs no migration.
+	 * USimClock::Now at which it parked ON ITS STAND and entered Turnaround - ON BLOCKS, where the turnaround contract STARTS - or 0
+	 * if it has not. Stamped once, by UFlightBoard::TransitionTo's Turnaround row.
 	 *
-	 * THE LINE-UP, NOT THE CLIMB, despite the name (#436): Departing starts when the aeroplane lines up and rolls.
-	 * EAgentEvent::Airborne is a MOMENT - the phase stays Departing - so it is not on OnAgentPhaseChanged; it is on
-	 * UGroundTraffic::GetMomentsThisAdvance, which nothing in ops reads. Scoring the real wheels-up would bridge that
-	 * list (the per-frame moments), a change to the contract the airlines score, left for its own issue.
+	 * NOT THE ACCEPT ANY MORE (#398, ruling 2026-10-02): measured from Saved/Logs, movement ate ~80% of the old accept-to-airborne
+	 * two hours - landing ~740 game s, taxi-in 1020-4970, pushback ~755, taxi-out ~1030 - and the stand only ~970. Aircraft move in
+	 * real seconds while the clock runs ~21x (USimClock), so the player was scored on the runway's queue and the taxiway's length,
+	 * not on the stand work they control. Holding and taxi time cost nothing against the contract now; penalising them is a
+	 * separate decision, not taken (see UAirlineRoster::OnFlightOffBlocks).
+	 * ENFORCED BY: AirportOps.Model.FlightBoard.Events.OffBlocksLateness
 	 */
-	UPROPERTY() double AirborneAt = 0.0;
+	UPROPERTY() double OnBlocksAt = 0.0;
 
-	/** The turnaround contract's deadline: AcceptedAt + ContractSeconds. */
-	double AirborneBy() const { return AcceptedAt + ContractSeconds; }
+	/**
+	 * USimClock::Now at which it left its stand after on-blocks - OFF BLOCKS, the push (Manoeuvring) or a stand left forward
+	 * (TaxiOut) - or 0 if it has not. Where the contract ENDS and the airline scores it: UFlightBoard publishes
+	 * FFlightOffBlocksEvent here. The take-off is no longer scored, so the line-up-not-wheels-up gap #436 noted on the old
+	 * AirborneAt stamp (gone with this) no longer matters to any airline.
+	 * ENFORCED BY: AirportOps.Model.FlightBoard.Events.OffBlocksLateness
+	 */
+	UPROPERTY() double OffBlocksAt = 0.0;
+
+	/** The contract has started: the aeroplane has been on blocks. Before then there is no countdown - the rows say how long the
+	 *  turnaround WILL be, not how much is left of it. */
+	bool HasContractStarted() const { return OnBlocksAt > 0.0; }
+
+	/** Stamps OnBlocksAt at At, ONCE - the contract starts. True if this call took it. Called by UFlightBoard::TransitionTo's Turnaround row. */
+	bool MarkOnBlocks(double At);
+
+	/**
+	 * Stamps OffBlocksAt at At, ONCE, for a flight that was on blocks - and returns its lateness, OffBlocksAt - OffBlocksBy() (negative is
+	 * early), for the board to publish. Unset when it scores nothing: already off blocks, never on them, or no contract (0 s). Called by UFlightBoard::TransitionTo's
+	 * Manoeuvring and TaxiOut rows.
+	 * ENFORCED BY: AirportOps.Model.FlightBoard.Events.OffBlocksLateness
+	 */
+	TOptional<double> MarkOffBlocks(double At);
+
+	/** The turnaround contract's deadline: OnBlocksAt + ContractSeconds. MEANINGFUL ONLY ONCE HasContractStarted(). */
+	double OffBlocksBy() const { return OnBlocksAt + ContractSeconds; }
 
 	/**
 	 * GAME seconds left on the turnaround contract at Now; NEGATIVE once it has passed. THE ONE SUBTRACTION (#447): the arrivals row, the
-	 * aircraft card's turnaround line and its gate each wrote `AirborneBy() - Now`, and #398 will change what "late" means - in one place
-	 * now, not three that then disagree about whether the same flight is late.
-	 * ENFORCED BY: Check-Architecture rule 4's 'contract left is the flight's' row (no `AirborneBy() -` outside this header),
+	 * aircraft card's turnaround line and its gate each wrote `AirborneBy() - Now`, and #398 changed what "late" means - in this one place,
+	 * not three that then disagree about whether the same flight is late. The board's lateness at off-blocks asks it too.
+	 *
+	 * THREE STAGES (#398): before on-blocks the whole contract is left whatever the clock - the trip to the stand is not on it; on
+	 * the stand it counts down from on-blocks; from off-blocks it is FROZEN at the push, so a flight that left on time never turns
+	 * late on the taxiway, and one that left late stays exactly as late as it was scored.
+	 * ENFORCED BY: Check-Architecture rule 4's 'contract left is the flight's' row (no `OffBlocksBy() -` outside this header),
 	 * AirportOps.Model.Flight.ContractLeftAndLate
 	 */
-	double ContractSecondsLeft(double Now) const { return AirborneBy() - Now; }
+	double ContractSecondsLeft(double Now) const
+	{
+		if (!HasContractStarted())
+		{
+			return ContractSeconds;
+		}
+		const double StoppedAt = OffBlocksAt > 0.0 ? FMath::Min(Now, OffBlocksAt) : Now;
+		return OffBlocksBy() - StoppedAt;
+	}
 
-	/** Past the contract's deadline at Now - ContractSecondsLeft below zero. MEANINGLESS FOR A FLIGHT WITH NO CONTRACT (ContractSeconds 0: the debug
-	 *  land key's, never offered): its deadline is its accept time, so this reads late from then on. */
+	/** Past the contract's deadline at Now - ContractSecondsLeft below zero. Never before on-blocks. MEANINGLESS FOR A FLIGHT WITH NO
+	 *  CONTRACT (ContractSeconds 0: the debug land key's, never offered): its deadline is its on-blocks time, so this reads late from then on. */
 	bool IsLate(double Now) const { return ContractSecondsLeft(Now) < 0.0; }
 
 	/**

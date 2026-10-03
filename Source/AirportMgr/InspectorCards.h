@@ -392,6 +392,8 @@ struct FInspectorTurnaround
 	/** Flight, contract, late?, whole minutes shown - DescribeTurnaround's every input at the resolution it prints. */
 	TWeakObjectPtr<const UFlight> Flight;
 	double Contract = -1.0;
+	/** On blocks (#398) - "starts on stand" before, a countdown after; the minutes alone do not move when it starts. */
+	bool bStarted = false;
 	bool bLate = false;
 	int32 Minutes = -1;
 	FString Line;

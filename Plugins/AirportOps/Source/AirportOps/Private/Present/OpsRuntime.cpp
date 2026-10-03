@@ -577,8 +577,8 @@ void UOpsRuntime::WireBus()
 	});
 
 	// REACTION: the airlines, reading what the boards have already settled.
-	Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Reaction, TEXT("Airlines"),
-		[this](const FFlightAirborneEvent& E) { Airlines->OnFlightAirborne(E); });
+	Bus.Subscribe<FFlightOffBlocksEvent>(EOpsTier::Reaction, TEXT("Airlines"),
+		[this](const FFlightOffBlocksEvent& E) { Airlines->OnFlightOffBlocks(E); });
 	Bus.Subscribe<FOfferExpiredEvent>(EOpsTier::Reaction, TEXT("Airlines"),
 		[this](const FOfferExpiredEvent& E) { Airlines->OnOfferExpired(E); });
 	Bus.Subscribe<FOfferDeclinedEvent>(EOpsTier::Reaction, TEXT("Airlines"),
@@ -631,7 +631,7 @@ void UOpsRuntime::WireBus()
 	Bus.Subscribe<FNetworkChangedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FNetworkChangedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 	Bus.Subscribe<FOfferExpiredEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FOfferExpiredEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 	Bus.Subscribe<FOfferDeclinedEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FOfferDeclinedEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
-	Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FFlightAirborneEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
+	Bus.Subscribe<FFlightOffBlocksEvent>(EOpsTier::Reaction, TEXT("Alerts"), [this](const FFlightOffBlocksEvent&) { Bus.MarkDirty(TEXT("Alerts")); });
 	// A FLIGHT JOINS THE QUEUE, OR LEAVES IT BY A CANCEL (#442): FlightCannotLand reads the clearance the ArrivalQueue pass
 	// computes for a holding flight, and it runs before this pass in the same round - so the alert is raised the round the flight
 	// is judged, not at the next offer minute; and a cancel clears it the round it happens. A closure's cancel is covered by

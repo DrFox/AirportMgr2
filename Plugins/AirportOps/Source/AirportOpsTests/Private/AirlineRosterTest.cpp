@@ -36,7 +36,7 @@ namespace
 			Flight->SetPhaseForTest(EFlightPhase::TaxiOut);
 			Flights->AddOffer(*NewObject<USimClock>(GetTransientPackage()), Flight);
 			Bus.BeginWiring();
-			Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Reaction, TEXT("Airlines"), [this](const FFlightAirborneEvent& E) { Roster->OnFlightAirborne(E); });
+			Bus.Subscribe<FFlightOffBlocksEvent>(EOpsTier::Reaction, TEXT("Airlines"), [this](const FFlightOffBlocksEvent& E) { Roster->OnFlightOffBlocks(E); });
 			Bus.Subscribe<FOfferExpiredEvent>(EOpsTier::Reaction, TEXT("Airlines"), [this](const FOfferExpiredEvent& E) { Roster->OnOfferExpired(E); });
 			Bus.Subscribe<FOfferDeclinedEvent>(EOpsTier::Reaction, TEXT("Airlines"), [this](const FOfferDeclinedEvent& E) { Roster->OnOfferDeclined(E); });
 			Bus.Subscribe<FDayEndedEvent>(EOpsTier::Reaction, TEXT("Airlines"), [this](const FDayEndedEvent& E) { Roster->OnDayEnded(E); });
@@ -63,9 +63,9 @@ namespace
 			Bus.Drain();
 		}
 
-		void Airborne(double LateBy, FName Id = TEXT("A"))
+		void OffBlocks(double LateBy, FName Id = TEXT("A"))
 		{
-			Bus.Publish(FFlightAirborneEvent{ 1, Id, LateBy });
+			Bus.Publish(FFlightOffBlocksEvent{ 1, Id, LateBy });
 			Bus.Drain();
 		}
 	};
@@ -77,8 +77,8 @@ bool FAirlinesOnTimeTest::RunTest(const FString&)
 {
 	FRosterFixture F;
 	TestEqual(TEXT("a new airline starts at the tuning's start"), F.Sat(), 0.5, 1e-9);
-	F.Airborne(-30.0);
-	TestEqual(TEXT("airborne before the deadline is on time: +0.03"), F.Sat(), 0.53, 1e-9);
+	F.OffBlocks(-30.0);
+	TestEqual(TEXT("off stand before the deadline is on time: +0.03"), F.Sat(), 0.53, 1e-9);
 	if (!TestEqual(TEXT("the change is published once"), F.Changes.Num(), 1)) { return false; }
 	TestTrue(TEXT("and says why"), F.Changes[0].Cause.Contains(TEXT("on time")));
 	TestEqual(TEXT("with the figures before and after"), F.Changes[0].Old, 0.5, 1e-9);
@@ -91,13 +91,15 @@ bool FAirlinesLateTest::RunTest(const FString&)
 {
 	{
 		FRosterFixture F;
-		F.Airborne(1500.0);   // 25 min: 2.5 tenths x 0.02
+		F.OffBlocks(1500.0);   // 25 min: 2.5 tenths x 0.02
 		TestEqual(TEXT("late costs 0.02 per ten game minutes"), F.Sat(), 0.45, 1e-9);
 		TestTrue(TEXT("the cause names the lateness"), F.Changes.Num() == 1 && F.Changes[0].Cause.Contains(TEXT("25 min")));
+		// OFF STAND, NOT DEPARTURE (#398): the contract ends at off-blocks, so the cause the offer row prints names what was late.
+		TestTrue(TEXT("and says it was the stand that ran late, not the take-off"), F.Changes.Num() == 1 && F.Changes[0].Cause.Contains(TEXT("late off stand")));
 	}
 	{
 		FRosterFixture F;
-		F.Airborne(6000.0);   // 100 min would be 0.20
+		F.OffBlocks(6000.0);   // 100 min would be 0.20
 		TestEqual(TEXT("capped at 0.10 - two hours late has missed its slot as surely as ten minutes"), F.Sat(), 0.40, 1e-9);
 	}
 	return true;
@@ -140,8 +142,8 @@ bool FAirlinesDriftTest::RunTest(const FString&)
 {
 	FRosterFixture F;
 	F.Roster->Ensure(TEXT("B"));
-	for (int32 Index = 0; Index < 20; ++Index) { F.Airborne(-1.0); }      // A up to 1.0 (clamped)
-	for (int32 Index = 0; Index < 3; ++Index) { F.Airborne(6000.0, TEXT("B")); }   // B to 0.2
+	for (int32 Index = 0; Index < 20; ++Index) { F.OffBlocks(-1.0); }      // A up to 1.0 (clamped)
+	for (int32 Index = 0; Index < 3; ++Index) { F.OffBlocks(6000.0, TEXT("B")); }   // B to 0.2
 	TestEqual(TEXT("A is clamped at the ceiling"), F.Sat(), 1.0, 1e-9);
 	TestEqual(TEXT("B has fallen to 0.2"), F.Sat(TEXT("B")), 0.2, 1e-9);
 	F.Bus.Publish(FDayEndedEvent{ 1 });
@@ -156,7 +158,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlinesClampedTest, "AirportOps.Model.Airline
 bool FAirlinesClampedTest::RunTest(const FString&)
 {
 	FRosterFixture F;
-	for (int32 Index = 0; Index < 40; ++Index) { F.Airborne(6000.0); }
+	for (int32 Index = 0; Index < 40; ++Index) { F.OffBlocks(6000.0); }
 	TestEqual(TEXT("satisfaction never goes below zero"), F.Sat(), 0.0, 1e-9);
 	TestEqual(TEXT("a zero airline offers at the bottom of the range"), F.Roster->RateMultiplier(TEXT("A"), false), 0.5, 1e-9);
 	TestEqual(TEXT("a penalty at zero moves nothing and so announces nothing"), F.Changes.Num(), 5);
@@ -168,11 +170,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlinesFloorTest, "AirportOps.Model.Airlines.
 bool FAirlinesFloorTest::RunTest(const FString&)
 {
 	FRosterFixture F;
-	for (int32 Index = 0; Index < 10; ++Index) { F.Airborne(6000.0); }
+	for (int32 Index = 0; Index < 10; ++Index) { F.OffBlocks(6000.0); }
 	TestEqual(TEXT("a floor airline at zero still offers at 1.0x - the floor exists so the airport is never empty"),
 		F.Roster->RateMultiplier(TEXT("A"), true), 1.0, 1e-9);
 	TestEqual(TEXT("an ordinary one at zero offers at half"), F.Roster->RateMultiplier(TEXT("A"), false), 0.5, 1e-9);
-	for (int32 Index = 0; Index < 40; ++Index) { F.Airborne(-1.0); }
+	for (int32 Index = 0; Index < 40; ++Index) { F.OffBlocks(-1.0); }
 	TestEqual(TEXT("and a delighted floor airline still gets the top of the range"), F.Roster->RateMultiplier(TEXT("A"), true), 1.5, 1e-9);
 	return true;
 }
@@ -182,8 +184,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlinesUnknownTest, "AirportOps.Model.Airline
 bool FAirlinesUnknownTest::RunTest(const FString&)
 {
 	FRosterFixture F;
-	F.Airborne(999.0, NAME_None);            // the debug flight (key 7)
-	F.Airborne(999.0, TEXT("Removed"));      // an airline since taken out of content
+	F.OffBlocks(999.0, NAME_None);            // the debug flight (key 7)
+	F.OffBlocks(999.0, TEXT("Removed"));      // an airline since taken out of content
 	F.Bus.Publish(FOfferExpiredEvent{ 2, TEXT("Removed"), ELapseReason::Ignored });
 	F.Bus.Drain();
 	TestEqual(TEXT("an event for an airline with no row changes nothing"), F.Changes.Num(), 0);
@@ -198,8 +200,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlinesRecentTest, "AirportOps.Model.Airlines
 bool FAirlinesRecentTest::RunTest(const FString&)
 {
 	FRosterFixture F;
-	for (int32 Index = 0; Index < 6; ++Index) { F.Airborne(-1.0); }
-	F.Airborne(1500.0);
+	for (int32 Index = 0; Index < 6; ++Index) { F.OffBlocks(-1.0); }
+	F.OffBlocks(1500.0);
 	const FAirlineStanding* Row = F.Roster->Find(TEXT("A"));
 	if (!TestNotNull(TEXT("the row"), Row)) { return false; }
 	TestEqual(TEXT("only the last few changes are kept"), Row->Recent.Num(), UAirlineRoster::RecentCap);
@@ -212,7 +214,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlinesSaveTest, "AirportOps.Model.Airlines.S
 bool FAirlinesSaveTest::RunTest(const FString&)
 {
 	FRosterFixture F;
-	F.Airborne(1500.0);
+	F.OffBlocks(1500.0);
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	FOpsSnapshot Snapshot;
 	TArray<IOpsPersistent*> Saved = { F.Roster };
@@ -247,7 +249,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlinesDriftSettlesTest, "AirportOps.Model.Ai
 bool FAirlinesDriftSettlesTest::RunTest(const FString&)
 {
 	FRosterFixture F;
-	F.Airborne(1500.0);   // 0.45, "late departure (25 min)"
+	F.OffBlocks(1500.0);   // 0.45, "late off stand (25 min)"
 	for (int32 Day = 1; Day <= 40; ++Day)
 	{
 		F.Bus.Publish(FDayEndedEvent{ Day });

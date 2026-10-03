@@ -629,7 +629,7 @@ namespace
 		TArray<FOfferDeclinedEvent> Declined;
 		TArray<FOfferExpiredEvent> Expired;
 		TArray<FFlightCancelledEvent> Cancelled;
-		TArray<FFlightAirborneEvent> Airborne;
+		TArray<FFlightOffBlocksEvent> OffBlocks;
 
 		explicit FTransitionRig(int32 Stands = 4)
 		{
@@ -649,7 +649,7 @@ namespace
 			Bus.Subscribe<FOfferDeclinedEvent>(EOpsTier::Sim, TEXT("test"), [this](const FOfferDeclinedEvent& E) { Declined.Add(E); });
 			Bus.Subscribe<FOfferExpiredEvent>(EOpsTier::Sim, TEXT("test"), [this](const FOfferExpiredEvent& E) { Expired.Add(E); });
 			Bus.Subscribe<FFlightCancelledEvent>(EOpsTier::Sim, TEXT("test"), [this](const FFlightCancelledEvent& E) { Cancelled.Add(E); });
-			Bus.Subscribe<FFlightAirborneEvent>(EOpsTier::Sim, TEXT("test"), [this](const FFlightAirborneEvent& E) { Airborne.Add(E); });
+			Bus.Subscribe<FFlightOffBlocksEvent>(EOpsTier::Sim, TEXT("test"), [this](const FFlightOffBlocksEvent& E) { OffBlocks.Add(E); });
 			Bus.EndWiring();
 		}
 
@@ -759,6 +759,7 @@ bool FFlightBoardTransitionTableTest::RunTest(const FString& Parameters)
 
 	// -- Accepted: the count, the arrival armed, FOfferAcceptedEvent.
 	UFlight* Flight = R.Offer(/*Lead=*/50.0);
+	Flight->ContractSeconds = 600.0;   // a contract to score at off-blocks - a flight with none scores nothing (#398)
 	TestEqual(TEXT("a fresh offer is pending"), R.Board->PendingOfferCount(), 1);
 	R.HoldRunway();   // so the queue pass below does not dispatch it the moment it joins
 	if (!TestTrue(TEXT("accepted"), R.Board->Accept(*R.Traffic, *R.Airport.Net, *R.Clock, *Flight))) { return false; }
@@ -789,18 +790,27 @@ bool FFlightBoardTransitionTableTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Landing: the stand hold was released for the planner"), R.StandHeldFor(*Flight));
 	const int32 Agent = Flight->AgentId;
 
-	// -- The ground rows follow the agent (OnAgentPhase decides which, TransitionTo applies): Departing stamps and publishes once.
+	// -- The ground rows follow the agent (OnAgentPhase decides which, TransitionTo applies): Turnaround stamps on-blocks, the push
+	// stamps off-blocks and publishes once (#398), Departing publishes nothing of its own.
 	R.Board->OnAgentPhase(*R.Airport.Net, *R.Clock, OpsTestTransition(Agent, EAgentPhase::Arriving, EAgentPhase::Taxiing, EAgentEvent::Vacated));
 	TestEqual(TEXT("TaxiIn"), Flight->GetPhase(), EFlightPhase::TaxiIn);
+	R.Clock->Advance(5.0);
+	R.Board->OnAgentPhase(*R.Airport.Net, *R.Clock, OpsTestTransition(Agent, EAgentPhase::Taxiing, EAgentPhase::Parked, EAgentEvent::Parked,
+		R.Airport.Pose(Flight->Stand)));
+	TestEqual(TEXT("Turnaround: the phase"), Flight->GetPhase(), EFlightPhase::Turnaround);
+	TestEqual(TEXT("Turnaround: OnBlocksAt is the clock"), Flight->OnBlocksAt, R.Clock->Now(), 1e-9);
+	TestEqual(TEXT("Turnaround: not off blocks yet"), Flight->OffBlocksAt, 0.0, 1e-9);
+	R.Clock->Advance(5.0);
 	R.Board->OnAgentPhase(*R.Airport.Net, *R.Clock, OpsTestTransition(Agent, EAgentPhase::Parked, EAgentPhase::Manoeuvring, EAgentEvent::DepartOrdered));
+	R.Drain();
+	TestEqual(TEXT("Manoeuvring: OffBlocksAt is the clock"), Flight->OffBlocksAt, R.Clock->Now(), 1e-9);
+	TestEqual(TEXT("Manoeuvring: off-blocks published once"), R.OffBlocks.Num(), 1);
 	R.Board->OnAgentPhase(*R.Airport.Net, *R.Clock, OpsTestTransition(Agent, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing, EAgentEvent::PushedBack));
 	TestEqual(TEXT("TaxiOut"), Flight->GetPhase(), EFlightPhase::TaxiOut);
-	TestEqual(TEXT("nothing is airborne yet"), Flight->AirborneAt, 0.0, 1e-9);
 	R.Board->OnAgentPhase(*R.Airport.Net, *R.Clock, OpsTestTransition(Agent, EAgentPhase::Taxiing, EAgentPhase::Departing, EAgentEvent::LinedUp));
 	R.Drain();
 	TestEqual(TEXT("Departing: the phase"), Flight->GetPhase(), EFlightPhase::Departing);
-	TestEqual(TEXT("Departing: AirborneAt is the clock"), Flight->AirborneAt, R.Clock->Now(), 1e-9);
-	TestEqual(TEXT("Departing: published once"), R.Airborne.Num(), 1);
+	TestEqual(TEXT("TaxiOut and Departing: no second off-blocks"), R.OffBlocks.Num(), 1);
 
 	// -- Departed: History, and the aeroplane let go of. Nothing published for the departure itself.
 	R.Board->OnAgentPhase(*R.Airport.Net, *R.Clock, OpsTestTransition(Agent, EAgentPhase::Departing, EAgentPhase::Gone, EAgentEvent::Gone));
@@ -810,7 +820,7 @@ bool FFlightBoardTransitionTableTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Departed: filed in History"), R.Board->GetHistoryCountForTest(), 4);
 	TestTrue(TEXT("Departed: the aeroplane is let go of - no agent, and the board finds no flight by it"),
 		Flight->AgentId == INDEX_NONE && R.Board->FlightForAgent(Agent) == nullptr);
-	TestEqual(TEXT("Departed: and no second FlightAirborne"), R.Airborne.Num(), 1);
+	TestEqual(TEXT("Departed: and no second FlightOffBlocks"), R.OffBlocks.Num(), 1);
 
 	// -- Moving a flight to the phase it is in is not a transition: a terminal flight is not filed twice, nothing publishes again.
 	R.Board->OnAgentPhase(*R.Airport.Net, *R.Clock, OpsTestTransition(Agent, EAgentPhase::Departing, EAgentPhase::Gone, EAgentEvent::Gone));

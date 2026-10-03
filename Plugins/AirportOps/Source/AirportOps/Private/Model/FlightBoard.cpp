@@ -556,7 +556,7 @@ TArray<UFlight*> UFlightBoard::DemoteRestoredMidFlight(double Now)
 		else if (FlightPhase::HasReachedStand(Each->GetPhase()))
 		{
 			// DEPARTED, UNSCORED: the save system is not the player's fault, so nothing the airline roster scores is
-			// published (no FlightAirborne, no TurnaroundEnded) and no parking fee is posted: the Departed row publishes
+			// published (no FlightOffBlocks, no TurnaroundEnded) and no parking fee is posted: the Departed row publishes
 			// nothing of its own, and the FFlightPhaseChangedEvent every change publishes reaches a billing reaction
 			// (FlightBilling::OnFlightPhaseChanged) that does not react to Departed - it bills Landing, Turnaround and TaxiOut.
 			// ENFORCED BY: AirportOps.Model.FlightSave.MidFlightGoesRoundOrRetires ("the load posted no fee").
@@ -681,9 +681,10 @@ void UFlightBoard::OnAgentPhase(const URoadNetwork& Network, const USimClock& Cl
 			Flight->Id, *Flight->Callsign, AgentId, *FlightPhase::Name(WasPhase));
 	}
 	// THE PHASE CHANGE, THROUGH THE ONE WRITER (#442): whatever the new phase's row does - the agent unhooked when the flight
-	// leaves the ground (Gone, and every other way off it), the AirborneAt stamp and FFlightAirborne publish on entering
-	// Departing ("THE OTHER END OF THE TURNAROUND CONTRACT" - see UFlight::AirborneAt; taken once, LATENESS AGAINST THE
-	// CONTRACT the row showed at the offer: AirborneBy is AcceptedAt + ContractSeconds), History for Departed - happens
+	// leaves the ground (Gone, and every other way off it), the OnBlocksAt stamp on entering Turnaround and the OffBlocksAt
+	// stamp and FFlightOffBlocks publish on leaving the stand ("THE OTHER END OF THE TURNAROUND CONTRACT" - see
+	// UFlight::OffBlocksAt; taken once, LATENESS AGAINST THE CONTRACT the row showed at the offer: OffBlocksBy is OnBlocksAt +
+	// ContractSeconds, #398), History for Departed - happens
 	// there. THIS FUNCTION IS THE ONE DECISION POINT FOR AGENT-DRIVEN PHASES: FlightPhaseFromTransition says WHICH phase,
 	// TransitionTo applies it.
 	TransitionTo(*Flight, Next, FTransitionCause::Played(Clock.Now()));
@@ -799,7 +800,7 @@ void UFlightBoard::TransitionTo(UFlight& Flight, EFlightPhase To, const FTransit
 	if (From == To)
 	{
 		// NOT A TRANSITION. A caller that asks for the phase the flight is already in (an agent event that moves it nowhere is
-		// not sent here at all) must not re-run the row: a second Departing would publish FFlightAirborne again, a second
+		// not sent here at all) must not re-run the row: a second Manoeuvring would be a second off-blocks, a second
 		// terminal would file the flight in History twice.
 		return;
 	}
@@ -876,30 +877,27 @@ void UFlightBoard::TransitionTo(UFlight& Flight, EFlightPhase To, const FTransit
 		break;
 
 	case EFlightPhase::TaxiIn:
-	case EFlightPhase::Turnaround:
-	case EFlightPhase::Manoeuvring:
-	case EFlightPhase::TaxiOut:
-		// THE AGENT DRIVES THESE and the flight follows: nothing to arm, hook or publish of their own. The money they trigger
-		// (the parking clock on Turnaround, the parking fee on TaxiOut) is billing's REACTION to the FFlightPhaseChangedEvent
-		// below (FlightBilling::OnFlightPhaseChanged), not a phase effect.
+	case EFlightPhase::Departing:
+		// THE AGENT DRIVES THESE: nothing to arm, hook or publish. The ground phases' money (parking clock, parking fee) is billing's
+		// REACTION to FFlightPhaseChangedEvent below. DEPARTING SCORES NOTHING since #398: the contract ended at off-blocks.
 		break;
 
-	case EFlightPhase::Departing:
-		// THE OTHER END OF THE TURNAROUND CONTRACT - see UFlight::AirborneAt. Taken once.
-		if (Flight.AirborneAt <= 0.0)
+	case EFlightPhase::Turnaround:
+		// ON BLOCKS: the turnaround contract starts, once (#398) - see UFlight::MarkOnBlocks.
+		Flight.MarkOnBlocks(Cause.At);
+		break;
+
+	case EFlightPhase::Manoeuvring:
+	case EFlightPhase::TaxiOut:
+		// OFF BLOCKS, the contract's other end, scored ONCE against the contract the row showed (#398) - see UFlight::MarkOffBlocks.
+		if (const TOptional<double> LateBy = Flight.MarkOffBlocks(Cause.At); LateBy.IsSet() && Bus != nullptr)
 		{
-			Flight.AirborneAt = Cause.At;
-			if (Bus != nullptr)
-			{
-				// LATENESS AGAINST THE CONTRACT the row showed at the offer: AirborneBy is AcceptedAt +
-				// ContractSeconds. Published once, because AirborneAt is taken once.
-				Bus->Publish(FFlightAirborneEvent{ Flight.Id, Flight.AirlineId, Flight.AirborneAt - Flight.AirborneBy() });
-			}
+			Bus->Publish(FFlightOffBlocksEvent{ Flight.Id, Flight.AirlineId, LateBy.GetValue() });
 		}
 		break;
 
 	case EFlightPhase::Departed:
-		// TERMINAL, and nothing of its own published: the airline scored the departure at Departing (FFlightAirborne). Filed
+		// TERMINAL, and nothing of its own published: the airline scored the turnaround at off-blocks (FFlightOffBlocks). Filed
 		// below; the FFlightPhaseChangedEvent every change publishes bills nothing for it.
 		break;
 

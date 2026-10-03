@@ -9,7 +9,7 @@
 class FOpsEventBus;
 class UFlightBoard;
 struct FDayEndedEvent;
-struct FFlightAirborneEvent;
+struct FFlightOffBlocksEvent;
 struct FFlightCancelledEvent;
 struct FOfferDeclinedEvent;
 struct FOfferExpiredEvent;
@@ -24,7 +24,7 @@ struct AIRPORTOPS_API FAirlineSatisfactionChange
 	/** New minus old, after the clamp - so a change that hit the ceiling records what it really moved. */
 	UPROPERTY() double Delta = 0.0;
 
-	/** "on time", "late departure (25 min)", "offer ignored", ... */
+	/** "on time", "late off stand (25 min)", "offer ignored", ... */
 	UPROPERTY() FString Cause;
 };
 
@@ -55,7 +55,7 @@ struct AIRPORTOPS_API FAirlineStanding
  * (spec 2026-09-29 §3) and the first airline state that exists at runtime - before it an airline was a
  * UAirlineDefinition plus an offer accumulator.
  *
- * A REACTION, IN THE BUS'S SENSE. It hears what the Sim tier has already settled - a flight airborne
+ * A REACTION, IN THE BUS'S SENSE. It hears what the Sim tier has already settled - a flight off its stand (#398)
  * and how late, an offer that lapsed or was declined, a day ending - and changes only its own state.
  * UOpsRuntime::WireBus is where it is subscribed; this class never sees the bus's subscribe side.
  *
@@ -117,7 +117,7 @@ public:
 	double RateMultiplier(FName AirlineId, bool bIsFloor) const;
 
 	// --- Reaction-tier handlers (subscribed in UOpsRuntime::WireBus) ---------------------
-	void OnFlightAirborne(const FFlightAirborneEvent& Event);
+	void OnFlightOffBlocks(const FFlightOffBlocksEvent& Event);
 	void OnOfferExpired(const FOfferExpiredEvent& Event);
 
 	/** DELIBERATELY FREE: declining is a legitimate choice (spec §3), and an airline that punished it

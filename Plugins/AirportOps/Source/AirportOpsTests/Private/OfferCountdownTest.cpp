@@ -203,7 +203,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferCountdownAcceptSchedulesTest, "AirportOps
 bool FOfferCountdownAcceptSchedulesTest::RunTest(const FString& Parameters)
 {
 	// THE LEAD TIME RUNS FROM THE ACCEPT, not from the offer: a player who took 50 seconds to
-	// decide still gets the full lead, and the contract is measured from the decision.
+	// decide still gets the full lead. The contract is NOT measured from the decision any more (#398): it starts on blocks.
 	FCountdownRig Rig;
 	Rig.Clock->SetUniformDay(USimClock::SecondsPerDay);
 	Rig.Clock->StartAtHour(10.0);
@@ -213,7 +213,8 @@ bool FOfferCountdownAcceptSchedulesTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("accepted"), Rig.Board->Accept(*Rig.Traffic, *Rig.Net, *Rig.Clock, *Flight));
 	TestEqual(TEXT("the accept is recorded"), Flight->AcceptedAt, At, 1e-9);
 	TestEqual(TEXT("it lands a lead time after the accept"), Flight->ArrivesAt, At + 900.0, 1e-9);
-	TestEqual(TEXT("and is due airborne a contract after it"), Flight->AirborneBy(), At + 4200.0, 1e-9);
+	TestFalse(TEXT("and the accept starts no contract - that waits for on-blocks"), Flight->HasContractStarted());
+	TestEqual(TEXT("so the whole contract is still left, however long it takes to arrive"), Flight->ContractSecondsLeft(At + 90000.0), 4200.0, 1e-9);
 	return true;
 }
 
@@ -234,7 +235,8 @@ bool FOfferCountdownSortedTest::RunTest(const FString& Parameters)
 }
 
 // (AirportOps.Model.Offers.Countdown.AirborneAtIsRecorded is gone, #462 #15: it was written "so C needs no migration" - C has landed, and
-// AirborneAt's reader scores it as lateness. AirportOps.Model.FlightBoard.Events.AirborneLateness asserts AirborneAt - AirborneBy() on the
+// AirborneAt's reader scored it as lateness. AirborneAt itself went with #398, which scores off-blocks instead: AirportOps.Model.FlightBoard.Events.OffBlocksLateness
+// asserts OffBlocksAt - (OnBlocksAt + ContractSeconds) on the
 // published event, so a stamp that was not taken, or was taken at the wrong moment, turns it red.)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferVerdictFuelTest, "AirportOps.Model.Offers.Countdown.VerdictReportsFuel",

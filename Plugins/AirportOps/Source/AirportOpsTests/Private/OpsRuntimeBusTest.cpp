@@ -386,7 +386,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeBusSatisfactionRateTest, "AirportOps
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FOpsRuntimeBusSatisfactionRateTest::RunTest(const FString&)
 {
-	// THE WHOLE CHAIN, through the runtime's own wiring: an airborne event on the bus -> the roster's
+	// THE WHOLE CHAIN, through the runtime's own wiring: an off-blocks event on the bus -> the roster's
 	// Reaction -> the generator's rate. The roster's world-free tests cannot see a WireBus that forgot a
 	// subscription, or an Attach that never handed the generator its reader. ITS OWN AIRLINE, not the
 	// content's, so the test measures something whatever content ships (stage 2 review).
@@ -399,11 +399,11 @@ bool FOpsRuntimeBusSatisfactionRateTest::RunTest(const FString&)
 	const double Before = Runtime->GetOfferGenerator()->AirlineFactor(*Airline);
 	for (int32 Index = 0; Index < 10; ++Index)
 	{
-		Runtime->GetBus().Publish(FFlightAirborneEvent{ 0, Airline->GetFName(), 6000.0 });
+		Runtime->GetBus().Publish(FFlightOffBlocksEvent{ 0, Airline->GetFName(), 6000.0 });
 	}
 	Runtime->Tick(0.0);
 	const double After = Runtime->GetOfferGenerator()->AirlineFactor(*Airline);
-	TestTrue(FString::Printf(TEXT("ten very late departures lower the airline's offer rate (%.2f -> %.2f)"), Before, After), After < Before);
+	TestTrue(FString::Printf(TEXT("ten flights very late off stand lower the airline's offer rate (%.2f -> %.2f)"), Before, After), After < Before);
 	return true;
 }
 
