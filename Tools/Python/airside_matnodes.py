@@ -218,18 +218,23 @@ def clear_graph(lib, mat, on_fail=None):
 
 
 
-# Owned land, in centimetres, in MPC_OwnedLand. THE NAMES ARE AAirsideOwnedLandActor::CollectionParams',
-# which writes them; the defaults are "everything" (its `Everything`), so with no owned-land actor in
-# the level - or before one has written the collection - nothing is clipped.
+# Owned land in MPC_OwnedLand (land purchase spec 2026-10-02, section 4). THE NAMES ARE
+# AAirsideOwnedLandActor::CollectionParams', which writes them: the airport's FLandGrid - whether it is valid, its
+# origin, tile size and size, and its 64-bit owned mask as four 16-bit words (a float holds integers exactly to 2^24).
+# LandValid defaults to 0, which clips NOTHING - a map whose airport owns no grid, or a frame before any edge actor
+# has written the collection, shows all its ground.
 OWNED_LAND_MPC = "/Game/Environment/MPC_OwnedLand"
-OWNED_RECT_PARAMS = ("OwnedMinX", "OwnedMinY", "OwnedMaxX", "OwnedMaxY")
-OWNED_RECT_EVERYTHING = (-1.0e9, -1.0e9, 1.0e9, 1.0e9)
+OWNED_LAND_PARAMS = (("LandValid", 0.0), ("LandOriginX", 0.0), ("LandOriginY", 0.0), ("LandTileSize", 60000.0),
+                     ("LandColumns", 8.0), ("LandRows", 8.0),
+                     ("LandMask0", 0.0), ("LandMask1", 0.0), ("LandMask2", 0.0), ("LandMask3", 0.0))
+# #529's rectangle, retired with it: removed from the collection on the next run so nothing can read a stale one.
+RETIRED_OWNED_PARAMS = ("OwnedMinX", "OwnedMinY", "OwnedMaxX", "OwnedMaxY")
 
 
 def owned_land_collection(on_fail=None):
-    """MPC_OwnedLand, created or updated IN PLACE keeping each parameter's Id: a CollectionParameter
-    node resolves its parameter by that Guid, and rebuilding the array would orphan every node that
-    reads it (build_fence_content.collection's rule)."""
+    """MPC_OwnedLand, created or updated IN PLACE keeping each surviving parameter's Id: a CollectionParameter node
+    resolves its parameter by that Guid, and rebuilding the array would orphan every node that reads it
+    (build_fence_content.collection's rule). Retired names are dropped."""
     folder, name = OWNED_LAND_MPC.rsplit("/", 1)
     if unreal.EditorAssetLibrary.does_asset_exist(OWNED_LAND_MPC):
         mpc = unreal.EditorAssetLibrary.load_asset(OWNED_LAND_MPC)
@@ -240,9 +245,10 @@ def owned_land_collection(on_fail=None):
         if on_fail:
             on_fail("could not load or create %s" % OWNED_LAND_MPC)
         return None
-    params = list(mpc.get_editor_property("scalar_parameters"))
+    params = [p for p in mpc.get_editor_property("scalar_parameters")
+              if str(p.get_editor_property("parameter_name")) not in RETIRED_OWNED_PARAMS]
     by_name = {str(p.get_editor_property("parameter_name")): p for p in params}
-    for pname, value in zip(OWNED_RECT_PARAMS, OWNED_RECT_EVERYTHING):
+    for pname, value in OWNED_LAND_PARAMS:
         p = by_name.get(pname)
         if p is None:
             p = unreal.CollectionScalarParameter()
@@ -254,24 +260,33 @@ def owned_land_collection(on_fail=None):
     return mpc
 
 
-def owned_rect_clip(lib, mat, mpc, x, y):
-    """1 inside the owned land, 0 outside - for Opacity Mask. The diorama edge (2026-10-02).
+# The tile under the pixel, then its bit. Outside the grid is not owned. Bit = Row * Columns + Column, the
+# FLandGrid::BitOf rule; word = bit / 16 picks the float, fmod(floor(m / 2^b), 2) reads the bit.
+OWNED_LAND_HLSL = """if (Valid < 0.5) return 1.0;
+float2 t = floor((WP.xy - float2(OX, OY)) / Size);
+if (t.x < 0 || t.y < 0 || t.x >= Cols || t.y >= Rows) return 0.0;
+float bit = t.y * Cols + t.x;
+float word = floor(bit / 16.0);
+float m = word < 0.5 ? M0 : (word < 1.5 ? M1 : (word < 2.5 ? M2 : M3));
+return fmod(floor(m / exp2(bit - word * 16.0)), 2.0) >= 0.5 ? 1.0 : 0.0;"""
+OWNED_LAND_PINS = ("Valid", "OX", "OY", "Size", "Cols", "Rows", "M0", "M1", "M2", "M3")
 
-    Wired into an OPAQUE material it does nothing: Opacity Mask is ignored until the blend mode
-    is Masked. That is deliberate. Only an instance that overrides the blend mode to Masked pays
-    for the clip, so every map that does not opt in renders exactly as before. The rectangle comes
-    from `mpc` (MPC_OwnedLand), written at runtime by AAirsideOwnedLandActor - one source of truth
-    with the walls, camera and grass, rather than numbers typed on an instance. Returns the Custom
-    node, or None if a pin did not connect (connect_material_expressions reports a misnamed pin
-    only through its bool, and the material still compiles)."""
+
+def owned_land_clip(lib, mat, mpc, x, y):
+    """1 on owned land, 0 off it - for Opacity Mask. The diorama edge (2026-10-02).
+
+    Wired into an OPAQUE material it does nothing: Opacity Mask is ignored until the blend mode is Masked. That is
+    deliberate. Only an instance that overrides the blend mode to Masked pays for the clip, so every map that does not
+    opt in renders exactly as before. The land comes from `mpc` (MPC_OwnedLand), written at runtime by
+    AAirsideOwnedLandActor from the airport's FLandGrid - one source of truth with the walls, camera, grass and every
+    build refusal. Returns the Custom node, or None if a pin did not connect (connect_material_expressions reports a
+    misnamed pin only through its bool, and the material still compiles)."""
     custom = lib.create_material_expression(mat, unreal.MaterialExpressionCustom, x, y)
-    custom.set_editor_property("description", "OwnedRectClip")
-    custom.set_editor_property(
-        "code",
-        "return (WP.x >= MinX && WP.x <= MaxX && WP.y >= MinY && WP.y <= MaxY) ? 1.0 : 0.0;")
+    custom.set_editor_property("description", "OwnedLandClip")
+    custom.set_editor_property("code", OWNED_LAND_HLSL)
     custom.set_editor_property("output_type", unreal.CustomMaterialOutputType.CMOT_FLOAT1)
     pins = []
-    for n in ("WP", "MinX", "MinY", "MaxX", "MaxY"):
+    for n in ("WP",) + OWNED_LAND_PINS:
         pin = unreal.CustomInput()
         pin.set_editor_property("input_name", n)
         pins.append(pin)
@@ -279,7 +294,7 @@ def owned_rect_clip(lib, mat, mpc, x, y):
 
     world = lib.create_material_expression(mat, unreal.MaterialExpressionWorldPosition, x - 300, y)
     ok = lib.connect_material_expressions(world, "", custom, "WP")
-    for i, (param, pin) in enumerate(zip(OWNED_RECT_PARAMS, ("MinX", "MinY", "MaxX", "MaxY"))):
+    for i, ((param, _), pin) in enumerate(zip(OWNED_LAND_PARAMS, OWNED_LAND_PINS)):
         node = lib.create_material_expression(
             mat, unreal.MaterialExpressionCollectionParameter, x - 300, y + 60 * (i + 1))
         node.set_editor_property("collection", mpc)

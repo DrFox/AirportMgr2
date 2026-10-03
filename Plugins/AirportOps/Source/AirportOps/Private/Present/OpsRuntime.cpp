@@ -703,6 +703,16 @@ void UOpsRuntime::WireBus()
 		Purchase.Money = Pricing->Format(E.Amount);
 		Events->NotifyPurchase(Purchase);
 	});
+	// A LAND TILE BOUGHT: a receipt, the noun is "land" (land purchase spec R10).
+	Bus.Subscribe<FLandPurchasedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"), [this](const FLandPurchasedEvent& E)
+	{
+		FOpsPurchase Purchase;
+		Purchase.Kind = EOpsPurchaseKind::LandBought;
+		Purchase.Name = NSLOCTEXT("AirportOps", "LandNoun", "land");
+		Purchase.Amount = E.Amount;
+		Purchase.Money = Pricing->Format(E.Amount);
+		Events->NotifyPurchase(Purchase);
+	});
 	Bus.Subscribe<FFacilityUpgradedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"), [this](const FFacilityUpgradedEvent& E)
 	{
 		const FModuleOffer* Offer = FacilityPurchases->ModuleOffers.Find(E.Module);
@@ -811,6 +821,18 @@ void UOpsRuntime::ArmDeadlockLook()
 		DeadlockLookHandle = INDEX_NONE;
 		Bus.MarkDirty(TEXT("Alerts"));
 	});
+}
+
+void UOpsRuntime::OnLandBought(FIntPoint Tile, const FBuildQuote& Quote)
+{
+	// PRICED BY THE PURSE (OnBuildRefused's reason): the ledger charged UPricing's price for each line, so the event
+	// carries that figure - Airside knows only the base amount.
+	double Amount = 0.0;
+	for (const FBuildLine& Line : Quote.Lines)
+	{
+		Amount += Pricing->PriceOfBuild(Line.Amount(), Line.Source.Get());
+	}
+	Bus.Publish(FLandPurchasedEvent{ Tile, Amount });
 }
 
 void UOpsRuntime::OnBuildRefused(const FBuildQuote& Quote, EBuildRefusal Why)
@@ -974,6 +996,15 @@ TArray<UOpsRuntime::FAirsideBridge> UOpsRuntime::AirsideBridges()
 				[&Runtime](const FString& SplitOff, const FString& From) { Runtime.Bus.Publish(FTaxiwaySplitEvent{ SplitOff, From }); });
 		},
 		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (URoadEditFacade* Facade = Actor.GetEditFacade()) { Facade->OnTaxiwaySplit.Remove(Handle); } } });
+
+	// A LAND PURCHASE, bridged (land purchase spec R10): the facade bought and charged; ops announces it.
+	Out.Add({ TEXT("LandBought"),
+		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
+		{
+			URoadEditFacade* Facade = Actor.GetEditFacade();
+			return Facade != nullptr ? Facade->OnLandBought.AddUObject(&Runtime, &UOpsRuntime::OnLandBought) : FDelegateHandle();
+		},
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (URoadEditFacade* Facade = Actor.GetEditFacade()) { Facade->OnLandBought.Remove(Handle); } } });
 	return Out;
 }
 

@@ -766,6 +766,17 @@ FOwnedLandKit UAirsideSettings::ResolveOwnedLandKit()
 	return Kit;
 }
 
+FLandPrice UAirsideSettings::ResolveLandPrice()
+{
+	FLandPrice Price;
+	if (const UAirsideContent* Content = GetContent())
+	{
+		Price.Base = Content->LandTileBase;
+		Price.Growth = Content->LandTileGrowth;
+	}
+	return Price;
+}
+
 TArray<FDepotModuleLook> UAirsideSettings::ResolveDepotLooks()
 {
 	TArray<FDepotModuleLook> Looks;

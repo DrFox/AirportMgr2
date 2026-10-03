@@ -328,7 +328,11 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 		? Context.Target->QuoteForRunway(Threshold, Far, Profile, Surface) : FBuildQuote();
 	const bool bAffordable = Quote.IsFree() || Purse->CanAfford(Quote);
 
-	const EPreviewStyle Style = bLongEnough && bAffordable ? EPreviewStyle::Pending : EPreviewStyle::Refused;
+	// OWNED LAND, asked through the target's own evaluator - PlaceRunway asks the same one at the click (land
+	// purchase spec R7), so the ghost cannot approve a strip the click refuses.
+	const FString LandWhy = Context.Target != nullptr ? Context.Target->WhyRunwayRefused(Threshold, Far, Profile) : FString();
+
+	const EPreviewStyle Style = bLongEnough && bAffordable && LandWhy.IsEmpty() ? EPreviewStyle::Pending : EPreviewStyle::Refused;
 
 	Sink.Marker(Threshold, Style);
 	Sink.Marker(Far, Style);
@@ -352,6 +356,13 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 	{
 		Sink.Label(Far, FString::Printf(TEXT("too short: %.0f m, needs %.0f m"),
 			Length / 100.0, Minimum / 100.0), EPreviewStyle::Refused);
+		return;
+	}
+
+	// SAID, not only coloured, like the length: red alone cannot tell the void from any other refusal.
+	if (!LandWhy.IsEmpty())
+	{
+		Sink.Label(Far, LandWhy, EPreviewStyle::Refused);
 		return;
 	}
 

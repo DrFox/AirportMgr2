@@ -5,26 +5,26 @@
 #include "AirsideOwnedLandActor.generated.h"
 
 class UStaticMeshComponent;
+class URoadEditFacade;
 class UWorld;
+struct FLandGrid;
 
 /**
- * The land the player owns, and the diorama edge that shows where it ends (2026-10-02): the
- * landscape is clipped to it, the plinth's strata walls stand under its sides, the build camera's
- * focus stays inside it and the grass grows only on it. ONE RECTANGLE, ONE SOURCE OF TRUTH - each
- * of those four reads it from here, so they cannot drift apart. The look was chosen over a sea or
- * mountain backdrop and over a farmland surround (env spec section 10, Slice D).
+ * The diorama edge (2026-10-02): DRAWS the land the player owns - the landscape clipped to it, and the plinth's
+ * strata walls standing under its boundary. The look was chosen over a sea or mountain backdrop and over a farmland
+ * surround (env spec section 10, Slice D).
  *
- * PLACED IN THE LEVEL, not spawned: the rectangle is a fact about the map, like the landscape.
- * A level with none owns everything - nothing is clipped, bounded or walled - which is every map
- * made before this existed.
+ * IT DRAWS THE LAND; IT DOES NOT HOLD IT. The owned tiles are FLandGrid on the airport's URoadNetwork (land purchase
+ * spec 2026-10-02 section 2), written only by URoadEditFacade, saved with the level and every save. #529 kept a
+ * rectangle here; that was replaced rather than kept beside the tiles, because two descriptions of owned land is the
+ * drift the one rectangle existed to prevent. The camera, the grass and every build refusal read the same grid.
  *
- * WHY THE LANDSCAPE IS CLIPPED RATHER THAN SIZED: a Landscape cannot be created or resized from
- * script or at runtime (env spec 7.2), and land purchase will grow this rectangle in play. A
- * material clip on a landscape that already covers the whole map grows with one parameter write.
+ * PLACED IN THE LEVEL. A level with none still has its land (refusals and the camera bound hold); it just has no
+ * edge drawn. A level whose airport owns no grid owns everything, and this draws nothing.
  *
- * Land purchase is not built yet. When it is, it calls SetOwnedLand, which rewrites the collection
- * and the walls here; the camera and grass will need telling too (they read this once - see
- * UBuildCameraComponent::CreateBuildCamera and AAirsideGroundCoverActor::RebuildMask).
+ * WHY THE LANDSCAPE IS CLIPPED RATHER THAN SIZED: a Landscape cannot be created or resized from script or at runtime
+ * (env spec 7.2), and land purchase grows the land in play. A material clip on a landscape that already covers the
+ * whole map grows with one parameter write.
  */
 UCLASS()
 class AIRSIDE_API AAirsideOwnedLandActor : public AActor
@@ -34,17 +34,10 @@ class AIRSIDE_API AAirsideOwnedLandActor : public AActor
 public:
 	AAirsideOwnedLandActor();
 
-	/** The owned land's corners on the road plane, uu. Min must be below Max on both axes. */
-	UPROPERTY(EditAnywhere, Category = "Airside|OwnedLand")
-	FVector2D OwnedMin = FVector2D(-30000.0, -30000.0);
-
-	UPROPERTY(EditAnywhere, Category = "Airside|OwnedLand")
-	FVector2D OwnedMax = FVector2D(30000.0, 30000.0);
-
 	/**
-	 * How far the plinth's walls reach below the ground, uu. 40 m is exaggerated on purpose - a
-	 * diorama base, not geology - and was judged on 20/150/600 m shots (2026-10-02). From 600 m it
-	 * reads thin; deepen it here if the edge must read from the top zoom.
+	 * How far the plinth's walls reach below the ground, uu. 40 m is exaggerated on purpose - a diorama base, not
+	 * geology - and was judged on 20/150/600 m shots (2026-10-02). From 600 m it reads thin; deepen it here if the
+	 * edge must read from the top zoom.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|OwnedLand", meta = (ClampMin = "100.0"))
 	double PlinthDepth = 4000.0;
@@ -53,22 +46,26 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|OwnedLand", meta = (ClampMin = "1.0"))
 	double WallThickness = 100.0;
 
-	/** The rectangle, valid only when Min < Max on both axes. */
-	FBox2D GetOwnedLand() const;
-
-	/** Move the edge: walls and the ground clip follow at once. A UFUNCTION so the authoring script
-	 *  can set it headlessly, where a property write alone reruns no construction. */
+	/**
+	 * Author this level's starting land on its airport - the level script's door (build_diorama_prototype.py). The
+	 * land then lives on the network; this actor only draws it. A UFUNCTION so the script can call it headlessly,
+	 * where a property write reruns no construction.
+	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside|OwnedLand")
-	void SetOwnedLand(const FVector2D& InMin, const FVector2D& InMax);
+	void AuthorStartingLand(FVector2D Origin, double TileSize, int32 Columns, int32 Rows, const TArray<FIntPoint>& StartTiles);
 
-	/** The level's owned land, or null when it has none - which means "owns everything". */
+	/** The level's edge actor, or null when it has none. */
 	static AAirsideOwnedLandActor* Find(const UWorld* World);
 
-	/** The four walls, south/north/west/east - exposed for the test that measures them. */
+	/** The pooled walls; only the first NumWalls() are live - exposed for the test that measures them. */
 	const TArray<TObjectPtr<UStaticMeshComponent>>& GetWalls() const { return Walls; }
+	int32 NumWalls() const { return LiveWalls; }
 
-	/** Names of the four MPC_OwnedLand scalars, in the order Min.X, Min.Y, Max.X, Max.Y. */
-	static const FName CollectionParams[4];
+	/**
+	 * Names of the MPC_OwnedLand scalars: LandValid, the grid's origin, tile size and size, and the 64-bit mask as four
+	 * 16-bit words (a float holds integers exactly to 2^24). LandValid 0 clips nothing.
+	 */
+	static const FName CollectionParams[10];
 
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
@@ -76,12 +73,23 @@ public:
 	virtual void Destroyed() override;
 
 private:
-	/** Lay the walls under the rectangle's edges and write the clip. Editor and game alike. */
-	void Apply();
+	/** Draw Land: walls under every boundary run, and the clip written. Invalid land hides the walls and clips nothing. */
+	void Apply(const FLandGrid& Land);
 
-	/** Write Bounds to MPC_OwnedLand in this world - or "everything" when Bounds is invalid. */
-	void WriteCollection(const FBox2D& Bounds) const;
+	/** Write Land to MPC_OwnedLand in this world. */
+	void WriteCollection(const FLandGrid& Land) const;
 
-	UPROPERTY(VisibleAnywhere, Category = "Airside|OwnedLand")
+	/** Listen to the airport's owned land, and draw it once to catch up. */
+	void Bind();
+	void Unbind();
+
+	UStaticMeshComponent* WallAt(int32 Index);
+
+	/** Pooled: an L-shape adds walls, a purchase that straightens an edge frees one. At most 4 x 32 runs on 8x8. */
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Airside|OwnedLand")
 	TArray<TObjectPtr<UStaticMeshComponent>> Walls;
+
+	int32 LiveWalls = 0;
+	TWeakObjectPtr<URoadEditFacade> BoundFacade;
+	FDelegateHandle BoundHandle;
 };

@@ -320,6 +320,18 @@ struct AIRPORTOPS_API FBalanceSignChangedEvent
 	FString Describe() const;
 };
 
+/**
+ * A land tile was bought (land purchase spec R10) - bridged from URoadEditFacade::OnLandBought, after the facade charged
+ * the purse and grew the land. Tile is the grid cell; Amount what the ledger took, priced by UPricing.
+ */
+struct AIRPORTOPS_API FLandPurchasedEvent
+{
+	FIntPoint Tile = FIntPoint::ZeroValue;
+	double Amount = 0.0;
+	static const TCHAR* EventName() { return TEXT("LandPurchased"); }
+	FString Describe() const;
+};
+
 /** A build refused at commit (URoadEditFacade::OnRefused), priced by the purse for the toast. */
 struct AIRPORTOPS_API FBuildRefusedEvent
 {
@@ -557,7 +569,7 @@ using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChanged
 	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent, FOfferAcceptedEvent,
 	FTurnaroundEndedEvent, FAirportStatusChangedEvent, FFlightCancelledEvent, FRunwayFreedEvent, FStandsFreedEvent,
 	FFlightInboundEvent, FPushGroundFreedEvent, FModulesRefundedEvent, FAlertChangedEvent, FAirlineAdmissionChangedEvent,
-	FFlightPhaseChangedEvent, FTaxiwaySplitEvent, FTaxiPlansFreedEvent, FTaxiUnplannedChangedEvent>;
+	FFlightPhaseChangedEvent, FTaxiwaySplitEvent, FTaxiPlansFreedEvent, FTaxiUnplannedChangedEvent, FLandPurchasedEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec

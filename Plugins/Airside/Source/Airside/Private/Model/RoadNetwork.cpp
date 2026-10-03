@@ -472,6 +472,7 @@ void URoadNetwork::CopyFrom(const URoadNetwork& Source)
 	NextDepotNumber = Source.NextDepotNumber;
 	// THE NAMES (2026-10-02): an undo that restored the roads but not their names would re-letter the airport.
 	Taxiways = Source.Taxiways;
+	OwnedLand = Source.OwnedLand;
 }
 
 void URoadNetwork::RestoreFrom(const URoadNetwork& Snapshot)

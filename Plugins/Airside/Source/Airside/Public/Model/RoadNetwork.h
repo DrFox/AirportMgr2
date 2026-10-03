@@ -7,6 +7,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadApron.h"
 #include "Model/RoadEntity.h"
+#include "Model/LandGrid.h"
 #include "Model/ReverseTurn.h"
 #include "Model/TrafficOccupancy.h"
 #include "Solve/IcaoCode.h"
@@ -244,6 +245,16 @@ public:
 	 * Built on CopyFrom, so it is exactly as complete as that is - see its own comment.
 	 */
 	void RestoreFrom(const URoadNetwork& Snapshot);
+
+	/** The land the player owns - see FLandGrid. Invalid (the default) owns everything. */
+	const FLandGrid& GetOwnedLand() const { return OwnedLand; }
+
+	/**
+	 * URoadEditFacade's door only (AuthorOwnedLand, BuyLandTile, AdoptNetwork's carry): the facade announces the
+	 * change, and a write past it would leave the walls, clip, camera and grass on the old land.
+	 * ENFORCED BY: Check-Architecture rule 103 (owned-land-one-writer)
+	 */
+	void SetOwnedLand(const FLandGrid& Land) { OwnedLand = Land; }
 
 	const FRoadNode*    GetNode(FRoadNodeId Node) const;
 	const FRoadSegment* GetSegment(FRoadSegmentId Segment) const;
@@ -1415,6 +1426,14 @@ private:
 	 * ids exactly. ENFORCED BY: Airside.Model.CopyFromCoversEveryProperty, Airside.Present.TaxiwayNames.SplitIsAnnouncedAndUndone
 	 */
 	UPROPERTY() TArray<FTaxiway> Taxiways;
+
+	/**
+	 * Owned land (land purchase spec 2026-10-02). A UPROPERTY so it rides the save's Network blob and the level.
+	 * NOT UNDONE: URoadEditFacade::AdoptNetwork carries the live value onto every snapshot it adopts (spec 3.1) -
+	 * so it is copied by CopyFrom like every UPROPERTY, and overridden only at that one door.
+	 * ENFORCED BY: Airside.Present.OwnedLand.UndoKeepsLand
+	 */
+	UPROPERTY() FLandGrid OwnedLand;
 
 	/**
 	 * FindEntityIndexByPoseNode's index, memoised the same discipline FNodeReachCache and

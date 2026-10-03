@@ -73,6 +73,8 @@ namespace ToolRegistryRulings
 			{ TEXT("Road"),            E::ServiceRoadNode,  true,  false, S::Judged },
 			// The one tool whose plot has capacity to show. Judged, Task 5.
 			{ TEXT("FuelDepot"),       E::None,             false, true,  S::Judged },
+			// Buys ground, lays no pavement - the strip has nothing to judge. Land purchase spec R6.
+			{ TEXT("BuyLand"),         E::None,             false, false, S::PlacesNoPavement },
 		};
 		return Table;
 	}

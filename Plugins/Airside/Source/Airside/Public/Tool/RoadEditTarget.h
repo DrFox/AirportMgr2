@@ -263,6 +263,28 @@ public:
 	 */
 	virtual FString WhySegmentRefused(int32 FromIndex, const FRoadSnapResult& To, ERoadKind Kind, int32 WidthIndex) const = 0;
 
+	/**
+	 * Why a runway from From to To at Profile may not be laid - today only that it leaves owned land (land purchase
+	 * spec R7). Empty = allowed. THE ONE EVALUATOR, WhySegmentRefused's pattern: the runway tool's ghost and
+	 * PlaceRunway both ask it, so the preview cannot approve what the click refuses. Length and money keep their own
+	 * gates (GetMinimumRunwayLength, QuoteForRunway).
+	 * ENFORCED BY: Airside.Present.OwnedLand.EveryBuildAsksTheLand
+	 */
+	virtual FString WhyRunwayRefused(FVector2D From, FVector2D To, const URoadProfile* Profile) const = 0;
+
+	/**
+	 * Buying land (land purchase spec R5, R6), for the Buy land tool. The quote prices the tile at the current number
+	 * owned; the Why says why a tile cannot be bought now ("" = it can); Buy charges the purse and grows the land.
+	 * Defaults are a target with no land: nothing to sell. ENFORCED BY: Airside.Present.OwnedLand.BuyRefusals
+	 */
+	virtual FBuildQuote QuoteLandTile(FIntPoint Tile) const { return FBuildQuote(); }
+	virtual FString WhyLandTileRefused(FIntPoint Tile) const { return TEXT("No land here"); }
+	virtual bool BuyLandTile(FIntPoint Tile) { return false; }
+
+	/** Why an apron with this outline may not be laid - today only owned land. Empty = allowed. The apron tool's
+	 *  ghost and AddApron both ask it. ENFORCED BY: Airside.Present.OwnedLand.EveryBuildAsksTheLand */
+	virtual FString WhyApronRefused(TArrayView<const FVector2D> Outline) const = 0;
+
 	/** Tarmac - what every caller before the surface row meant. */
 	bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex)
 	{

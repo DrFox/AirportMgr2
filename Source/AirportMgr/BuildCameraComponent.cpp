@@ -4,7 +4,8 @@
 #include "Camera/CameraComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "MiniatureFocus.h"
-#include "Present/AirsideOwnedLandActor.h"
+#include "Model/RoadNetwork.h"
+#include "Present/RoadEditFacade.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadAgentActor.h"
 #include "Present/RoadNetworkActor.h"
@@ -35,7 +36,19 @@ UBuildCameraComponent::UBuildCameraComponent()
 
 void UBuildCameraComponent::CreateBuildCamera(APlayerController& Owner, const ARoadNetworkActor& Target)
 {
-	// The actor was only ever read for this one figure - see the header's overload.
+	// THE OWNED LAND BOUNDS THE FOCUS, and follows it: a purchase moves the edge mid-session (land purchase spec 4).
+	// Set before the overload's Reset, so a StartFocus off the land starts on it.
+	if (Target.Network != nullptr)
+	{
+		TargetView.FocusLand = Target.Network->GetOwnedLand();
+	}
+	if (URoadEditFacade* Facade = Target.GetEditFacade())
+	{
+		Facade->OnOwnedLandChanged.AddUObject(this, &UBuildCameraComponent::SetFocusLand);
+	}
+	UE_LOG(LogRoadBuild, Log, TEXT("Build camera: focus held on %d owned tile(s)."),
+		TargetView.FocusLand.IsValid() ? TargetView.FocusLand.NumOwned() : 0);
+	// The actor is read for SurfaceZ besides - see the header's overload.
 	CreateBuildCamera(Owner, Target.SurfaceZ);
 }
 
@@ -47,16 +60,7 @@ void UBuildCameraComponent::CreateBuildCamera(APlayerController& Owner, double S
 		return;
 	}
 
-	// THE OWNED LAND BOUNDS THE FOCUS, set before Reset so a StartFocus outside it starts inside.
-	// Looked up once here: the land is fixed for a session until land purchase exists, and that
-	// feature calls SetFocusBounds when it grows the plot rather than this polling for it.
-	if (const AAirsideOwnedLandActor* Land = AAirsideOwnedLandActor::Find(World))
-	{
-		const FBox2D Bounds = Land->GetOwnedLand();
-		TargetView.FocusBounds = Bounds;
-		UE_LOG(LogRoadBuild, Log, TEXT("Build camera: focus held inside the owned land (%.0f, %.0f)-(%.0f, %.0f)."),
-			Bounds.Min.X, Bounds.Min.Y, Bounds.Max.X, Bounds.Max.Y);
-	}
+	// Reset clamps a StartFocus off the owned land onto it - FocusLand is set by the airport overload before this.
 	TargetView.Reset(ViewLimits);
 
 	// The view starts settled rather than easing in from wherever a default-constructed rig

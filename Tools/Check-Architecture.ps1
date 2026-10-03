@@ -5440,6 +5440,26 @@ else {
 }
 $ranRules.Add('relay-adds-behaviour')
 
+# --- 103. OWNED LAND HAS ONE WRITER: THE EDIT FACADE (land purchase spec 2026-10-02) ----------------------------------------
+# URoadNetwork::SetOwnedLand changes what the walls, the ground clip, the build camera, the grass and every build refusal
+# read - and only URoadEditFacade announces it (OnOwnedLandChanged). A write anywhere else leaves all five on the old land
+# with nothing to say why. Comments and strings are stripped first, so a WHY comment may name it.
+foreach ($landTree in @($plugin, $editor, $ops, (Join-Path $Root 'Source\AirportMgr'))) {
+    foreach ($file in Get-Sources $landTree @('.cpp', '.h')) {
+        if ($file.Name -like '*Test.cpp' -or $file.Name -like 'RoadEditFacade*.cpp' -or $file.Name -eq 'RoadNetwork.h') { continue }
+        $lines = Get-Content -LiteralPath $file.FullName
+        $inBlock = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
+            # A CALL through a network (-> or .), not the bare name: AAirsideOwnedLandActor's own method of a similar name is not a write.
+            if ($code -match '(->|\.)\s*SetOwnedLand\s*\(') {
+                $failures.Add("owned-land-one-writer: $($file.Name):$($i + 1) writes owned land past URoadEditFacade - use AuthorOwnedLand or BuyLandTile, which announce it")
+            }
+        }
+    }
+}
+$ranRules.Add('owned-land-one-writer')
+
 # --- Verdict -------------------------------------------------------------------------------
 # Issue #291: this line used to be typed by hand and had already drifted (solve-purity was
 # missing from it, unnoticed) - it now names whatever actually ran, from $ranRules, so the two

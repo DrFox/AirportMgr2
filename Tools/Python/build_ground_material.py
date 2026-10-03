@@ -583,7 +583,7 @@ def build_material():
     # Masked (MI_Ground_Diorama, build_diorama_prototype.py); the rectangle itself is
     # MPC_OwnedLand's, which AAirsideOwnedLandActor writes.
     mpc = nodes.owned_land_collection(on_fail=fail)
-    clip = nodes.owned_rect_clip(lib, mat, mpc, -400, 2100) if mpc else None
+    clip = nodes.owned_land_clip(lib, mat, mpc, -400, 2100) if mpc else None
     if clip is None:
         fail("owned-rect clip did not wire")
         return None

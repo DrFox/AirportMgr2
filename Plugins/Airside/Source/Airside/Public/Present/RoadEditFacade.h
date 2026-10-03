@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/BuildPurse.h"
+#include "Model/LandGrid.h"
 #include "Tool/BuildSession.h"
 #include "Tool/RoadEditTarget.h"
 #include "RoadEditFacade.generated.h"
@@ -244,6 +245,28 @@ public:
 	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnTaxiwaySplit, const FString& /*SplitOff*/, const FString& /*From*/);
 	FOnTaxiwaySplit OnTaxiwaySplit;
 
+	/**
+	 * The owned land changed - authored, bought, or a load brought different land. Airside's presentation
+	 * (AAirsideOwnedLandActor, AAirsideGroundCoverActor) and the game module's camera listen; ops hears a
+	 * PURCHASE through OnLandBought, not this. Not fired by undo, redo or clear: land is not undone (AdoptNetwork).
+	 * NATIVE, NOT DYNAMIC: FLandGrid carries a uint64, and nothing in Blueprint binds here.
+	 * ENFORCED BY: Airside.Present.OwnedLand.UndoKeepsLand
+	 */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnOwnedLandChanged, const FLandGrid& /*Land*/);
+	FOnOwnedLandChanged OnOwnedLandChanged;
+
+	/** Set the owned land outright - the level authoring script and tests. Not a purchase: charges nothing. */
+	void AuthorOwnedLand(const FLandGrid& Land);
+
+	/**
+	 * A tile was BOUGHT - after the charge, with the quote it was charged at. The layer that owns the purse bridges it
+	 * onto its own announcements (the toast); OnOwnedLandChanged has already fired for the land itself, and is what
+	 * this plugin's presentation hears.
+	 * ENFORCED BY: Airside.Present.OwnedLand.BuyRefusals
+	 */
+	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnLandBought, FIntPoint /*Tile*/, const FBuildQuote& /*Quote*/);
+	FOnLandBought OnLandBought;
+
 	// --- IRoadEditTarget ---------------------------------------------------------------
 
 	virtual const URoadNetwork* GetNetwork() const override;
@@ -368,6 +391,17 @@ public:
 	 * TaxiwayStrip::JudgeSegment.
 	 */
 	virtual FString WhySegmentRefused(int32 FromIndex, const FRoadSnapResult& To, ERoadKind Kind, int32 WidthIndex) const override;
+
+	/** See IRoadEditTarget::WhyRunwayRefused - the strip at the profile's half-width, against owned land. */
+	virtual FString WhyRunwayRefused(FVector2D From, FVector2D To, const URoadProfile* Profile) const override;
+
+	/** See IRoadEditTarget::WhyApronRefused. */
+	virtual FString WhyApronRefused(TArrayView<const FVector2D> Outline) const override;
+
+	/** See IRoadEditTarget::QuoteLandTile / WhyLandTileRefused / BuyLandTile. */
+	virtual FBuildQuote QuoteLandTile(FIntPoint Tile) const override;
+	virtual FString WhyLandTileRefused(FIntPoint Tile) const override;
+	virtual bool BuyLandTile(FIntPoint Tile) override;
 
 	/** See IRoadEditTarget::WhyPlotRefused. PlaceEntityInPlot's own outline refusals, moved here
 	 *  whole (same order, same wording), plus the clearance strip in the stand's words. */
@@ -603,6 +637,15 @@ public:
 	void ClearHistory();
 
 private:
+	/**
+	 * FLandGrid::OutsideText when Footprint leaves owned land, else empty - every Why* that lays ground asks this, and
+	 * a site in the void has nothing else worth saying. An airport whose grid is invalid owns everything.
+	 */
+	FString LandRefusal(TConstArrayView<FVector2D> Footprint) const;
+
+	/** LandRefusal for one point - a node, a point-placed entity. */
+	bool IsLandOwned(FVector2D Where) const;
+
 	/** A live segment's handle from its slot index. See MakeLiveNodeId. */
 	bool MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const;
 

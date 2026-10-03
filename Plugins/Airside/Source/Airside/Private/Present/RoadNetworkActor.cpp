@@ -1258,6 +1258,31 @@ FString ARoadNetworkActor::WhySegmentRefused(int32 FromIndex, const FRoadSnapRes
 	return Facade->WhySegmentRefused(FromIndex, To, Kind, WidthIndex);
 }
 
+FString ARoadNetworkActor::WhyRunwayRefused(FVector2D From, FVector2D To, const URoadProfile* RunwayProfile) const
+{
+	return Facade->WhyRunwayRefused(From, To, RunwayProfile);
+}
+
+FString ARoadNetworkActor::WhyApronRefused(TArrayView<const FVector2D> Outline) const
+{
+	return Facade->WhyApronRefused(Outline);
+}
+
+FBuildQuote ARoadNetworkActor::QuoteLandTile(FIntPoint Tile) const
+{
+	return Facade->QuoteLandTile(Tile);
+}
+
+FString ARoadNetworkActor::WhyLandTileRefused(FIntPoint Tile) const
+{
+	return Facade->WhyLandTileRefused(Tile);
+}
+
+bool ARoadNetworkActor::BuyLandTile(FIntPoint Tile)
+{
+	return Facade->BuyLandTile(Tile);
+}
+
 FString ARoadNetworkActor::WhyStandRefused(TArrayView<const FVector2D> Outline, EPavement Pavement) const
 {
 	return Facade->WhyStandRefused(Outline, Pavement);
