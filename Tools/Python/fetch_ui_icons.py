@@ -110,6 +110,10 @@ ICONS = {
     # Close / open the airport (ops batch 3 PR B). The tower is the airport's own voice - closing is what ATC
     # does - and it reads at 24 pixels. FETCHED AND CHECKED 2026-09-30: PNG; lorc/stop-sign returns HTML.
     "game.airport":        ("delapouite", "control-tower"),
+    # The Airlines window (airlines panel spec 2026-10-02 section 2): the airport's RELATIONSHIP with each airline, so two hands
+    # rather than another aeroplane - the bar already has three. FETCHED AND CHECKED 2026-10-03: PNG; delapouite/handshake,
+    # delapouite/airplane and delapouite/passenger-plane return HTML.
+    "game.airlines":       ("delapouite", "shaking-hands"),
 
     # The drive-side toggle (2026-09-23). A steering wheel: it reads as DRIVING at 24 pixels,
     # and which side the wheel sits on is the everyday sign of which side a country drives.

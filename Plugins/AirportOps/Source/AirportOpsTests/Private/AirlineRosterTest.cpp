@@ -374,4 +374,51 @@ bool FAirlinesPlayerCancelTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAirlinesCauseKindTest, "AirportOps.Model.Airlines.CauseKindCarried",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FAirlinesCauseKindTest::RunTest(const FString&)
+{
+	// THE ENUM, NOT THE TEXT, IS WHAT A TALLY KEYS ON: the cause strings carry figures ("late off stand (25 min)") and are
+	// for the player to read; anything counting causes must switch on Kind. Each handler is driven through the bus and both
+	// the remembered row and the published event are checked, since they are filled by the same Apply but are two fields.
+	struct FCase { const TCHAR* Name; EAirlineSatisfactionCause Want; TFunction<void(FRosterFixture&)> Drive; };
+	const FCase Cases[] = {
+		{ TEXT("on time"), EAirlineSatisfactionCause::OnTime, [](FRosterFixture& F) { F.OffBlocks(-30.0); } },
+		{ TEXT("late"), EAirlineSatisfactionCause::LateOffStand, [](FRosterFixture& F) { F.OffBlocks(1500.0); } },
+		{ TEXT("offer ignored"), EAirlineSatisfactionCause::OfferIgnored,
+			[](FRosterFixture& F) { F.Bus.Publish(FOfferExpiredEvent{ 1, TEXT("A"), ELapseReason::Ignored }); F.Bus.Drain(); } },
+		{ TEXT("never acceptable"), EAirlineSatisfactionCause::OfferNeverAcceptable,
+			[](FRosterFixture& F) { F.Bus.Publish(FOfferExpiredEvent{ 1, TEXT("A"), ELapseReason::NeverAcceptable }); F.Bus.Drain(); } },
+		{ TEXT("short of fuel"), EAirlineSatisfactionCause::LeftShortOfFuel,
+			[](FRosterFixture& F) { F.TurnaroundEnded(EFuelOutcome::Unfuelled, 0.0, 2500.0); } },
+		{ TEXT("airport closed"), EAirlineSatisfactionCause::CancelledAirportClosed,
+			[](FRosterFixture& F) { F.Bus.Publish(FFlightCancelledEvent{ 1, TEXT("A"), ECancelReason::AirportClosed }); F.Bus.Drain(); } },
+		{ TEXT("player cancel"), EAirlineSatisfactionCause::CancelledByPlayer,
+			[](FRosterFixture& F) { F.Bus.Publish(FFlightCancelledEvent{ 1, TEXT("A"), ECancelReason::PlayerCancelled }); F.Bus.Drain(); } },
+	};
+	for (const FCase& Case : Cases)
+	{
+		FRosterFixture F;
+		Case.Drive(F);
+		const FAirlineStanding* Row = F.Roster->Find(TEXT("A"));
+		if (!TestTrue(FString::Printf(TEXT("%s: the row remembers one change"), Case.Name), Row != nullptr && Row->Recent.Num() == 1)) { continue; }
+		TestTrue(FString::Printf(TEXT("%s: remembered Kind"), Case.Name), Row->Recent.Last().Kind == Case.Want);
+		if (TestEqual(FString::Printf(TEXT("%s: one event"), Case.Name), F.Changes.Num(), 1))
+		{
+			TestTrue(FString::Printf(TEXT("%s: published Kind"), Case.Name), F.Changes[0].Kind == Case.Want);
+		}
+	}
+	// DRIFT IS NOT REMEMBERED (a day's forgiveness must not hide the cause the player could act on), so only the event shows it.
+	FRosterFixture F;
+	F.OffBlocks(6000.0);
+	F.Changes.Reset();
+	F.Bus.Publish(FDayEndedEvent{ 1 });
+	F.Bus.Drain();
+	if (TestEqual(TEXT("day end: one drift event"), F.Changes.Num(), 1))
+	{
+		TestTrue(TEXT("day end: published Kind"), F.Changes[0].Kind == EAirlineSatisfactionCause::DailyDrift);
+	}
+	return true;
+}
+
 #endif

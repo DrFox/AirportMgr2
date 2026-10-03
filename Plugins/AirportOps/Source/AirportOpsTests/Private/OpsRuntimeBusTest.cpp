@@ -9,6 +9,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/AirlineDefinition.h"
 #include "Model/AirlineRoster.h"
+#include "Model/AirlineHistory.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/Airport.h"
 #include "Model/JobBoard.h"
@@ -85,6 +86,72 @@ bool FOpsRuntimeBusSubscribedTest::RunTest(const FString&)
 		TestTrue(FString::Printf(TEXT("%s has a subscriber after WireBus"), Names[Index]),
 			Runtime->GetBus().SubscribersOf(Index).Num() > 0);
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeHistoryWiredTest, "AirportOps.Present.Bus.HistoryIsWired",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeHistoryWiredTest::RunTest(const FString&)
+{
+	// THE SEAM: UOpsRuntime::Attach hands the roster its history. Without that line the roster scores and the history stays
+	// empty - and every roster-level test still passes, because each wires its own.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	if (!TestNotNull(TEXT("the runtime owns a history"), Runtime->GetAirlineHistory())) { return false; }
+	const FName Airline = TEXT("HistoryWiredAir");
+	Runtime->GetAirlines()->Ensure(Airline);
+	Runtime->GetBus().Publish(FFlightOffBlocksEvent{ 1, Airline, -30.0 });
+	Runtime->GetBus().Drain();
+	const FAirlineDays* Row = Runtime->GetAirlineHistory()->Find(Airline);
+	if (!TestNotNull(TEXT("the airline has history after one flight"), Row)) { return false; }
+	TestTrue(TEXT("an OnTime tally is in today"), Row->Days.Last().Tallies.ContainsByPredicate(
+		[](const FAirlineCauseTally& T) { return T.Kind == EAirlineSatisfactionCause::OnTime; }));
+	Runtime->Detach();
+	TestNull(TEXT("Detach takes the roster's history back"), Runtime->GetAirlines()->History);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeHistoryNewGameTest, "AirportOps.Present.Bus.HistoryResetsAtAttach",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeHistoryNewGameTest::RunTest(const FString&)
+{
+	// THE SEAM: Attach's new-game block resets the history to the clock's day. Dirty it, attach again, and it must be clean.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	UAirlineHistory* History = Runtime->GetAirlineHistory();
+	History->Record(TEXT("Old"), EAirlineSatisfactionCause::OnTime, 0.01, 0.51);
+	History->CloseDay(TArrayView<const FAirlineStanding>());
+	History->CloseDay(TArrayView<const FAirlineStanding>());
+	if (!TestTrue(TEXT("the history is dirty"), History->GetCurrentDay() == 2 && History->Find(TEXT("Old")) != nullptr)) { return false; }
+	Runtime->Attach(TestWorld.Actor);
+	TestNull(TEXT("a new game forgets the old rows"), History->Find(TEXT("Old")));
+	TestEqual(TEXT("and starts on the clock's day"), History->GetCurrentDay(), Runtime->GetClock()->Day());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOpsRuntimeHistoryLoadDayTest, "AirportOps.Present.Bus.HistoryAdoptsTheLoadedDay",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOpsRuntimeHistoryLoadDayTest::RunTest(const FString&)
+{
+	// THE SEAM: a save with no "AirlineHistory" blob leaves the history empty on day 0; the runtime then adopts the LOADED clock's day,
+	// or the first week of trend would be labelled from 0.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor to attach to"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = RuntimeBusTestAttach(TestWorld);
+	for (int32 Guard = 0; Runtime->GetClock()->Day() < 3 && Guard < 1000; ++Guard) { Runtime->GetClock()->Advance(1000.0); }
+	const int32 SavedDay = Runtime->GetClock()->Day();
+	if (!TestTrue(TEXT("the clock is past day 2"), SavedDay >= 3)) { return false; }
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_BusHistoryDay"));
+	if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
+	FOpsSnapshot Snapshot;
+	if (!TestTrue(TEXT("and reads back"), OpsSave::ReadSlot(Slot, Snapshot))) { return false; }
+	Snapshot.Blobs.Remove(TEXT("AirlineHistory"));
+	if (!TestTrue(TEXT("the older snapshot writes"), OpsSave::WriteSlot(Slot, Snapshot))) { return false; }
+	if (!TestTrue(TEXT("and loads"), Runtime->LoadFromSlot(Slot))) { return false; }
+	TestEqual(TEXT("the clock came back at the saved day"), Runtime->GetClock()->Day(), SavedDay);
+	TestEqual(TEXT("the history opens on it"), Runtime->GetAirlineHistory()->GetCurrentDay(), SavedDay);
 	return true;
 }
 
