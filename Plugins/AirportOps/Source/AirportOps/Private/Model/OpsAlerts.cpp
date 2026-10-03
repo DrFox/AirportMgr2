@@ -191,9 +191,9 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 			NSLOCTEXT("OpsAlerts", "NoRunway", "No runway - build one to receive offers")));
 	}
 
-	// FUEL LOW (spec 2026-10-02 §7): under a quarter of the tanks and nothing contracted - the moment ordering still
-	// helps. Not raised for a contracted airport, whose deliveries are already on the way, nor one with no tanks (UFuelSupply::IsLow). A spot order on its way
-	// counts: the player has acted, and the alert would nag through the delivery delay.
+	// FUEL LOW (spec 2026-10-02 §7): under a quarter of the tanks and nothing contracted - the moment ordering still helps.
+	// Not raised for a contracted airport, whose deliveries are already on the way, nor one with no tanks (UFuelSupply::IsLow).
+	// A spot order on its way counts: the player has acted, and the alert would nag through the delivery delay.
 	// ENFORCED BY: AirportOps.Model.Alerts.FuelLowWhenUnderAQuarter, AirportOps.Present.Fuel.FuelLowIsWokenByFuelEvents
 	if (Sources.FuelSupply != nullptr && Sources.FuelSupply->IsLow())
 	{

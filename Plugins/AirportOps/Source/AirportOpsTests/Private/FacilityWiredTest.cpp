@@ -1004,7 +1004,8 @@ bool FFuelLowWokenTest::RunTest(const FString&)
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
 	UOpsRuntime* Runtime = nullptr;
-	if (!TestTrue(TEXT("setup: the starter depot is placed"), FacilityWiredDepot(TestWorld, Runtime).IsSet())) { return false; }
+	const FEntityInstanceId Depot = FacilityWiredDepot(TestWorld, Runtime);
+	if (!TestTrue(TEXT("setup: the starter depot is placed"), Depot.IsSet())) { return false; }
 	UFuelSupply* Supply = FacilityWiredBoardSupply(*Runtime);
 	if (!TestNotNull(TEXT("setup: the board holds the supply"), Supply)) { return false; }
 	UOpsAlerts* Alerts = Runtime->GetAlerts();
@@ -1012,8 +1013,8 @@ bool FFuelLowWokenTest::RunTest(const FString&)
 	for (int32 Settle = 0; Settle < 3; ++Settle) { Runtime->Tick(0.0); }
 	TestFalse(TEXT("CONTROL: a full tank raises nothing"), Standing());
 
-	// A SIGNING publishes nothing and posts nothing, so only its forwarder can wake the pass. Cancelling it wakes by its own forwarder
-	// (the refund of a cancel is a post, but a free one is not).
+	// A SIGNING publishes nothing and posts nothing, so only its forwarder can wake the pass. Cancelling it posts a charge, which wakes
+	// the pass by FMoneyPostedEvent (mutation-checked 2026-10-03: no forwarder mark is needed).
 	Supply->StockLitres = 0.1 * Supply->Capacity();   // no wake yet: a Draw publishes nothing
 	TestFalse(TEXT("CONTROL: nothing woke the pass, so the alert is not up yet"), Standing());
 	int32 Count = Alerts->RecomputeCountForTest();
@@ -1039,6 +1040,15 @@ bool FFuelLowWokenTest::RunTest(const FString&)
 	TestTrue(TEXT("CONTROL: the order was delivered"), Supply->SpotOrders.Num() == 0 && Runtime->GetClock()->Now() >= Due);
 	TestTrue(TEXT("the delivery ran the alerts pass"), Alerts->RecomputeCountForTest() > Count);
 	TestFalse(TEXT("and 40% of the tanks is not low"), Standing());
+
+	// A TANK BOUGHT GROWS THE CAPACITY under a stock that was fine: 26% of the old tanks is under a quarter of any larger set. The
+	// alert must follow - woken by the JobBoard pass (FFacilityUpgradedEvent) and the network change, not by a subscription of its own.
+	const double OldCapacity = Supply->Capacity();
+	Supply->StockLitres = 0.26 * OldCapacity;
+	if (!TestTrue(TEXT("setup: a tank is bought"), Runtime->BuyModule(Depot, EDepotModule::Tank).Succeeded())) { return false; }
+	Runtime->Tick(0.0);
+	TestTrue(TEXT("CONTROL: the tanks grew"), Supply->Capacity() > OldCapacity);
+	TestTrue(TEXT("and 26% of the old tanks is now low"), Standing());
 	return true;
 }
 

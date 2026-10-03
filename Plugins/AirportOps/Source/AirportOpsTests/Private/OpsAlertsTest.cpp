@@ -461,9 +461,21 @@ bool FOpsAlertsFuelLowTest::RunTest(const FString&)
 	F.Recompute();
 	TestEqual(TEXT("30% of the tanks: nothing"), F.RaisedOf(EAlertKind::FuelLow), 0);
 
+	// THE BOUNDARY IS STRICT: exactly a quarter is not under it.
+	Supply->StockLitres = 25000.0;
+	F.Recompute();
+	TestEqual(TEXT("exactly 25%: nothing"), F.RaisedOf(EAlertKind::FuelLow), 0);
+	Supply->StockLitres = 24999.0;
+	F.Recompute();
+	TestEqual(TEXT("a litre under 25%: raised"), F.RaisedOf(EAlertKind::FuelLow), 1);
+	Supply->StockLitres = 30000.0;
+	F.Recompute();
+	TestEqual(TEXT("back over: cleared"), F.ClearedOf(EAlertKind::FuelLow), 1);
+	// The counts below continue from this raise/clear pair.
+
 	Supply->StockLitres = 20000.0;
 	F.Recompute();
-	if (!TestEqual(TEXT("20% of the tanks and no contract: raised"), F.RaisedOf(EAlertKind::FuelLow), 1)) { return false; }
+	if (!TestEqual(TEXT("20% of the tanks and no contract: raised"), F.RaisedOf(EAlertKind::FuelLow), 2)) { return false; }
 	const FOpsAlert* Alert = F.Alerts->GetAlerts().FindByPredicate([](const FOpsAlert& A) { return A.Key.Kind == EAlertKind::FuelLow; });
 	if (!TestNotNull(TEXT("and held"), Alert)) { return false; }
 	TestEqual(TEXT("with nowhere in the world to look"), Alert->Focus.Kind, EAlertFocusKind::None);
@@ -473,27 +485,27 @@ bool FOpsAlertsFuelLowTest::RunTest(const FString&)
 	Order.Litres = 10000.0;
 	Supply->SpotOrders.Add(Order);
 	F.Recompute();
-	TestEqual(TEXT("20% held plus 10% on its way: cleared"), F.ClearedOf(EAlertKind::FuelLow), 1);
+	TestEqual(TEXT("20% held plus 10% on its way: cleared"), F.ClearedOf(EAlertKind::FuelLow), 2);
 	Supply->SpotOrders.Reset();
 	F.Recompute();
-	TestEqual(TEXT("the order gone, the stock still low: raised again"), F.RaisedOf(EAlertKind::FuelLow), 2);
+	TestEqual(TEXT("the order gone, the stock still low: raised again"), F.RaisedOf(EAlertKind::FuelLow), 3);
 
 	Supply->Contract.Tier = 0;
 	F.Recompute();
-	TestEqual(TEXT("20% WITH a contract: cleared - deliveries are on the way"), F.ClearedOf(EAlertKind::FuelLow), 2);
+	TestEqual(TEXT("20% WITH a contract: cleared - deliveries are on the way"), F.ClearedOf(EAlertKind::FuelLow), 3);
 	Supply->Contract = FFuelContract();
 
 	// NO TANKS IS NOT LOW FUEL: 0 of 0 is under a quarter of nothing, and the missing tank is the player's other problem.
 	Supply->CapacityOf = []() { return 0.0; };
 	Supply->StockLitres = 0.0;
 	F.Recompute();
-	TestEqual(TEXT("capacity 0: not raised"), F.RaisedOf(EAlertKind::FuelLow), 2);
+	TestEqual(TEXT("capacity 0: not raised"), F.RaisedOf(EAlertKind::FuelLow), 3);
 	TestEqual(TEXT("and none standing"), F.Alerts->GetAlerts().Num(), 0);
 
 	// A SUPPLY WITH NO CAPACITY HOOK is a detached runtime's: unbounded, so every stock is "under a quarter" of it.
 	Supply->CapacityOf = nullptr;
 	F.Recompute();
-	TestEqual(TEXT("no capacity hook: not raised"), F.RaisedOf(EAlertKind::FuelLow), 2);
+	TestEqual(TEXT("no capacity hook: not raised"), F.RaisedOf(EAlertKind::FuelLow), 3);
 	return true;
 }
 
