@@ -264,6 +264,15 @@ namespace InspectFacts
 		case ETrafficResourceKind::Edge:
 			Hold.At = EHoldAt::Behind;
 			break;
+		case ETrafficResourceKind::StandLanes:
+		{
+			// ONE SERVICE VEHICLE ON A STAND'S LANES AT A TIME (#540) - named by the stand's own number, the one the
+			// player reads off the apron, not the entity's index.
+			Hold.At = EHoldAt::StandLanes;
+			const FEntityInstance* Stand = Network != nullptr ? Network->GetEntity(Resource.LanesOf) : nullptr;
+			Hold.StandNumber = Stand != nullptr ? Stand->StandNumber : 0;
+			break;
+		}
 		case ETrafficResourceKind::Node:
 		default:
 			Hold.At = EHoldAt::Crossing;
@@ -291,6 +300,12 @@ namespace InspectFacts
 			break;
 		case EHoldAt::Behind:
 			Line = FString::Format(*NSLOCTEXT("Airside", "HoldBehind", "Waiting behind {0}").ToString(), { BlockerName });
+			break;
+		case EHoldAt::StandLanes:
+			Line = Hold.StandNumber > 0
+				? FString::Format(*NSLOCTEXT("Airside", "HoldStandLanes", "Waiting for stand {0}'s lane - {1} is on it").ToString(),
+					{ Hold.StandNumber, BlockerName })
+				: FString::Format(*NSLOCTEXT("Airside", "HoldStandLanesBare", "Waiting for the stand's lane - {0} is on it").ToString(), { BlockerName });
 			break;
 		case EHoldAt::Crossing:
 		case EHoldAt::None:

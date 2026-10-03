@@ -901,6 +901,8 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	Lead.Width = Original.Width;
 	Lead.MaxWingspan = Link.MaxWingspan;
 	Lead.bDerived = true;
+	// PART OF THE STAND'S LANES FOR TRAFFIC (#540), though not for connectivity - see FGuidelineEdge::StandLink.
+	Lead.StandLink = Link.LaneOwner;
 
 	// MEASURED, NOT ASSUMED, for every link that is sized to a radius in the first place. The
 	// lead-in's DELIVERED radius is what a truck drives; the run that was asked for is not. This
@@ -945,6 +947,9 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 		Sweep.Width = Original.Width;
 		Sweep.MaxWingspan = Link.MaxWingspan;
 		Sweep.bDerived = true;
+		// THE SWEEPS TOO (#540): a vehicle that waits for the stand's lanes waits on the ROAD, short of the
+		// sweep's start, not on a sweep it would share with the vehicle leaving.
+		Sweep.StandLink = Link.LaneOwner;
 
 		// THE MERGE ONLY, not the turn-back. Both sweeps are tangent to the lead-in at one end
 		// and to the road at the other and both are cut back the SAME Offset; what differs is

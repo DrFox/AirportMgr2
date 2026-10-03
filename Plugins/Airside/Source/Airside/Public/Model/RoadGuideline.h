@@ -289,6 +289,23 @@ struct AIRSIDE_API FGuidelineEdge
 	UPROPERTY() FEntityInstanceId StandGeometryOwner;
 
 	/**
+	 * The stand whose service lanes this LINK leads into - the lead-in and the sweeps onto the road that
+	 * FAnchorLink lays from a stand's entry. Unset on everything else, the stand's own lanes included
+	 * (those carry StandGeometryOwner).
+	 *
+	 * A SEPARATE FIELD AND NOT StandGeometryOwner, because that mark is what IsServiceNodeConnected walks:
+	 * a link carrying it would make every stand read as reaching itself. This one is read only by the
+	 * one-vehicle-per-stand-lane claim (#540, StandLanesOf below): a stand's contact spur and its lead-in
+	 * are ONE two-way strip, so a vehicle leaving on the lead-in and one arriving on it meet head-on unless
+	 * the second waits on the road, before the sweep.
+	 * ENFORCED BY: AirportOps.Fuel.StandLanes.OneVehicleAtATime
+	 */
+	UPROPERTY() FEntityInstanceId StandLink;
+
+	/** The stand whose lanes this edge is part of - its own geometry or the link into it - or unset. */
+	FEntityInstanceId StandLanesOf() const { return StandGeometryOwner.IsSet() ? StandGeometryOwner : StandLink; }
+
+	/**
 	 * True on the edges of a service bay's REVERSE leg - the back-out the vehicle makes once it
 	 * has finished at a service point.
 	 *

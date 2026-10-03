@@ -193,6 +193,40 @@ namespace InspectorCardsTest
 
 // --- One test per card --------------------------------------------------------------------------------------------------
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorStandLaneHoldTest, "AirportMgr.Inspector.StandLaneHoldNamesTheStand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FInspectorStandLaneHoldTest::RunTest(const FString&)
+{
+	// THROUGH THE CARD, not InspectFacts: the card used to copy the hold field by field into its display and back, and the
+	// stand-lane hold's StandNumber (#540) was the field the copy did not name - PIE would have said "Waiting for the stand's
+	// lane" with no number. The display carries the hold whole now; this is the number reaching the Status line.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	FAircraftCard Card;
+	FAgentFacts F;
+	F.Id = 7;
+	F.TypeName = TEXT("UTILITY");
+	F.Status = TEXT("held");
+	F.bStatusIsHold = true;
+	F.Hold.WaitingOn = 9;
+	F.Hold.At = EHoldAt::StandLanes;
+	F.Hold.StandNumber = 4;
+	FInspectorCardInput In;
+	In.Target = TestWorld.Actor;
+	In.Selection.Kind = ESelectionKind::Aircraft;
+	In.Selection.Id = 7;
+	In.PrecomputedAgentFacts = &F;
+	const FInspectorCardView* View = Card.Describe(In);
+	if (!TestNotNull(TEXT("a view"), View)) { return false; }
+	TestEqual(TEXT("the hold names the stand by its number"), View->Status, FString(TEXT("Waiting for stand 4's lane - aircraft 9 is on it")));
+	// AND A CHANGE OF STAND ALONE RE-COMPOSES IT - the display gate must see the number, not only the kind.
+	F.Hold.StandNumber = 5;
+	View = Card.Describe(In);
+	if (!TestNotNull(TEXT("a view, another stand"), View)) { return false; }
+	TestTrue(TEXT("a different stand number reaches the card"), View->Status.StartsWith(TEXT("Waiting for stand 5's lane")));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorAircraftCardTest, "AirportMgr.Inspector.Card.Aircraft",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FInspectorAircraftCardTest::RunTest(const FString&)

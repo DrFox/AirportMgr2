@@ -3,7 +3,10 @@
 #include "Build/StandLayoutBuild.h"
 #include "Solve/IcaoCode.h"
 #include "Content/AirsideSettings.h"
+#include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
+#include "Model/StandLaneClaim.h"
+#include "Model/TrafficOccupancy.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
@@ -1949,6 +1952,253 @@ bool FAnchorLinkDoesNotRescanEveryGuidelineTest::RunTest(const FString& Paramete
 			DecoyCount, CrowdedCost, BareCost),
 		CrowdedCost <= BareCost * 4 + 4);
 
+	return true;
+}
+
+namespace StandLaneFixture
+{
+	/**
+	 * A CODE C STAND BESIDE A TWO-LANE ROAD, world-free (#540 review): the stand faces +X, the road runs north-south
+	 * 1500 beyond its far edge, and the stand's TWO entries (port, south; starboard, north) both join the
+	 * northbound lane. Traffic is a bare UGroundTraffic ticked here, so the claim is measured as the traffic model
+	 * applies it, with no job board.
+	 */
+	struct FLanes
+	{
+		URoadNetwork* Net = nullptr;
+		UGroundTraffic* Traffic = nullptr;
+		FEntityInstanceId Stand;
+		FGuidelineNodeId South, North, Hydrant, Gpu;
+		FVehicle Truck = UAirsideSettings::ResolveDefaultVehicle();
+		FVehicle Tow = UAirsideSettings::ResolveUtilityTowVehicle();
+
+		bool Build(FAutomationTestBase& Test)
+		{
+			using namespace ServiceLinkFixture;
+			Net = NewObject<URoadNetwork>(GetTransientPackage());
+			Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+			UEntityDefinition* Definition = UEntityDefinition::MakeStandTransient(EIcaoCode::C);
+			double FarEdgeX = 0.0;
+			Stand = PlaceDrawnStand(*Net, *Definition, EIcaoCode::C, 0.0, FarEdgeX);
+			const double RoadX = FarEdgeX + 1500.0;
+			TestGraph::LayServiceRoads(*Net, { TPair<FVector2D, FVector2D>(FVector2D(RoadX, -20000.0), FVector2D(RoadX, 20000.0)) });
+			FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
+			auto AnchorNode = [this](const TCHAR* Id)
+			{
+				const FResolvedAnchor* Found = Net->FindResolvedAnchor(Stand, FName(Id));
+				return Found != nullptr ? Found->Node : FGuidelineNodeId();
+			};
+			Hydrant = AnchorNode(TEXT("HydrantPit"));
+			Gpu = AnchorNode(TEXT("FixedGPU"));
+			const TArray<FGuidelineNode>& Nodes = Net->GetGuidelineNodes();
+			for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+			{
+				const FGuidelineNodeId Id = Net->GuidelineNodeIdAt(Index);
+				if (!Nodes[Index].bAlive) { continue; }
+				if (!South.IsSet() && Nodes[Index].Position.Y < -19000.0
+					&& TestGraph::Probe(*Net, Id, Hydrant, ETraversalClass::GroundVehicle).IsValid()
+					&& TestGraph::Probe(*Net, Id, Gpu, ETraversalClass::GroundVehicle).IsValid())
+				{
+					South = Id;
+				}
+				if (!North.IsSet() && Nodes[Index].Position.Y > 19000.0
+					&& TestGraph::Probe(*Net, Gpu, Id, ETraversalClass::GroundVehicle).IsValid())
+				{
+					North = Id;
+				}
+			}
+			return Test.TestTrue(TEXT("setup: a stand with both anchors, a road start south and an end north"),
+				Hydrant.IsSet() && Gpu.IsSet() && South.IsSet() && North.IsSet());
+		}
+
+		int32 Send(FGuidelineNodeId From, FGuidelineNodeId To, const FVehicle& Vehicle) const
+		{
+			return Traffic->DispatchAgent(Net, TestGraph::Probe(*Net, From, To, ETraversalClass::GroundVehicle), Vehicle,
+				ETraversalClass::GroundVehicle, 0.0);
+		}
+
+		/** How many agents OCCUPY this stand's lanes in the TABLE right now. */
+		int32 ClaimsOnLanes() const
+		{
+			int32 Count = 0;
+			for (const FTrafficClaim& Claim : Traffic->GetOccupancy().GetClaims())
+			{
+				Count += Claim.bOccupied && Claim.Resource == FTrafficResource::OfStandLanes(Stand) ? 1 : 0;
+			}
+			return Count;
+		}
+
+		/** Whether Agent's BODY is on this stand's lanes - the step its centre is on - whatever the table says. */
+		bool BodyOnLanes(const FRoadAgent& Agent) const
+		{
+			const FRoutePlan& Plan = Agent.PlanInProgress();
+			return StandLaneClaim::Of(*Net, Plan, UGroundTraffic::CurrentStep(Plan, Agent.Follower.Travelled)) == Stand;
+		}
+
+		/** How many agents are physically on this stand's lanes - measured off the bodies, not the claims, so a claim
+		 *  that fails to keep a second vehicle out reads as two here (a refused occupancy is not in the table). */
+		int32 OnLanes() const
+		{
+			int32 Count = 0;
+			for (const FRoadAgent& Agent : Traffic->GetAgents())
+			{
+				Count += BodyOnLanes(Agent) ? 1 : 0;
+			}
+			return Count;
+		}
+
+		/** Held by the stand's lanes AND still off them, on the road: the DOOR held it, not a refused occupancy inside. */
+		bool HeldAtTheDoor(int32 Agent) const
+		{
+			const FRoadAgent* Found = Traffic->FindAgent(Agent);
+			return Found != nullptr && Found->GetWaitingOn() != 0
+				&& Found->GetBlockedResource().Kind == ETrafficResourceKind::StandLanes && !BodyOnLanes(*Found);
+		}
+
+		bool Parked(int32 Agent) const
+		{
+			const FRoadAgent* Found = Traffic->FindAgent(Agent);
+			return Found != nullptr && Found->Phase == EAgentPhase::Parked;
+		}
+
+		/** Ticks until Done or MaxSeconds; WorstOnLanes is the most agents ever seen occupying the lanes at once. */
+		bool AdvanceUntil(TFunctionRef<bool()> Done, double MaxSeconds, int32& WorstOnLanes) const
+		{
+			for (double T = 0.0; T < MaxSeconds; T += 1.0 / 30.0)
+			{
+				WorstOnLanes = FMath::Max(WorstOnLanes, OnLanes());
+				if (Done()) { return true; }
+				Traffic->Advance(1.0 / 30.0, Net);
+			}
+			return Done();
+		}
+
+		/** The holder parked at the GPU, a tow sent for the hydrant and held at the stand's door. */
+		bool HolderAndWaiter(FAutomationTestBase& Test, int32& OutHolder, int32& OutWaiter, int32& WorstOnLanes)
+		{
+			OutHolder = Send(South, Gpu, Truck);
+			if (!Test.TestTrue(TEXT("setup: the holder parks at the GPU, on the stand's lanes"), OutHolder > 0
+				&& AdvanceUntil([&] { return Parked(OutHolder); }, 600.0, WorstOnLanes) && OnLanes() == 1)) { return false; }
+			OutWaiter = Send(South, Hydrant, Tow);
+			return Test.TestTrue(TEXT("setup: the tow sent for the hydrant is held at the stand's door"), OutWaiter > 0
+				&& AdvanceUntil([&] { return HeldAtTheDoor(OutWaiter); }, 600.0, WorstOnLanes));
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStandLanesTwoEntriesTest, "Airside.Model.Traffic.StandLanes.TwoEntriesOneLane",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FStandLanesTwoEntriesTest::RunTest(const FString& Parameters)
+{
+	// THE REVIEW'S SUSPECTED DEADLOCK (#542 M3). A Code C stand's two entries both join the northbound lane: port
+	// (south, upstream) and starboard (north, downstream). A tow for the HYDRANT enters at starboard, so its door is
+	// the downstream one and it waits on the lane with its body upstream - BETWEEN the stand's two entries. The holder,
+	// at the GPU (port bay), then leaves for the north: it merges onto that same lane at the PORT entry, upstream of the
+	// waiter, and drives north into the waiter's tail. The waiter waits for the lanes the holder still occupies; the
+	// holder waits behind the waiter. Must finish: both arrive, no deadlock declared, never two on the lanes.
+	StandLaneFixture::FLanes L;
+	if (!L.Build(*this)) { return false; }
+	int32 Holder = 0, Waiter = 0, Worst = 0;
+	if (!L.HolderAndWaiter(*this, Holder, Waiter, Worst)) { return false; }
+	{
+		// WHERE, AND BEFORE WHICH ENTRY: the node the waiter's blocked step ends at is where its route turns off the lane.
+		const FRoadAgent* W = L.Traffic->FindAgent(Waiter);
+		const FRoutePlan& Plan = W->Follower.Plan;
+		const int32 Step = W->GetBlockedStep();
+		const FGuidelineNode* Turn = Plan.Steps.IsValidIndex(Step) ? L.Net->GetGuidelineNode(Plan.Steps[Step].To) : nullptr;
+		AddInfo(FString::Printf(TEXT("MEASURED: the waiter holds at %s, short of the turn-in at %s (entries at y = -2150 port, +2150 starboard)"),
+			*W->GroundPosition().ToString(), Turn != nullptr ? *Turn->Position.ToString() : TEXT("?")));
+	}
+
+	if (!TestTrue(TEXT("setup: the holder is sent north"), L.Traffic->RedirectAgent(Holder, L.Net,
+		TestGraph::Probe(*L.Net, L.Gpu, L.North, ETraversalClass::GroundVehicle)))) { return false; }
+	const bool bBoth = L.AdvanceUntil([&]
+	{
+		const FRoadAgent* H = L.Traffic->FindAgent(Holder);
+		return L.Parked(Waiter) && H != nullptr && H->Phase == EAgentPhase::Parked && H->GoalNode == L.North;
+	}, 1800.0, Worst);
+	TestTrue(TEXT("the waiter reaches the hydrant and the holder the north end"), bBoth);
+	TestEqual(TEXT("no deadlock was declared"), L.Traffic->GetDeadlockLogLinesForTest(), 0);
+	TestTrue(*FString::Printf(TEXT("never two on the stand's lanes (worst %d)"), Worst), Worst <= 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStandLanesRebuildTest, "Airside.Model.Traffic.StandLanes.SurvivesARebuild",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FStandLanesRebuildTest::RunTest(const FString& Parameters)
+{
+	// A GUIDELINE REBUILD while one vehicle is on the lanes and another waits: ReleaseGuidelineClaims drops edges and
+	// nodes, and the lanes - named by the stand entity, not a guideline - stay held; the waiter does not slip in.
+	StandLaneFixture::FLanes L;
+	if (!L.Build(*this)) { return false; }
+	int32 Holder = 0, Waiter = 0, Worst = 0;
+	if (!L.HolderAndWaiter(*this, Holder, Waiter, Worst)) { return false; }
+	L.Traffic->OnGraphRebuilt(*L.Net);
+	L.AdvanceUntil([] { return false; }, 10.0, Worst);
+	TestEqual(TEXT("the holder still occupies the lanes after the rebuild"), L.ClaimsOnLanes(), 1);
+	TestTrue(TEXT("and the waiter is still held at the door"), L.HeldAtTheDoor(Waiter));
+	TestTrue(*FString::Printf(TEXT("never two on the lanes (worst %d)"), Worst), Worst <= 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStandLanesStandDeletedTest, "Airside.Model.Traffic.StandLanes.StandDeletedFreesThem",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FStandLanesStandDeletedTest::RunTest(const FString& Parameters)
+{
+	// THE STAND DELETED UNDER ITS HOLDER: its lanes go with it, the next claim pass finds the holder on no stand's lanes,
+	// and the claim is dropped - nobody keeps a lock on a stand that no longer exists.
+	StandLaneFixture::FLanes L;
+	if (!L.Build(*this)) { return false; }
+	int32 Holder = 0, Waiter = 0, Worst = 0;
+	if (!L.HolderAndWaiter(*this, Holder, Waiter, Worst)) { return false; }
+	if (!TestTrue(TEXT("setup: the stand is deleted"), L.Net->RemoveEntity(L.Stand))) { return false; }
+	L.Traffic->OnGraphRebuilt(*L.Net);
+	L.AdvanceUntil([] { return false; }, 5.0, Worst);
+	TestEqual(TEXT("nobody holds the deleted stand's lanes"), L.ClaimsOnLanes(), 0);
+	bool bReserved = false;
+	for (const FTrafficClaim& Claim : L.Traffic->GetOccupancy().GetClaims())
+	{
+		bReserved |= Claim.Resource == FTrafficResource::OfStandLanes(L.Stand);
+	}
+	TestFalse(TEXT("nor reserves them"), bReserved);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStandLanesStrandedHolderTest, "Airside.Model.Traffic.StandLanes.StrandedHolderKeepsThem",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FStandLanesStrandedHolderTest::RunTest(const FString& Parameters)
+{
+	// A HOLDER STRANDED ON THE LANES - its plan gone, its body still on them - KEEPS them: a plan says nothing about where
+	// a body is, and a waiter let in would meet it head-on. The waiter waits (silently, for now - no alert names it).
+	StandLaneFixture::FLanes L;
+	if (!L.Build(*this)) { return false; }
+	int32 Worst = 0;
+	const int32 Holder = L.Send(L.South, L.Gpu, L.Truck);
+	if (!TestTrue(TEXT("setup: the holder drives onto the lanes"), Holder > 0
+		&& L.AdvanceUntil([&] { return L.OnLanes() == 1; }, 600.0, Worst))) { return false; }
+	L.AdvanceUntil([] { return false; }, 1.0, Worst);
+	if (!TestTrue(TEXT("setup: the holder is stranded on them"), FGroundTrafficTestAccess(*L.Traffic).Strand(Holder))) { return false; }
+	const int32 Waiter = L.Send(L.South, L.Hydrant, L.Tow);
+	const bool bHeld = Waiter > 0 && L.AdvanceUntil([&] { return L.HeldAtTheDoor(Waiter); }, 600.0, Worst);
+	TestEqual(TEXT("the stranded holder still occupies the lanes"), L.ClaimsOnLanes(), 1);
+	TestTrue(TEXT("and the next vehicle waits at the door"), bHeld);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStandLanesDeadPlanWaiterTest, "Airside.Model.Traffic.StandLanes.DeadPlanWaiterHoldsNothing",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FStandLanesDeadPlanWaiterTest::RunTest(const FString& Parameters)
+{
+	// A WAITER WHOSE PLAN DIES at the door is on the ROAD, not on the lanes: once stranded it holds no claim on them,
+	// occupied or reserved - else a vehicle that will never drive in would keep the door shut.
+	StandLaneFixture::FLanes L;
+	if (!L.Build(*this)) { return false; }
+	int32 Holder = 0, Waiter = 0, Worst = 0;
+	if (!L.HolderAndWaiter(*this, Holder, Waiter, Worst)) { return false; }
+	if (!TestTrue(TEXT("setup: the waiter is stranded at the door"), FGroundTrafficTestAccess(*L.Traffic).Strand(Waiter))) { return false; }
+	L.AdvanceUntil([] { return false; }, 2.0, Worst);
+	TestNull(TEXT("the waiter holds nothing on the stand's lanes"),
+		L.Traffic->GetOccupancy().FindClaim(Waiter, FTrafficResource::OfStandLanes(L.Stand)));
 	return true;
 }
 

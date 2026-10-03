@@ -216,6 +216,25 @@ namespace TestGraph
 	AIRSIDE_API FRoadSolveResult Derive(URoadNetwork& Net, const FRoadDesignVehicles* DesignVehicles = nullptr);
 
 	/**
+	 * SERVICE ROADS AS THE GAME LAYS THEM, into a network a fixture otherwise authors by hand: each piece
+	 * (From, To) a straight segment of the shipping service-road profile (URoadProfile::
+	 * MakeServiceRoadTransient - two lanes, ONE EACH WAY), pieces sharing an end position meeting at one
+	 * road node, and the guideline graph DERIVED from them by the production builder (Derive) - lanes,
+	 * junction turn paths, dead-end turns - then copied into Net beside whatever the fixture already laid.
+	 *
+	 * WHY A COPY and not Derive(Net): a derivation clears every derived guideline first, and the fuel
+	 * fixtures hand-lay their taxiway, runway link and stand nodes as derived ones - so the roads are derived
+	 * in a scratch network and transplanted, segments included (Net gets the same segments, so a lane's
+	 * DerivedFrom and its sibling lane resolve - FAnchorLink joins BOTH lanes of a road through them).
+	 *
+	 * OWNER RULING 2026-10-03 (#540): "Roads are 2 lane in the game; it's only on the stand that they are
+	 * not 2 lane." The fixtures' single two-way LayLine roads made two service vehicles meet head-on on a
+	 * road no player can draw - a deadlock that was the fixture's, not the game's.
+	 * ENFORCED BY: AirportOps.Fuel.FixtureRoadsAreTwoLane
+	 */
+	AIRSIDE_API void LayServiceRoads(URoadNetwork& Net, TConstArrayView<TPair<FVector2D, FVector2D>> Pieces);
+
+	/**
 	 * The WHOLE derivation - AirsideDerivation::Derive's Full scope, the one ARoadNetworkActor::
 	 * RebuildMesh runs through its presenter: solve, restriction, guidelines, anchor links, census,
 	 * stamp. The content set's design vehicles, the default service-link radius and no depot kit

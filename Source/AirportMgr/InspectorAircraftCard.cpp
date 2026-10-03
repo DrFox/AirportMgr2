@@ -98,9 +98,8 @@ FAircraftDisplay FAircraftCard::DisplayOf(const FAgentFacts& F, const FAircraftN
 	D.TypeName = F.TypeName;
 	D.Status = F.Status;
 	D.bStatusIsHold = F.bStatusIsHold;
-	D.HoldAt = F.Hold.At;
-	D.HoldRunwayPair = F.Hold.RunwayPair;
-	D.WaitedForId = F.Hold.WaitingOn;
+	D.Hold = F.Hold;
+	D.Hold.StalledSeconds = 0.0;   // see FAircraftDisplay::Hold - the duration is gated as Waited's text
 	D.HeadingDegrees = FMath::RoundToInt(F.HeadingDegrees);
 	D.SpeedTenths = FMath::RoundToInt(Shown / 10.0);
 	D.SpeedKnots = FMath::RoundToInt(Shown / 100.0 * 1.94384);
@@ -198,11 +197,7 @@ void FAircraftCard::Compose(const FAircraftDisplay& D, FInspectorCardView& Out)
 	// (bStatusIsHold), so "Departure armed" still outranks it as before.
 	if (D.bStatusIsHold)
 	{
-		FAgentHold Hold;
-		Hold.WaitingOn = D.WaitedForId;
-		Hold.At = D.HoldAt;
-		Hold.RunwayPair = D.HoldRunwayPair;
-		Out.Status = InspectFacts::HoldLine(Hold, D.Blocker, D.Waited);
+		Out.Status = InspectFacts::HoldLine(D.Hold, D.Blocker, D.Waited);
 	}
 	else
 	{
@@ -214,8 +209,8 @@ void FAircraftCard::Compose(const FAircraftDisplay& D, FInspectorCardView& Out)
 	Out.Locate.Kind = EAlertFocusKind::Agent;
 	Out.Locate.Id = D.Id;
 	Out.bCanDepart = D.bCanDepart;
-	Out.WaitedForId = D.WaitedForId;
-	if (D.WaitedForId != 0)
+	Out.WaitedForId = D.Hold.WaitingOn;
+	if (D.Hold.WaitingOn != 0)
 	{
 		Out.Verbs |= EInspectorVerbs::WaitingFor;
 		Out.WaitingForCaption = FText::Format(NSLOCTEXT("AirportMgr", "InspectorShowBlockerNamed", "Show {0}"), FText::FromString(D.Blocker));

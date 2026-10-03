@@ -60,6 +60,68 @@ FGuidelineNodeId TestGraph::NodeFor(const URoadNetwork& Net, FRoadSegmentId Segm
 	return Best;
 }
 
+void TestGraph::LayServiceRoads(URoadNetwork& Net, TConstArrayView<TPair<FVector2D, FVector2D>> Pieces)
+{
+	URoadNetwork* Scratch = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Profile = URoadProfile::MakeServiceRoadTransient();
+
+	// ONE ROAD NODE PER END POSITION, in both networks, so pieces that share an end meet at a junction.
+	struct FEnd { FVector2D At; FRoadNodeId InScratch; FRoadNodeId InNet; };
+	TArray<FEnd> Ends;
+	auto EndAt = [&](const FVector2D& At) -> const FEnd&
+	{
+		for (const FEnd& End : Ends)
+		{
+			if (End.At.Equals(At, 1.0)) { return End; }
+		}
+		return Ends.Add_GetRef({ At, Scratch->AddNode(At), Net.AddNode(At) });
+	};
+	TMap<FRoadSegmentId, FRoadSegmentId> Segments;
+	TMap<FRoadNodeId, FRoadNodeId> RoadNodes;
+	for (const TPair<FVector2D, FVector2D>& Piece : Pieces)
+	{
+		const FEnd A = EndAt(Piece.Key);
+		const FEnd B = EndAt(Piece.Value);
+		RoadNodes.Add(A.InScratch, A.InNet);
+		RoadNodes.Add(B.InScratch, B.InNet);
+		Segments.Add(Scratch->AddStraightSegment(A.InScratch, B.InScratch, Profile),
+			Net.AddStraightSegment(A.InNet, B.InNet, Profile));
+	}
+
+	Derive(*Scratch);
+
+	auto MapEnd = [&Segments](FGuidelineEndRef Ref)
+	{
+		if (Ref.Segment.IsSet()) { Ref.Segment = Segments.FindRef(Ref.Segment); }
+		return Ref;
+	};
+	TMap<FGuidelineNodeId, FGuidelineNodeId> Nodes;
+	const TArray<FGuidelineNode>& ScratchNodes = Scratch->GetGuidelineNodes();
+	for (int32 Index = 0; Index < ScratchNodes.Num(); ++Index)
+	{
+		const FGuidelineNode& Node = ScratchNodes[Index];
+		if (!Node.bAlive) { continue; }
+		const FGuidelineNodeId Copy = Net.AddGuidelineNode(Node.Position, Node.bDerived);
+		if (Node.Origin.Segment.IsSet())
+		{
+			Net.SetGuidelineNodeOrigin(Copy, MapEnd(Node.Origin));
+		}
+		Nodes.Add(Scratch->GuidelineNodeIdAt(Index), Copy);
+	}
+	for (const FGuidelineEdge& Edge : Scratch->GetGuidelineEdges())
+	{
+		if (!Edge.bAlive) { continue; }
+		FGuidelineEdge Copy = Edge;
+		Copy.A = Nodes.FindRef(Edge.A);
+		Copy.B = Nodes.FindRef(Edge.B);
+		if (Edge.DerivedFrom.IsSet()) { Copy.DerivedFrom = Segments.FindRef(Edge.DerivedFrom); }
+		if (Edge.AtJunction.IsSet()) { Copy.AtJunction = RoadNodes.FindRef(Edge.AtJunction); }
+		Copy.EndRefA = MapEnd(Edge.EndRefA);
+		Copy.EndRefB = MapEnd(Edge.EndRefB);
+		Net.AddGuidelineEdge(MoveTemp(Copy));
+	}
+}
+
 FRoadSolveResult TestGraph::Derive(URoadNetwork& Net, const FRoadDesignVehicles* DesignVehicles)
 {
 	// RESOLVE ONCE if the caller has not already: ARoadNetworkActor::MakeSurfaceSettings resolves

@@ -15,6 +15,13 @@ enum class ETrafficResourceKind : uint8
 	/** One segment of a runway. A landing holds every segment of the chain; a holding-position
 	 *  node names one and the arbiter expands it. */
 	Surface,
+	/**
+	 * ONE STAND'S SERVICE LANES, whole - its own geometry and the link into it (FGuidelineEdge::StandLanesOf).
+	 * A stand's contact spur and lead-in are one two-way strip (owner ruling 2026-10-03: roads are two-lane,
+	 * only the stand's lanes are not), so one service vehicle at a time: the next waits on the road (#540).
+	 * Appended last: the enum's values are stable for anything that wrote one down.
+	 */
+	StandLanes,
 };
 
 /**
@@ -35,8 +42,11 @@ struct AIRSIDE_API FTrafficResource
 	UPROPERTY() FGuidelineEdgeId Edge;
 	UPROPERTY() FGuidelineNodeId Node;
 	UPROPERTY() FRoadSegmentId Surface;
+	/** StandLanes kind only: the stand ENTITY whose lanes these are - an entity id, not the player's stand number. */
+	UPROPERTY() FEntityInstanceId LanesOf;
 
 	static FTrafficResource OfEdge(FGuidelineEdgeId Id);
+	static FTrafficResource OfStandLanes(FEntityInstanceId Id);
 	static FTrafficResource OfNode(FGuidelineNodeId Id);
 	static FTrafficResource OfSurface(FRoadSegmentId Id);
 
@@ -60,6 +70,7 @@ FORCEINLINE uint32 GetTypeHash(const FTrafficResource& Resource)
 	case ETrafficResourceKind::Edge:    return HashCombine(GetTypeHash(Resource.Kind), GetTypeHash(Resource.Edge));
 	case ETrafficResourceKind::Node:    return HashCombine(GetTypeHash(Resource.Kind), GetTypeHash(Resource.Node));
 	case ETrafficResourceKind::Surface: return HashCombine(GetTypeHash(Resource.Kind), GetTypeHash(Resource.Surface));
+	case ETrafficResourceKind::StandLanes: return HashCombine(GetTypeHash(Resource.Kind), GetTypeHash(Resource.LanesOf));
 	default:                            return GetTypeHash(Resource.Kind);
 	}
 }
@@ -235,6 +246,13 @@ struct AIRSIDE_API FTrafficOccupancy
 	const FTrafficClaim* FindClaim(int32 AgentId, const FTrafficResource& Resource) const;
 
 	/**
+	 * The stand whose lanes AgentId OCCUPIES, or unset (#540). What FClaimPass::Run compares before and after a
+	 * pass to say, once, that a vehicle has entered or left a stand's lanes - a reservation is the door being
+	 * held for it, not the vehicle being in.
+	 */
+	FEntityInstanceId StandLanesOccupiedBy(int32 AgentId) const;
+
+	/**
 	 * Drops every EDGE and NODE claim, whoever holds it, and KEEPS every SURFACE claim.
 	 *
 	 * What a guideline rebuild releases - see UGroundTraffic::OnGraphRebuilt. The distinction
@@ -250,6 +268,12 @@ struct AIRSIDE_API FTrafficOccupancy
 	 * rolling out or lined up would show its strip free for as long as it took the player to
 	 * click, and a landing could be cleared onto it. Clear() is still the right call for a
 	 * session ending; this one is the right call for a graph changing under a running airport.
+	 *
+	 * STAND LANES SURVIVE IT TOO (#540): a StandLanes claim names a stand ENTITY, which a guideline rebuild does not
+	 * touch, and a vehicle on a stand's lanes is still on them after the rebuild. It is not trusted blindly: every
+	 * claim pass re-derives it from the step the agent stands on and ReleaseExcept drops it the next pass if the
+	 * rebuilt graph no longer puts the agent on that stand's lanes (a stand deleted under it).
+	 * ENFORCED BY: Airside.Model.Traffic.StandLanes.SurvivesARebuild, Airside.Model.Traffic.StandLanes.StandDeletedFreesThem
 	 */
 	void ReleaseGuidelineClaims();
 
@@ -268,6 +292,11 @@ struct AIRSIDE_API FTrafficOccupancy
 	 * NOT ReleaseGuidelineClaims: that one is a rebuild, where the resources themselves have
 	 * ceased to exist for everybody. This one is one agent giving back the lines it will
 	 * never drive, on a graph everyone else is still using.
+	 *
+	 * AND ITS STAND LANES, for the same reason as above (#540): kept here, re-derived next pass from where the body is
+	 * (FClaimPass::HoldRunwayOnly for a stranded vehicle), dropped then if it is not on them. A stranded holder on a
+	 * stand's lanes therefore keeps them, and the next vehicle waits - true of the body, and silent (no alert yet).
+	 * ENFORCED BY: Airside.Model.Traffic.StandLanes.StrandedHolderKeepsThem, Airside.Model.Traffic.StandLanes.DeadPlanWaiterHoldsNothing
 	 */
 	void ReleaseGuidelineClaimsOf(int32 AgentId);
 
