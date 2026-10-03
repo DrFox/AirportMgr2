@@ -280,6 +280,15 @@ public:
 	bool SetDriveSide(EDriveSide Side);
 
 	/**
+	 * Rename a taxiway (spec "Rename", PIE's inspector card in v1) - ONE undo step, "rename taxiway". False with OutWhy
+	 * the player's sentence (URoadNetwork::WhyTaxiwayNameRefused) when refused, before any snapshot; true and no step
+	 * when it already has that name. EChangeKind::Facts: a name re-derives nothing; the card and labels read the
+	 * GuidelineRevision the model moved. Logs "TaxiwayNames: rename ..." either way - the PIE check's line.
+	 * ENFORCED BY: Airside.Present.TaxiwayNames.RenameIsOneUndoStep
+	 */
+	bool RenameTaxiway(int32 TaxiwayId, const FString& Requested, FString& OutWhy);
+
+	/**
 	 * A module bought for a depot (facility-upgrades spec §3): the network write, a Topology rebuild so
 	 * AAirsideBuildingsActor relights the slot, then the undo history CLEARED (R8). Undo is a whole-network
 	 * Memento; an undo past this would drop the shed and keep the money, so a purchase is a checkpoint.

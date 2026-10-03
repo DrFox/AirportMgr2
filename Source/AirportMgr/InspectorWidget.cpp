@@ -7,12 +7,14 @@
 #include "Components/Button.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Components/EditableTextBox.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/PanelWidget.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
+#include "Framework/Application/SlateApplication.h"
 #include "InspectorFacilityRows.h"
 #include "InspectorLog.h"
 #include "Model/AgentRescue.h"
@@ -23,6 +25,7 @@
 #include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
 #include "Present/OpsRuntime.h"
+#include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
 #include "RoadBuildLog.h"
@@ -43,6 +46,7 @@ void UInspectorWidget::BuildOnce(const UUIStyle& Style)
 	if (RunwayUseButton != nullptr) { RunwayUseButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleRunwayUse); }
 	if (WaitingForButton != nullptr) { WaitingForButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleWaitingFor); }
 	if (LocateButton != nullptr) { LocateButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleLocate); }
+	if (RenameBox != nullptr) { RenameBox->OnTextCommitted.AddDynamic(this, &UInspectorWidget::HandleRenameCommitted); }
 	if (UnstickMenu != nullptr)
 	{
 		// WEAK, not this: a lambda held by a child widget that captured a raw pointer to its owner is
@@ -118,6 +122,17 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 	Text(DeadlockText, TEXT("DeadlockText"), EUITextRole::Body, Style->Warning);
 	Text(FactsText, TEXT("FactsText"), EUITextRole::Body, Style->InkMuted);
 	Text(StatusText, TEXT("StatusText"), EUITextRole::Body, Style->InkMuted);
+	// THE TAXIWAY CARD'S RENAME FIELD, then its refusal under it - both collapsed until a taxiway card paints (PaintView).
+	// Only into a code-built column, FacilityRows' reason: a box built with nowhere to go is never drawn.
+	if (RenameBox == nullptr && Column != nullptr)
+	{
+		RenameBox = WidgetTree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass(), TEXT("RenameBox"));
+		RenameBox->SetHintText(NSLOCTEXT("AirportMgr", "InspectorRenameHint", "Rename (Enter)"));
+		RenameBox->SetVisibility(ESlateVisibility::Collapsed);
+		Column->AddChildToVerticalBox(RenameBox)->SetPadding(FMargin(0.0f, 2.0f));
+	}
+	Text(RenameRefusalText, TEXT("RenameRefusalText"), EUITextRole::Body, Style->Warning);
+	if (RenameRefusalText != nullptr) { RenameRefusalText->SetVisibility(ESlateVisibility::Collapsed); }
 
 	UHorizontalBox* Row = nullptr;
 	if (Column != nullptr && (DepartButton == nullptr || FollowButton == nullptr || RunwayButton == nullptr
@@ -300,6 +315,7 @@ void UInspectorWidget::RefreshWith(const UOpsRuntime* Runtime, const ARoadNetwor
 	// path - no selection, a gone agent, another kind of card - leaves Show with nothing to select.
 	WaitedForId = 0;
 	LocateFocus = FAlertFocus();
+	RenameTaxiwayId = INDEX_NONE;
 	if (Target == nullptr || !Selection.IsSet())
 	{
 		// NOTHING SELECTED: hidden. The sale armed on the card that has just gone is disarmed by the selection EVENT
@@ -370,6 +386,10 @@ void UInspectorWidget::OnNewSelection()
 	// armed to forget: the armed sale lives in the rows alone now (#448) - the controller held an id too until the id travelled with
 	// the run, and this used to reach past the rows to clear it.
 	if (FacilityRows != nullptr) { FacilityRows->OnNewCard(); }
+	// A REFUSAL, AND A HALF-TYPED NAME, BELONG TO THE TAXIWAY THEY WERE ABOUT: Enter on the next card must not rename it to
+	// what was typed for the last one.
+	if (RenameRefusalText != nullptr) { RenameRefusalText->SetVisibility(ESlateVisibility::Collapsed); }
+	if (RenameBox != nullptr) { RenameBox->SetText(FText::GetEmpty()); }
 }
 
 void UInspectorWidget::HideCard()
@@ -382,6 +402,10 @@ void UInspectorWidget::PaintView(const FInspectorCardView& View, const FSelectio
 {
 	WaitedForId = View.WaitedForId;
 	LocateFocus = View.Locate;
+	RenameTaxiwayId = View.RenameTaxiwayId;
+	PaintedTarget = &Target;
+	const ESlateVisibility RenameShown = RenameTaxiwayId != INDEX_NONE ? ESlateVisibility::Visible : ESlateVisibility::Collapsed;
+	if (RenameBox != nullptr && RenameBox->GetVisibility() != RenameShown) { RenameBox->SetVisibility(RenameShown); }
 	bDepartEnabled = View.bCanDepart;
 	PaintTexts(View);
 	PaintVerbs(View, Selection, Target);
@@ -687,4 +711,47 @@ FLinearColor UInspectorWidget::DepartLabelColourForTest() const
 {
 	const UTextBlock* Caption = DepartButton != nullptr ? DepartButton->GetLabel() : nullptr;
 	return Caption != nullptr ? Caption->GetColorAndOpacity().GetSpecifiedColor() : FLinearColor::Black;
+}
+
+void UInspectorWidget::HandleRenameCommitted(const FText& Text, ETextCommit::Type How)
+{
+	// ENTER ONLY: a commit on focus loss (a click on the map) is the player leaving the field, not asking for the name.
+	if (How != ETextCommit::OnEnter)
+	{
+		return;
+	}
+	SubmitRename(Text.ToString());
+	// KEYBOARD BACK TO THE GAME. The box clears its focus on commit (UEditableTextBox::ClearKeyboardFocusOnCommit), and a
+	// Slate user with no focus routes keys nowhere (FSlateApplication::ProcessKeyDownEvent walks the focus path) - so
+	// WASD and the build keys would stay dead until the map was clicked.
+	if (FSlateApplication::IsInitialized())
+	{
+		FSlateApplication::Get().SetAllUserFocusToGameViewport();
+	}
+}
+
+FString UInspectorWidget::SubmitRename(const FString& Requested)
+{
+	const ARoadNetworkActor* Target = PaintedTarget.Get();
+	URoadEditFacade* Facade = Target != nullptr ? Target->GetEditFacade() : nullptr;
+	FString Why;
+	if (Facade == nullptr || RenameTaxiwayId == INDEX_NONE)
+	{
+		Why = TEXT("Nothing to rename");
+	}
+	else if (Facade->RenameTaxiway(RenameTaxiwayId, Requested, Why))
+	{
+		Why.Reset();
+		if (RenameBox != nullptr) { RenameBox->SetText(FText::GetEmpty()); }
+	}
+	if (RenameRefusalText != nullptr)
+	{
+		RenameRefusalText->SetText(FText::FromString(Why));
+		RenameRefusalText->SetVisibility(Why.IsEmpty() ? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+	}
+	// THE CARD'S SIDE OF THE PIE CHECK: the facade's "TaxiwayNames: A renamed K" says the model took it; this says the
+	// field's Enter reached the facade at all.
+	UE_LOG(LogInspector, Log, TEXT("TaxiwayNames: card rename of taxiway %d to '%s': %s"), RenameTaxiwayId, *Requested,
+		Why.IsEmpty() ? TEXT("accepted") : *FString::Printf(TEXT("refused - %s"), *Why));
+	return Why;
 }

@@ -146,4 +146,28 @@ bool FTaxiwayNamesLabelsTest::RunTest(const FString&)
 	return true;
 }
 
+/** A rename through the facade is ONE undo step (spec: "a test undoes a rename"). */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiwayNamesRenameUndoTest, "Airside.Present.TaxiwayNames.RenameIsOneUndoStep",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FTaxiwayNamesRenameUndoTest::RunTest(const FString&)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	TestTrue(TEXT("a taxiway"), Actor->ConnectNodes(Actor->PlaceNode({ 0.0, 0.0 }), Actor->PlaceNode({ 60000.0, 0.0 }),
+		ERoadKind::Taxiway, INDEX_NONE, EPavement::Tarmac));
+	const FRoadSegmentId Seg = Actor->Network->SegmentIdAt(Actor->Network->GetSegments().Num() - 1);
+	const int32 Id = Actor->Network->TaxiwayOf(Seg);
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	FString Why;
+	TestFalse(TEXT("a refusal is said"), Facade->RenameTaxiway(Id, TEXT("I"), Why));
+	TestEqual(TEXT("in the spec's words"), Why, FString(TEXT("I, O and X are avoided: they read as 1, 0 and closed")));
+	TestTrue(TEXT("renamed"), Facade->RenameTaxiway(Id, TEXT("k"), Why));
+	TestEqual(TEXT("K"), Actor->Network->TaxiwayDisplayName(Id), FString(TEXT("K")));
+	TestTrue(TEXT("undo"), Facade->Undo());
+	TestEqual(TEXT("one undo puts A back"), Actor->Network->TaxiwayDisplayName(Id), FString(TEXT("A")));
+	return true;
+}
+
+
 #endif // WITH_DEV_AUTOMATION_TESTS
