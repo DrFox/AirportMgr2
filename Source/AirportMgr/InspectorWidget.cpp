@@ -91,7 +91,7 @@ void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 			UnstickActionIndex = Index;
 			continue;
 		}
-		// THE PURCHASE ROWS' THREE, found by id in UInspectorFacilityRows::Build: skipped here for the runway row's reason -
+		// THE PURCHASE ROWS' OWN (buy, sell and the fuel row's), found by id in UInspectorFacilityRows::Build: skipped here for the runway row's reason -
 		// counted in SelectionSeen they would shift the positional Depart/Follow pair.
 		if (UInspectorFacilityRows::OwnsAction(Actions[Index].Id)) { continue; }
 		if (SelectionSeen == 0) { DepartActionIndex = Index; }
@@ -410,7 +410,7 @@ void UInspectorWidget::PaintView(const FInspectorCardView& View, const FSelectio
 	PaintTexts(View);
 	PaintVerbs(View, Selection, Target);
 	// EVERY CARD SAYS whether it has purchase rows - a non-depot's default quote collapses them.
-	if (FacilityRows != nullptr) { FacilityRows->Show(View.Quote); }
+	if (FacilityRows != nullptr) { FacilityRows->Show(View.Quote, View.Fuel); }
 	SetShown(true);
 }
 

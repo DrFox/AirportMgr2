@@ -226,7 +226,7 @@ There is no construction time. Placed is built.
 |---|---|---|---|
 | Control | Inbound holding depth; higher tiers unlock instrument approaches | — | — |
 | Goods depot | Cargo handling | throughput buffer (capacity cap) | goods trucks |
-| Fuel depot | Refuelling | fuel, litres | fuel trucks |
+| Fuel depot | Refuelling | fuel, litres (one airport-wide pool; capacity = tank add-ons x 30,000 L) | fuel trucks |
 | Terminal | Passenger handling; gate count and pax-per-hour throughput | — | buses, stairs |
 | Pushback depot | Pushback | — | tugs |
 
@@ -275,7 +275,7 @@ balance locks placement until it recovers; operations continue. Bankruptcy is un
 Fuel is the first: take-or-pay, so litres that do not fit the tanks are paid for and lost,
 and larger contract tiers need more tank capacity. A **spot** order is a one-shot delivery
 at a premium, after a delay, for when the player has miscalculated. A depot that runs dry
-sends flights away without fuel. **Outbound** contracts are the airline contracts of §6.
+sends flights away with what it could give, at their deadline. **Outbound** contracts are the airline contracts of §6.
 All contracts expire, can be renegotiated at expiry, and can be cancelled for a charge.
 Negotiation is a price multiplier from the other party's reputation; there is no minigame.
 Detail: spec `2026-10-02-progression-and-fuel-supply-design.md` §7.

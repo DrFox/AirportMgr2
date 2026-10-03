@@ -12,6 +12,8 @@
 #include "Misc/AutomationTest.h"
 #include "OpsRuntimeResolver.h"
 #include "Model/FacilityPurchases.h"
+#include "Model/OpsDesignDefaults.h"
+#include "Model/FuelSupply.h"
 #include "Model/InspectFacts.h"
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
@@ -898,7 +900,7 @@ bool FInspectorFacilityCardTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("a world"), Bare.World)) { return false; }
 	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(Bare.World, UInspectorWidget::StaticClass());
 	if (!TestNotNull(TEXT("the panel is created with no asset"), Panel)) { return false; }
-	TestNotNull(TEXT("the code-built card has a buy-module button"), Panel->FacilityRows->BuyModuleButton.Get());
+	TestNotNull(TEXT("the code-built card has a list for its module rows"), Panel->FacilityRows->ModuleList.Get());
 	TestNotNull(TEXT("and a buy-vehicle menu"), Panel->FacilityRows->BuyVehicleMenu.Get());
 
 	FFacilityQuote Quote;
@@ -928,7 +930,8 @@ bool FInspectorFacilityCardTest::RunTest(const FString& Parameters)
 
 	Panel->FacilityRows->Show(Quote);
 	TestTrue(TEXT("a facility's rows are shown"), Panel->FacilityRows->AreFacilityRowsShownForTest());
-	TestEqual(TEXT("the shed line counts owned against reserved"), Panel->FacilityRows->ShedsTextForTest(), FString(TEXT("Sheds 1 / 3 space")));
+	TestEqual(TEXT("one module row for the one module offered"), Panel->FacilityRows->ModuleRowCountForTest(), 1);
+	TestEqual(TEXT("the shed line counts owned against reserved"), Panel->FacilityRows->ModuleTextForTest(0), FString(TEXT("Sheds 1 / 3 space")));
 	TestFalse(TEXT("an unaffordable shed is a disabled button"), Panel->FacilityRows->IsBuyModuleEnabledForTest());
 	TestTrue(TEXT("whose caption says why"), Panel->FacilityRows->BuyModuleCaptionForTest().Contains(UFacilityPurchases::RefusalText(EPurchaseRefusal::CannotAfford).ToString()));
 	TestEqual(TEXT("the vehicle line counts vehicles against bays"), Panel->FacilityRows->VehiclesTextForTest(), FString(TEXT("Vehicles 1 / 1 bays")));
@@ -1061,7 +1064,7 @@ bool FInspectorDepotCardBuysTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("setup: an empty depot with a free bay and an affordable vehicle"),
 		Before.Vehicles == 0 && Before.VehicleOffers.Num() > 0 && Before.VehicleOffers[0].Refusal == EPurchaseRefusal::None)) { return false; }
 	if (!TestTrue(TEXT("setup: a second shed is reserved and affordable"),
-		Before.Modules.Num() == 1 && Before.Modules[0].Refusal == EPurchaseRefusal::None)) { return false; }
+		Before.FindModule(EDepotModule::Shed) != nullptr && Before.FindModule(EDepotModule::Shed)->Refusal == EPurchaseRefusal::None)) { return false; }
 	TestEqual(TEXT("the card's menu offers what the quote offers"), Rig.Panel->FacilityRows->BuyVehicleItemsForTest().Num(), Before.VehicleOffers.Num());
 
 	const double Balance = Ledger->Balance();
@@ -1072,7 +1075,7 @@ bool FInspectorDepotCardBuysTest::RunTest(const FString& Parameters)
 	Rig.Refresh();
 	Rig.Panel->FacilityRows->ClickBuyModuleForTest();
 	const FFacilityQuote After = Rig.Runtime->QuoteFacility(Rig.Depot);
-	TestEqual(TEXT("Buy Shed bought the second shed through the controller"), After.Modules.Num() > 0 ? After.Modules[0].Owned : 0, 2);
+	TestEqual(TEXT("Buy Shed bought the second shed through the controller"), After.FindModule(EDepotModule::Shed) != nullptr ? After.FindModule(EDepotModule::Shed)->Owned : 0, 2);
 	TestEqual(TEXT("and the depot has a second bay"), After.Bays, 2);
 	return true;
 }
@@ -1312,6 +1315,228 @@ bool FInspectorWaitingOnRefreshesTest::RunTest(const FString& Parameters)
 	TestNotEqual(FString::Printf(TEXT("the wait line counts on ('%s')"), *Panel->StatusForTest()), Panel->StatusForTest(), WaitedBefore);
 	TestTrue(TEXT("naming the same blocker"), Panel->StatusForTest().StartsWith(TEXT("Waiting behind G-HDVK")));
 	TestEqual(TEXT("with no flight board revision moving - the card's own key saw both"), Board->Revision(), BoardRevision);
+	return true;
+}
+
+/**
+ * 2026-10-03: THE TANK HAS ITS OWN BUY, AND THE ROW SAYS WHICH. selection.buy_module took no argument and bought the shed - the one
+ * module there was - so the tank, the second offer, could not be bought from the card at all. The run names the module now
+ * (DepotModuleCode); with no name it still means the shed, found by kind (ChosenModule's reason). The EFFECT is read off the quote's
+ * owned counts, both of them, so a buy of the wrong module cannot pass.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuyModuleUsesItsArgumentTest,
+	"AirportMgr.Actions.BuyModuleUsesItsArgument",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuyModuleUsesItsArgumentTest::RunTest(const FString& Parameters)
+{
+	FInspectorDepotRig Rig;
+	if (!TestTrue(TEXT("setup: depot, runtime, controller and panel"), Rig.Build())) { return false; }
+	const FBuildAction* Buy = FindAction(FName(TEXT("selection.buy_module")));
+	if (!TestNotNull(TEXT("the buy-module row is registered"), Buy)) { return false; }
+	auto Owned = [&Rig](EDepotModule Module)
+	{
+		const FFacilityQuote Quote = Rig.Runtime->QuoteFacility(Rig.Depot);
+		const FModuleOfferQuote* Row = Quote.FindModule(Module);
+		return Row != nullptr ? Row->Owned : -1;
+	};
+	const FFacilityQuote Before = Rig.Runtime->QuoteFacility(Rig.Depot);
+	const FModuleOfferQuote* Tank = Before.FindModule(EDepotModule::Tank);
+	const FModuleOfferQuote* Shed = Before.FindModule(EDepotModule::Shed);
+	if (!TestTrue(TEXT("setup: the shed and the tank are both offered"), Tank != nullptr && Shed != nullptr)) { return false; }
+	if (!TestEqual(FString::Printf(TEXT("setup: a tank may be bought (%d of %d reserved)"), Tank->Owned, Tank->Reserved), Tank->Refusal, EPurchaseRefusal::None)) { return false; }
+	const int32 Tanks = Tank->Owned;
+	const int32 Sheds = Shed->Owned;
+
+	TestEqual(TEXT("the code is the module's UENUM name"), DepotModuleCode(EDepotModule::Tank), FName(TEXT("Tank")));
+	TestTrue(TEXT("buy_module WITH Tank runs"), Buy->TryRunWith(*Rig.Controller, FBuildActionArg::OfCode(DepotModuleCode(EDepotModule::Tank)), TEXT("Test")));
+	TestEqual(TEXT("and bought a tank"), Owned(EDepotModule::Tank), Tanks + 1);
+	TestEqual(TEXT("and no shed"), Owned(EDepotModule::Shed), Sheds);
+
+	TestFalse(TEXT("a module the depot does not offer is refused"), Buy->TryRunWith(*Rig.Controller, FBuildActionArg::OfCode(TEXT("NoSuchModule")), TEXT("Test")));
+	// NO ARGUMENT STILL MEANS THE SHED - the plain door every caller before the tank used.
+	if (TestTrue(TEXT("buy_module with NO argument runs"), Buy->TryRun(*Rig.Controller, TEXT("Test"))))
+	{
+		TestEqual(TEXT("and bought the shed"), Owned(EDepotModule::Shed), Sheds + 1);
+		TestEqual(TEXT("and not another tank"), Owned(EDepotModule::Tank), Tanks + 1);
+	}
+
+	// THE CARD'S TANK ROW CARRIES Tank: its click reaches the same verb with the same argument, through the widget's own delegate.
+	Rig.Refresh();
+	TArray<FBuildActionArg> Ran;
+	Rig.Panel->FacilityRows->RunActionSource = [&Ran](int32, const FBuildActionArg& Arg) { Ran.Add(Arg); };
+	const int32 Rows = Rig.Panel->FacilityRows->ModuleRowCountForTest();
+	for (int32 Row = 0; Row < Rows; ++Row) { Rig.Panel->FacilityRows->ClickBuyModuleForTest(Row); }
+	TestTrue(TEXT("one of the card's module rows buys with Code = Tank"),
+		Ran.ContainsByPredicate([](const FBuildActionArg& Arg) { return Arg.Code == FName(TEXT("Tank")); }));
+	TestTrue(TEXT("and one with Code = Shed"),
+		Ran.ContainsByPredicate([](const FBuildActionArg& Arg) { return Arg.Code == FName(TEXT("Shed")); }));
+	return true;
+}
+
+/**
+ * THE FUEL ROW'S THREE VERBS REACH THE SUPPLY, through the card's buttons and the rows' door (2026-10-03): a spot order is paid and
+ * on its way, a contract is signed - after which Sign is off the card and Cancel on it - and cancelled. Each effect read off the
+ * supply, not off a log line.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelVerbsReachTheSupplyTest,
+	"AirportMgr.Actions.FuelVerbsReachTheSupply",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelVerbsReachTheSupplyTest::RunTest(const FString& Parameters)
+{
+	FInspectorDepotRig Rig;
+	if (!TestTrue(TEXT("setup: depot, runtime, controller and panel"), Rig.Build())) { return false; }
+	UFuelSupply* Supply = Rig.Runtime->GetJobBoard()->FuelSupply.Get();
+	if (!TestNotNull(TEXT("setup: the supply"), Supply)) { return false; }
+	Supply->Draw(Supply->StockLitres);   // room for an order and for a contract's day
+	using EAction = UInspectorFacilityRows::EAction;
+	UInspectorFacilityRows* Rows = Rig.Panel->FacilityRows;
+
+	Rig.Refresh();
+	TestTrue(TEXT("the depot card shows the fuel row"), Rows->IsFuelRowShownForTest());
+	TestTrue(FString::Printf(TEXT("whose line reads the stock ('%s')"), *Rows->FuelTextForTest()), Rows->FuelTextForTest().StartsWith(TEXT("Fuel 0 / ")));
+	Rows->ClickFuelForTest(EAction::FuelSpot);
+	TestEqual(TEXT("the Order button placed one spot order"), Supply->SpotOrders.Num(), 1);
+	TestEqual(TEXT("of the card's size"), Supply->PendingSpotLitres(), OpsDesignDefaults::SpotOrderLitres, 1e-6);
+
+	Rig.Refresh();
+	TestTrue(TEXT("with no contract the card offers Sign"), Rows->FuelButtonForTest(EAction::FuelContractUp)->GetVisibility() == ESlateVisibility::Visible);
+	TestTrue(TEXT("and not Cancel"), Rows->FuelButtonForTest(EAction::FuelContractCancel)->GetVisibility() == ESlateVisibility::Collapsed);
+	TestTrue(FString::Printf(TEXT("Sign's tooltip says the first day is charged whole ('%s')"), *Rows->FuelButtonForTest(EAction::FuelContractUp)->GetToolTipText().ToString()),
+		Rows->FuelButtonForTest(EAction::FuelContractUp)->GetToolTipText().ToString().Contains(TEXT("the first day too")));
+	Rows->ClickFuelForTest(EAction::FuelContractUp);
+	TestEqual(TEXT("the Sign button signed the smallest tier"), Supply->Contract.Tier, 0);
+
+	Rig.Refresh();
+	TestTrue(FString::Printf(TEXT("the line says the contract ('%s')"), *Rows->FuelTextForTest()), Rows->FuelTextForTest().Contains(TEXT("contract 5,000 L/day")));
+	// CONTRACTED: BOTH BUTTONS (ruled 2026-10-03) - Upgrade to the next tier, and Cancel.
+	UUiButton* Up = Rows->FuelButtonForTest(EAction::FuelContractUp);
+	TestTrue(TEXT("the contract button stays, as Upgrade"), Up->GetVisibility() == ESlateVisibility::Visible);
+	TestTrue(FString::Printf(TEXT("captioned with the next tier ('%s')"), *Up->GetLabel()->GetText().ToString()), Up->GetLabel()->GetText().ToString().StartsWith(TEXT("Upgrade to 10,000 L/day")));
+	TestTrue(FString::Printf(TEXT("its tooltip says a fresh term ('%s')"), *Up->GetToolTipText().ToString()), Up->GetToolTipText().ToString().Contains(TEXT("fresh")));
+	TestTrue(TEXT("and Cancel is on the card beside it"), Rows->FuelButtonForTest(EAction::FuelContractCancel)->GetVisibility() == ESlateVisibility::Visible);
+	const double Balance = Rig.Runtime->GetLedger()->Balance();
+	Rows->ClickFuelForTest(EAction::FuelContractUp);
+	TestEqual(TEXT("the Upgrade button upgraded to tier 1"), Supply->Contract.Tier, 1);
+	TestEqual(TEXT("for a fresh term"), Supply->Contract.DaysLeft, Supply->Figures.ContractTermDays);
+	TestEqual(TEXT("charging nothing"), Rig.Runtime->GetLedger()->Balance(), Balance, 0.01);
+	Rig.Refresh();
+	Rows->ClickFuelForTest(EAction::FuelContractCancel);
+	TestEqual(TEXT("the Cancel button cancelled it"), Supply->Contract.Tier, static_cast<int32>(INDEX_NONE));
+
+	// NO DEPOT SELECTED: the fuel rows are the depot card's, and refuse with nothing selected.
+	Rig.Controller->SelectForTest(FSelection());
+	const FBuildAction* Spot = FindAction(FName(TEXT("selection.fuel_spot")));
+	if (TestNotNull(TEXT("the spot row is registered"), Spot))
+	{
+		TestFalse(TEXT("nothing selected: the spot row is disabled"), Spot->IsEnabled(FBuildActionContext(*Rig.Controller)));
+	}
+	return true;
+}
+
+/**
+ * A REFUSED ORDER SAYS WHY (2026-10-03): with the tanks full, selection.fuel_spot is disabled - by the supply's own judge - and the
+ * card's Order button is greyed with the NoRoom sentence on its tooltip and caption. Both read the one quote, so this is the check
+ * that they read the SAME verdict: a control order that fits is enabled first.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelSpotRefusalIsShownTest,
+	"AirportMgr.Actions.FuelSpotRefusalIsShown",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelSpotRefusalIsShownTest::RunTest(const FString& Parameters)
+{
+	FInspectorDepotRig Rig;
+	if (!TestTrue(TEXT("setup: depot, runtime, controller and panel"), Rig.Build())) { return false; }
+	UFuelSupply* Supply = Rig.Runtime->GetJobBoard()->FuelSupply.Get();
+	const FBuildAction* Spot = FindAction(FName(TEXT("selection.fuel_spot")));
+	if (!TestTrue(TEXT("setup: the supply and the spot row"), Supply != nullptr && Spot != nullptr)) { return false; }
+	using EAction = UInspectorFacilityRows::EAction;
+	UUiButton* Button = Rig.Panel->FacilityRows->FuelButtonForTest(EAction::FuelSpot);
+	if (!TestNotNull(TEXT("setup: the card built an Order button"), Button)) { return false; }
+
+	Supply->Draw(Supply->StockLitres);
+	Rig.Refresh();
+	TestTrue(TEXT("CONTROL: empty tanks - the spot row is enabled"), Spot->IsEnabled(FBuildActionContext(*Rig.Controller)));
+	TestTrue(TEXT("CONTROL: and the Order button lit"), Button->GetIsEnabled());
+
+	Supply->Receive(Supply->FreeSpace());
+	Rig.Refresh();
+	const FString NoRoom = UFacilityPurchases::FuelOrderRefusalText(EFuelOrderRefusal::NoRoom).ToString();
+	TestFalse(TEXT("full tanks: the spot row is disabled"), Spot->IsEnabled(FBuildActionContext(*Rig.Controller)));
+	TestFalse(TEXT("and the Order button greyed"), Button->GetIsEnabled());
+	TestTrue(FString::Printf(TEXT("its tooltip reads the NoRoom sentence ('%s')"), *Button->GetToolTipText().ToString()), Button->GetToolTipText().ToString().Contains(NoRoom));
+	TestTrue(TEXT("and so does its caption"), Button->GetLabel() != nullptr && Button->GetLabel()->GetText().ToString().Contains(NoRoom));
+	const int32 Orders = Supply->SpotOrders.Num();
+	Rig.Panel->FacilityRows->ClickFuelForTest(EAction::FuelSpot);
+	TestEqual(TEXT("and a click orders nothing"), Supply->SpotOrders.Num(), Orders);
+	return true;
+}
+
+/**
+ * THE ORDER BUTTON TOPS UP WHAT FITS (2026-10-03 review): with 25,000 L held of 30,000, the fixed 10,000 L order was refused NoRoom
+ * though 5,000 L fitted. The card offers the 5,000, captioned with what it will order, and the click orders exactly that - the
+ * caption, the row's enable and the order all read the one quote.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelSpotCardTopsUpTest,
+	"AirportMgr.Actions.FuelSpotTopsUpWhatFits",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelSpotCardTopsUpTest::RunTest(const FString& Parameters)
+{
+	FInspectorDepotRig Rig;
+	if (!TestTrue(TEXT("setup: depot, runtime, controller and panel"), Rig.Build())) { return false; }
+	UFuelSupply* Supply = Rig.Runtime->GetJobBoard()->FuelSupply.Get();
+	const FBuildAction* Spot = FindAction(FName(TEXT("selection.fuel_spot")));
+	if (!TestTrue(TEXT("setup: the supply and the spot row"), Supply != nullptr && Spot != nullptr)) { return false; }
+	using EAction = UInspectorFacilityRows::EAction;
+	UUiButton* Button = Rig.Panel->FacilityRows->FuelButtonForTest(EAction::FuelSpot);
+	if (!TestNotNull(TEXT("setup: the card built an Order button"), Button)) { return false; }
+
+	Supply->StockLitres = Supply->Capacity() - 5000.0;
+	Rig.Refresh();
+	TestTrue(TEXT("5,000 L of room: the spot row is enabled"), Spot->IsEnabled(FBuildActionContext(*Rig.Controller)));
+	TestTrue(TEXT("and the Order button lit"), Button->GetIsEnabled());
+	const FString Caption = Button->GetLabel() != nullptr ? Button->GetLabel()->GetText().ToString() : FString();
+	TestTrue(FString::Printf(TEXT("captioned with the litres it will order ('%s')"), *Caption), Caption.StartsWith(TEXT("Order 5,000 L")));
+	Rig.Panel->FacilityRows->ClickFuelForTest(EAction::FuelSpot);
+	TestEqual(TEXT("the click placed one order"), Supply->SpotOrders.Num(), 1);
+	TestEqual(TEXT("of the 5,000 L the caption named"), Supply->PendingSpotLitres(), 5000.0, 1e-6);
+	return true;
+}
+
+/**
+ * THE FUEL IS IN THE DEPOT CARD'S KEY (2026-10-03): a bowser drawing or a tanker arriving moves no revision of the board, the ledger
+ * or the network - so with the fuel left out of FInspectorCardKey the line would hold the old stock until something else moved.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorDepotSeesTheFuelTest,
+	"AirportMgr.Inspector.Cache.DepotSeesTheFuel",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorDepotSeesTheFuelTest::RunTest(const FString& Parameters)
+{
+	FInspectorDepotRig Rig;
+	if (!TestTrue(TEXT("setup: depot, runtime, controller and panel"), Rig.Build())) { return false; }
+	UFuelSupply* Supply = Rig.Runtime->GetJobBoard()->FuelSupply.Get();
+	if (!TestNotNull(TEXT("setup: the supply"), Supply)) { return false; }
+	Supply->Draw(Supply->StockLitres);
+	Supply->Receive(12000.0);
+	Rig.Refresh();
+	const FString Before = Rig.Panel->FacilityRows->FuelTextForTest();
+	TestTrue(FString::Printf(TEXT("setup: the line reads 12,000 ('%s')"), *Before), Before.StartsWith(TEXT("Fuel 12,000 / ")));
+	const int32 Quoted = Rig.Panel->QuoteCountForTest();
+	Supply->Draw(30.0);
+	Rig.Refresh();
+	TestEqual(TEXT("a draw under the printed step recomposes nothing"), Rig.Panel->QuoteCountForTest(), Quoted);
+	Supply->Draw(4970.0);
+	Rig.Refresh();
+	TestTrue(FString::Printf(TEXT("a draw past it is shown at once ('%s')"), *Rig.Panel->FacilityRows->FuelTextForTest()),
+		Rig.Panel->FacilityRows->FuelTextForTest().StartsWith(TEXT("Fuel 7,000 / ")));
 	return true;
 }
 

@@ -41,6 +41,12 @@ FUEL_COST_PER_LITRE = 0.0              # what the airport PAYS - zero in the shi
 # a dry depot are both folded into --fuel-loss, a fraction of fuel revenue that never arrives.
 FUEL_CONTRACT_PRICE = 0.9
 FUEL_SPOT_PRICE = 1.2
+# Shipped 2026-10-02 (OpsDefinition.h FFuelSupplyFigures, Tank offer). Checked against the headers; NOT
+# fed into the model below: the opening depot already holds one starter tank, and a 30,000 L start is
+# worth 27,000 at the contract price (a one-off, under 0.5 day of income). Extra tanks cost 20,000 and
+# 100/day upkeep - at the model's end state (936/day upkeep) one tank is ~10% of upkeep, 0.15% of income.
+FUEL_TANK_LITRES, FUEL_TANK_COST, FUEL_TANK_UPKEEP = 30_000.0, 20_000.0, 100.0
+FUEL_STARTING_STOCK = 30_000.0
 FUEL_LOAD_MEAN = 0.7                   # OpsDesignDefaults FuelLoadDraw 0.5-0.9
 ELASTICITY = 1.0                       # offers x multiplier^-elasticity (spec D8)
 

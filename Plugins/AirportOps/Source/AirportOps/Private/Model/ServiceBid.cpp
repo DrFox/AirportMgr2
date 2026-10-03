@@ -7,7 +7,7 @@ ServiceBid::FResult ServiceBid::Finish(const FInput& In, int32 MaxTrips)
 	FResult Result;
 	if (In.Type == nullptr || In.Policy == nullptr || !In.DriveSeconds)
 	{
-		Result.bReachable = false;
+		Result.Outcome = EOutcome::NoWay;
 		return Result;
 	}
 	const IServiceRolePolicy& Policy = *In.Policy;
@@ -15,7 +15,12 @@ ServiceBid::FResult ServiceBid::Finish(const FInput& In, int32 MaxTrips)
 
 	double Time = In.FreeAt;
 	double Cargo = In.CargoWhenFree;
+	// WHAT THE FACILITY STILL HOLDS for this simulation: each refill spends it, so a multi-trip bid does not draw the
+	// same litres twice. ENFORCED BY: AirportOps.Service.Bid.StockIsSpentOnceAcrossTrips
+	double Available = In.FacilityAvailable;
 	int32 Node = In.NodeWhenFree;
+	// SET BY OneTrip when the facility it needed had nothing to give - see EOutcome::NoStock and the two loops below.
+	bool bDry = false;
 
 	/** Drive to To, or report the way missing. The one place a leg's time is added. */
 	auto DriveTo = [&](int32 To) -> bool
@@ -23,7 +28,7 @@ ServiceBid::FResult ServiceBid::Finish(const FInput& In, int32 MaxTrips)
 		const double Seconds = In.DriveSeconds(Node, To);
 		if (Seconds < 0.0)
 		{
-			Result.bReachable = false;
+			Result.Outcome = EOutcome::NoWay;
 			return false;
 		}
 		Time += Seconds;
@@ -33,19 +38,31 @@ ServiceBid::FResult ServiceBid::Finish(const FInput& In, int32 MaxTrips)
 
 	/**
 	 * One trip to Trip.Node, with the facility first if the policy says so - the SAME NextStep the
-	 * live vehicle asks (UJobBoard::StartNext). Returns what it delivered, or a negative on no way.
+	 * live vehicle asks (UJobBoard::StartNext). Returns what it delivered, or a negative on no way - or on a DRY facility
+	 * (bDry), checked before the drive to it: the live vehicle releases its queue there (UJobBoard::BeginFacility), so the
+	 * trip is never made and nothing after it is priced.
 	 */
 	auto OneTrip = [&](const FTrip& Trip, double Owed) -> double
 	{
-		if (Policy.NextStep(Cargo, Type, Owed) == EServiceStep::ViaFacility)
+		if (Policy.NextStep(Cargo, Type, Owed, Available) == EServiceStep::ViaFacility)
 		{
+			// THE LIVE RULE'S TWIN (UJobBoard::BeginFacility releases on the same two figures): ViaFacility with the stock
+			// below DoneWithin is a vehicle whose cargo is below it too (NextStep's bDepotDry sends any more straight
+			// there), so it has nothing to deliver and nothing to fetch.
+			if (Available < Policy.DoneWithin())
+			{
+				bDry = true;
+				return -1.0;
+			}
 			// AT THE FACILITY ALREADY (an idle vehicle at home): the visit, with no drive to it.
 			if (Node != In.FacilityNode && !DriveTo(In.FacilityNode))
 			{
 				return -1.0;
 			}
-			Time += Policy.FacilitySeconds(Cargo, Type, In.Pumps);
-			Cargo = Policy.CargoAfterFacility(Cargo, Type);
+			const double Before = Cargo;
+			Time += Policy.FacilitySeconds(Cargo, Type, In.Pumps, Available);
+			Cargo = Policy.CargoAfterFacility(Cargo, Type, Available);
+			Available = FMath::Max(Available - FMath::Max(Cargo - Before, 0.0), 0.0);
 			++Result.FacilityVisits;
 		}
 		if (!DriveTo(Trip.Node))
@@ -65,6 +82,12 @@ ServiceBid::FResult ServiceBid::Finish(const FInput& In, int32 MaxTrips)
 	{
 		if (OneTrip(Queued, Queued.Owed) < 0.0)
 		{
+			// DRY ON THE QUEUE AHEAD is dry for this job too: the stock only falls through a simulation, and the cargo that
+			// could not be topped up for the queued trip is no larger for this one.
+			if (bDry)
+			{
+				Result.Outcome = EOutcome::NoStock;
+			}
 			Result.Finish = Time;
 			return Result;
 		}
@@ -78,8 +101,17 @@ ServiceBid::FResult ServiceBid::Finish(const FInput& In, int32 MaxTrips)
 	for (int32 Trip = 0; Trip < MaxTrips && Owed > Policy.DoneWithin(); ++Trip)
 	{
 		const double Delivered = OneTrip(In.Appended, Owed);
+		if (Delivered < 0.0 && bDry && Trip == 0)
+		{
+			// IT WOULD DELIVER NOTHING: no finish time, and the reason - NoFuelStock, not a road.
+			Result.Outcome = EOutcome::NoStock;
+			Result.Finish = Time;
+			return Result;
+		}
 		if (Delivered < 0.0)
 		{
+			// NO WAY, or DRY AFTER A TRIP - PARTIAL SERVICE BEATS NONE (spec 2026-10-02 §7): finished with what was
+			// delivered, at the end of the last trip, as the live job is (its remainder refused NoFuelStock by the re-bid).
 			break;
 		}
 		// A TRIP THAT DELIVERS NOTHING (less than the policy would call a job done within) would repeat for ever - a

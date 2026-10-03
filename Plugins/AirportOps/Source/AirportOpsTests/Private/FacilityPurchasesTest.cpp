@@ -40,15 +40,33 @@ bool FFacilityScenarioCatalogueTest::RunTest(const FString&)
 	TestEqual(TEXT("and 60 a day to keep"), Tow->UpkeepPerDay, 60.0, 1e-9);
 	TestEqual(TEXT("the capacities are unchanged by pricing"), Bowser->CapacityLitres, 10000.0, 1e-9);
 
-	// ONLY THE SHED IS FOR SALE THIS SLICE (spec §1 out of scope: pumps, tanks).
-	TestEqual(TEXT("one module offer"), Scenario->ModuleOffers.Num(), 1);
 	const FModuleOffer* Shed = Scenario->ModuleOffers.Find(EDepotModule::Shed);
 	if (!TestNotNull(TEXT("the shed is offered"), Shed)) { return false; }
 	TestEqual(TEXT("a shed costs 16,000"), Shed->Price, 16000.0, 1e-9);
 	TestEqual(TEXT("and 80 a day to keep"), Shed->UpkeepPerDay, 80.0, 1e-9);
 	TestEqual(TEXT("and grants one vehicle bay (R2)"), Shed->VehicleSlots, 1);
-	TestNull(TEXT("a tank is not for sale"), Scenario->ModuleOffers.Find(EDepotModule::Tank));
+
+	// THE TANK JOINS THE SHED (spec 2026-10-02-progression-and-fuel-supply §7): storage is what bounds the stock and
+	// gates the contract tiers. Pumps are still not for sale.
+	TestEqual(TEXT("two module offers"), Scenario->ModuleOffers.Num(), 2);
+	const FModuleOffer* Tank = Scenario->ModuleOffers.Find(EDepotModule::Tank);
+	if (!TestNotNull(TEXT("a tank is offered"), Tank)) { return false; }
+	TestEqual(TEXT("a tank costs 20,000"), Tank->Price, 20000.0, 1e-9);
+	TestEqual(TEXT("and 100 a day to keep"), Tank->UpkeepPerDay, 100.0, 1e-9);
+	TestEqual(TEXT("and grants no vehicle bay"), Tank->VehicleSlots, 0);
 	TestNull(TEXT("nor a pump"), Scenario->ModuleOffers.Find(EDepotModule::Pump));
+
+	const FFuelSupplyFigures& Fuel = Scenario->FuelSupply;
+	TestEqual(TEXT("a tank holds 30,000 L"), Fuel.LitresPerTank, 30000.0, 1e-9);
+	TestEqual(TEXT("a new game starts with one tank full"), Fuel.StartingStockLitres, 30000.0, 1e-9);
+	TestEqual(TEXT("spot fuel costs 1.2 a litre"), Fuel.SpotPricePerLitre, 1.2, 1e-9);
+	TestEqual(TEXT("and arrives two game hours after the order"), Fuel.SpotDelaySeconds, 7200.0, 1e-9);
+	TestEqual(TEXT("four contract tiers"), Fuel.ContractTiers.Num(), 4);
+	if (Fuel.ContractTiers.Num() < 1) { return false; }
+	TestEqual(TEXT("the smallest is 5,000 L a day"), Fuel.ContractTiers[0].LitresPerDay, 5000.0, 1e-9);
+	TestEqual(TEXT("at 0.9 a litre"), Fuel.ContractTiers[0].PricePerLitre, 0.9, 1e-9);
+	TestEqual(TEXT("a contract runs seven game days"), Fuel.ContractTermDays, 7);
+	TestEqual(TEXT("cancelling owes half of what is left"), Fuel.CancelFraction, 0.5, 1e-9);
 	return true;
 }
 
@@ -147,7 +165,7 @@ bool FFacilitySlotsTest::RunTest(const FString&)
 	FFacilityFixture F;
 	TestEqual(TEXT("the start kit's one shed is one bay"), F.Shop->VehicleSlotsOf(F.Depot, *F.Net->GetEntity(F.Depot)), 1);
 	F.Net->AddEntityModule(F.Depot, EDepotModule::Tank);
-	TestEqual(TEXT("a tank grants nothing - it has no offer"), F.Shop->VehicleSlotsOf(F.Depot, *F.Net->GetEntity(F.Depot)), 1);
+	TestEqual(TEXT("a tank grants no bay - its offer's VehicleSlots is 0"), F.Shop->VehicleSlotsOf(F.Depot, *F.Net->GetEntity(F.Depot)), 1);
 	F.Net->AddEntityModule(F.Depot, EDepotModule::Shed);
 	TestEqual(TEXT("a second shed is a second bay"), F.Shop->VehicleSlotsOf(F.Depot, *F.Net->GetEntity(F.Depot)), 2);
 	TestEqual(TEXT("and the quote reads the same count"), F.Shop->Quote(*F.Net, F.Depot).Bays, 2);
@@ -220,7 +238,7 @@ bool FFacilityRefusalsTest::RunTest(const FString&)
 		FFacilityFixture F;
 		Snap(F, B, E, Q, V, S);
 		Nothing(TEXT("UnknownType vehicle"), F, F.Shop->BuyVehicle(*F.Net, F.Depot, TEXT("TANKER")), EPurchaseRefusal::UnknownType, B, E, Q, V, S);
-		Nothing(TEXT("UnknownType module (no offer)"), F, F.Shop->BuyModule(*F.Net, F.Depot, EDepotModule::Tank), EPurchaseRefusal::UnknownType, B, E, Q, V, S);
+		Nothing(TEXT("UnknownType module (no offer)"), F, F.Shop->BuyModule(*F.Net, F.Depot, EDepotModule::Pump), EPurchaseRefusal::UnknownType, B, E, Q, V, S);
 	}
 	{
 		FFacilityFixture F;
@@ -544,7 +562,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFacilityUpkeepTest, "AirportOps.Model.Facility
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FFacilityUpkeepTest::RunTest(const FString&)
 {
-	// R6: sheds and vehicles both cost upkeep. Tanks and pumps have no offer and so no upkeep this slice.
+	// R6: sheds, tanks (since 2026-10-02) and vehicles all cost upkeep. Pumps have no offer and so no upkeep.
 	FFacilityFixture F;
 	F.Board->AddVehicleForTest(TEXT("FUEL"), F.Depot, EServiceVehicleState::Idle, 0.0);
 	F.Board->AddVehicleForTest(TEXT("UTILITY"), F.Depot, EServiceVehicleState::ToJob, 0.0);
@@ -558,7 +576,10 @@ bool FFacilityUpkeepTest::RunTest(const FString&)
 	F.Net->RemoveEntity(F.Net->PlaceEntity(Gone));
 
 	const FFacilityUpkeep Upkeep = F.Shop->DailyUpkeep(*F.Net);
-	TestEqual(TEXT("one live shed's upkeep - a removed depot's sheds cost nothing"), Upkeep.Modules, FacilityTestShedOffer().UpkeepPerDay, 1e-9);
+	// The fixture's depot holds a shed, a tank and a pump; the shed and the tank have offers, the pump has none.
+	const double TankUpkeep = F.Shop->ModuleOffers.FindChecked(EDepotModule::Tank).UpkeepPerDay;
+	TestEqual(TEXT("one live shed's and tank's upkeep - a removed depot's sheds cost nothing, a pump has no offer"), Upkeep.Modules,
+		FacilityTestShedOffer().UpkeepPerDay + TankUpkeep, 1e-9);
 	TestEqual(TEXT("a bowser's and a tow's upkeep, busy or not"), Upkeep.Fleet,
 		FacilityTestVehicleRow(TEXT("FUEL")).UpkeepPerDay + FacilityTestVehicleRow(TEXT("UTILITY")).UpkeepPerDay, 1e-9);
 	return true;
@@ -611,11 +632,14 @@ bool FFacilityRepairTest::RunTest(const FString&)
 	TestEqual(TEXT("one tank"), Count(F.Depot, EDepotModule::Tank), 1);
 	TestEqual(TEXT("the plotless depot keeps all five - no plot, nothing to be smaller than"), Count(Legacy, EDepotModule::Shed), 5);
 	const double ShedRefund = 2.0 * FacilityTestShedOffer().Price;
-	TestEqual(TEXT("the two sheds are refunded at the offer's price"), F.Ledger->Balance(), Balance + ShedRefund, 1e-6);
-	const FLedgerEntry& Line = F.Ledger->Entries().Last();
-	TestEqual(TEXT("on ONE line"), Line.Amount, ShedRefund, 1e-6);
-	TestEqual(TEXT("in the Refund column"), static_cast<int32>(Line.Category), static_cast<int32>(ELedgerCategory::Refund));
-	TestTrue(FString::Printf(TEXT("saying what and why (%s)"), *Line.What.ToString()), Line.What.ToString().Contains(TEXT("2 x Shed")));
+	// THE TANK IS NOW SOLD (2026-10-02), so the excess tank is refunded too, on its own line, at the shop's tank price.
+	const double TankRefund = F.Shop->ModuleOffers.FindChecked(EDepotModule::Tank).Price;
+	TestEqual(TEXT("the two sheds and the tank are refunded at the offers' prices"), F.Ledger->Balance(), Balance + ShedRefund + TankRefund, 1e-6);
+	const FLedgerEntry* ShedLine = F.Ledger->Entries().FindByPredicate([](const FLedgerEntry& E) { return E.What.ToString().Contains(TEXT("2 x Shed")); });
+	if (!TestNotNull(TEXT("the sheds have a refund line"), ShedLine)) { return false; }
+	TestEqual(TEXT("on ONE line"), ShedLine->Amount, ShedRefund, 1e-6);
+	TestEqual(TEXT("in the Refund column"), static_cast<int32>(ShedLine->Category), static_cast<int32>(ELedgerCategory::Refund));
+	TestTrue(FString::Printf(TEXT("saying what and why (%s)"), *ShedLine->What.ToString()), ShedLine->What.ToString().Contains(TEXT("2 x Shed")));
 	F.Bus.Drain();
 	if (TestEqual(TEXT("one event per kind removed"), Seen.Num(), 3))
 	{
@@ -629,7 +653,8 @@ bool FFacilityRepairTest::RunTest(const FString&)
 	const int32 Lines = F.Ledger->Entries().Num();
 	TestEqual(TEXT("run again, there is nothing left to repair"), F.Shop->RemoveUnseated(*F.Net), 0);
 	TestEqual(TEXT("and nothing more is posted"), F.Ledger->Entries().Num(), Lines);
-	TestEqual(TEXT("upkeep charges the three standing sheds and the plotless five - none past a plot's ceiling"), F.Shop->DailyUpkeep(*F.Net).Modules, (3.0 + 5.0) * FacilityTestShedOffer().UpkeepPerDay, 1e-9);
+	TestEqual(TEXT("upkeep charges the three standing sheds and the plotless five - none past a plot's ceiling"), F.Shop->DailyUpkeep(*F.Net).Modules,
+		(3.0 + 5.0) * FacilityTestShedOffer().UpkeepPerDay + F.Shop->ModuleOffers.FindChecked(EDepotModule::Tank).UpkeepPerDay, 1e-9);
 	return true;
 }
 

@@ -25,6 +25,7 @@ class UJobBoard;
 class UScenario;
 class UFlightBoard;
 class UOfferGenerator;
+class UFuelSupply;
 class ULedger;
 class UPricing;
 struct FAirframe;
@@ -33,6 +34,7 @@ struct FVehicle;
 enum class EAgentPhase : uint8;
 enum class EArrivalRefusal : uint8;
 enum class EChangeKind : uint8;
+enum class EFuelOrderRefusal : uint8;
 
 /**
  * The AirportOps composition root. Owns the clock and the event bus, attaches to the one
@@ -115,6 +117,24 @@ public:
 	FPurchaseResult BuyModule(FEntityInstanceId Entity, EDepotModule Module);
 	FPurchaseResult BuyVehicle(FEntityInstanceId Entity, FName TypeCode);
 	FPurchaseResult SellVehicle(int32 VehicleId);
+
+	/**
+	 * The airport's fuel: stock, contract, orders on the way. See UFuelSupply - this runtime owns it, hands it the ledger and
+	 * the board, wires its capacity to the seated tanks at Attach (cleared at Detach), sets a NEW game's starting stock,
+	 * delivers the contract at each day end and polls the spot orders on the clock. Const: a command goes through the
+	 * forwarders below, which stamp the clock's Now.
+	 * ENFORCED BY: AirportOps.Present.Fuel.AttachWiresTheSupply
+	 */
+	const UFuelSupply* GetFuelSupply() const { return FuelSupply; }
+
+	/**
+	 * FORWARDERS to UFuelSupply with this runtime's clock - the one thing the driver does not hold. Each logs nothing: the
+	 * supply logs what it did. Logic, refusals included, lives in UFuelSupply.
+	 * ENFORCED BY: AirportOps.Present.Fuel.DayEndDeliversTheContract, AirportOps.Present.Fuel.SpotOrderSurvivesASave
+	 */
+	EFuelOrderRefusal OrderSpotFuel(double Litres);
+	EFuelOrderRefusal SignFuelContract(int32 Tier);
+	EFuelOrderRefusal CancelFuelContract();
 
 	/**
 	 * FORWARDERS to UAgentRescue with this runtime's traffic, network and clock - the three the driver
@@ -259,16 +279,16 @@ public:
 	bool HasOfferScheduledForTest() const { return OfferHandle != INDEX_NONE; }
 
 	/**
-	 * Cancel and re-book the two repeaters - the generator's minute tick, from the clock's CURRENT Now, and the daily
-	 * upkeep, whose first firing is the next MIDNIGHT after it (#442: it was a day from Now, so a load at 05:59 postponed the
-	 * 06:00 upkeep by a day).
+	 * Cancel and re-book the three repeaters - the generator's minute tick and the fuel spot orders' poll, from the clock's
+	 * CURRENT Now, and the daily upkeep, whose first firing is the next MIDNIGHT after it (#442: it was a day from Now, so a
+	 * load at 05:59 postponed the 06:00 upkeep by a day).
 	 *
 	 * AFTER A LOAD, and not optional (review I1, 2026-09-28): USimClock does not save its queue
 	 * and books absolute due times, so repeaters armed at Attach still pointed at the pre-load
 	 * time. A later save fired the minute tick once per missed minute in one frame; an earlier
 	 * one went silent until the clock caught up. Attach books them through this too, so there is
-	 * one place that knows the two exist.
-	 * ENFORCED BY: AirportOps.Present.OffersRearmOnLoad
+	 * one place that knows they exist.
+	 * ENFORCED BY: AirportOps.Present.OffersRearmOnLoad, AirportOps.Present.Fuel.SpotOrderSurvivesASave
 	 */
 	void RearmRepeatingSchedules();
 
@@ -317,6 +337,8 @@ private:
 	UPROPERTY() TObjectPtr<UJobBoard> JobBoard;
 	UPROPERTY() TObjectPtr<UFlightBoard> FlightBoard;
 	UPROPERTY() TObjectPtr<UOfferGenerator> OfferGenerator;
+	/** The airport's fuel pool - see GetFuelSupply for its wiring. */
+	UPROPERTY() TObjectPtr<UFuelSupply> FuelSupply;
 	UPROPERTY() TObjectPtr<ULedger> Ledger;
 	UPROPERTY() TObjectPtr<UPricing> Pricing;
 	UPROPERTY() TObjectPtr<UAgentRescue> AgentRescue;
@@ -469,6 +491,13 @@ private:
 	 *  a handle left armed across a Detach fires against a runtime with no network. */
 	int32 UpkeepHandle = INDEX_NONE;
 
+	/** The repeating poll that delivers due fuel spot orders (see RearmRepeatingSchedules). Same sentinel and cancellation. */
+	int32 FuelSpotHandle = INDEX_NONE;
+
+	/** Game seconds between spot polls: the generator's minute, so an order lands at most a minute late against a delay of
+	 *  hours (SpotDelaySeconds, 7200 on 2026-10-02) - finer would only cost clock entries. */
+	static constexpr double FuelSpotPollSeconds = 60.0;
+
 	/**
 	 * One day's upkeep for everything standing, posted as a single entry. Bound in Attach.
 	 *
@@ -498,9 +527,9 @@ private:
 
 	/**
 	 * Every design figure the scenario sets, onto its receiver - the clock's day, the vehicle catalogue and starter fleet
-	 * (ResolveVehicleCatalogue), the refill rate, the module offers, the inbox cap, the airline tuning. THE ONE DOOR (#449), run at Attach and after every load: each
+	 * (ResolveVehicleCatalogue), the refill rate, the module offers, the inbox cap, the airline tuning, the fuel supply's prices and tiers. THE ONE DOOR (#449), run at Attach and after every load: each
 	 * field it writes is Transient on its receiver, the ruling UAirlineRoster::Tuning set, so a save carries the game and
-	 * never the design. New-game acts (the start hour, the opening balance, the roster reset) stay in Attach.
+	 * never the design. New-game acts (the start hour, the opening balance, the starting fuel stock, the roster reset) stay in Attach.
 	 * ENFORCED BY: AirportOps.Present.RuntimeLoad.DesignFiguresAreTheScenarios
 	 */
 	void ApplyScenarioFigures(const class UScenario& Scenario);

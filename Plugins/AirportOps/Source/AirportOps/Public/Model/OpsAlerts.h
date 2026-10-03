@@ -8,6 +8,7 @@ class FOpsEventBus;
 class UAirport;
 class UFlightBoard;
 class UGroundTraffic;
+class UFuelSupply;
 class UJobBoard;
 class ULedger;
 class UOfferGenerator;
@@ -39,7 +40,12 @@ enum class EAlertKind : uint8
 	 * An aircraft lost its taxi plan after a layout edit and taxis UNPLANNED - today's claims and resolver (taxi planning
 	 * spec 2026-10-02 §3: one alert per aircraft, cleared on a new plan or arrival). Id is the flight's id. Appended LAST.
 	 */
-	FlightLostTaxiPlan
+	FlightLostTaxiPlan,
+	/**
+	 * Under a quarter of the tanks (stock plus spot on its way) with no contract, and tanks to speak of (spec 2026-10-02 §7).
+	 * No focus and no Id: the airport's, not a place's. Appended LAST, for the same reason FlightCannotLand was.
+	 */
+	FuelLow
 };
 
 /** What "Go" moves the camera to. None for a problem with no place in the world. */
@@ -118,6 +124,8 @@ struct FOpsAlertSources
 	const ULedger* Ledger = nullptr;
 	/** The status: NoRunway raises its alert, and AirlineCannotCome is judged only while Open. */
 	const UAirport* Airport = nullptr;
+	/** The airport's fuel: FuelLow reads stock, orders on the way, contract and capacity. Null skips the kind. */
+	const UFuelSupply* FuelSupply = nullptr;
 	/** For an airline's display name; an airline missing here is named by its key. */
 	TArrayView<const FAirlineOffers> Airlines;
 };

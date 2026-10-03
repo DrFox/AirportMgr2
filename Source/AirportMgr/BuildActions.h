@@ -8,6 +8,8 @@
 
 class ARoadBuildController;
 class ARoadNetworkActor;
+/** Airside's UENUM (Model/RoadEntity.h); a fixed underlying type, so declared here for DepotModuleCode alone. */
+enum class EDepotModule : uint8;
 class UBuildHudLayer;
 class UOpsRuntime;
 
@@ -27,7 +29,7 @@ class UOpsRuntime;
  */
 struct FBuildActionArg
 {
-	/** A kind's code - selection.buy_vehicle's vehicle type. */
+	/** A kind's code - selection.buy_vehicle's vehicle type, selection.buy_module's module (DepotModuleCode). */
 	FName Code;
 	/** An id - selection.sell_vehicle's vehicle. */
 	int32 Id = 0;
@@ -209,6 +211,13 @@ struct FBuildAction
 	/** The same, given a context already built - the bar's (and a test's, with a runtime handed in). */
 	bool TryChoose(FBuildActionContext& Context, int32 Line, const TCHAR* Via) const;
 };
+
+/**
+ * selection.buy_module's argument for Module - its UENUM name, "Shed" or "Tank". THE ONE SPELLING: the depot card's per-module
+ * row writes it and the verb matches the quote's rows against it, so the two cannot name a module differently.
+ * ENFORCED BY: AirportMgr.Actions.BuyModuleUsesItsArgument
+ */
+FName DepotModuleCode(EDepotModule Module);
 
 /** Linear scan: BuildActions() is a few dozen entries, not a hot loop. */
 const FBuildAction* FindAction(FName Id);

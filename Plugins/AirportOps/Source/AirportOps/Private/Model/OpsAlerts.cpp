@@ -5,6 +5,7 @@
 #include "Model/Airport.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
+#include "Model/FuelSupply.h"
 #include "Model/GroundTraffic.h"
 #include "Model/TaxiPlanning.h"
 #include "Model/InspectFacts.h"
@@ -204,6 +205,16 @@ void UOpsAlerts::Recompute(const FOpsAlertSources& Sources, double Now)
 	{
 		Found.Add(OpsAlertOf(EAlertKind::NoRunway, 0, NAME_None,
 			NSLOCTEXT("OpsAlerts", "NoRunway", "No runway - build one to receive offers")));
+	}
+
+	// FUEL LOW (spec 2026-10-02 §7): under a quarter of the tanks and nothing contracted - the moment ordering still helps.
+	// Not raised for a contracted airport, whose deliveries are already on the way, nor one with no tanks (UFuelSupply::IsLow).
+	// A spot order on its way counts: the player has acted, and the alert would nag through the delivery delay.
+	// ENFORCED BY: AirportOps.Model.Alerts.FuelLowWhenUnderAQuarter, AirportOps.Present.Fuel.FuelLowIsWokenByFuelEvents
+	if (Sources.FuelSupply != nullptr && Sources.FuelSupply->IsLow())
+	{
+		Found.Add(OpsAlertOf(EAlertKind::FuelLow, 0, NAME_None,
+			NSLOCTEXT("OpsAlerts", "FuelLow", "Fuel low - order spot fuel or sign a contract at the depot")));
 	}
 
 	// AIRLINES that cannot use the airport, named as the generator's own log line names them.

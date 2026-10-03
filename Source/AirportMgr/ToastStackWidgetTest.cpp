@@ -453,6 +453,14 @@ bool FToastsWordSavesAndPurchasesTest::RunTest(const FString& Parameters)
 		{ EOpsPurchaseKind::ModulesRefunded, 0.0, TEXT("No room on its plot — 1 Fuel bowser removed"), ENotificationSeverity::Warning },
 		// THE PAID REFUND (#499 review): the figure, and "refunded", when money came back.
 		{ EOpsPurchaseKind::ModulesRefunded, 45000.0, TEXT("No room on its plot — 1 Fuel bowser removed, $45,000 refunded"), ENotificationSeverity::Warning },
+		// FUEL (2026-10-03): an order, a signing - "a day", since nothing is charged until the day end - and a cancel, with its
+		// charge or, with none owed, without a "$0".
+		{ EOpsPurchaseKind::FuelOrdered, 45000.0, TEXT("Ordered Fuel bowser — $45,000"), ENotificationSeverity::Info },
+		{ EOpsPurchaseKind::FuelContractSigned, 45000.0, TEXT("Signed Fuel bowser — $45,000 a day"), ENotificationSeverity::Info },
+		{ EOpsPurchaseKind::FuelContractCancelled, 45000.0, TEXT("Cancelled Fuel bowser — $45,000 charged"), ENotificationSeverity::Info },
+		{ EOpsPurchaseKind::FuelContractCancelled, 0.0, TEXT("Cancelled Fuel bowser"), ENotificationSeverity::Info },
+		// TAKE-OR-PAY'S LOSS: a warning, naming what was lost, with no figure (the day's own line carries the money).
+		{ EOpsPurchaseKind::FuelPouredAway, 0.0, TEXT("Tanks full — Fuel bowser poured away"), ENotificationSeverity::Warning },
 	};
 	for (const FPurchaseCase& Case : PurchaseCases)
 	{

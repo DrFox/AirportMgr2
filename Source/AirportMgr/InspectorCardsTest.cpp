@@ -607,16 +607,23 @@ bool FInspectorFacilityRowsAreWiredTest::RunTest(const FString&)
 	TestNotNull(TEXT("and parented in the card's column, or it is never drawn"), Rows->GetParent());
 	TestTrue(TEXT("handed a door to run a BuildActions row through - WITH an argument, the only thing the rows act by (#448)"), static_cast<bool>(Rows->RunActionSource));
 
-	const FBuildAction* BuyModule = FindAction(FName(TEXT("selection.buy_module")));
 	const FBuildAction* BuyVehicle = FindAction(FName(TEXT("selection.buy_vehicle")));
-	if (!TestNotNull(TEXT("the registry has a buy_module row"), BuyModule) || !TestNotNull(TEXT("and a buy_vehicle row"), BuyVehicle)) { return false; }
-	if (!TestNotNull(TEXT("the rows built a buy-module button"), Rows->BuyModuleButton.Get())
+	const FBuildAction* FuelSpot = FindAction(FName(TEXT("selection.fuel_spot")));
+	if (!TestNotNull(TEXT("the registry has a buy_vehicle row"), BuyVehicle) || !TestNotNull(TEXT("and a fuel_spot row"), FuelSpot)) { return false; }
+	if (!TestNotNull(TEXT("the rows built a list for the module rows"), Rows->ModuleList.Get())
 		|| !TestNotNull(TEXT("and a buy-vehicle menu"), Rows->BuyVehicleMenu.Get())) { return false; }
-	TestEqual(TEXT("Buy's caption comes from its row"), Rows->BuyModuleCaptionForTest(), BuyModule->Label.ToString());
 	TestEqual(TEXT("the menu's caption comes from its row"), Rows->BuyVehicleMenu->GetButton()->GetLabel()->GetText().ToString(), BuyVehicle->Label.ToString());
+	// THE FUEL ROW'S THREE BUTTONS, each built for its registry row and captioned from it until a quote words them.
+	for (const UInspectorFacilityRows::EAction Fuel : { UInspectorFacilityRows::EAction::FuelSpot, UInspectorFacilityRows::EAction::FuelContractUp,
+		UInspectorFacilityRows::EAction::FuelContractCancel })
+	{
+		TestNotNull(FString::Printf(TEXT("the rows built fuel button %d"), static_cast<int32>(Fuel)), Rows->FuelButtonForTest(Fuel));
+	}
+	TestEqual(TEXT("Order's caption comes from its row"), Rows->FuelButtonForTest(UInspectorFacilityRows::EAction::FuelSpot)->GetLabel()->GetText().ToString(), FuelSpot->Label.ToString());
 
-	// THE ONE LIST: the rows own exactly their three, and the inspector's positional scan skips exactly those.
-	for (const TCHAR* Own : { TEXT("selection.buy_module"), TEXT("selection.buy_vehicle"), TEXT("selection.sell_vehicle") })
+	// THE ONE LIST: the rows own exactly their six, and the inspector's positional scan skips exactly those.
+	for (const TCHAR* Own : { TEXT("selection.buy_module"), TEXT("selection.buy_vehicle"), TEXT("selection.sell_vehicle"),
+		TEXT("selection.fuel_spot"), TEXT("selection.fuel_contract_up"), TEXT("selection.fuel_contract_cancel") })
 	{
 		TestTrue(FString::Printf(TEXT("the rows own %s"), Own), UInspectorFacilityRows::OwnsAction(FName(Own)));
 	}
@@ -629,7 +636,10 @@ bool FInspectorFacilityRowsAreWiredTest::RunTest(const FString&)
 	const TPair<UInspectorFacilityRows::EAction, const TCHAR*> Found[] = {
 		{ UInspectorFacilityRows::EAction::BuyModule, TEXT("selection.buy_module") },
 		{ UInspectorFacilityRows::EAction::BuyVehicle, TEXT("selection.buy_vehicle") },
-		{ UInspectorFacilityRows::EAction::SellVehicle, TEXT("selection.sell_vehicle") } };
+		{ UInspectorFacilityRows::EAction::SellVehicle, TEXT("selection.sell_vehicle") },
+		{ UInspectorFacilityRows::EAction::FuelSpot, TEXT("selection.fuel_spot") },
+		{ UInspectorFacilityRows::EAction::FuelContractUp, TEXT("selection.fuel_contract_up") },
+		{ UInspectorFacilityRows::EAction::FuelContractCancel, TEXT("selection.fuel_contract_cancel") } };
 	for (const TPair<UInspectorFacilityRows::EAction, const TCHAR*>& Each : Found)
 	{
 		const int32 Index = Rows->ActionIndexForTest(Each.Key);
@@ -642,6 +652,101 @@ bool FInspectorFacilityRowsAreWiredTest::RunTest(const FString&)
 		TestEqual(TEXT("and the purchase rows, skipped by the positional scan, did not shift it"),
 			Panel->DepartButton->GetLabel()->GetText().ToString(), Depart->Label.ToString());
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInspectorDepotFuelAndTankTest, "AirportMgr.Inspector.DepotCardShowsFuelAndTank",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FInspectorDepotFuelAndTankTest::RunTest(const FString&)
+{
+	// THE DEPOT CARD'S FUEL ROW AND ITS TANK ROW (2026-10-03), rendered from a quote built by hand - nothing computed here, so what is
+	// read is the composition (FDepotCard::FuelViewOf) and the rows' rendering of it. A second module offer makes a SECOND row, and
+	// its Buy carries its module: the shed's single row could not buy a tank.
+	FAirsideTestWorld Bare(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), Bare.World)) { return false; }
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(Bare.World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel"), Panel)) { return false; }
+	UInspectorFacilityRows* Rows = Panel->FacilityRows;
+
+	FFacilityQuote Quote;
+	Quote.Refusal = EPurchaseRefusal::None;
+	Quote.Bays = 1;
+	// THE TANK FIRST, as a TMap may list it: the rows show modules in kind order, the shed above the tank, whatever the quote's order.
+	FModuleOfferQuote& Tank = Quote.Modules.AddDefaulted_GetRef();
+	Tank.Module = EDepotModule::Tank;
+	Tank.PluralName = FText::FromString(TEXT("Fuel tanks"));
+	Tank.Owned = 1;
+	Tank.Reserved = 2;
+	Tank.Label = FText::FromString(TEXT("Buy Fuel tank 20,000"));
+	FModuleOfferQuote& Shed = Quote.Modules.AddDefaulted_GetRef();
+	Shed.Module = EDepotModule::Shed;
+	Shed.PluralName = FText::FromString(TEXT("Sheds"));
+	Shed.Owned = 1;
+	Shed.Reserved = 3;
+	Shed.Label = FText::FromString(TEXT("Buy Shed 40,000"));
+
+	FFuelQuote Fuel;
+	Fuel.StockLitres = 12000.0;
+	Fuel.CapacityLitres = 30000.0;
+	Fuel.bBounded = true;
+	Fuel.ContractTier = 0;
+	Fuel.ContractDaysLeft = 6;
+	Fuel.ContractLitresPerDay = 5000.0;
+	Fuel.ContractDailyCost = 4500.0;
+	Fuel.SpotLitres = 10000.0;
+	Fuel.NextTier = 1;
+	Fuel.NextLitresPerDay = 10000.0;
+	Fuel.Sign = EFuelOrderRefusal::NoRoom;
+	Fuel.Cancel = EFuelOrderRefusal::None;
+	Rows->Show(Quote, FDepotCard::FuelViewOf(Fuel, nullptr));
+
+	TestTrue(TEXT("the fuel row is shown"), Rows->IsFuelRowShownForTest());
+	TestEqual(TEXT("the fuel line reads stock of capacity, and the contract"), Rows->FuelTextForTest(),
+		FString(TEXT("Fuel 12,000 / 30,000 L · contract 5,000 L/day, 6 days")));
+	if (TestEqual(TEXT("TWO module rows - the shed's and the tank's"), Rows->ModuleRowCountForTest(), 2))
+	{
+		TestEqual(TEXT("the shed first, in kind order"), Rows->ModuleTextForTest(0), FString(TEXT("Sheds 1 / 3 space")));
+		TestEqual(TEXT("the tank's row counts its tanks"), Rows->ModuleTextForTest(1), FString(TEXT("Fuel tanks 1 / 2 space")));
+	}
+	// CONTRACTED: Upgrade AND Cancel, the upgrade greyed with its reason.
+	using EAction = UInspectorFacilityRows::EAction;
+	TestTrue(TEXT("the Upgrade button is shown while contracted"), Rows->FuelButtonForTest(EAction::FuelContractUp)->GetVisibility() == ESlateVisibility::Visible);
+	TestTrue(TEXT("beside Cancel"), Rows->FuelButtonForTest(EAction::FuelContractCancel)->GetVisibility() == ESlateVisibility::Visible);
+	TestTrue(TEXT("an upgrade that does not fit is greyed"), !Rows->FuelButtonForTest(EAction::FuelContractUp)->GetIsEnabled());
+	TestTrue(TEXT("with the NoRoom reason on its tooltip"), Rows->FuelButtonForTest(EAction::FuelContractUp)->GetToolTipText().ToString()
+		.Contains(UFacilityPurchases::FuelOrderRefusalText(EFuelOrderRefusal::NoRoom).ToString()));
+	// THE SPOT DELAY IN WORDS: plural hours, and minutes below an hour.
+	FFuelQuote Short = Fuel;
+	Short.SpotDelaySeconds = 7200.0;
+	TestTrue(TEXT("two hours, plural"), FDepotCard::FuelViewOf(Short, nullptr).SpotTip.ToString().Contains(TEXT("2 game hours")));
+	Short.SpotDelaySeconds = 3600.0;
+	TestTrue(TEXT("one hour, singular"), FDepotCard::FuelViewOf(Short, nullptr).SpotTip.ToString().Contains(TEXT("1 game hour")));
+	Short.SpotDelaySeconds = 1800.0;
+	TestTrue(TEXT("half an hour in minutes"), FDepotCard::FuelViewOf(Short, nullptr).SpotTip.ToString().Contains(TEXT("30 game minutes")));
+	// NO CONTRACT: the button signs, and Cancel is not offered.
+	FFuelQuote Uncontracted = Fuel;
+	Uncontracted.ContractTier = INDEX_NONE;
+	Uncontracted.NextTier = 0;
+	Uncontracted.NextLitresPerDay = 5000.0;
+	Uncontracted.Sign = EFuelOrderRefusal::None;
+	Uncontracted.Cancel = EFuelOrderRefusal::NoContract;
+	Rows->Show(Quote, FDepotCard::FuelViewOf(Uncontracted, nullptr));
+	TestTrue(TEXT("no contract: the button signs"), Rows->FuelButtonForTest(EAction::FuelContractUp)->GetLabel()->GetText().ToString().StartsWith(TEXT("Contract 5,000 L/day")));
+	TestTrue(TEXT("and Cancel is not offered"), Rows->FuelButtonForTest(EAction::FuelContractCancel)->GetVisibility() == ESlateVisibility::Collapsed);
+
+	TArray<FBuildActionArg> Ran;
+	TArray<int32> RanIndex;
+	Rows->RunActionSource = [&Ran, &RanIndex](int32 Index, const FBuildActionArg& Arg) { RanIndex.Add(Index); Ran.Add(Arg); };
+	Rows->ClickBuyModuleForTest(1);
+	if (TestEqual(TEXT("the tank's Buy ran one row"), Ran.Num(), 1))
+	{
+		TestEqual(TEXT("with Code = Tank"), Ran[0].Code, FName(TEXT("Tank")));
+		TestEqual(TEXT("through selection.buy_module"), RanIndex[0], Rows->ActionIndexForTest(UInspectorFacilityRows::EAction::BuyModule));
+	}
+
+	// NO FUEL VIEW (any card but a depot's, or no runtime): the fuel row collapses.
+	Rows->Show(Quote);
+	TestFalse(TEXT("a default fuel view collapses the fuel row"), Rows->IsFuelRowShownForTest());
 	return true;
 }
 

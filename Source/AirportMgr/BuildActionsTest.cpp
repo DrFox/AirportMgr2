@@ -99,6 +99,13 @@ bool FBuildActionsRegistryTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("selection.runway_use is registered, keyless, in Selection"), Actions.ContainsByPredicate([](const FBuildAction& A)
 		{ return A.Id == FName(TEXT("selection.runway_use")) && A.Section == EActionSection::Selection && !A.Key.IsValid() && A.DynamicLabel; }));
 
+	// THE DEPOT CARD'S FUEL ROW (2026-10-03): three rows the inspector finds by id - a rename here is dead buttons on the card.
+	for (const TCHAR* Fuel : { TEXT("selection.fuel_spot"), TEXT("selection.fuel_contract_up"), TEXT("selection.fuel_contract_cancel") })
+	{
+		TestTrue(FString::Printf(TEXT("%s is registered, keyless, inspector-only, in Selection"), Fuel), Actions.ContainsByPredicate([Fuel](const FBuildAction& A)
+			{ return A.Id == FName(Fuel) && A.Section == EActionSection::Selection && !A.Key.IsValid() && A.bInspectorOnly; }));
+	}
+
 	// Every section has at least one action - an empty section on the bar is a layout with
 	// nothing in it, which reads as a bug.
 	for (uint8 S = 0; S < static_cast<uint8>(EActionSection::Count); ++S)
@@ -923,7 +930,8 @@ bool FFacilityVerbsRegisteredTest::RunTest(const FString& Parameters)
 {
 	// BY NAME (CLAUDE.md "lists that must agree"): the inspector finds these rows by id, so a rename here
 	// would leave the depot card with dead buttons and nothing red.
-	for (const TCHAR* Id : { TEXT("selection.buy_module"), TEXT("selection.buy_vehicle"), TEXT("selection.sell_vehicle") })
+	for (const TCHAR* Id : { TEXT("selection.buy_module"), TEXT("selection.buy_vehicle"), TEXT("selection.sell_vehicle"),
+		TEXT("selection.fuel_spot"), TEXT("selection.fuel_contract_up"), TEXT("selection.fuel_contract_cancel") })
 	{
 		const FBuildAction* Action = FindAction(FName(Id));
 		if (!TestNotNull(*FString::Printf(TEXT("%s is registered"), Id), Action)) { continue; }

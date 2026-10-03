@@ -181,6 +181,16 @@ struct AIRPORTOPS_API FDayEndedEvent
 	FString Describe() const;
 };
 
+/** Fuel reached the tanks - a contract day or a spot order (spec 2026-10-02 §7). Litres arrived, Added fitted. */
+struct AIRPORTOPS_API FFuelDeliveredEvent
+{
+	double Litres = 0.0;
+	double Added = 0.0;
+	bool bContract = false;
+	static const TCHAR* EventName() { return TEXT("FuelDelivered"); }
+	FString Describe() const;
+};
+
 /** An airline's satisfaction moved. Published by UAirlineRoster from the Reaction tier. */
 struct AIRPORTOPS_API FAirlineSatisfactionEvent
 {
@@ -575,7 +585,7 @@ using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChanged
 	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent, FOfferAcceptedEvent,
 	FTurnaroundEndedEvent, FAirportStatusChangedEvent, FFlightCancelledEvent, FRunwayFreedEvent, FStandsFreedEvent,
 	FFlightInboundEvent, FPushGroundFreedEvent, FModulesRefundedEvent, FAlertChangedEvent, FAirlineAdmissionChangedEvent,
-	FFlightPhaseChangedEvent, FTaxiwaySplitEvent, FTaxiPlansFreedEvent, FTaxiUnplannedChangedEvent, FLandPurchasedEvent>;
+	FFlightPhaseChangedEvent, FTaxiwaySplitEvent, FTaxiPlansFreedEvent, FTaxiUnplannedChangedEvent, FLandPurchasedEvent, FFuelDeliveredEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec

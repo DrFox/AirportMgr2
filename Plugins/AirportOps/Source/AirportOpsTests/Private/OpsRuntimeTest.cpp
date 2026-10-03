@@ -4,6 +4,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/Pricing.h"
 #include "Misc/ScopeExit.h"
+#include "Model/FuelSupply.h"
 #include "Model/OpsDefinition.h"
 #include "Model/VehicleCodes.h"
 #include "Content/AirportOpsSettings.h"
@@ -1012,8 +1013,10 @@ bool FOpsRuntimeDesignFiguresAreTheScenariosTest::RunTest(const FString& Paramet
 	const double BowserPrice = Scenario->FuelVehicles[Bowser].Price;
 	const int32 Cap = Scenario->MaxPendingOffers;
 	const FAirlineSatisfactionTuning Tuning = Scenario->AirlineSatisfaction;
+	const FFuelSupplyFigures Fuel = Scenario->FuelSupply;
 	ON_SCOPE_EXIT
 	{
+		Scenario->FuelSupply = Fuel;
 		Scenario->RealSecondsDaylight = Daylight;
 		Scenario->DuskHour = Dusk;
 		Scenario->DepotRefillLitresPerMinutePerPump = Refill;
@@ -1035,6 +1038,8 @@ bool FOpsRuntimeDesignFiguresAreTheScenariosTest::RunTest(const FString& Paramet
 	Scenario->FuelVehicles[Bowser].Price = BowserPrice + 1234.0;
 	Scenario->MaxPendingOffers = Cap + 3;
 	Scenario->AirlineSatisfaction.Start = Tuning.Start * 0.5;
+	Scenario->FuelSupply.SpotPricePerLitre = Fuel.SpotPricePerLitre + 0.7;
+	Scenario->FuelSupply.ContractTermDays = Fuel.ContractTermDays + 2;
 
 	if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
 	TestEqual(TEXT("the clock's day is the scenario's"), Runtime->GetClock()->RealSecondsDaylight, Daylight + 600.0, 1e-9);
@@ -1047,6 +1052,10 @@ bool FOpsRuntimeDesignFiguresAreTheScenariosTest::RunTest(const FString& Paramet
 		Runtime->GetJobBoard()->Fleet().PriceOf(Bowser), BowserPrice + 1234.0, 1e-9);
 	TestEqual(TEXT("the inbox cap is the scenario's"), Runtime->GetOfferGenerator()->MaxPendingOffers, Cap + 3);
 	TestEqual(TEXT("and the airline tuning, as it always was"), Runtime->GetAirlines()->Tuning.Start, Tuning.Start * 0.5, 1e-9);
+	// THE FUEL SUPPLY'S FIGURES (Transient, UFuelSupply::Figures): ApplyScenarioFigures re-reads them after the restore, so a load
+	// prices spot fuel and signs contracts at the scenario's figures, not the session's.
+	TestEqual(TEXT("the spot price is the scenario's"), Runtime->GetFuelSupply()->Figures.SpotPricePerLitre, Fuel.SpotPricePerLitre + 0.7, 1e-9);
+	TestEqual(TEXT("and the contract term"), Runtime->GetFuelSupply()->Figures.ContractTermDays, Fuel.ContractTermDays + 2);
 	return true;
 }
 

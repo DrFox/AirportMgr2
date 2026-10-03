@@ -9,6 +9,8 @@
 #include "FacilityPurchases.generated.h"
 
 class FOpsEventBus;
+/** UFuelSupply's (Model/FuelSupply.h) - a fixed underlying type, so declared here without dragging the supply into every quote reader. */
+enum class EFuelOrderRefusal : uint8;
 struct FServiceVehicle;
 class UJobBoard;
 class ULedger;
@@ -92,6 +94,15 @@ struct FFacilityQuote
 	TArray<FFleetRowQuote> Fleet;
 
 	bool IsFacility() const { return Refusal == EPurchaseRefusal::None; }
+
+	/**
+	 * A module's row BY KIND, or null. Modules is one row per offer in TMap order, which is not stable - "the first row" was
+	 * the shed only while the shed was the only offer (the tank joined 2026-10-02). A consumer naming a kind asks for it here.
+	 */
+	const FModuleOfferQuote* FindModule(EDepotModule Module) const
+	{
+		return Modules.FindByPredicate([Module](const FModuleOfferQuote& Row) { return Row.Module == Module; });
+	}
 };
 
 /** What a command did. Amount is what was charged (buy) or credited (sell); 0 when refused. */
@@ -235,6 +246,14 @@ public:
 
 	/** "No space", "Can't afford" - the disabled button's reason. The wording is the contract. */
 	static FText RefusalText(EPurchaseRefusal Why);
+
+	/**
+	 * The fuel row's reason, one sentence per EFuelOrderRefusal (2026-10-03) - BESIDE RefusalText so the depot card's two kinds of
+	 * greyed button speak from one place, and Can't afford reads the same on a shed and on a spot order. Empty for None.
+	 * ENFORCED BY: C4062 as an error (AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN) for a missing case; AirportOps.Model.FuelSupply.EveryRefusalHasASentence
+	 * for empty or shared words
+	 */
+	static FText FuelOrderRefusalText(EFuelOrderRefusal Why);
 
 private:
 	/** Entity if it is a live facility on Network, else null. */

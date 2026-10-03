@@ -1,6 +1,8 @@
 #include "Model/FacilityPurchases.h"
 
 #include "AirportOpsLog.h"
+#include "Model/ExhaustiveSwitch.h"
+#include "Model/FuelSupply.h"
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
 #include "Model/OpsEventBus.h"
@@ -25,6 +27,26 @@ FText UFacilityPurchases::RefusalText(EPurchaseRefusal Why)
 	}
 	return FText::GetEmpty();
 }
+
+// EVERY CASE BY NAME, NO default: a refusal appended to EFuelOrderRefusal is a BUILD ERROR here (C4062, raised by the macro), not a
+// greyed button with no reason. ENFORCED BY: C4062 as an error, AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN
+FText UFacilityPurchases::FuelOrderRefusalText(EFuelOrderRefusal Why)
+{
+	// RefusalText's CannotAfford words, said again by name rather than by calling it with a cast: the two enums are different
+	// types, and a reordered value would silently borrow the wrong sentence.
+	switch (Why)
+	{
+	case EFuelOrderRefusal::None:              return FText::GetEmpty();
+	case EFuelOrderRefusal::NoRoom:            return LOCTEXT("FuelNoRoom", "No room in the tanks - buy a tank");
+	case EFuelOrderRefusal::CannotAfford:      return LOCTEXT("CannotAfford", "Can't afford");
+	case EFuelOrderRefusal::UnknownTier:       return LOCTEXT("FuelUnknownTier", "No larger contract");
+	case EFuelOrderRefusal::AlreadyContracted: return LOCTEXT("FuelAlreadyContracted", "Already under contract");
+	case EFuelOrderRefusal::NoContract:        return LOCTEXT("FuelNoContract", "No contract");
+	}
+	return FText::GetEmpty();
+}
+AIRSIDE_EXHAUSTIVE_SWITCH_END
 
 const FEntityInstance* UFacilityPurchases::FacilityAt(const URoadNetwork& Network, FEntityInstanceId Entity)
 {

@@ -40,7 +40,16 @@ enum class EOpsPurchaseKind : uint8
 	/** #266's repair: modules with no room left on the plot, removed and refunded - the game's doing, not the player's. */
 	ModulesRefunded,
 	/** A land tile bought (land purchase spec R10). APPENDED, so no other value moves. */
-	LandBought
+	LandBought,
+	/** A spot fuel order paid for (UOpsRuntime::OrderSpotFuel). Name is the litres; Amount the price, paid now. */
+	FuelOrdered,
+	/** A fuel contract signed. Name says the tier and term; Amount is ONE DAY's cost, charged at each day end - signing pays nothing. */
+	FuelContractSigned,
+	/** A fuel contract cancelled. Amount is the cancellation charge, 0 when the term had run out. */
+	FuelContractCancelled,
+	/** A contract day the tanks could not hold: take-or-pay, paid whole, and the rest poured away. Name is the litres LOST; Amount 0 -
+	 *  the money went on the day's own FuelPurchase line, and this is the news that part of it bought nothing. */
+	FuelPouredAway
 };
 
 /**

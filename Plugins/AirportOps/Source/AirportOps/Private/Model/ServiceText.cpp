@@ -58,6 +58,8 @@ namespace ServiceText
 		// NOT "buy one": the card lists the vehicle, and it is the listed one that cannot be used (#478) - sell it, buy a kind
 		// the scenario has.
 		case EServiceRefusal::UnknownVehicleKind: return TEXT("the depot's vehicles are of a kind this scenario no longer has - sell them and buy new");
+		// THE FIX, NAMED: the two ways fuel enters the airport (spec 2026-10-02 §7).
+		case EServiceRefusal::NoFuelStock:   return TEXT("the airport has no fuel in its tanks - order spot fuel or sign a contract");
 		}
 		// A VALUE OUTSIDE THE ENUM (a corrupt save's Why): not one of the cases above, and still worded.
 		return TEXT("unserviceable");

@@ -32,6 +32,7 @@ class URoadNetwork;
 class ULedger;
 class FOpsEventBus;
 class UPricing;
+class UFuelSupply;
 struct FRoadAgent;
 enum class EAgentPhase : uint8;
 
@@ -195,6 +196,29 @@ public:
 	 * counts the owned pumps, not the seated ones)
 	 */
 	FModuleCeilingFn ModuleCeilingOf;
+
+	/**
+	 * The airport's fuel stock (spec 2026-10-02 §7). NULL means unlimited - every board built before fuel had a cost, and
+	 * every test that is not about stock. UOpsRuntime sets it (fuel-supply plan task 6; until then nothing in production
+	 * does, and fuel stays free there). A refill DRAWS from it as it begins (BeginFacility); a bid only READS it (BidFor).
+	 * ENFORCED BY: AirportOps.Fuel.RefillDrawsTheStock, AirportOps.Fuel.BidPricesTheBoardsStock
+	 */
+	UPROPERTY(Transient) TObjectPtr<UFuelSupply> FuelSupply;
+
+	/** What a refill may take now: the stock, or unbounded when there is no supply. */
+	double FuelAvailable() const;
+
+	/** Re-opens every Unserviceable job refused NoFuelStock (spec 2026-10-02 §7) and returns how many. Fuel arriving
+	 *  changes no graph revision, so the refusal's usual re-judge never fires; UOpsRuntime calls this on FFuelDeliveredEvent.
+	 *  ENFORCED BY: AirportOps.Fuel.DeliveryReopensStockRefusals */
+	int32 ReopenStockRefusals();
+
+	/**
+	 * Seated tanks across every live depot, in litres (FDepotCapability::Tanks x LitresPerTank). UOpsRuntime wires
+	 * UFuelSupply::CapacityOf to this (task 6). LitresPerTank is a PARAMETER, not read here, because the figure lives on the
+	 * supply's Figures and the board does not own the supply's design.
+	 */
+	double FuelCapacityLitres(const URoadNetwork& Network, double LitresPerTank) const;
 
 	/**
 	 * What Depot's SEATED modules give it (#443, ruled 2026-09-30): its pumps and whether it can fuel at all. THE MODULES
@@ -806,6 +830,10 @@ private:
 		bool bAnyPumpless = false;
 		bool bAnyTooLarge = false;
 		bool bAnyTooNarrow = false;
+		/** No bid finished and at least one failed for want of stock (ServiceBid::EOutcome::NoStock) - NoFuelStock. ANY, not
+		 *  every: the stock is one airport pool, so a dry bidder means fuel is a real blocker whatever the others failed on.
+		 *  Written by the bid pass, after Judge: eligibility is the airport's shape, and stock is not part of it. */
+		bool bNoStock = false;
 		FGuidelineEdgeId NarrowAt;
 		FName TooLargeType;
 		FName DesignType;

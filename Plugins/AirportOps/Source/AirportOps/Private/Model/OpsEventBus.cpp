@@ -60,6 +60,11 @@ FString FFlightOffBlocksEvent::Describe() const
 	return FString::Printf(TEXT("flight %d, airline %s, %+.0f s against its contract"), FlightId, *AirlineId.ToString(), LateBySeconds);
 }
 
+FString FFuelDeliveredEvent::Describe() const
+{
+	return FString::Printf(TEXT("%s %.0f L, %.0f L added"), bContract ? TEXT("contract") : TEXT("spot"), Litres, Added);
+}
+
 FString FDayEndedEvent::Describe() const
 {
 	return FString::Printf(TEXT("day %d"), Day);
