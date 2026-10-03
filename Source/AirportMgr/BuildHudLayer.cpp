@@ -1,5 +1,6 @@
 #include "BuildHudLayer.h"
 #include "AlertsPanelWidget.h"
+#include "AirlinesPanelWidget.h"
 
 #include "ArrivalsPanelWidget.h"
 #include "Blueprint/UserWidget.h"
@@ -63,6 +64,9 @@ void UBuildHudLayer::CreateAll(APlayerController& Owner)
 	// CODE-ONLY, no *Class hook, like Arrivals and Settings. IN WireWindows TOO - a list that must agree.
 	// ENFORCED BY: AirportMgr.UI.Alerts.HudHostsItAsAWindow
 	AlertsPanel = CreateWidget<UAlertsPanelWidget>(&Owner, UAlertsPanelWidget::StaticClass());
+	// CODE-ONLY, as Alerts. IN WireWindows TOO - a list that must agree.
+	// ENFORCED BY: AirportMgr.Airlines.Panel.Registered
+	AirlinesPanel = CreateWidget<UAirlinesPanelWidget>(&Owner, UAirlinesPanelWidget::StaticClass());
 	ToastStack = CreateConfiguredWidget<UToastStackWidget>(Owner, ToastStackClass, 2,
 		TEXT("Toast stack"), TEXT("ToastStackClass"));
 	WireWindows();
@@ -74,7 +78,7 @@ void UBuildHudLayer::WireWindows()
 	{
 		return;
 	}
-	for (UAirportMgrPanelWidget* Panel : TArray<UAirportMgrPanelWidget*>{ Inspector, OfferInbox, ArrivalsPanel, LedgerPanel, LandPanel, AlertsPanel, SettingsPanel })
+	for (UAirportMgrPanelWidget* Panel : TArray<UAirportMgrPanelWidget*>{ Inspector, OfferInbox, ArrivalsPanel, LedgerPanel, LandPanel, AlertsPanel, AirlinesPanel, SettingsPanel })
 	{
 		if (Panel != nullptr)
 		{
@@ -88,7 +92,8 @@ namespace
 {
 	/** The words of each window's open/close line, in EHudWindow order - ONE TABLE whose static_assert fails a window added to the
 	 *  enum with no name, the way ActionSectionName's does. The first three are what the controller's own lines said. */
-	constexpr const TCHAR* HudWindowNames[] = { TEXT("Ledger panel"), TEXT("Alerts window"), TEXT("Land panel"), TEXT("Settings") };
+	constexpr const TCHAR* HudWindowNames[] = { TEXT("Ledger panel"), TEXT("Alerts window"), TEXT("Land panel"), TEXT("Settings"),
+		TEXT("Airlines window") };
 	static_assert(UE_ARRAY_COUNT(HudWindowNames) == static_cast<int32>(EHudWindow::Count),
 		"Every EHudWindow needs a name in HudWindowNames");
 }
@@ -107,6 +112,7 @@ namespace
 		case EHudWindow::Alerts:   return Layer.AlertsPanel;
 		case EHudWindow::Land:     return Layer.LandPanel;
 		case EHudWindow::Settings: return Layer.SettingsPanel;
+		case EHudWindow::Airlines: return Layer.AirlinesPanel;
 		default:                   return nullptr;
 		}
 	}

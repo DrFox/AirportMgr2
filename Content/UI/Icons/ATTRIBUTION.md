@@ -17,6 +17,7 @@ drives the downloads, so it cannot drift from what was fetched.
 | `edit.redo` | clockwise-rotation | delapouite |
 | `edit.remove` | trash-can | delapouite |
 | `edit.undo` | anticlockwise-rotation | delapouite |
+| `game.airlines` | shaking-hands | delapouite |
 | `game.airport` | control-tower | delapouite |
 | `game.alerts` | hazard-sign | lorc |
 | `game.driveside` | steering-wheel | delapouite |

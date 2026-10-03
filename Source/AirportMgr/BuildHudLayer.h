@@ -8,6 +8,7 @@ class UInspectorWidget;
 class UOfferInboxWidget;
 class ULedgerPanelWidget;
 class UAlertsPanelWidget;
+class UAirlinesPanelWidget;
 class USettingsPanelWidget;
 class UArrivalsPanelWidget;
 class ULandAircraftPanelWidget;
@@ -30,6 +31,7 @@ enum class EHudWindow : uint8
 	Alerts,
 	Land,
 	Settings,
+	Airlines,
 
 	/** How many windows there are - NOT one. Sizes the name table, whose static_assert fails a window added with no name. */
 	Count
@@ -125,6 +127,10 @@ public:
 	/** The standing alerts (ops alerts spec 2026-09-29) - opened from the bar's Alerts button. */
 	UPROPERTY(Transient)
 	TObjectPtr<UAlertsPanelWidget> AlertsPanel;
+
+	/** Who flies here and how they feel about it (spec 2026-10-02-airlines-panel) - opened from the bar's Airlines button. */
+	UPROPERTY(Transient)
+	TObjectPtr<UAirlinesPanelWidget> AirlinesPanel;
 
 	/** Every floating panel's window, on one canvas at Z 1 - see UUiWindowHost. */
 	UPROPERTY(Transient)

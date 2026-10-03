@@ -19,6 +19,7 @@
 #include "Model/RunwayFacts.h"
 #include "Entities/EntityDefinition.h"
 #include "AlertsPanelWidget.h"
+#include "AirlinesPanelWidget.h"
 #include "BuildActions.h"
 #include "BuildBarWidget.h"
 #include "LandAircraftPanelWidget.h"
@@ -621,7 +622,7 @@ bool FBuildActionsSettingsDropsADragTest::RunTest(const FString& Parameters)
 /**
  * #448: THE WINDOW VERBS TOGGLE THE HUD LAYER. Four Toggle/IsShowing pairs on the controller became ONE toggle on UBuildHudLayer, which the
  * bar's rows reach through FBuildActionContext::Hud - so this is the seam that goes red if a row is left bound to nothing, or to the wrong
- * window. Each row's Execute opens its window, its IsActive lights while open, and the second Execute closes it. (Ledger, alerts and Land
+ * window. Each row's Execute opens its window, its IsActive lights while open, and the second Execute closes it. (Ledger, alerts, Land and Airlines
  * go through the HUD directly; Settings through the controller, which adds the drag drop - the tests above.)
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWindowVerbsToggleTheHudTest, "AirportMgr.Actions.WindowVerbsToggleTheHudLayer",
@@ -637,11 +638,14 @@ bool FWindowVerbsToggleTheHudTest::RunTest(const FString& Parameters)
 	Hud->LedgerPanel = CreateWidget<ULedgerPanelWidget>(TestWorld.World, ULedgerPanelWidget::StaticClass());
 	Hud->AlertsPanel = CreateWidget<UAlertsPanelWidget>(TestWorld.World, UAlertsPanelWidget::StaticClass());
 	Hud->LandPanel = CreateWidget<ULandAircraftPanelWidget>(TestWorld.World, ULandAircraftPanelWidget::StaticClass());
-	if (!TestTrue(TEXT("setup: the three panels"), Hud->LedgerPanel != nullptr && Hud->AlertsPanel != nullptr && Hud->LandPanel != nullptr)) { return false; }
+	Hud->AirlinesPanel = CreateWidget<UAirlinesPanelWidget>(TestWorld.World, UAirlinesPanelWidget::StaticClass());
+	if (!TestTrue(TEXT("setup: the four panels"), Hud->LedgerPanel != nullptr && Hud->AlertsPanel != nullptr && Hud->LandPanel != nullptr
+		&& Hud->AirlinesPanel != nullptr)) { return false; }
 
 	struct FRow { const TCHAR* Id; EHudWindow Window; };
 	const FRow Rows[] = { { TEXT("game.ledger"), EHudWindow::Ledger }, { TEXT("game.alerts"), EHudWindow::Alerts },
-		{ TEXT("aircraft.land"), EHudWindow::Land }, { TEXT("game.settings"), EHudWindow::Settings } };
+		{ TEXT("aircraft.land"), EHudWindow::Land }, { TEXT("game.settings"), EHudWindow::Settings },
+		{ TEXT("game.airlines"), EHudWindow::Airlines } };
 	for (const FRow& Row : Rows)
 	{
 		const FBuildAction* Action = FindAction(FName(Row.Id));

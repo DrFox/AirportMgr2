@@ -558,6 +558,13 @@ namespace
 			Out.Add(MoveTemp(Alerts));
 		}
 
+		// WHO FLIES HERE AND WHY THEY FEEL AS THEY DO (spec 2026-10-02-airlines-panel section 2). NO KEY, Alerts' reason. Lit while
+		// open, the ledger's rule; HasRuntime, because every figure in the window is the runtime's.
+		Out.Add(Make(TEXT("game.airlines"), EActionSection::Game, LOCTEXT("Airlines", "Airlines"),
+			EKeys::Invalid, false,
+			[](FBuildActionContext& Ctx) { BuildActionVerbs::ToggleWindow(Ctx, EHudWindow::Airlines); },
+			[](const FBuildActionContext& Ctx) { return BuildActionVerbs::WindowShowing(Ctx, EHudWindow::Airlines); }, HasRuntime));
+
 		// THE AIRPORT'S STATUS (spec 2026-09-29-ops-batch3 §3): close it, reopen it, and read why it is not open. A MENU
 		// VERB, because closing cancels every flight not yet arrived - a destructive gesture, so it confirms at the
 		// cursor with the inspector Unstick's popup (UUiMenuButton + bConfirm) rather than on one click. Reopening loses
