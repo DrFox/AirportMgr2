@@ -10,7 +10,7 @@ exposure, so the figures the tests exercise and the figures the shipped assets c
 the same figures rather than two transcriptions of them - the class of duplication that
 puts a hold door in one place in code and another in content.
 
-Four assets, and the splits between them are the point:
+Three assets (four until the stand was retired), and the splits between them are the point:
 
   DA_Aircraft_A320 / DA_Aircraft_B738   where each service CONNECTS to that airframe
   (DA_Stand_CodeC                       RETIRED 2026-10-03 - built at runtime now; see the tail)
@@ -173,8 +173,30 @@ build_aircraft("DA_Aircraft_B738", unreal.AircraftType.build737)
 # NO STAND IS AUTHORED HERE SINCE 2026-10-03 (owner ruling). DA_Stand_CodeC is retired: a stand
 # layout is DERIVED data, and the saved copy went stale once (the tow's settle straights had to be
 # re-authored by hand). Code C is built at runtime by UStandDefinitionCache like every other letter,
-# and its A320 pairing is the content set's StandDesignAircraft, resolved by
-# UAirsideSettings::ResolveLargestAircraftOfLetter. The airbus is still authored above for that.
+# and its A320 pairing is the content set's StandLetters row for C, resolved by
+# UAirsideSettings::ResolveLargestAircraftOfLetter - WRITTEN BELOW, by the script that authors the
+# airbus, so a scripted rebuild cannot drop the pairing. Only the row's aircraft: its prices are
+# build_cost_rates.py's.
+STAND_LETTER_C = 2   # EIcaoCode ordinal, A..F
+
+
+def wire_stand_aircraft(aircraft):
+    content = unreal.EditorAssetLibrary.load_asset(CONTENT_SET)
+    if content is None:
+        unreal.log_error("MARKER: %s not found - no stand row to pair with the A320." % CONTENT_SET)
+        return
+    rows = list(content.get_editor_property("stand_letters"))
+    while len(rows) <= STAND_LETTER_C:
+        rows.append(unreal.StandLetterDefaults())
+    rows[STAND_LETTER_C].set_editor_property("design_aircraft", aircraft)
+    content.set_editor_property("stand_letters", rows)
+    unreal.EditorAssetLibrary.save_asset(CONTENT_SET, only_if_is_dirty=False)
+    unreal.log("MARKER: %s.StandLetters[C].DesignAircraft -> %s" % (
+        CONTENT_SET, content.get_editor_property("stand_letters")[STAND_LETTER_C].get_editor_property("design_aircraft")))
+
+
+if airbus is not None:
+    wire_stand_aircraft(airbus)
 
 fuel_depot = build_fuel_depot()
 if fuel_depot is not None:

@@ -100,7 +100,8 @@ bool FAirsideContentPostLoadDoesNotClobberAuthoredSlotTest::RunTest(const FStrin
 
 /**
  * An asset saved before Placeables existed (issue #192 item 1) still has its bytes under
- * DefaultStand / DefaultFuelDepot - meta = (DeprecatedProperty) keeps those tagged names
+ * DefaultFuelDepot (and had them under DefaultStand, removed 2026-10-03 with the retired stand
+ * asset) - meta = (DeprecatedProperty) keeps the tagged name
  * matching on load, the way the runway materials test above proves for its own three fields
  * - and this asserts PostLoad actually moves them into Placeables rather than leaving it
  * empty, which is what would make ARoadNetworkActor place nothing for a shipped asset.

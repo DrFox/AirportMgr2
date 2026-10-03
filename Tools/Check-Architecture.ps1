@@ -5436,12 +5436,16 @@ $letterPathFiles = @(
     'Plugins\Airside\Source\Airside\Private\Entities\EntityDefinition.cpp',
     'Plugins\Airside\Source\Airside\Private\Content\AirsideSettings.cpp',
     'Plugins\Airside\Source\Airside\Private\Present\RoadEditFacadeSurfaces.cpp',
-    'Plugins\Airside\Source\Airside\Private\Present\RoadNetworkActor.cpp'
+    'Plugins\Airside\Source\Airside\Private\Present\RoadNetworkActor.cpp',
+    'Plugins\Airside\Source\Airside\Private\Tool\StandPlotTool.cpp'
 )
 $letterAllowed = @{
     # THE USER'S RULING 2026-09-26, the per-letter design vehicle: A and B are the tow's, C up the truck's. A two-row
     # table written as one ordered compare on a scoped enum declared A..F - see the function's own comment.
     'UAirsideSettings::ResolveStandDesignVehicle' = 'per-letter design vehicle ruling (2026-09-26)'
+    # THE END OF THE TABLE, not a special case: the ghost's "next letter's lever" names the letter AFTER this one by
+    # ordinal, and F, the last row, has none - a bound check written as a compare against the table's last letter.
+    'FStandPlotTool::DescribeReadout' = 'F is the last row - no next letter to name'
 }
 foreach ($rel in $letterPathFiles) {
     $file = Join-Path $Root $rel
@@ -5456,6 +5460,9 @@ foreach ($rel in $letterPathFiles) {
         $code = Strip-ArchCode $lines[$i] ([ref]$inBlock)
         $def = Get-ArchDefinition $code
         if ($null -ne $def) { $current = $def }
+        # A FUNCTION ENDS AT A CLOSING BRACE IN COLUMN 0 (this codebase's layout), and so does an allow-list row's cover:
+        # code after an allowed function's body is judged as nobody's (review, 2026-10-03).
+        if ($code -match '^\}') { $current = ''; continue }
         if ($code -match '(==|!=|<=|>=|<|>)\s*EIcaoCode::[A-F]\b|\bEIcaoCode::[A-F]\s*(==|!=|<=|>=|<|>)|\bcase\s+EIcaoCode::[A-F]\b') {
             if ($letterAllowed.ContainsKey($current)) { continue }
             $failures.Add("stand-letter-no-branch: $($rel):$($i + 1) in $current compares against one ICAO letter - the stand path reads a letter's differences from a TABLE (IcaoCode, UAirsideContent::StandLetters), never a branch; a legitimate compare is an allow-list row in rule 106 with its reason: $($lines[$i].Trim())")

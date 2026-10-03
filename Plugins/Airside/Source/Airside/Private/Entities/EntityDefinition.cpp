@@ -12,25 +12,14 @@
 
 UEntityDefinition* UEntityDefinition::MakeStandTransient()
 {
-	// BUILT FIRST, because the layout is measured FROM it: this used to be set after
-	// BuildCodeCStand had already run, which was harmless only for as long as nothing in the
-	// layout depended on it.
-	//
-	// AND BECAUSE THE FIXTURE HAS TO BE THE SHIPPING STAND. A definition with no design
-	// aircraft is SUPPORTED - it gets a lane whose crossings are placed off the anchors alone
-	// rather than pushed clear of a nose and a tail that are not there, which is what a stand
-	// with no envelope wants, and BuildCodeCStandFor's header says so. It is simply a
-	// different stand from the one the suite is about: without an envelope the tail clamp
-	// that puts the aft crossing at x = -3550 never binds and the fuselage the lane is
-	// asserted to clear does not exist, so every figure measured here would be another
-	// layout's.
-	UAircraftType* A320 = NewObject<UAircraftType>(GetTransientPackage());
-	UAircraftType::BuildA320(A320);
-
-	UEntityDefinition* Definition = NewObject<UEntityDefinition>(GetTransientPackage());
-	BuildCodeCStand(Definition, A320);
-
-	return Definition;
+	// THE SHIPPING CODE C STAND, EXACTLY: the letter overload, which is what UStandDefinitionCache places
+	// (2026-10-03). It built its own paper A320 here (UAircraftType::BuildA320) - a SECOND source for C's
+	// aircraft beside the content set's StandLetters row, the pairing the retired DA_Stand_CodeC carried -
+	// so the suite's fixture and the game's stand could have been drawn with different aircraft. One
+	// resolver now. A run with no content set gets a null aircraft, which BuildStandFor supports and which
+	// changes no leg, pose or extent (RuntimeCodeCStandEqualsTheRetiredAsset holds the layout bitwise).
+	// ENFORCED BY: Airside.Content.CodeCStandDrawsTheRetiredAssetsAircraft (the fixture's aircraft is the content row's)
+	return MakeStandTransient(EIcaoCode::C);
 }
 
 UEntityDefinition* UEntityDefinition::MakeStandTransient(EIcaoCode Letter, UObject* Outer)
@@ -266,6 +255,11 @@ void UEntityDefinition::BuildStandFor(
 	// stand's own inspect panel both read it, and a definition that names no design aircraft is
 	// a stand nothing can be shown parked on.
 	Definition->DesignAircraft = Aircraft;
+
+	// ITS NAME FOR THE PLAYER, by letter (IcaoCode::StandNameForLetter, 2026-10-03). The retired
+	// DA_Stand_CodeC never set one and was labelled by its asset name; a runtime template's object name is
+	// "EntityDefinition_N", which is what every snap-guide and inspector label would otherwise say.
+	Definition->DisplayName = FText::FromString(IcaoCode::StandNameForLetter(Letter));
 
 	// A contact stand: the ground half of a turnaround. This function now takes Letter as a
 	// parameter rather than pinning it to C: the wing-relative fixtures below (hydrant, hold,

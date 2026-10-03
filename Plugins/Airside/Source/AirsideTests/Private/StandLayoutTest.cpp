@@ -1017,6 +1017,28 @@ bool FRuntimeCodeCStandEqualsTheRetiredAssetTest::RunTest(const FString& Paramet
 				Have.Id == FName(Want.Id) && Have.LocalPosition == Want.At && Have.LocalHeading == Want.Heading && Have.Role == Want.Role);
 		}
 	}
+	// AND EVERY OTHER FIELD THE ASSET CARRIED (review, 2026-10-03). Read off the retired asset (git show
+	// b9413f7a:Content/Entities/DA_Stand_CodeC.uasset): AdmittedVehicles and AvailableServices were saved;
+	// PoseRole, Trucks, Layout, bTaxiThrough and FootprintExtent have NO tag in its name table, so the asset
+	// held the class defaults for them - which is what is asserted. AvailableServices as a SET: the name
+	// table proves the members, not their order. The PRICES and aircraft are content now -
+	// CodeCStandDrawsTheRetiredAssetsAircraft holds those.
+	{
+		FString Kinds;
+		for (const FVehicle& Vehicle : Runtime->AdmittedVehicles) { Kinds += Vehicle.TypeCode.ToString() + TEXT(" "); }
+		TestEqual(TEXT("it admits what the retired asset admitted, by kind and in order"), Kinds,
+			UAirsideSettings::ResolveDefaultVehicle().TypeCode.ToString() + TEXT(" ") + UAirsideSettings::ResolveUtilityTowVehicle().TypeCode.ToString() + TEXT(" "));
+		const TSet<EServiceRole> Services(Runtime->AvailableServices);
+		const TSet<EServiceRole> Retired = { EServiceRole::Aircraft, EServiceRole::Fuel, EServiceRole::Baggage,
+			EServiceRole::Tug, EServiceRole::GPU, EServiceRole::Passenger, EServiceRole::Crew };
+		TestTrue(TEXT("it provides the retired asset's services, no more and no fewer"),
+			Services.Num() == Retired.Num() && Services.Includes(Retired));
+		TestEqual(TEXT("pose role, the asset's (class default)"), static_cast<int32>(Runtime->PoseRole), static_cast<int32>(EServiceRole::Aircraft));
+		TestEqual(TEXT("trucks, the asset's (class default)"), Runtime->Trucks, 0);
+		TestEqual(TEXT("layout, the asset's (class default)"), static_cast<int32>(Runtime->Layout), static_cast<int32>(EPlotLayout::Scatter));
+		TestFalse(TEXT("taxi-through, the asset's (class default)"), Runtime->bTaxiThrough);
+		TestTrue(TEXT("footprint extent, the asset's (class default)"), Runtime->FootprintExtent == FVector2D::ZeroVector);
+	}
 	const FBayPoses* Poses[] = { &Bay0, &Bay1, &Bay2 };
 	if (!TestEqual(TEXT("as many bays as the retired asset"), Runtime->ServiceBays.Num(), static_cast<int32>(UE_ARRAY_COUNT(Poses))))
 	{
@@ -1059,13 +1081,17 @@ bool FCodeCStandDrawsTheRetiredAssetsAircraftTest::RunTest(const FString& Parame
 	// pairing with DA_Aircraft_A320, the aircraft a C stand is drawn with and reads its design span off.
 	// The layout is runtime now (RuntimeCodeCStandEqualsTheRetiredAsset); the pairing is content, and
 	// moved to the ONE resolver, UAirsideSettings::ResolveLargestAircraftOfLetter, read off the content
-	// set's StandDesignAircraft - the asset's own reference, dumped from it before it was deleted.
+	// set's StandLetters row for C - the asset's own reference, dumped from it before it was deleted.
 	const UAircraftType* C = UAirsideSettings::ResolveLargestAircraftOfLetter(EIcaoCode::C);
 	if (TestNotNull(TEXT("Code C resolves a design aircraft"), C))
 	{
 		TestEqual(TEXT("and it is the one DA_Stand_CodeC paired with"), C->GetPathName(),
 			FString(TEXT("/Game/Entities/DA_Aircraft_A320.DA_Aircraft_A320")));
 	}
+	// AND THE SUITE'S FIXTURE IS DRAWN WITH THE SAME ONE: zero-arg MakeStandTransient built its own paper A320
+	// until 2026-10-03, a second source for C's aircraft beside this row.
+	TestTrue(TEXT("MakeStandTransient()'s design aircraft is the content row's, not a second one"),
+		C != nullptr && UEntityDefinition::MakeStandTransient()->DesignAircraft.Get() == C);
 	for (const EIcaoCode Letter : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
 	{
 		TestNull(*FString::Printf(TEXT("Code %s has no aircraft chosen to draw it with yet"), IcaoCode::ToLetter(Letter)),
