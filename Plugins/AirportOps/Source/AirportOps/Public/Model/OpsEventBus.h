@@ -4,6 +4,7 @@
 #include "AirportOpsLog.h"
 #include "Misc/TVariant.h"
 #include "Model/Airport.h"
+#include "Model/AirlineRoster.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/BuildPurse.h"
 #include "Model/Flight.h"
@@ -142,16 +143,19 @@ struct AIRPORTOPS_API FOfferDeclinedEvent
 };
 
 /**
- * A flight left the ground. LateBySeconds is AirborneAt - AirborneBy(): the contract the inbox row
- * showed at the offer. Negative is early, and is not clamped - what early is worth is the listener's
- * decision, not the publisher's.
+ * A flight left its stand - OFF BLOCKS, the end of its turnaround contract (#398; it was "left the ground", scored at the
+ * line-up, until movement was measured eating most of the contract). LateBySeconds is how far OffBlocksAt overran OffBlocksBy(), i.e.
+ * OffBlocksAt - (OnBlocksAt + ContractSeconds): the contract the inbox row showed at the offer, run on the stand only.
+ * Negative is early, and is not clamped - what early is worth is the listener's decision, not the publisher's. Published only
+ * for a flight that was on blocks: no turnaround, no contract, nothing to score.
+ * ENFORCED BY: AirportOps.Model.FlightBoard.Events.OffBlocksLateness
  */
-struct AIRPORTOPS_API FFlightAirborneEvent
+struct AIRPORTOPS_API FFlightOffBlocksEvent
 {
 	int32 FlightId = 0;
 	FName AirlineId;
 	double LateBySeconds = 0.0;
-	static const TCHAR* EventName() { return TEXT("FlightAirborne"); }
+	static const TCHAR* EventName() { return TEXT("FlightOffBlocks"); }
 	FString Describe() const;
 };
 
@@ -184,6 +188,8 @@ struct AIRPORTOPS_API FAirlineSatisfactionEvent
 	double Old = 0.0;
 	double New = 0.0;
 	FString Cause;
+	/** The cause as a kind; Cause is the text with its figures. */
+	EAirlineSatisfactionCause Kind = EAirlineSatisfactionCause::OnTime;
 	static const TCHAR* EventName() { return TEXT("AirlineSatisfaction"); }
 	FString Describe() const;
 };
@@ -520,7 +526,7 @@ struct AIRPORTOPS_API FFlightInboundEvent
  * billing reaction hears ("Billing", FlightBilling::OnFlightPhaseChanged): the money UFlightBoard::OnAgentPhase used to post inline
  * is a Sim-tier reaction to the phase now, a round later in the same drain.
  *
- * GENERIC, BESIDE THE SPECIFIC ONES, NOT INSTEAD OF THEM: FFlightInboundEvent, FFlightAirborneEvent and FFlightCancelledEvent carry
+ * GENERIC, BESIDE THE SPECIFIC ONES, NOT INSTEAD OF THEM: FFlightInboundEvent, FFlightOffBlocksEvent and FFlightCancelledEvent carry
  * what their listeners need (the airline, the lateness, the reason) and keep their own rules - a load's cancel publishes no
  * FFlightCancelledEvent, so the roster never scores it. This carries only the change, so a listener that cares about a phase
  * (billing: Landing, Turnaround, TaxiOut) needs no event of its own per phase. A LOAD'S CHANGES ARE PUBLISHED TOO - the re-queue's
@@ -564,7 +570,7 @@ struct AIRPORTOPS_API FAirlineAdmissionChangedEvent
  * FInstancedStruct was rejected: an open set has no answer to "which events exist?".
  */
 using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChangedEvent, FSaveSlotEvent,
-	FOfferExpiredEvent, FOfferDeclinedEvent, FFlightAirborneEvent, FDayEndedEvent, FAirlineSatisfactionEvent,
+	FOfferExpiredEvent, FOfferDeclinedEvent, FFlightOffBlocksEvent, FDayEndedEvent, FAirlineSatisfactionEvent,
 	FNetworkChangedEvent, FAlertRaisedEvent, FAlertClearedEvent, FAlertsResetEvent, FBuildRefusedEvent, FLandRefusedEvent,
 	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent, FOfferAcceptedEvent,
 	FTurnaroundEndedEvent, FAirportStatusChangedEvent, FFlightCancelledEvent, FRunwayFreedEvent, FStandsFreedEvent,

@@ -107,7 +107,7 @@ public:
 	float GetTimeLeftFraction() const { return TimeLeftFraction; }
 	FText GetAcceptLabel() const { return AcceptLabel; }
 
-	/** "62% \u25BC late departure (25 min)" - see DescribeSatisfaction. Empty with no roster. */
+	/** "62% \u25BC late off stand (25 min)" - see DescribeSatisfaction. Empty with no roster. */
 	FText GetSatisfaction() const { return Satisfaction; }
 
 	/**
@@ -124,12 +124,33 @@ public:
 	static FText DescribeMood(const FOfferMoodKey& Mood);
 
 	/**
-	 * "lands in 15 min - airborne within 1 h 10 min", from the flight's lead time and contract.
+	 * The mood's ARROW: which way the newest remembered change went, "▲" or "▼" - empty with nothing remembered (or no
+	 * standing). ONE MEANING FOR THE GLYPH: DescribeMood prints it and so does the Airlines list, so the two windows, open side by side,
+	 * never point opposite ways for one airline.
+	 * ENFORCED BY: AirportMgr.Airlines.List.SortAndTrend
+	 */
+	static FString MoodArrowOf(const FOfferMoodKey& Mood);
+
+	/**
+	 * "lands in 15 min - 40 min on stand", from the flight's lead time and contract (time on stand since #398).
 	 * GAME time, in the clock's own words (GameTimeText::Duration, which the arrivals rows, the cards and the depot's backlog
 	 * share - DescribeDuration lived here until #447): the player reads the clock, not a seconds count.
 	 * Static so a test can ask it of numbers.
 	 */
 	static FText DescribeContract(double LeadTimeSeconds, double ContractSeconds);
+
+	/**
+	 * REAL seconds left to answer Flight's offer, rounded up - what GetSecondsLeft holds after a Refresh. PUBLIC AND STATIC (airlines
+	 * panel, 2026-10-02) so the panel's read-only "offering now" rows count the same second the inbox does without a row object of their own.
+	 */
+	static int32 SecondsLeftOf(const UFlight& Flight);
+
+	/**
+	 * "42 s" - the inbox countdown's words. It was composed inline in UOfferInboxWidget::PaintRows; lifted here, public and static
+	 * (airlines panel, 2026-10-02), so the panel's offering-now rows print the inbox's own text rather than a second formatter.
+	 * ENFORCED BY: AirportMgr.Airlines.Detail.OffersAndFlightsFilteredByAirline (the panel's countdown is this function's output)
+	 */
+	static FText DescribeSecondsLeft(int32 Seconds);
 
 private:
 	UPROPERTY(Transient) FText Callsign;

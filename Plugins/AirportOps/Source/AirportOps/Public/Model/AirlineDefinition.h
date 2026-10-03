@@ -96,8 +96,14 @@ public:
 	double LeadTimeSeconds = 900.0;
 
 	/**
-	 * The turnaround contract: GAME seconds from the accept to airborne again. See
-	 * UFlight::ContractSeconds, and C, which scores AirborneAt against it.
+	 * The turnaround contract: GAME seconds ON THE STAND, on-blocks to off-blocks (#398). See
+	 * UFlight::ContractSeconds and UFlight::OnBlocksAt; the roster scores OffBlocksAt against it.
+	 *
+	 * 2026-10-02 (#398, ruled by the user): IT WAS ACCEPT TO AIRBORNE, and measured from the logs
+	 * movement ate ~80% of it - landing ~740 game s, taxi-in 1020-4970, pushback ~755, taxi-out
+	 * ~1030, against ~970 on the stand (minimum turnaround 720). So the contract now counts only the
+	 * part the player's stand work controls: Cumbria 40 game minutes, the Flying Club 60. The
+	 * history below is why it became one figure; its "two hours" was the accept-to-airborne length.
 	 *
 	 * ONE FIGURE PER AIRLINE (2026-09-28, from play) - it replaced lead + a 10-minute taxi
 	 * allowance + the airframe's turnaround x a slack multiplier, which gave an SR22 40 game
@@ -105,10 +111,11 @@ public:
 	 * the clock runs ~21x in daylight (USimClock), so landing and taxiing in alone cost ~28 game
 	 * minutes measured, a fuel loop ~30 and taxiing out ~25 - about 95 before any queueing. How
 	 * demanding an airline is, is simply how long it gives: two hours is strict, three relaxed.
-	 * ENFORCED BY: AirportOps.Content.AirlineDefinition.TheAssetManagerScansThem (>= 2 h)
+	 * ENFORCED BY: AirportOps.Content.AirlineDefinition.TheAssetManagerScansThem (>= the slowest fleet type's
+	 * TurnaroundSeconds x 1.25, and under the old accept-to-airborne two hours)
 	 */
 	UPROPERTY(EditAnywhere, Category = "Offer", meta = (ClampMin = "0.0"))
-	double ContractSeconds = 7200.0;
+	double ContractSeconds = 2400.0;
 
 	/**
 	 * What the row prints as the flight's name. A flight-number prefix ("CU" -> "CU 204"), or

@@ -907,11 +907,26 @@ bool FInspectorTurnaroundKeyMatchesTest::RunTest(const FString&)
 	};
 	for (int32 Contract = 0; Contract < 8; ++Contract)
 	{
-		Flight->AcceptedAt = Stream.FRandRange(0.0f, 5000.0f);
+		// ON BLOCKS from the second contract on (#398: the contract counts from on-blocks); the first two are NOT STARTED, so the
+		// walk also covers the "starts on stand" sentence and the moment a contract starts under a kept line.
+		Flight->OnBlocksAt = 0.0;
+		Flight->AcceptedAt = Stream.FRandRange(1.0f, 5000.0f);
 		Flight->ContractSeconds = Contract == 0 ? 0.0 : Stream.RandRange(1, 40) * 300.0;
+		if (Contract == 1)
+		{
+			Check(Flight->AcceptedAt);
+		}
+		Flight->OnBlocksAt = Contract <= 1 ? 0.0 : Flight->AcceptedAt;
 		for (int32 Half = -240; Half <= 240; ++Half)
 		{
-			Check(Flight->AirborneBy() - 30.0 * Half);
+			Check(Flight->AcceptedAt + Flight->ContractSeconds - 30.0 * Half);
+		}
+		if (Contract == 1)
+		{
+			// THE CONTRACT STARTS UNDER A KEPT LINE: the same flight, the same minutes left (the whole contract), and the sentence
+			// changes from "starts on stand" to "N min left" - the key must see it.
+			Flight->OnBlocksAt = Flight->AcceptedAt;
+			Check(Flight->AcceptedAt);
 		}
 		double Now = Flight->AcceptedAt;
 		for (int32 Step = 0; Step < 800; ++Step)
@@ -925,6 +940,7 @@ bool FInspectorTurnaroundKeyMatchesTest::RunTest(const FString&)
 
 	// AND IT HOLDS WHERE NOTHING MOVES: half-second steps across ten minutes of one contract compose once a minute, not once an ask.
 	Flight->AcceptedAt = 1000.0;
+	Flight->OnBlocksAt = 1000.0;
 	Flight->ContractSeconds = 7200.0;
 	const int32 Before = Recomposed;
 	int32 Asks = 0;

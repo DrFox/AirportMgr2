@@ -7,13 +7,33 @@
 #include "AirlineRoster.generated.h"
 
 class FOpsEventBus;
+class UAirlineHistory;
 class UFlightBoard;
 struct FDayEndedEvent;
-struct FFlightAirborneEvent;
+struct FFlightOffBlocksEvent;
 struct FFlightCancelledEvent;
 struct FOfferDeclinedEvent;
 struct FOfferExpiredEvent;
 struct FTurnaroundEndedEvent;
+
+/**
+ * WHY an airline's satisfaction moved, as a kind rather than a sentence. The text in FAirlineSatisfactionChange::Cause carries
+ * figures ("late off stand (25 min)") and is for the player to read; anything that COUNTS causes (the airline history's tally) or
+ * LABELS them (the panel's exhaustive switch) keys on this, because a string match breaks the day someone rewords the text.
+ * UENUM so UHT sees it - the change struct below is a saved USTRUCT.
+ */
+UENUM()
+enum class EAirlineSatisfactionCause : uint8
+{
+	OnTime,
+	LateOffStand,
+	OfferIgnored,
+	OfferNeverAcceptable,
+	LeftShortOfFuel,
+	CancelledAirportClosed,
+	CancelledByPlayer,
+	DailyDrift,
+};
 
 /** One change to an airline's satisfaction and what caused it - the "why" the inbox row shows. */
 USTRUCT()
@@ -24,8 +44,12 @@ struct AIRPORTOPS_API FAirlineSatisfactionChange
 	/** New minus old, after the clamp - so a change that hit the ceiling records what it really moved. */
 	UPROPERTY() double Delta = 0.0;
 
-	/** "on time", "late departure (25 min)", "offer ignored", ... */
+	/** "on time", "late off stand (25 min)", "offer ignored", ... */
 	UPROPERTY() FString Cause;
+
+	/** The same cause as a kind. A save written before it existed loads OnTime (the zero value) - harmless, as no save carries
+	 *  these yet (memory: no player saves) and Recent is display only. */
+	UPROPERTY() EAirlineSatisfactionCause Kind = EAirlineSatisfactionCause::OnTime;
 };
 
 /**
@@ -55,7 +79,7 @@ struct AIRPORTOPS_API FAirlineStanding
  * (spec 2026-09-29 §3) and the first airline state that exists at runtime - before it an airline was a
  * UAirlineDefinition plus an offer accumulator.
  *
- * A REACTION, IN THE BUS'S SENSE. It hears what the Sim tier has already settled - a flight airborne
+ * A REACTION, IN THE BUS'S SENSE. It hears what the Sim tier has already settled - a flight off its stand (#398)
  * and how late, an offer that lapsed or was declined, a day ending - and changes only its own state.
  * UOpsRuntime::WireBus is where it is subscribed; this class never sees the bus's subscribe side.
  *
@@ -102,6 +126,11 @@ public:
 	 *  publish checks. Raw: the runtime owns both this and the bus. */
 	FOpsEventBus* Bus = nullptr;
 
+	/** Where each change that moved a standing is tallied by cause. Set by UOpsRuntime::Attach, cleared by Detach; null in a bare
+	 *  NewObject, and Apply checks. Raw: the runtime owns both. The roster FEEDS it rather than the history subscribing to the bus
+	 *  so the daily drift lands in the day it closes - see UAirlineHistory. */
+	UAirlineHistory* History = nullptr;
+
 	/** Add AirlineId at Tuning.Start if it has no row. The catalog's airlines, at attach and after a load. */
 	void Ensure(FName AirlineId);
 
@@ -117,7 +146,7 @@ public:
 	double RateMultiplier(FName AirlineId, bool bIsFloor) const;
 
 	// --- Reaction-tier handlers (subscribed in UOpsRuntime::WireBus) ---------------------
-	void OnFlightAirborne(const FFlightAirborneEvent& Event);
+	void OnFlightOffBlocks(const FFlightOffBlocksEvent& Event);
 	void OnOfferExpired(const FOfferExpiredEvent& Event);
 
 	/** DELIBERATELY FREE: declining is a legitimate choice (spec §3), and an airline that punished it
@@ -157,5 +186,5 @@ private:
 
 	/** Clamp to 0..1; if it moved, log and publish it - and, bRemember, record it as the row's latest
 	 *  cause (trimming Recent). */
-	void Apply(FAirlineStanding& Standing, double Delta, const FString& Cause, bool bRemember = true);
+	void Apply(FAirlineStanding& Standing, double Delta, EAirlineSatisfactionCause Kind, const FString& Cause, bool bRemember = true);
 };

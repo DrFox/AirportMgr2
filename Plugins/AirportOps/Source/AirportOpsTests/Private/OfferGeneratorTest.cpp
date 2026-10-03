@@ -359,6 +359,170 @@ bool FOfferRateFleetShareTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+namespace
+{
+	/** A candidate whose published landing field no 600 m test runway covers - refused by admission, whatever its wingspan. */
+	FOfferCandidate NeedingARunwayOf(double FieldLength, double Wingspan, const TCHAR* Type)
+	{
+		FOfferCandidate Out = Candidate(Wingspan, Type);
+		Out.Airframe.Requirements.LandingFieldLength = FieldLength;
+		return Out;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferFleetAdmissionMixedTest, "AirportOps.Model.Offers.FleetAdmission.EveryTypeHasAVerdict",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferFleetAdmissionMixedTest::RunTest(const FString& Parameters)
+{
+	// ONE LIST (the airlines panel, spec 2026-10-02 1.3): the pick, FleetShare, DescribeWhyNot and the panel's tick/cross rows all read
+	// these verdicts, so a row can never disagree with what the generator actually does.
+	URoadNetwork* Field = FieldWith(4500.0, Needing(0.0, 3000.0));
+	UAirlineDefinition* Airline = MakeAirline(6.0);
+	const TArray<FAirlineOffers> Airlines = { Offering(Airline, {
+		Candidate(3000.0, TEXT("Fits")),
+		NeedingARunwayOf(100000000.0, 3000.0, TEXT("TooLong")),
+		Candidate(9000.0, TEXT("TooWide")) }) };
+	UOfferGenerator* Generator = SeededGenerator();
+	TestEqual(TEXT("nothing judged yet: no rows"), Generator->GetFleetAdmission(Airline->GetFName()).Num(), 0);
+
+	RunMinutes(*Generator, *Field, Airlines, *ClockAt(9.0), 1);
+	const TArray<FFleetAdmission> Rows = Generator->GetFleetAdmission(Airline->GetFName());
+	if (!TestEqual(TEXT("one row per fleet type"), Rows.Num(), 3)) { return false; }
+	TestEqual(TEXT("and no extra route search bought them"), Generator->AdmissionChecksForTest(), 3);
+	TestEqual(TEXT("in fleet order"), Rows[0].TypeName.ToString(), FString(TEXT("Fits")));
+	TestEqual(TEXT("in fleet order, second"), Rows[1].TypeName.ToString(), FString(TEXT("TooLong")));
+	TestEqual(TEXT("in fleet order, third"), Rows[2].TypeName.ToString(), FString(TEXT("TooWide")));
+	TestTrue(TEXT("the fitting type is admitted"), Rows[0].bAdmitted);
+	TestEqual(TEXT("with no reason"), Rows[0].Why, EArrivalRefusal::None);
+	TestTrue(TEXT("and no sentence"), Rows[0].Sentence.IsEmpty());
+	for (int32 Index = 1; Index < 3; ++Index)
+	{
+		TestFalse(*FString::Printf(TEXT("row %d is a cross"), Index), Rows[Index].bAdmitted);
+		TestTrue(*FString::Printf(TEXT("row %d has a permanent reason"), Index), ArrivalPlanner::IsPermanentRefusal(Rows[Index].Why));
+		TestFalse(*FString::Printf(TEXT("row %d says why"), Index), Rows[Index].Sentence.IsEmpty());
+	}
+	TestEqual(TEXT("too long a landing field: refused by admission"), Rows[1].Why, EArrivalRefusal::NotAdmitted);
+	TestEqual(TEXT("too wide a wingspan: refused by admission"), Rows[2].Why, EArrivalRefusal::NotAdmitted);
+	TestTrue(TEXT("each cross has ITS OWN sentence"), Rows[1].Sentence != Rows[2].Sentence);
+	TestEqual(TEXT("FleetShare reads the same list: one of three"), Generator->FleetShare(*Airline), 1.0 / 3.0, 1e-9);
+	TestEqual(TEXT("DescribeWhyNot is the FIRST cross's sentence"), Generator->DescribeWhyNot(Airline->GetFName()), Rows[1].Sentence);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferFleetAdmissionAllRefusedTest, "AirportOps.Model.Offers.FleetAdmission.AllRefusedEachHasItsOwnReason",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferFleetAdmissionAllRefusedTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Field = FieldWith(4500.0, Needing(0.0, 3000.0));
+	UAirlineDefinition* Airline = MakeAirline(6.0);
+	const TArray<FAirlineOffers> Airlines = { Offering(Airline, {
+		NeedingARunwayOf(100000000.0, 3000.0, TEXT("TooLong")),
+		Candidate(9000.0, TEXT("TooWide")) }) };
+	UOfferGenerator* Generator = SeededGenerator();
+	TestEqual(TEXT("an airline nothing of whose fleet can come: no offers"),
+		RunMinutes(*Generator, *Field, Airlines, *ClockAt(9.0), 30).Num(), 0);
+	const TArray<FFleetAdmission> Rows = Generator->GetFleetAdmission(Airline->GetFName());
+	if (!TestEqual(TEXT("both rows present"), Rows.Num(), 2)) { return false; }
+	for (const FFleetAdmission& Row : Rows)
+	{
+		TestFalse(*FString::Printf(TEXT("%s is crossed"), *Row.TypeName.ToString()), Row.bAdmitted);
+		TestFalse(*FString::Printf(TEXT("%s has its own sentence"), *Row.TypeName.ToString()), Row.Sentence.IsEmpty());
+	}
+	TestEqual(TEXT("too long: its reason"), Rows[0].Why, EArrivalRefusal::NotAdmitted);
+	TestEqual(TEXT("too wide: its reason"), Rows[1].Why, EArrivalRefusal::NotAdmitted);
+	TestTrue(TEXT("two crosses, two sentences"), Rows[0].Sentence != Rows[1].Sentence);
+	TestEqual(TEXT("the share is zero"), Generator->FleetShare(*Airline), 0.0, 1e-9);
+	TestEqual(TEXT("DescribeWhyNot is unchanged: the first row's sentence"),
+		Generator->DescribeWhyNot(Airline->GetFName()), Rows[0].Sentence);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferFleetAdmissionEmptyTest, "AirportOps.Model.Offers.FleetAdmission.EmptyBeforeJudgement",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferFleetAdmissionEmptyTest::RunTest(const FString& Parameters)
+{
+	UOfferGenerator* Generator = SeededGenerator();
+	TestEqual(TEXT("an airline never judged has no rows - the panel reads that as 'not judged yet', not as 'all crossed'"),
+		Generator->GetFleetAdmission(TEXT("Nobody")).Num(), 0);
+	TestEqual(TEXT("and no whyNot"), Generator->DescribeWhyNot(TEXT("Nobody")), FString());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferFleetAdmissionRebuildTest, "AirportOps.Model.Offers.FleetAdmission.CacheRebuildRefreshesVerdicts",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferFleetAdmissionRebuildTest::RunTest(const FString& Parameters)
+{
+	// A better airport: a different network, which is what the cache key sees first (a guideline bump re-keys it the same way -
+	// AdmissionCachedOnGuidelineRevision). The type an 18 m strip refuses is taken by a 45 m one.
+	URoadNetwork* Narrow = FieldWith(1800.0, Needing(0.0, 3000.0));
+	URoadNetwork* Wide = FieldWith(4500.0, Needing(0.0, 3000.0));
+	UAirlineDefinition* Airline = MakeAirline(6.0);
+	const TArray<FAirlineOffers> Airlines = { Offering(Airline, { Candidate(1200.0, TEXT("Fits")), Candidate(3000.0, TEXT("Big")) }) };
+	UOfferGenerator* Generator = SeededGenerator();
+	USimClock* Clock = ClockAt(9.0);
+	RunMinutes(*Generator, *Narrow, Airlines, *Clock, 1);
+	TArray<FFleetAdmission> Rows = Generator->GetFleetAdmission(Airline->GetFName());
+	if (!TestEqual(TEXT("two rows"), Rows.Num(), 2)) { return false; }
+	TestFalse(TEXT("the big type is crossed on the narrow strip"), Rows[1].bAdmitted);
+
+	RunMinutes(*Generator, *Wide, Airlines, *Clock, 1);
+	Rows = Generator->GetFleetAdmission(Airline->GetFName());
+	if (!TestEqual(TEXT("still two rows"), Rows.Num(), 2)) { return false; }
+	TestTrue(TEXT("the big type is admitted once the airport can take it"), Rows[1].bAdmitted);
+	TestTrue(TEXT("and its sentence is gone"), Rows[1].Sentence.IsEmpty());
+	TestEqual(TEXT("and an admitted row carries no reason (Why == None), so the panel never reads one beside a tick"),
+		Rows[1].Why, EArrivalRefusal::None);
+	TestEqual(TEXT("and the share follows the same list"), Generator->FleetShare(*Airline), 1.0, 1e-9);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferCurrentRateTest, "AirportOps.Model.Offers.Rate.CurrentRateIsWhatAccrues",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FOfferCurrentRateTest::RunTest(const FString& Parameters)
+{
+	// THE PANEL'S "~N offers/h now" must be the number TickMinute accrues, not a second formula that drifts from it.
+	URoadNetwork* Field = FieldWith(4500.0, Needing(0.0, 3000.0));
+	UAirlineDefinition* Airline = MakeAirline(6.0);
+	const TArray<FAirlineOffers> Airlines = { Offering(Airline,
+		{ Candidate(3000.0, TEXT("Fits")), Candidate(9000.0, TEXT("TooWide")) }) };
+	UOfferGenerator* Generator = SeededGenerator();
+	Generator->AirlineFactorOf = [](const UAirlineDefinition&) { return 0.9; };
+	TestEqual(TEXT("MoodFactor is the wired reader's answer"), Generator->MoodFactor(*Airline), 0.9, 1e-9);
+	UOfferGenerator* Bare = SeededGenerator();
+	TestEqual(TEXT("and 1.0 for a generator nobody wired"), Bare->MoodFactor(*Airline), 1.0, 1e-9);
+
+	USimClock* Clock = ClockAt(9.0);
+	// A threshold nothing reaches, so the accumulator holds the increment and no offer is drawn.
+	Generator->States.FindOrAdd(Airline->GetFName()).Threshold = 1.0e9;
+	Generator->TickMinute(*Field, FVector2D::ZeroVector, Airlines, *Clock, 0, []() { return 1; });
+	TestEqual(TEXT("judged: half the fleet"), Generator->FleetShare(*Airline), 0.5, 1e-9);
+
+	const double Expected = UOfferGenerator::RateAt(*Airline, Clock->TimeOfDay(), Clock->IsDaylight(),
+		Generator->DemandFactor(), Generator->AirlineFactor(*Airline));
+	const double Now = Generator->CurrentRate(*Airline, *Clock);
+	TestEqual(TEXT("CurrentRate is RateAt at the clock's time, with demand and the airline's factor"), Now, Expected, 1e-9);
+	TestEqual(TEXT("6 an hour x 0.9 mood x 0.5 share"), Now, 2.7, 1e-9);
+
+	Generator->States.FindOrAdd(Airline->GetFName()).Accumulated = 0.0;
+	Generator->TickMinute(*Field, FVector2D::ZeroVector, Airlines, *Clock, 0, []() { return 1; });
+	TestEqual(TEXT("and one minute's accrual x 60 is that rate"),
+		Generator->States.FindOrAdd(Airline->GetFName()).Accumulated * 60.0, Now, 1e-9);
+
+	// CLOSED, NOTHING ACCRUES - so nothing is "now": the inbox says "Closed", and the panel's rate must not say ~2.7 beside it.
+	UAirport* Closed = NewObject<UAirport>(GetTransientPackage());
+	Closed->SetClosedByPlayer(true, *Field);
+	Generator->Airport = Closed;
+	Generator->States.FindOrAdd(Airline->GetFName()).Accumulated = 0.0;
+	Generator->TickMinute(*Field, FVector2D::ZeroVector, Airlines, *Clock, 0, []() { return 1; });
+	TestEqual(TEXT("closed: a minute accrues nothing"), Generator->States.FindOrAdd(Airline->GetFName()).Accumulated, 0.0, 1e-12);
+	TestEqual(TEXT("closed: and CurrentRate says so"), Generator->CurrentRate(*Airline, *Clock), 0.0, 1e-12);
+	UAirport* Open = NewObject<UAirport>(GetTransientPackage());
+	Open->Reseat(*Field);
+	Generator->Airport = Open;
+	TestEqual(TEXT("CONTROL: open again, the rate is back"), Generator->CurrentRate(*Airline, *Clock), Now, 1e-9);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FOfferFlatRateTest, "AirportOps.Model.Offers.Generate.FlatRateOverTenHours",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FOfferFlatRateTest::RunTest(const FString& Parameters)

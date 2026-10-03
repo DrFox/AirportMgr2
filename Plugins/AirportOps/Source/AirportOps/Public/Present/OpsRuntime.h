@@ -12,6 +12,7 @@
 
 class ARoadNetworkActor;
 class UAirlineRoster;
+class UAirlineHistory;
 class UAirport;
 class UOpsAlerts;
 struct FArrivalQuote;
@@ -133,6 +134,9 @@ public:
 
 	/** How every airline feels about this airport. See UAirlineRoster - a Reaction on the bus. */
 	UAirlineRoster* GetAirlines() const { return Airlines; }
+
+	/** A week of why each airline's satisfaction moved - see UAirlineHistory; fed by the roster. */
+	UAirlineHistory* GetAirlineHistory() const { return AirlineHistory; }
 
 	/** The standing problems the player must act on - see UOpsAlerts; run as the bus pass "Alerts". */
 	UOpsAlerts* GetAlerts() const { return Alerts; }
@@ -341,6 +345,7 @@ private:
 	int32 ReservationSolves = 0;
 
 	UPROPERTY() TObjectPtr<UAirlineRoster> Airlines;
+	UPROPERTY() TObjectPtr<UAirlineHistory> AirlineHistory;
 	UPROPERTY() TObjectPtr<UOpsAlerts> Alerts;
 	UPROPERTY() TObjectPtr<UAirport> Airport;
 

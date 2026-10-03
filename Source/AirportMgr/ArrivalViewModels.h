@@ -30,6 +30,9 @@ struct FArrivalRowKey
 	int32 StatusMinutes = -1;
 	/** A flight with no contract (the debug land key's) has no detail line at all. */
 	bool bContract = false;
+	/** On blocks (UFlight::HasContractStarted, #398): "turnaround 1 h" before, "47 min left" after - and at the moment it starts the
+	 *  minutes do not move (the whole contract is left either way), so without this the key would hold the old sentence. */
+	bool bContractStarted = false;
 	bool bLate = false;
 	/** Whole minutes of the contract left - or late by, once bLate. */
 	int32 DetailMinutes = -1;
@@ -103,15 +106,16 @@ public:
 	static FText DescribeStatus(const UFlight& Flight, double Now, const FString& Runway = FString());
 
 	/**
-	 * "waited 3 min - 47 min left" while holding, "47 min left" otherwise, "12 min late" once
-	 * AirborneBy has passed (bOutLate then true). Empty for a flight with no contract - the
-	 * debug land key's, which was never offered.
+	 * "47 min left" on the stand, "12 min late" once OffBlocksBy has passed (bOutLate then true). BEFORE ON-BLOCKS (#398) no
+	 * countdown - the contract has not started: "turnaround 1 h", or "waited 3 min - turnaround 1 h" while holding. Empty for a
+	 * flight with no contract - the debug land key's, which was never offered.
 	 */
 	static FText DescribeDetail(const UFlight& Flight, double Now, bool& bOutLate);
 
 	/**
-	 * "Turnaround 2 h - 47 min left", or "... 12 min late" past AirborneBy - the contract line
-	 * on the aircraft card. Empty for a flight with no contract (the debug land key's).
+	 * "Turnaround 40 min - 27 min left", or "... 12 min late" past OffBlocksBy - the contract line
+	 * on the aircraft card; "Turnaround 40 min - starts on stand" before on-blocks (#398). Empty for a
+	 * flight with no contract (the debug land key's).
 	 */
 	static FText DescribeTurnaround(const UFlight& Flight, double Now);
 

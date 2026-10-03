@@ -74,16 +74,20 @@ FText UArrivalRowViewModel::DescribeDetail(const UFlight& Flight, double Now, bo
 	const double Left = Flight.ContractSecondsLeft(Now);
 	if (Flight.IsLate(Now))
 	{
-		// LATE, AND BY HOW MUCH - the turnaround contract C will score this flight against.
+		// LATE, AND BY HOW MUCH - the turnaround contract the airline will score this flight against at off-blocks.
 		bOutLate = true;
 		return FText::Format(NSLOCTEXT("AirportMgr", "ArrivalLate", "{0} late"),
 			GameTimeText::Duration(-Left));
 	}
-	const FText Remaining = FText::Format(NSLOCTEXT("AirportMgr", "ArrivalLeft", "{0} left"),
-		GameTimeText::Duration(Left));
+	// NO COUNTDOWN BEFORE ON-BLOCKS (#398): the contract is time on stand, so before the aeroplane parks nothing is being spent -
+	// the row says how long the turnaround will be. A countdown that did not move would read as a frozen clock.
+	const FText Remaining = Flight.HasContractStarted()
+		? FText::Format(NSLOCTEXT("AirportMgr", "ArrivalLeft", "{0} left"), GameTimeText::Duration(Left))
+		: FText::Format(NSLOCTEXT("AirportMgr", "ArrivalNotStarted", "turnaround {0}"), GameTimeText::Duration(Flight.ContractSeconds));
 	if (Flight.GetPhase() == EFlightPhase::Inbound)
 	{
-		// THE WAIT, beside what it is costing: holding time comes out of the same contract.
+		// THE WAIT, beside the turnaround to come. Holding no longer comes out of the contract (#398); it is still shown, because it is
+		// the one state the player can do something about. A penalty for it is out of scope (see UAirlineRoster::OnFlightOffBlocks).
 		return FText::Format(NSLOCTEXT("AirportMgr", "ArrivalWaited", "waited {0} · {1}"),
 			GameTimeText::Duration(FMath::Max(Now - Flight.HoldingSince, 0.0)), Remaining);
 	}
@@ -98,8 +102,12 @@ FText UArrivalRowViewModel::DescribeTurnaround(const UFlight& Flight, double Now
 	}
 	// THE SAME DURATION WORDS AND THE SAME LEFT/LATE RULE as the ARRIVALS row (DescribeDetail),
 	// so the card and the list cannot tell the player two different things.
+	// BEFORE ON-BLOCKS, "starts on stand" (#398): the card is often opened on an aeroplane still taxiing in, and a full
+	// countdown that does not move would read as stuck.
 	const double Left = Flight.ContractSecondsLeft(Now);
-	const FText Remaining = Flight.IsLate(Now)
+	const FText Remaining = !Flight.HasContractStarted()
+		? NSLOCTEXT("AirportMgr", "CardTurnaroundNotStarted", "starts on stand")
+		: Flight.IsLate(Now)
 		? FText::Format(NSLOCTEXT("AirportMgr", "ArrivalLate", "{0} late"), GameTimeText::Duration(-Left))
 		: FText::Format(NSLOCTEXT("AirportMgr", "ArrivalLeft", "{0} left"), GameTimeText::Duration(Left));
 	return FText::Format(NSLOCTEXT("AirportMgr", "CardTurnaround", "Turnaround {0} \u00B7 {1}"),
@@ -122,6 +130,7 @@ FArrivalRowKey UArrivalRowViewModel::KeyFor(const UFlight& Live, int32 QueuePosi
 	if (Out.bContract)
 	{
 		const double Left = Live.ContractSecondsLeft(Now);
+		Out.bContractStarted = Live.HasContractStarted();
 		Out.bLate = Live.IsLate(Now);
 		Out.DetailMinutes = GameTimeText::WholeMinutes(Out.bLate ? -Left : Left);
 		Out.WaitedMinutes = Live.GetPhase() == EFlightPhase::Inbound

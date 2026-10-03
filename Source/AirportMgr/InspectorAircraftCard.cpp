@@ -20,13 +20,15 @@ bool FInspectorTurnaround::Refresh(const UFlight& Of, double Now)
 	const double Left = Of.ContractSecondsLeft(Now);
 	const bool bNowLate = Of.IsLate(Now);
 	const int32 NowMinutes = GameTimeText::WholeMinutes(FMath::Abs(Left));
-	if (Flight.Get() == &Of && Contract == Of.ContractSeconds && bLate == bNowLate && Minutes == NowMinutes)
+	const bool bNowStarted = Of.HasContractStarted();
+	if (Flight.Get() == &Of && Contract == Of.ContractSeconds && bStarted == bNowStarted && bLate == bNowLate && Minutes == NowMinutes)
 	{
 		return false;
 	}
 	Line = UArrivalRowViewModel::DescribeTurnaround(Of, Now).ToString();
 	Flight = &Of;
 	Contract = Of.ContractSeconds;
+	bStarted = bNowStarted;
 	bLate = bNowLate;
 	Minutes = NowMinutes;
 	return true;

@@ -26,7 +26,8 @@
 /**
  * The ARRIVALS section (spec 2026-09-28-arrival-queue section 3): every accepted flight until
  * it is airborne, holding first in queue order, then inbound by ETA, then on the ground - and a
- * contract line that turns into "late" once AirborneBy has passed.
+ * contract line that counts down from on-blocks and turns into "late" once OffBlocksBy has passed
+ * (#398: before on-blocks it says how long the turnaround will be, and counts nothing).
  */
 namespace
 {
@@ -111,16 +112,22 @@ bool FArrivalsDetailTest::RunTest(const FString& Parameters)
 	F->ContractSeconds = 3600.0;
 	F->HoldingSince = 600.0;
 	bool bLate = true;
-	TestEqual(TEXT("holding: how long it has waited and what is left of the contract"),
-		UArrivalRowViewModel::DescribeDetail(*F, 780.0, bLate).ToString(), FString(TEXT("waited 3 min · 47 min left")));
+	// #398: HOLDING COSTS THE CONTRACT NOTHING, so the row does not count it down - it says how long the turnaround will be.
+	TestEqual(TEXT("holding: how long it has waited, and the turnaround it will get - no countdown before on-blocks"),
+		UArrivalRowViewModel::DescribeDetail(*F, 780.0, bLate).ToString(), FString(TEXT("waited 3 min · turnaround 1 h")));
 	TestFalse(TEXT("not late"), bLate);
+	F->SetPhaseForTest(EFlightPhase::TaxiIn);
+	TestEqual(TEXT("taxiing in, hours after the accept: still not started"),
+		UArrivalRowViewModel::DescribeDetail(*F, 20000.0, bLate).ToString(), FString(TEXT("turnaround 1 h")));
+	TestFalse(TEXT("and not late"), bLate);
 
 	F->SetPhaseForTest(EFlightPhase::Turnaround);
-	TestEqual(TEXT("on the ground: what is left"),
-		UArrivalRowViewModel::DescribeDetail(*F, 780.0, bLate).ToString(), FString(TEXT("47 min left")));
+	F->OnBlocksAt = 20000.0;
+	TestEqual(TEXT("on the stand: what is left, counted from on-blocks"),
+		UArrivalRowViewModel::DescribeDetail(*F, 20000.0 + 780.0, bLate).ToString(), FString(TEXT("47 min left")));
 
-	TestEqual(TEXT("past AirborneBy it is late, by how much"),
-		UArrivalRowViewModel::DescribeDetail(*F, 3600.0 + 720.0, bLate).ToString(), FString(TEXT("12 min late")));
+	TestEqual(TEXT("past OffBlocksBy it is late, by how much"),
+		UArrivalRowViewModel::DescribeDetail(*F, 20000.0 + 3600.0 + 720.0, bLate).ToString(), FString(TEXT("12 min late")));
 	TestTrue(TEXT("and flagged"), bLate);
 	return true;
 }
@@ -131,13 +138,18 @@ bool FArrivalsTurnaroundLineTest::RunTest(const FString& Parameters)
 {
 	// THE CONTRACT ON THE AIRCRAFT CARD (2026-09-28): how long the airline gave, and how much of
 	// it is left - the same words the ARRIVALS row uses, so the two cannot disagree.
-	UFlight* F = Flight(TEXT("CU 1"), EFlightPhase::Turnaround);
+	UFlight* F = Flight(TEXT("CU 1"), EFlightPhase::TaxiIn);
 	F->AcceptedAt = 0.0;
-	F->ContractSeconds = 7200.0;
-	TestEqual(TEXT("time left"), UArrivalRowViewModel::DescribeTurnaround(*F, 7200.0 - 47.0 * 60.0).ToString(),
-		FString(TEXT("Turnaround 2 h \u00B7 47 min left")));
-	TestEqual(TEXT("past the deadline"), UArrivalRowViewModel::DescribeTurnaround(*F, 7200.0 + 12.0 * 60.0).ToString(),
-		FString(TEXT("Turnaround 2 h \u00B7 12 min late")));
+	F->ContractSeconds = 2400.0;
+	// #398: BEFORE ON-BLOCKS no countdown - the card says the contract starts on the stand.
+	TestEqual(TEXT("not started"), UArrivalRowViewModel::DescribeTurnaround(*F, 9000.0).ToString(),
+		FString(TEXT("Turnaround 40 min \u00B7 starts on stand")));
+	F->SetPhaseForTest(EFlightPhase::Turnaround);
+	F->OnBlocksAt = 5000.0;
+	TestEqual(TEXT("time left"), UArrivalRowViewModel::DescribeTurnaround(*F, 5000.0 + 2400.0 - 27.0 * 60.0).ToString(),
+		FString(TEXT("Turnaround 40 min \u00B7 27 min left")));
+	TestEqual(TEXT("past the deadline"), UArrivalRowViewModel::DescribeTurnaround(*F, 5000.0 + 2400.0 + 12.0 * 60.0).ToString(),
+		FString(TEXT("Turnaround 40 min \u00B7 12 min late")));
 	F->ContractSeconds = 0.0;
 	TestTrue(TEXT("no contract (the debug land key), no line"), UArrivalRowViewModel::DescribeTurnaround(*F, 0.0).IsEmpty());
 	return true;
@@ -218,7 +230,8 @@ bool FArrivalsKeyMovesWithTheTextTest::RunTest(const FString& Parameters)
 	Held->ContractSeconds = 3600.0;
 	UFlight* OnStand = Flight(TEXT("CU 3"), EFlightPhase::Turnaround);
 	OnStand->AcceptedAt = 0.0;
-	OnStand->ContractSeconds = 3600.0;   // goes late at 3600 s: the walk crosses left -> late
+	OnStand->OnBlocksAt = 1.0;           // on blocks at 1 s (0 is "never") - the contract counts from here (#398)
+	OnStand->ContractSeconds = 3600.0;   // goes late at 3601 s: the walk crosses left -> late
 	const FCase Cases[] = { { Coming, TEXT("accepted") }, { Held, TEXT("holding") }, { OnStand, TEXT("on stand") } };
 
 	for (const FCase& Case : Cases)
