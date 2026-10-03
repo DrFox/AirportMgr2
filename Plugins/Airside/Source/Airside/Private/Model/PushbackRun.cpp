@@ -119,6 +119,25 @@ void FPushbackRun::AppendRemainingRun(bool bReverse, TArray<FRouteRun>& Out) con
 	}
 }
 
+double FPushbackRun::SecondsFor(const FRoutePlan& InPlan, double InPushSpeed, double InPushAccel)
+{
+	FPushbackRun Probe;
+	if (!Probe.Start(InPlan, InPushSpeed, InPushAccel, /*bInNeedsThrust*/ false))
+	{
+		return 0.0;
+	}
+	constexpr double Step = 1.0 / 30.0;
+	constexpr int32 MaxSteps = 30 * 1200;
+	FVector2D At = FVector2D::ZeroVector;
+	double Heading = 0.0;
+	double Seconds = 0.0;
+	for (int32 Guard = 0; Guard < MaxSteps && Probe.Advance(Step, TNumericLimits<double>::Max(), true, At, Heading); ++Guard)
+	{
+		Seconds += Step;
+	}
+	return Seconds;
+}
+
 bool FPushbackRun::Advance(double DeltaSeconds, double StopWithin, bool bHasThrust,
 	FVector2D& OutPosition, double& OutHeading)
 {

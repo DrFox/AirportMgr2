@@ -6,6 +6,7 @@
 #include "Model/RouteSearch.h"
 #include "Model/RunwayAdmission.h"
 #include "Model/StandAdmission.h"
+#include "Model/TaxiPlanner.h"
 #include "ArrivalPlanner.generated.h"
 
 class URoadNetwork;
@@ -101,6 +102,14 @@ enum class EArrivalRefusal : uint8
 	 * the runway card's setting, not building. Appended LAST, NoStandClearOfStrip's reason.
 	 */
 	NoArrivalRunway,
+
+	/**
+	 * Everything else is ready - runway, exit, a free stand, a route - but the taxi from the exit to the stand cannot
+	 * be fitted round the taxi plans already booked (spec 2026-10-02 §1, arrival clearance): the flight keeps holding,
+	 * in the air, until a plan frees (UGroundTraffic::OnTaxiPlansFreed). TRANSIENT: traffic clears it, not building.
+	 * Appended LAST, NoStandClearOfStrip's reason.
+	 */
+	NoTaxiPlan,
 };
 
 /**
@@ -269,6 +278,14 @@ namespace ArrivalPlanner
 	 * ArrivalPlanner.cpp and the policy table only)
 	 */
 	AIRSIDE_API FRouteQuery TaxiInQuery(FGuidelineNodeId From, const FAirframe& Airframe, double EdgeSpan);
+
+	/**
+	 * THE TAXI-IN AS A TAXI PLAN REQUEST (taxi planning PR 2): Plan's taxi in, from its exit to its stand, under the
+	 * errand TaxiInQuery searches with - built HERE, beside it, so the taxi plan and the stand choice cannot search two
+	 * ways (rule 4's 'taxi-in query built'). Rolling at its start (it vacates at taxi speed) and never waiting there (a
+	 * hold at the exit is a hold on the runway). DepartAt is when it reaches the exit, the caller's clock.
+	 */
+	AIRSIDE_API FTaxiRequest TaxiInRequest(const FArrivalPlan& Plan, double DepartAt);
 
 	/**
 	 * Plans an arrival at the runway nearest Near, for an airframe with Airframe's

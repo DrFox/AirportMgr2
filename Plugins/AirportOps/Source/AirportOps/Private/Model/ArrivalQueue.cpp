@@ -74,7 +74,7 @@ TArray<UFlight*> FArrivalQueue::Queue(const UFlightBoard& Board) const
 	return Out;
 }
 
-EArrivalRefusal FArrivalQueue::ClearanceFor(const UGroundTraffic& Traffic, const URoadNetwork& Network,
+EArrivalRefusal FArrivalQueue::ClearanceFor(UGroundTraffic& Traffic, const URoadNetwork& Network,
 	const UFlight& Flight)
 {
 	FClearance& Clearance = Clearances.FindOrAdd(Flight.Id);
@@ -83,8 +83,11 @@ EArrivalRefusal FArrivalQueue::ClearanceFor(const UGroundTraffic& Traffic, const
 	// AND THE STAND CHURN (#497 re-review): a body on or off a stand's pose moves no OccupancyRevision, and this plan reads exactly
 	// that - see FClearance. FReholdMiss's third stamp, so the clearance and the re-hold date the plan alike.
 	const uint32 StandChurnNow = Traffic.StandHoldChangeCount();
+	// AND THE TAXI PLANS (taxi planning PR 2): the clearance now asks for a taxi-in plan, which the reservation table
+	// answers - booked into and released from every tick, and dated by its own revision.
+	const uint32 TaxiPlansNow = Traffic.TaxiPlanRevision();
 	if (Clearance.bValid && Clearance.GuidelineAt == GuidelineNow && Clearance.OccupancyAt == OccupancyNow
-		&& Clearance.StandChurnAt == StandChurnNow)
+		&& Clearance.StandChurnAt == StandChurnNow && Clearance.TaxiPlansAt == TaxiPlansNow)
 	{
 		return Clearance.Why;
 	}
@@ -97,7 +100,11 @@ EArrivalRefusal FArrivalQueue::ClearanceFor(const UGroundTraffic& Traffic, const
 	// could strand a quiet airport's queue until some unrelated claim happened to bump it.
 	FArrivalPlan Planned = ArrivalPlanner::Plan(Network, Flight.RunwayPreference, Flight.Airframe,
 		&Traffic.GetOccupancy(), ERunwayBusy::Queue, Flight.HolderId());
-	const EArrivalRefusal Why = Planned.Why;
+	// AND A TAXI-IN PLAN (spec 2026-10-02 §1, arrival clearance): none, and the flight keeps holding - in the air, not
+	// a go-around - until the table frees one (FTaxiPlansFreedEvent wakes this pass). Asked of the plan just made, so
+	// the clearance and the dispatch judge the same exit and stand.
+	const EArrivalRefusal Why = Planned.Why != EArrivalRefusal::None ? Planned.Why
+		: Traffic.TaxiInRefusal(Network, Planned, Flight.Airframe);
 	// A DRAG IS NOT THE FLIGHT'S NEWS (#445): GraphBeingEdited is the planner's "not on a graph mid-edit", answered before anything
 	// else is read, and it clears when the player lets go. It is returned - nothing is cleared to land on a stale graph - but NOT
 	// KEPT: stored over a standing permanent verdict, it made UnlandableWhy read None for the length of the drag, the FlightCannotLand
@@ -119,6 +126,7 @@ EArrivalRefusal FArrivalQueue::ClearanceFor(const UGroundTraffic& Traffic, const
 	Clearance.GuidelineAt = GuidelineNow;
 	Clearance.OccupancyAt = OccupancyNow;
 	Clearance.StandChurnAt = StandChurnNow;
+	Clearance.TaxiPlansAt = TaxiPlansNow;
 	Clearance.Usable = MoveTemp(Planned.UsableRunways);
 	Clearance.bValid = true;
 	return Why;

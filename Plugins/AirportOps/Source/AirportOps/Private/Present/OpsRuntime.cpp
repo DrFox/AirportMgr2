@@ -510,6 +510,8 @@ void UOpsRuntime::WireBus()
 	// A RUNWAY OR A STAND FREED: what a holding flight waits for (Airside's diff, bridged in Attach).
 	Bus.Subscribe<FRunwayFreedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FRunwayFreedEvent&) { Bus.MarkDirty(TEXT("ArrivalQueue")); });
 	Bus.Subscribe<FStandsFreedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FStandsFreedEvent&) { Bus.MarkDirty(TEXT("ArrivalQueue")); });
+	// A TAXI PLAN FREED (taxi planning PR 2): what a flight holding "awaiting taxi-in route" waits for - the clearance asks for one.
+	Bus.Subscribe<FTaxiPlansFreedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FTaxiPlansFreedEvent&) { Bus.MarkDirty(TEXT("ArrivalQueue")); });
 	// AN ACCEPT: a zero-lead accept (key 7's AcceptImmediate) is due at once, and the queue re-reserves.
 	Bus.Subscribe<FOfferAcceptedEvent>(EOpsTier::Sim, TEXT("ArrivalQueue"), [this](const FOfferAcceptedEvent&) { Bus.MarkDirty(TEXT("ArrivalQueue")); });
 	// A FLIGHT JOINS THE QUEUE - its ETA came (FArrivalQueue::Enqueue, UFlightBoard's until #442 item 4).
@@ -927,6 +929,16 @@ TArray<UOpsRuntime::FAirsideBridge> UOpsRuntime::AirsideBridges()
 				[&Runtime](int32 AgentId) { Runtime.Bus.Publish(FPushGroundFreedEvent{ AgentId }); });
 		},
 		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UGroundTraffic* Model = Actor.GetGroundTraffic()) { Model->OnPushGroundFreed.Remove(Handle); } } });
+
+	// ENFORCED BY: AirportOps.Present.Bus.TaxiPlansFreedIsBridged
+	Out.Add({ TEXT("TaxiPlansFreed"),
+		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
+		{
+			UGroundTraffic* Model = Actor.GetGroundTraffic();
+			return Model == nullptr ? FDelegateHandle() : Model->OnTaxiPlansFreed.AddWeakLambda(&Runtime,
+				[&Runtime]() { Runtime.Bus.Publish(FTaxiPlansFreedEvent{}); });
+		},
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (UGroundTraffic* Model = Actor.GetGroundTraffic()) { Model->OnTaxiPlansFreed.Remove(Handle); } } });
 
 	// "THE NETWORK CHANGED", BRIDGED LIKE THE ABOVE (#446) - it was a per-frame poll in Tick. See OnNetworkChanged, which adds behaviour (Geometry is no change).
 	Out.Add({ TEXT("NetworkChanged"),

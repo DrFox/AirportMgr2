@@ -16,6 +16,7 @@
 #include "AirsideLog.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadNetwork.h"
+#include "Model/TaxiPlanning.h"
 #include "Solve/GuidelineGeom.h"
 
 // GroundTraffic.h ABOVE IS FOR UGroundTraffic::StepStart/StepFromNode/CurrentStep ONLY
@@ -1489,7 +1490,7 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 }
 
 void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
-	const FPendingClaims& Pending)
+	const FPendingClaims& Pending, const FTaxiOrderHold& OrderHold)
 {
 	// WHAT WAS ACTUALLY CLAIMED, not what was wanted: the loop below stops reserving at the
 	// first refusal, so a resource further along the route was never asked for this pass and
@@ -1544,6 +1545,22 @@ void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 
 	for (const FWantedClaim& Want : Pending)
 	{
+		// NOT MY TURN (taxi planning, spec 2026-10-02 §1): the first reservation on or past the move the order holds the
+		// agent out of is refused as any first refusal is - G short of the move's start (the box-entry stop), WaitingOn the
+		// aircraft booked ahead, a box's grants given back. Never ground it stands on. ENFORCED BY: Airside.Model.TaxiPlan.NotMyTurn
+		// A HOLD AT A NODE waits for that node's own claim - it stops a gap short of where the node's reach begins, as a
+		// refused node does (StopWithinFor's bEndNode); a hold at a move's start, for the first claim at or past it.
+		const bool bOrderHere = OrderHold.bAtNode
+			? (Want.bEndNode && Want.Step == OrderHold.Step && Want.Claim.Resource == OrderHold.Resource)
+			: Want.Step >= OrderHold.Step;
+		if (!bHeld && OrderHold.IsSet() && bOrderHere && !Want.Claim.bOccupied)
+		{
+			GiveBack(Want.bInChain ? TArrayView<const FTrafficResource>(ChainGranted) : TArrayView<const FTrafficResource>());
+			GiveBack(Want.bInExitChain ? TArrayView<const FTrafficResource>(ExitChainGranted) : TArrayView<const FTrafficResource>());
+			bHeld = RefuseForOrder(Agent, Window, OrderHold, WasWaitingOn, WasBlockedStep, Want.ReachExcess);
+			continue;
+		}
+
 		// PAST THE FIRST REFUSAL, only ground the agent occupies is still claimed. Skipping
 		// its own occupancies here was a defect: an agent refused a node it was STANDING on
 		// abandoned the rest of its own body, and the agent that had merely reserved that
@@ -1734,6 +1751,13 @@ void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 		// making this tick) but must go on claiming the ground the agent is standing on.
 	}
 
+	// AND WHERE NO RESERVATION REACHED IT - a hold at the step it stands on, all of whose claims are occupancies - the order
+	// still holds it: a wait that came and went with the window's length flickered "resumes" every other tick.
+	if (!bHeld && OrderHold.IsSet())
+	{
+		bHeld = RefuseForOrder(Agent, Window, OrderHold, WasWaitingOn, WasBlockedStep, 0.0);
+	}
+
 	Agent.SetLastOverlaps(MoveTemp(OverlapsThisPass));
 	Table.ReleaseExcept(Agent.Id, Wanted);
 
@@ -1747,6 +1771,24 @@ void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d resumes"), Agent.Id);
 		}
 	}
+}
+
+bool FClaimPass::RefuseForOrder(FRoadAgent& Agent, const FClaimWindow& Window, const FTaxiOrderHold& OrderHold,
+	int32 WasWaitingOn, int32 WasBlockedStep, double ReachExcess)
+{
+	// ON THE TRANSITION ONLY, as every refusal's line is. A test's delay and a queue's empty entry name nobody
+	// (UTaxiPlanning::DelayBlocker, QueueBlocker), each in its own words.
+	if (WasWaitingOn != OrderHold.Blocker || WasBlockedStep != OrderHold.Step)
+	{
+		const FString Who = OrderHold.Blocker == UTaxiPlanning::DelayBlocker ? FString(TEXT("a test's delay"))
+			: OrderHold.Blocker == UTaxiPlanning::QueueBlocker ? FString(TEXT("its way on to the runway to be booked (queueing)"))
+			: FString::Printf(TEXT("agent %d"), OrderHold.Blocker);
+		UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d not my turn: waiting for %s (booked ahead through %s)"), Agent.Id,
+			*Who, *OrderHold.Resource.Describe());
+	}
+	const double HoldAt = OrderHold.bAtNode ? OrderHold.StepEnd - ReachExcess : OrderHold.StepStart;
+	Agent.Refuse(OrderHold.Step, OrderHold.Resource, FMath::Max(0.0, HoldAt - Window.T - Window.G), OrderHold.Blocker);
+	return true;
 }
 
 double FClaimPass::StopWithinFor(const FWantedClaim& Want, const FTrafficClaim& Blocker,
@@ -1899,8 +1941,14 @@ void FClaimPass::Run(FRoadAgent& Agent, const URoadNetwork& Network)
 	FPendingClaims Pending;
 	BuildPending(Agent, Network, Window, Pending);
 
-	// 3. ASK THE TABLE, in that order. The FIRST refusal decides how far the agent may go.
-	ApplyClaims(Agent, Window, Pending);
+	// 3. ASK THE TABLE, in that order. The FIRST refusal decides how far the agent may go - the taxi plan's ORDER
+	// included, asked first so its hold takes its place in route order (UTaxiPlanning::OrderHold).
+	FTaxiOrderHold OrderHold;
+	if (Planning != nullptr)
+	{
+		Planning->OrderHold(Agent, SimSeconds, Window.T, Window.Head, OrderHold);
+	}
+	ApplyClaims(Agent, Window, Pending, OrderHold);
 
 	// 4. AND THE STAND IT IS GOING TO, after the route pass has released what is behind it.
 	ClaimGoalNode(Agent, Network);

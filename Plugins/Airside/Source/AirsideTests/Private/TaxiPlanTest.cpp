@@ -6,6 +6,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
 #include "Model/RoutePolicy.h"
+#include "Model/PassingOrder.h"
 #include "Model/RouteSearch.h"
 #include "Model/SpeedProfile.h"
 #include "Model/TaxiPlanner.h"
@@ -710,6 +711,312 @@ bool FTaxiPlanTouchingBoundaryTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("every sweep planned"), Planned, Sweeps);
 	TestEqual(TEXT("and every plan the planner called fitting books"), Booked, Planned);
+	return true;
+}
+
+// ---- PR 2: one-way FIFO sharing, the push prefix, the passing order ----
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanShareOneWayTest, "Airside.Model.TaxiPlan.ReservationsShareOneWayInOrder",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanShareOneWayTest::RunTest(const FString& Parameters)
+{
+	// PR 2's correction to PR 1: an edge was one aircraft's at a time, so nobody could follow anybody down a taxiway.
+	// Now two windows may overlap when they go THE SAME WAY and in FIFO order - entry order is exit order, a headway
+	// apart at both ends. Opposite ways (the head-on) and Any (nodes, pushes) never share.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(40000.0, 0.0));
+	const FTaxiResource R = FTaxiResource::Edge(Join(*Net, A, B));
+	const FTaxiResource N = FTaxiResource::Node(A);
+
+	FTaxiReservations Table;
+	Table.SetHeadway(5.0);
+	TestTrue(TEXT("a window going A to B books"), Table.BookWindow(R, { 1, 0.0, 30.0, ETaxiWay::AToB }));
+	TestTrue(TEXT("a follower the same way, in and out 5 s or more later, books ALONGSIDE it"),
+		Table.BookWindow(R, { 2, 6.0, 40.0, ETaxiWay::AToB }));
+	TestFalse(TEXT("one that would OVERTAKE (in later, out earlier) is refused"), Table.BookWindow(R, { 3, 12.0, 32.0, ETaxiWay::AToB }));
+	TestFalse(TEXT("one closer than the headway behind is refused"), Table.BookWindow(R, { 3, 8.0, 50.0, ETaxiWay::AToB }));
+	TestFalse(TEXT("the OTHER way, overlapping, is refused - the head-on the table exists for"),
+		Table.BookWindow(R, { 3, 20.0, 60.0, ETaxiWay::BToA }));
+	TestFalse(TEXT("Any, overlapping, is refused"), Table.BookWindow(R, { 3, 20.0, 60.0, ETaxiWay::Any }));
+	TestTrue(TEXT("the other way once both have left books"), Table.BookWindow(R, { 3, 40.0, 60.0, ETaxiWay::BToA }));
+	TestTrue(TEXT("a node holds one aircraft at a time"), Table.BookWindow(N, { 1, 0.0, 10.0 }));
+	TestFalse(TEXT("so a second overlapping it is refused"), Table.BookWindow(N, { 2, 5.0, 15.0 }));
+
+	// The planner's queries.
+	FTaxiReservations One;
+	One.SetHeadway(5.0);
+	One.BookWindow(R, { 1, 0.0, 30.0, ETaxiWay::AToB });
+	double Shift = -1.0;
+	TestTrue(TEXT("EarliestFit: the same way fits"), One.EarliestFit(R, ETaxiWay::AToB, 2.0, 20.0, 0, Shift));
+	TestEqual(TEXT("as a follower - in 5 s after, and out 5 s after: shifted 15"), Shift, 15.0);
+	TestTrue(TEXT("EarliestFit: the other way fits"), One.EarliestFit(R, ETaxiWay::BToA, 2.0, 20.0, 0, Shift));
+	TestEqual(TEXT("only once it has left: shifted 28"), Shift, 28.0);
+	TestTrue(TEXT("EarliestFit: the holder's own window is ignored"), One.EarliestFit(R, ETaxiWay::BToA, 2.0, 20.0, 1, Shift) && Shift == 0.0);
+	FTaxiReservations Parked;
+	Parked.BookWindow(N, { 1, 0.0, FTaxiReservations::Forever });
+	TestFalse(TEXT("EarliestFit: held for ever - no shift will do"), Parked.EarliestFit(N, ETaxiWay::Any, 2.0, 20.0, 0, Shift));
+
+	FTaxiReservations Ahead;
+	Ahead.SetHeadway(5.0);
+	Ahead.BookWindow(R, { 2, 50.0, 80.0, ETaxiWay::AToB });
+	Ahead.BookWindow(R, { 3, 100.0, 120.0, ETaxiWay::BToA });
+	TestEqual(TEXT("LatestEnd: going A to B, out a headway before the follower behind leaves"),
+		Ahead.LatestEnd(R, ETaxiWay::AToB, 0.0, 0), 75.0);
+	TestEqual(TEXT("LatestEnd: going B to A, out before the next one in"), Ahead.LatestEnd(R, ETaxiWay::BToA, 0.0, 0), 50.0);
+	TestEqual(TEXT("PlaceAt: one window starts before 60"), Ahead.PlaceAt(R, 60.0, 0), 1);
+	TestEqual(TEXT("NextPlaceAfter: the same way, a headway behind the next one's entry"),
+		Ahead.NextPlaceAfter(R, ETaxiWay::AToB, 0.0, 0), 55.0);
+	TestEqual(TEXT("NextPlaceAfter: the other way, once it has left"), Ahead.NextPlaceAfter(R, ETaxiWay::BToA, 0.0, 0), 80.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanFollowersTest, "Airside.Model.TaxiPlan.FollowersShareOneEdge",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanFollowersTest::RunTest(const FString& Parameters)
+{
+	//   S1 ====\                    /==== G1
+	//           X ================ Y
+	//   S2 ====/                    \==== G2
+	// Two aircraft set off together and share X-Y, 40 km of it, one behind the other. They meet at X (a node: one at a
+	// time) - but along X-Y the second must FOLLOW, not wait for the first to have left: an edge one aircraft's at a
+	// time is the throughput PR 1 lost.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId S1 = Net->AddGuidelineNode(FVector2D(-10000.0, 3000.0));
+	const FGuidelineNodeId S2 = Net->AddGuidelineNode(FVector2D(-10000.0, -3000.0));
+	const FGuidelineNodeId X = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId Y = Net->AddGuidelineNode(FVector2D(40000.0, 0.0));
+	const FGuidelineNodeId G1 = Net->AddGuidelineNode(FVector2D(50000.0, 3000.0));
+	const FGuidelineNodeId G2 = Net->AddGuidelineNode(FVector2D(50000.0, -3000.0));
+	Join(*Net, S1, X);
+	Join(*Net, S2, X);
+	const FGuidelineEdgeId XY = Join(*Net, X, Y);
+	Join(*Net, Y, G1);
+	Join(*Net, Y, G2);
+
+	const FAirframe Piper = TestAirframes::Piper();
+	const FTrafficRules Rules;
+	FTaxiReservations Table;
+	Table.SetHeadway(Rules.TaxiPlanMargin);
+
+	FTaxiPlanner First(*Net, Table, Piper, Rules);
+	const FTaxiPlan Leader = First.Plan(Request(S1, G1, 0.0, OurId));
+	TestTrue(TEXT("the leader plans and books"), Leader.IsPlanned() && Table.BookPasses(Leader.Passes));
+
+	FTaxiPlanner Second(*Net, Table, Piper, Rules);
+	const FTaxiPlan Follower = Second.Plan(Request(S2, G2, 0.0, TheirId));
+	TestTrue(TEXT("the follower plans"), Follower.IsPlanned());
+	TestTrue(TEXT("and books alongside"), BooksInto(Table, Follower));
+
+	const TConstArrayView<FTaxiWindow> OnXY = Table.WindowsOn(FTaxiResource::Edge(XY));
+	double LeaderOut = 0.0;
+	for (const FTaxiWindow& Window : OnXY)
+	{
+		LeaderOut = Window.Holder == OurId ? Window.To : LeaderOut;
+	}
+	double FollowerIn = FTaxiReservations::Forever;
+	for (const FTaxiPass& Pass : Follower.Passes)
+	{
+		FollowerIn = Pass.Resource == FTaxiResource::Edge(XY) ? Pass.Window.From : FollowerIn;
+	}
+	TestTrue(FString::Printf(TEXT("the follower is on X-Y (from %.1f s) before the leader has left it (%.1f s)"), FollowerIn, LeaderOut),
+		FollowerIn < LeaderOut);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanHeadOnTest, "Airside.Model.TaxiPlan.OppositeDirectionWaits",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanHeadOnTest::RunTest(const FString& Parameters)
+{
+	//   A0 ==\                  /== B0
+	//         A ============== B
+	//   A1 ==/                  \== B1
+	// One aircraft A0 -> B0, another B1 -> A1: head-on along A-B, the 2026-10-02 jam. The second may not be on A-B
+	// while the first is - it waits (at its start, where a plan may wait) until the first has gone.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A0 = Net->AddGuidelineNode(FVector2D(-10000.0, 3000.0));
+	const FGuidelineNodeId A1 = Net->AddGuidelineNode(FVector2D(-10000.0, -3000.0));
+	const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(20000.0, 0.0));
+	const FGuidelineNodeId B0 = Net->AddGuidelineNode(FVector2D(30000.0, 3000.0));
+	const FGuidelineNodeId B1 = Net->AddGuidelineNode(FVector2D(30000.0, -3000.0));
+	Join(*Net, A0, A);
+	Join(*Net, A1, A);
+	const FGuidelineEdgeId AB = Join(*Net, A, B);
+	Join(*Net, B, B0);
+	Join(*Net, B, B1);
+
+	const FAirframe Piper = TestAirframes::Piper();
+	const FTrafficRules Rules;
+	FTaxiReservations Table;
+	Table.SetHeadway(Rules.TaxiPlanMargin);
+	FTaxiPlanner First(*Net, Table, Piper, Rules);
+	const FTaxiPlan East = First.Plan(Request(A0, B0, 0.0, OurId));
+	TestTrue(TEXT("east-bound plans and books"), East.IsPlanned() && Table.BookPasses(East.Passes));
+
+	FTaxiPlanner Second(*Net, Table, Piper, Rules);
+	const FTaxiPlan West = Second.Plan(Request(B1, A1, 0.0, TheirId));
+	TestTrue(TEXT("west-bound plans"), West.IsPlanned());
+	TestTrue(TEXT("it waits for the other to clear A-B"), HoldsAt(West, B1));
+	TestTrue(TEXT("and books - never overlapping the head-on"), BooksInto(Table, West));
+	double EastOut = 0.0;
+	for (const FTaxiWindow& Window : Table.WindowsOn(FTaxiResource::Edge(AB)))
+	{
+		EastOut = FMath::Max(EastOut, Window.To);
+	}
+	for (const FTaxiPass& Pass : West.Passes)
+	{
+		if (Pass.Resource == FTaxiResource::Edge(AB))
+		{
+			TestTrue(FString::Printf(TEXT("its A-B window (from %.1f s) starts once the other's has ended (%.1f s)"),
+				Pass.Window.From, EastOut), Pass.Window.From >= EastOut);
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanPushPrefixTest, "Airside.Model.TaxiPlan.PushPrefixHoldsAtStand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanPushPrefixTest::RunTest(const FString& Parameters)
+{
+	//   P (stand) ---- J ==== E      the push: P to J, back onto the arm J-E
+	//                  ||
+	//                  R             the taxi out: E, J, R
+	// The push is the plan's first move, booked whole (both ways) for its duration. Someone holds J until 100 s, so the
+	// push itself must wait - ON THE STAND, the departure's hold - never half-way onto the taxiway.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId P = Net->AddGuidelineNode(FVector2D(0.0, -8000.0));
+	const FGuidelineNodeId J = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId E = Net->AddGuidelineNode(FVector2D(15000.0, 0.0));
+	const FGuidelineNodeId R = Net->AddGuidelineNode(FVector2D(-30000.0, 0.0));
+	const FGuidelineEdgeId PJ = Join(*Net, P, J);
+	const FGuidelineEdgeId JE = Join(*Net, J, E);
+	Join(*Net, J, R);
+
+	const FAirframe Piper = TestAirframes::Piper();
+	const FTrafficRules Rules;
+	FTaxiReservations Table;
+	Table.SetHeadway(Rules.TaxiPlanMargin);
+	Table.BookWindow(FTaxiResource::Node(J), { TheirId, 0.0, 100.0 });
+
+	FTaxiRequest Push = Request(P, R);
+	FRouteStep Lead;
+	Lead.Edge = PJ;
+	Lead.To = J;
+	FRouteStep Back;
+	Back.Edge = JE;
+	Back.To = E;
+	Push.PushSteps = { Lead, Back };
+	Push.PushSeconds = 30.0;
+
+	FTaxiPlanner Planner(*Net, Table, Piper, Rules);
+	const FTaxiPlan Plan = Planner.Plan(Push);
+	TestTrue(TEXT("planned"), Plan.IsPlanned());
+	TestTrue(FString::Printf(TEXT("the push waits for J (pushes at %.1f s)"), Plan.PushAt),
+		Plan.PushAt >= 100.0 + Rules.TaxiPlanMargin);
+	TestTrue(TEXT("on the stand"), HoldsAt(Plan, P));
+	TestTrue(TEXT("the taxi route starts where the push ends"),
+		Plan.Route.Steps.Num() > 0 && Plan.Route.Steps[0].Edge == JE && Plan.Route.Steps.Last().To == R);
+	TestTrue(TEXT("moves are named"), Plan.MoveStarts.Num() > 0 && Plan.MoveStarts[0] == 0);
+	bool bPushGroundAny = false;
+	for (const FTaxiPass& Pass : Plan.Passes)
+	{
+		bPushGroundAny |= Pass.Resource == FTaxiResource::Edge(PJ) && Pass.Window.Way == ETaxiWay::Any
+			&& Pass.Window.From <= Plan.PushAt;
+	}
+	TestTrue(TEXT("the push ground is booked both ways from the push"), bPushGroundAny);
+	TestTrue(TEXT("and the plan books"), BooksInto(Table, Plan));
+
+	// THE PUSH'S WINDOW IS ITS EARLIEST on every resource the push alone holds - what UTaxiPlanning::Track's hand-over
+	// relies on when it releases the FIRST window there (ReleaseFirstOn), leaving any later one, the taxi's, still due.
+	FTaxiReservations Booked = Table;
+	const bool bBooked = Booked.BookPasses(Plan.Passes);
+	bool bPushFirst = bBooked && Plan.PushWindows.Num() > 0;
+	for (const FTaxiResource& Resource : Plan.PushWindows)
+	{
+		double Earliest = FTaxiReservations::Forever;
+		for (const FTaxiWindow& Window : Booked.WindowsOn(Resource))
+		{
+			Earliest = Window.Holder == OurId ? FMath::Min(Earliest, Window.From) : Earliest;
+		}
+		bPushFirst &= Earliest <= Plan.PushAt;
+	}
+	TestTrue(TEXT("the push's windows are the holder's earliest where the push alone holds"), bPushFirst);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanOrderTest, "Airside.Model.TaxiPlan.OrderWaitsForWhoIsAhead",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanOrderTest::RunTest(const FString& Parameters)
+{
+	// FPassingOrder: an aircraft may enter a resource when everyone booked through it AHEAD of it has left - or, the
+	// same way along an edge, has entered (they may follow each other down it).
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(40000.0, 0.0));
+	const FTaxiResource E = FTaxiResource::Edge(Join(*Net, A, B));
+	const FTaxiResource N = FTaxiResource::Node(A);
+
+	FTaxiReservations Table;
+	Table.SetHeadway(5.0);
+	Table.BookWindow(N, { 1, 0.0, 10.0 });
+	Table.BookWindow(N, { 2, 20.0, 30.0 });
+	TArray<int32> Entered;
+	auto HasEntered = [&Entered](int32 Other) { return Entered.Contains(Other); };
+
+	TestEqual(TEXT("the first through a node waits for nobody"), FPassingOrder::WaitingFor(Table, 1, N, HasEntered), 0);
+	TestEqual(TEXT("the second waits for the first"), FPassingOrder::WaitingFor(Table, 2, N, HasEntered), 1);
+	Entered.Add(1);
+	TestEqual(TEXT("entering a NODE is not leaving it - still waits"), FPassingOrder::WaitingFor(Table, 2, N, HasEntered), 1);
+	FTaxiReservations Left = Table;
+	Left.ReleaseHolderOn(N, 1);
+	TestEqual(TEXT("once the first's window is released (its tail cleared), the second goes"),
+		FPassingOrder::WaitingFor(Left, 2, N, HasEntered), 0);
+	TestEqual(TEXT("an aircraft with no window there is not this order's to hold"), FPassingOrder::WaitingFor(Table, 3, N, HasEntered), 0);
+
+	Entered.Reset();
+	Table.BookWindow(E, { 1, 0.0, 30.0, ETaxiWay::AToB });
+	Table.BookWindow(E, { 2, 6.0, 40.0, ETaxiWay::AToB });
+	Table.BookWindow(E, { 3, 50.0, 60.0, ETaxiWay::BToA });
+	TestEqual(TEXT("a follower the same way waits for its leader to ENTER"), FPassingOrder::WaitingFor(Table, 2, E, HasEntered), 1);
+	Entered.Add(1);
+	TestEqual(TEXT("and no longer once it has"), FPassingOrder::WaitingFor(Table, 2, E, HasEntered), 0);
+	Entered.Add(2);
+	TestEqual(TEXT("the other way waits for them to LEAVE, entered or not"), FPassingOrder::WaitingFor(Table, 3, E, HasEntered), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTaxiPlanOnePassTest, "Airside.Model.TaxiPlan.ReleasesOnePassAtATime",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTaxiPlanOnePassTest::RunTest(const FString& Parameters)
+{
+	// A ROUTE MAY PASS ONE RESOURCE TWICE - a turnaround loop at a dead end, out along an edge and back. The tail clearing
+	// it the first time releases THAT pass only; the way back is still booked, and still ordered. Releasing every window
+	// of the holder on the first pass (ReleaseHolderOn) let a departure back onto the edge with no window - unordered -
+	// ahead of the one booked before it (measured on M_ScaleGatwick at 80 mov/h, 2026-10-02: a jam of a dozen aircraft).
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(40000.0, 0.0));
+	const FTaxiResource E = FTaxiResource::Edge(Join(*Net, A, B));
+
+	FTaxiReservations Table;
+	Table.BookWindow(E, { 1, 0.0, 20.0, ETaxiWay::AToB });   // out
+	Table.BookWindow(E, { 2, 30.0, 50.0, ETaxiWay::AToB });  // another, out
+	Table.BookWindow(E, { 1, 60.0, 80.0, ETaxiWay::BToA });  // the first, back
+	auto Never = [](int32) { return false; };
+
+	TestTrue(TEXT("the first pass released"), Table.ReleaseFirstOn(E, 1));
+	TestEqual(TEXT("and only it: the way back is still booked"), Table.WindowsOn(E).Num(), 2);
+	TestEqual(TEXT("so on its way back it waits for the one booked between"), FPassingOrder::WaitingFor(Table, 1, E, Never), 2);
+	TestTrue(TEXT("which passes"), Table.ReleaseFirstOn(E, 2));
+	TestEqual(TEXT("and then it is its turn"), FPassingOrder::WaitingFor(Table, 1, E, Never), 0);
+	TestFalse(TEXT("nothing of a holder with no window to release"), Table.ReleaseFirstOn(E, 3));
 	return true;
 }
 
