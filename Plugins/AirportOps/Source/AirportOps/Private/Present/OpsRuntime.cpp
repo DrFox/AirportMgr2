@@ -669,6 +669,8 @@ void UOpsRuntime::WireBus()
 		[this](const FAlertsResetEvent&) { Events->OnAlertsReset.Broadcast(); });
 	Bus.Subscribe<FBuildRefusedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FBuildRefusedEvent& E) { Events->OnBuildRefused.Broadcast(E.What, E.Price, E.Balance); });
+	Bus.Subscribe<FTaxiwaySplitEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
+		[this](const FTaxiwaySplitEvent& E) { Events->OnTaxiwaySplit.Broadcast(E.SplitOff, E.From); });
 	Bus.Subscribe<FLandRefusedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
 		[this](const FLandRefusedEvent& E) { Events->OnLandRefused.Broadcast(E.Why, E.Sentence); });
 	Bus.Subscribe<FBalanceSignChangedEvent>(EOpsTier::Presentation, TEXT("OpsEvents"),
@@ -939,6 +941,15 @@ TArray<UOpsRuntime::FAirsideBridge> UOpsRuntime::AirsideBridges()
 			return Facade != nullptr ? Facade->OnRefused.AddUObject(&Runtime, &UOpsRuntime::OnBuildRefused) : FDelegateHandle();
 		},
 		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (URoadEditFacade* Facade = Actor.GetEditFacade()) { Facade->OnRefused.Remove(Handle); } } });
+	// A TAXIWAY SPLIT, bridged (taxiway naming spec 2026-10-02): the facade's normalise reports it, the toast says it.
+	Out.Add({ TEXT("TaxiwaySplit"),
+		[](UOpsRuntime& Runtime, ARoadNetworkActor& Actor)
+		{
+			URoadEditFacade* Facade = Actor.GetEditFacade();
+			return Facade == nullptr ? FDelegateHandle() : Facade->OnTaxiwaySplit.AddWeakLambda(&Runtime,
+				[&Runtime](const FString& SplitOff, const FString& From) { Runtime.Bus.Publish(FTaxiwaySplitEvent{ SplitOff, From }); });
+		},
+		[](ARoadNetworkActor& Actor, FDelegateHandle Handle) { if (URoadEditFacade* Facade = Actor.GetEditFacade()) { Facade->OnTaxiwaySplit.Remove(Handle); } } });
 	return Out;
 }
 

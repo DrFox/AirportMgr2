@@ -43,6 +43,18 @@ namespace RoadGeom
 	AIRSIDE_API double AngleBetween(const FVector2D& A, const FVector2D& B);
 
 	/**
+	 * How far off straight two arms' outgoing tangents may be for a road to CARRY ON through their node - 10 degrees,
+	 * set 2026-10-01 for a taxiway leaving a runway's end (ExitGeometry::InLineEndDegrees, which now aliases this) and
+	 * read by the taxiway names (spec 2026-10-02: "continue in line ... 10 deg"). HERE, in Solve/, because Model/ may not
+	 * include Build/ (Check-Architecture rule 1) and two copies of "10" is the drift CLAUDE.md's one-list rule names.
+	 * ENFORCED BY: Airside.Solve.InLineIsOneDefinition (static_assert and a sweep through both callers)
+	 */
+	inline constexpr double InLineDegrees = 10.0;
+
+	/** Whether OutA and OutB - two OUTGOING tangents at one node - are within InLineDegrees of straight through. */
+	AIRSIDE_API bool IsInLine(const FVector2D& OutA, const FVector2D& OutB);
+
+	/**
 	 * How close to pi two arms' outgoing tangents must be for the node between them to be ONE
 	 * straight road - no corner to round, no cut, whatever the two widths. THE one definition:
 	 * SolveFillet (which draws the junction) and CornerReachAtZeroRadius (which RoadPlacement

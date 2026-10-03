@@ -107,6 +107,7 @@ FAircraftDisplay FAircraftCard::DisplayOf(const FAgentFacts& F, const FAircraftN
 	D.VerticalFpm = FMath::RoundToInt(F.VerticalSpeed / 100.0 * 196.850);   // ft/min, as a VSI reads
 	D.AltitudeMetres = FMath::RoundToInt(F.Altitude / 100.0);
 	D.Destination = F.Destination;
+	D.On = F.On;
 	D.bEngineRunning = F.bEngineRunning;
 	D.Fuel = F.Fuel;
 	D.Pushback = F.Pushback;
@@ -172,6 +173,12 @@ void FAircraftCard::Compose(const FAircraftDisplay& D, FInspectorCardView& Out)
 				FMath::Abs(D.VerticalTenths) / 10, FMath::Abs(D.VerticalTenths) % 10),
 			FString::FromInt(D.VerticalFpm),
 		});
+	// WHERE IT IS, in names (taxiway naming spec 2026-10-02) - only when the facts know (InspectFacts::WhereIs), so an
+	// unnamed airport's card reads as before.
+	if (!D.On.IsEmpty())
+	{
+		Out.Facts += FString::Format(*NSLOCTEXT("AirportMgr", "InspectorOn", "\nOn: {0}").ToString(), { D.On });
+	}
 	// THE DEMANDS BLOCK (2026-09-28): what the aircraft wants, one line each. The fuel
 	// line is AirportOps's whole sentence (it names itself "Fuel ..."); pushback is the
 	// airframe's need, which nothing services yet.

@@ -193,6 +193,8 @@ private:
 	UFUNCTION() void OnLandRefused(EArrivalRefusal Why, const FString& Sentence);
 	/** Back in credit (stage 3) - the one money moment the feed says; going negative is the alert's. */
 	UFUNCTION() void OnBalanceSignChanged(bool bOverdrawn);
+	/** "C split off from A" - Info: the player's own edit renamed part of a taxiway, and nothing needs fixing. */
+	UFUNCTION() void OnTaxiwaySplit(const FString& SplitOff, const FString& From);
 	/** An Overdrawn alert was toasted, so the way back out is news. */
 	bool bToldOverdrawn = false;
 };

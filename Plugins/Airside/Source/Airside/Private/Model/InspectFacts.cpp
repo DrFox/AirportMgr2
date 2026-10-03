@@ -199,6 +199,7 @@ namespace InspectFacts
 		Out.VerticalSpeed = Agent->LastMotion.VerticalSpeed;
 		Out.Altitude = Agent->LastMotion.Altitude;
 		Out.Destination = DestinationOf(*Agent, Network);
+		Out.On = Network != nullptr ? WhereIs(*Agent, *Network) : FString();
 		Out.Hold = HoldOf(*Agent, Network);
 		Out.Status = StatusWithHold(*Agent, Out.Hold, BlockerNoun(&Traffic, Out.Hold.WaitingOn), Out.bStatusIsHold);
 
@@ -231,6 +232,31 @@ namespace InspectFacts
 			Out.Pushback = PushbackText(Aircraft->PushbackNeed);
 		}
 		return true;
+	}
+
+	FString WhereIs(const FRoadAgent& Agent, const URoadNetwork& Network)
+	{
+		const FRoutePlan& Plan = Agent.PlanInProgress();
+		if (Plan.Steps.Num() == 0)
+		{
+			return FString();
+		}
+		const int32 Step = UGroundTraffic::CurrentStep(Plan, Agent.DistanceAlongPlan());
+		const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Plan.Steps[Step].Edge);
+		if (Edge == nullptr)
+		{
+			return FString();   // a plan against an edge a rebuild has since replaced
+		}
+		if (Network.GetSegment(Edge->DerivedFrom) != nullptr)
+		{
+			if (Network.IsRunwaySegment(Edge->DerivedFrom))
+			{
+				FRunwayCardFacts Card;
+				return DescribeRunway(Network, Edge->DerivedFrom.Index, Card) ? Card.Pair : FString();
+			}
+			return Network.TaxiwayDisplayName(Network.TaxiwayOf(Edge->DerivedFrom));
+		}
+		return Edge->AtJunction.IsSet() ? Network.JunctionName(Edge->AtJunction) : FString();
 	}
 
 	FAgentHold HoldOf(const FRoadAgent& Agent, const URoadNetwork* Network)

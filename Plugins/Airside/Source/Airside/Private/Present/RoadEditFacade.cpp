@@ -207,6 +207,15 @@ void URoadEditFacade::NotifyChanged(EChangeKind Kind)
 		++FoldedNotifyCount;
 		return;
 	}
+	// THE NAMES BEFORE THE BROADCAST (spec: normalise "after EVERY topology change, in one place"; plan D9): this is the
+	// one door every mutator's notify passes - draw, delete, merge, insert, a heal, undo and redo - and a listener that
+	// rebuilds labels or a card must read names that are already true. Topology only: a drag frame (Geometry), a facts
+	// edit or a marking changes no chain. After the batch fold above, so a bulk edit normalises once.
+	// ENFORCED BY: Airside.Present.TaxiwayNames.SplitIsAnnouncedAndUndone
+	if (Kind == EChangeKind::Topology)
+	{
+		NormaliseTaxiwayNames();
+	}
 	OnChanged.Broadcast(Kind);
 }
 
@@ -2405,4 +2414,20 @@ TArray<int32> URoadEditFacade::SegmentsIncidentTo(int32 NodeIndex) const
 		Found.Add(Incident.Index);
 	}
 	return Found;
+}
+
+void URoadEditFacade::NormaliseTaxiwayNames()
+{
+	URoadNetwork* Network = Actor().Network;
+	if (Network == nullptr)
+	{
+		return;
+	}
+	// OUTSIDE ANY EDIT SCOPE, and that is right: the scope that made this change has already committed its BEFORE
+	// snapshot, so the names written here are part of the state the next edit snapshots, and an undo restores the
+	// previous state's names whole (URoadNetwork::CopyFrom carries Taxiways).
+	for (const FTaxiwayRename& Rename : Network->NormaliseTaxiways(Actor().TaxiwayNaming))
+	{
+		OnTaxiwaySplit.Broadcast(Rename.SplitOff, Rename.From);
+	}
 }

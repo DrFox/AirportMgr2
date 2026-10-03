@@ -453,6 +453,18 @@ struct AIRPORTOPS_API FPushGroundFreedEvent
 };
 
 /**
+ * A taxiway edit split a piece off a taxiway (URoadEditFacade::OnTaxiwaySplit, bridged) - "C split off from A".
+ * ENFORCED BY: AirportOps.Present.Bus.ReattachDoesNotDouble, AirportOps.Present.TaxiwaySplitReachesUi
+ */
+struct AIRPORTOPS_API FTaxiwaySplitEvent
+{
+	FString SplitOff;
+	FString From;
+	static const TCHAR* EventName() { return TEXT("TaxiwaySplit"); }
+	FString Describe() const;
+};
+
+/**
  * A flight came due and joined the arrival queue - FArrivalQueue::Enqueue (UFlightBoard's until #442 item 4), its one site (a
  * Clock.At callback, or the load's RearmSchedules for one already overdue). The queue pass hears it; before PR D the queue was
  * ticked every frame and needed no word.
@@ -521,7 +533,7 @@ using FOpsEvent = TVariant<FAgentPhaseEvent, FArrivalRefusedEvent, FSpeedChanged
 	FMoneyPostedEvent, FBalanceSignChangedEvent, FFacilityUpgradedEvent, FFleetChangedEvent, FOfferAcceptedEvent,
 	FTurnaroundEndedEvent, FAirportStatusChangedEvent, FFlightCancelledEvent, FRunwayFreedEvent, FStandsFreedEvent,
 	FFlightInboundEvent, FPushGroundFreedEvent, FModulesRefundedEvent, FAlertChangedEvent, FAirlineAdmissionChangedEvent,
-	FFlightPhaseChangedEvent>;
+	FFlightPhaseChangedEvent, FTaxiwaySplitEvent>;
 
 /**
  * The ops event bus. Pattern: Observer through a queue (an event queue / mediator hybrid) - spec

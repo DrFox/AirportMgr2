@@ -74,6 +74,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOpsAlertsReset);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOpsBuildRefused, const FString&, What, const FString&, Price, const FString&, Balance);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOpsLandRefused, EArrivalRefusal, Why, const FString&, Sentence);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOpsBalanceSignChanged, bool, bOverdrawn);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOpsTaxiwaySplit, const FString&, SplitOff, const FString&, From);
 
 /**
  * The outcome bus. Pattern: Observer, via DYNAMIC multicast delegates so UMG and Blueprint
@@ -143,6 +144,9 @@ public:
 	 * ENFORCED BY: AirportMgr.UI.LedgerPanelGate (the Serialize bump alone - it deserialises directly, no OnBeforeRestore)
 	 */
 	UPROPERTY(BlueprintAssignable) FOpsBalanceSignChanged OnBalanceSignChanged;
+
+	/** "C split off from A" (taxiway naming spec 2026-10-02): two NOUNS, the toast words them - no sentence face (rule 4). */
+	UPROPERTY(BlueprintAssignable) FOpsTaxiwaySplit OnTaxiwaySplit;
 
 	void NotifyArrivalRefused(EArrivalRefusal Why, const FString& Sentence);
 	void NotifySaveSlot(EOpsSaveOutcome Outcome, const FString& Slot);

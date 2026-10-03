@@ -92,6 +92,7 @@ void UToastStackWidget::BindTo(UOpsEvents& Events)
 	Events.OnBuildRefused.AddUniqueDynamic(this, &UToastStackWidget::OnBuildRefused);
 	Events.OnLandRefused.AddUniqueDynamic(this, &UToastStackWidget::OnLandRefused);
 	Events.OnBalanceSignChanged.AddUniqueDynamic(this, &UToastStackWidget::OnBalanceSignChanged);
+	Events.OnTaxiwaySplit.AddUniqueDynamic(this, &UToastStackWidget::OnTaxiwaySplit);
 }
 
 void UToastStackWidget::OnAlertRaised(const FOpsAlert& Alert)
@@ -133,6 +134,15 @@ void UToastStackWidget::OnBuildRefused(const FString& What, const FString& Price
 	{
 		Notifications->PostFeed(FText::Format(NSLOCTEXT("AirportMgr", "CannotAfford", "Can't afford {0} ({1}; balance {2})"),
 			FText::FromString(What), FText::FromString(Price), FText::FromString(Balance)), ENotificationSeverity::Warning);
+	}
+}
+
+void UToastStackWidget::OnTaxiwaySplit(const FString& SplitOff, const FString& From)
+{
+	if (Notifications != nullptr)
+	{
+		Notifications->PostFeed(FText::Format(NSLOCTEXT("AirportMgr", "TaxiwaySplit", "{0} split off from {1}"),
+			FText::FromString(SplitOff), FText::FromString(From)), ENotificationSeverity::Info);
 	}
 }
 

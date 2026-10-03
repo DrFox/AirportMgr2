@@ -77,7 +77,7 @@ namespace ExitGeometry
 
 	bool IsInLineAtRunwayEnd(const FVector2D& RunwayTangent, const FVector2D& TaxiwayTangent)
 	{
-		return RoadGeom::AngleBetween(RunwayTangent, TaxiwayTangent)
-			>= PI - FMath::DegreesToRadians(InLineEndDegrees);
+		// RoadGeom's one definition - see InLineEndDegrees.
+		return RoadGeom::IsInLine(RunwayTangent, TaxiwayTangent);
 	}
 }

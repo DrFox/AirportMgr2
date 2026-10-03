@@ -522,3 +522,8 @@ bool RoadGeom::CornerReachAtZeroRadius(double HalfWidthA, double HalfWidthB, dou
 	OutAlongB = FMath::Max(0.0, ReachB);
 	return true;
 }
+
+bool RoadGeom::IsInLine(const FVector2D& OutA, const FVector2D& OutB)
+{
+	return AngleBetween(OutA, OutB) >= UE_DOUBLE_PI - FMath::DegreesToRadians(InLineDegrees);
+}
