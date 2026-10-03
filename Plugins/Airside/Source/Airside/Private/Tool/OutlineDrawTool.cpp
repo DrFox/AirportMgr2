@@ -173,6 +173,15 @@ void FOutlineDrawingState::BuildPreview(const FToolContext& Context, const IOutl
 	const bool bClosing = WouldClose(Context);
 	const bool bCrosses = !bClosing && WouldCross(OutlineGuidedCursor(Context));
 
+	// THE TARGET'S OWN REFUSAL for the outline as the next click would leave it - the placed corners plus the cursor
+	// (or, closing, the corners alone).
+	TArray<FVector2D> Candidate(Corners);
+	if (!bClosing)
+	{
+		Candidate.Add(OutlineGuidedCursor(Context));
+	}
+	const FString TargetWhy = bCrosses ? FString() : Target.WhyRefused(Context, Candidate);
+
 	// The first corner lights up when the cursor is near enough to close on it, which is
 	// the only way to know the gesture is finishable without trying it.
 	if (bClosing)
@@ -180,7 +189,7 @@ void FOutlineDrawingState::BuildPreview(const FToolContext& Context, const IOutl
 		Sink.Marker(Corners[0], EPreviewStyle::Snap);
 	}
 
-	const EPreviewStyle Style = bCrosses ? EPreviewStyle::Refused : EPreviewStyle::Pending;
+	const EPreviewStyle Style = bCrosses || !TargetWhy.IsEmpty() ? EPreviewStyle::Refused : EPreviewStyle::Pending;
 	const FVector2D Ahead = bClosing ? Corners[0] : OutlineGuidedCursor(Context);
 	Sink.Line(Corners.Last(), Ahead, Style);
 
@@ -195,6 +204,10 @@ void FOutlineDrawingState::BuildPreview(const FToolContext& Context, const IOutl
 	if (bCrosses)
 	{
 		Sink.Label(OutlineGuidedCursor(Context), TEXT("crosses the outline"), EPreviewStyle::Refused);
+	}
+	else if (!TargetWhy.IsEmpty())
+	{
+		Sink.Label(OutlineGuidedCursor(Context), TargetWhy, EPreviewStyle::Refused);
 	}
 
 	// The closing edge, so the SHAPE is visible rather than just the path walked so far.

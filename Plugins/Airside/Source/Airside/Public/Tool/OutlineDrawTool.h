@@ -45,6 +45,13 @@ struct IOutlineTarget
 
 	/** Outline what RemoveUnderCursor would take, if anything is under the cursor. */
 	virtual void PreviewRemoval(const FToolContext& Context, IToolPreviewSink& Sink) const = 0;
+
+	/**
+	 * Why the outline Corners (the placed corners plus the cursor's) may not be committed - the target's own evaluator,
+	 * so the ghost goes red before the click that Commit would refuse (land purchase spec R7). Empty = allowed; the
+	 * default has nothing to refuse.
+	 */
+	virtual FString WhyRefused(const FToolContext& Context, TArrayView<const FVector2D> Corners) const { return FString(); }
 };
 
 /**

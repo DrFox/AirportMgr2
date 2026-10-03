@@ -65,6 +65,22 @@ struct AIRSIDE_API FLandGrid
 	/** The boundary as straight runs: unit tile edges with an unowned neighbour, merged where collinear and touching. */
 	TArray<FLandEdgeRun> Outline() const;
 
+	/**
+	 * Does this footprint stand entirely on owned land? Any winding, convex or not. A footprint whose EDGE lies on
+	 * the cut is owned - a road laid exactly to the edge is on the player's land; one that enters an unowned tile's
+	 * interior anywhere is not, even with every vertex on owned tiles (an L's notch). Invalid grid: true.
+	 * The FOOTPRINT, not a centreline: a taxiway whose centre is inside but whose shoulder crosses the cut would hang
+	 * over the void (land purchase spec 5).
+	 * ENFORCED BY: Airside.Model.LandGrid.Areas
+	 */
+	bool IsAreaOwned(TConstArrayView<FVector2D> Polygon) const;
+
+	/** IsAreaOwned for the straight strip a road of HalfWidth lays from A to B. */
+	bool IsStripOwned(FVector2D A, FVector2D B, double HalfWidth) const;
+
+	/** The one wording of every refusal past the edge (spec R7). */
+	static const FString OutsideText;
+
 	/** Bits 16*Word .. 16*Word+15 - four of these carry the mask to the material, one float each (exact to 2^24). */
 	uint16 MaskWord(int32 Word) const { return static_cast<uint16>((Owned >> (16 * Word)) & 0xFFFFu); }
 };

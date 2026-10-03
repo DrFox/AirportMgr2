@@ -94,4 +94,33 @@ bool FLandGridOutlineAndClamp::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLandGridAreas, "Airside.Model.LandGrid.Areas",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FLandGridAreas::RunTest(const FString&)
+{
+	FLandGrid Grid = LgStart();
+	Grid.SetTileOwned(FIntPoint(1, 3), true);   // the L: (0,3), (0,4), (1,3)
+	TestTrue(TEXT("a strip inside one tile"), Grid.IsStripOwned(FVector2D(10000, 200000), FVector2D(50000, 200000), 1200));
+	TestTrue(TEXT("EdgeTouchingIsOwned: a strip whose side lies ON the outer edge"),
+		Grid.IsStripOwned(FVector2D(1200, 190000), FVector2D(1200, 290000), 1200));
+	TestFalse(TEXT("ShoulderOverTheCutIsNot: centreline inside, shoulder 1 m over the west cut"),
+		Grid.IsStripOwned(FVector2D(1100, 190000), FVector2D(1100, 290000), 1200));
+	// NotchIsNotOwned: every vertex on owned tiles, but the strip crosses unowned (1,4).
+	TestFalse(TEXT("a diagonal across the L's notch"), Grid.IsStripOwned(FVector2D(50000, 290000), FVector2D(110000, 230000), 500));
+	TestTrue(TEXT("across the shared edge between two owned tiles"), Grid.IsStripOwned(FVector2D(30000, 200000), FVector2D(90000, 200000), 2000));
+	const TArray<FVector2D> OffGrid = { FVector2D(-5000, 200000), FVector2D(5000, 200000), FVector2D(5000, 210000) };
+	TestFalse(TEXT("off the grid"), Grid.IsAreaOwned(OffGrid));
+	TestTrue(TEXT("an invalid grid owns any area"), FLandGrid().IsAreaOwned(OffGrid));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FLandGridOutsideText, "Airside.Model.LandGrid.OutsideText",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FLandGridOutsideText::RunTest(const FString&)
+{
+	// THE ONE WORDING every build refusal past the edge uses (spec R7) - the readouts and the tests compare against it.
+	TestEqual(TEXT("refusal text"), FLandGrid::OutsideText, FString(TEXT("Outside your land")));
+	return true;
+}
+
 #endif

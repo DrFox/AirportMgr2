@@ -365,6 +365,12 @@ public:
 	 */
 	virtual FString WhySegmentRefused(int32 FromIndex, const FRoadSnapResult& To, ERoadKind Kind, int32 WidthIndex) const override;
 
+	/** See IRoadEditTarget::WhyRunwayRefused - the strip at the profile's half-width, against owned land. */
+	virtual FString WhyRunwayRefused(FVector2D From, FVector2D To, const URoadProfile* Profile) const override;
+
+	/** See IRoadEditTarget::WhyApronRefused. */
+	virtual FString WhyApronRefused(TArrayView<const FVector2D> Outline) const override;
+
 	/** See IRoadEditTarget::WhyPlotRefused. PlaceEntityInPlot's own outline refusals, moved here
 	 *  whole (same order, same wording), plus the clearance strip in the stand's words. */
 	virtual FString WhyPlotRefused(TArrayView<const FVector2D> Outline) const override;
@@ -599,6 +605,15 @@ public:
 	void ClearHistory();
 
 private:
+	/**
+	 * FLandGrid::OutsideText when Footprint leaves owned land, else empty - every Why* that lays ground asks this, and
+	 * a site in the void has nothing else worth saying. An airport whose grid is invalid owns everything.
+	 */
+	FString LandRefusal(TConstArrayView<FVector2D> Footprint) const;
+
+	/** LandRefusal for one point - a node, a point-placed entity. */
+	bool IsLandOwned(FVector2D Where) const;
+
 	/** A live segment's handle from its slot index. See MakeLiveNodeId. */
 	bool MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const;
 
