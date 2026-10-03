@@ -1830,6 +1830,8 @@ bool FRuntimeBusLandBoughtTest::RunTest(const FString&)
 	const FIntPoint Start[] = { FIntPoint(0, 3), FIntPoint(0, 4) };
 	TestWorld.Actor->GetEditFacade()->AuthorOwnedLand(FLandGrid::Make(FVector2D(-30000.0, -240000.0), 60000.0, 8, 8, Start));
 	Runtime->Tick(0.0);
+	// FUNDED HERE, not by the scenario: the opening balance (260,000 since #531) is under the 300,000 tile.
+	Runtime->GetLedger()->Open(1000000.0);
 	const int32 Before = Listener->Purchases.Num();
 	const int32 Published = Runtime->GetBus().DispatchedCountOfForTest<FLandPurchasedEvent>();
 	const double Balance = Runtime->GetLedger()->Balance();
