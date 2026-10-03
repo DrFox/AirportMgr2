@@ -1,6 +1,7 @@
 #include "Model/JobBoard.h"
 
 #include "AirportOpsLog.h"
+#include "Model/FuelSupply.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
@@ -210,6 +211,16 @@ EServiceRefusal UJobBoard::RefusalOf(const FJudgement& Out)
 	{
 		return EServiceRefusal::StandUnjoined;
 	}
+	if (Out.bNoStock)
+	{
+		// A VEHICLE REACHED THE BID AND RAN DRY (spec 2026-10-02 §7) - so there IS a depot, a road, a fleet and a joined
+		// stand, which is why the four above still come first ("a dry airport with no road is a road problem first"). BEFORE
+		// the per-candidate flags below: those are about OTHER vehicles (a second depot's too-large truck, a pumpless shed),
+		// and naming them here sent the player to fix a depot that was never the blocker - and, worse, left a reason
+		// ReopenStockRefusals does not re-open, so the aircraft left unfuelled after fuel arrived (Task 4 review).
+		// ENFORCED BY: AirportOps.Fuel.DryBesideATooLargeDepotSaysNoFuelStock
+		return EServiceRefusal::NoFuelStock;
+	}
 	if (Out.bAnyPumpless)
 	{
 		// BEFORE NoRoute, because this is a thing the player can go and fix. Falling through to
@@ -291,6 +302,92 @@ double UJobBoard::DriveSeconds(const URoadNetwork& Network, FGuidelineNodeId Fro
 	return Length / FMath::Max(Type.Vehicle.Chassis.Ground.Taxi.SpeedCap, 1.0);
 }
 
+// THE REFILL, LIVE AND PRICED, IN ONE FILE (2026-10-02, spec §7): BeginFacility draws the airport's stock and BidFor
+// below prices the same limit through the same two policy calls. MOVED HERE FROM JobBoard.cpp with that change, which
+// also keeps JobBoard.cpp inside its Check-Architecture rule 77 figure - the stock is a new responsibility, and it
+// entered beside the bid that must agree with it rather than growing the orchestrator.
+
+double UJobBoard::FuelAvailable() const
+{
+	return FuelSupply != nullptr ? FuelSupply->Available() : TNumericLimits<double>::Max();
+}
+
+int32 UJobBoard::ReopenStockRefusals()
+{
+	// THROUGH ReopenRefusedJob, the graph-change re-offer's own door: Open with the reason KEPT (#445's "refused, asking
+	// again"), so the alert stands through the frame the bid is pending, and the bid that follows clears it or re-refuses.
+	int32 Reopened = 0;
+	for (FServiceJob& Job : Jobs)
+	{
+		if (Job.State == EServiceJobState::Unserviceable && Job.Why == EServiceRefusal::NoFuelStock)
+		{
+			ReopenRefusedJob(Job);
+			++Reopened;
+		}
+	}
+	if (Reopened > 0)
+	{
+		UE_LOG(LogAirportOps, Log, TEXT("Fuel: %d job(s) re-opened by a delivery"), Reopened);
+	}
+	return Reopened;
+}
+
+double UJobBoard::FuelCapacityLitres(const URoadNetwork& Network, double LitresPerTank) const
+{
+	// THE SAME LIVE-DEPOT WALK UFacilityPurchases makes for its seated modules (FacilityPurchases.cpp, the excess pass), so
+	// a tank counts here exactly when the plot seats it - an owned tank the plot cannot hold holds no fuel.
+	int32 Tanks = 0;
+	const TArray<FEntityInstance>& Entities = Network.GetEntities();
+	for (int32 Index = 0; Index < Entities.Num(); ++Index)
+	{
+		const FEntityInstance& Entity = Entities[Index];
+		if (Entity.bAlive && Entity.IsDepot())
+		{
+			Tanks += CapabilityOf(Network.EntityIdAt(Index), Entity).Tanks();
+		}
+	}
+	return Tanks * FMath::Max(LitresPerTank, 0.0);
+}
+
+void UJobBoard::BeginFacility(FServiceVehicle& Vehicle, const URoadNetwork& Network, const USimClock& Clock)
+{
+	const IServiceRolePolicy* Policy = PolicyFor(Vehicle.Role);
+	const FEntityInstance* Home = Network.GetEntity(Vehicle.Home);
+	// DRAWN NOW, not when the pumping ends: two trucks home together must not both be promised the last 500 L. What is
+	// granted is held on the vehicle (RefillLitres, saved) and added when the refill ends (Step's AtFacility branch).
+	// FUEL'S STOCK, drawn for whatever role this is: the board is fuel's until a second role is scheduled (see JobBoard.h),
+	// and a second role's facility would need its own supply here.
+	const double Missing = Policy != nullptr ? FMath::Max(FFuelRolePolicy::CapacityOf(TypeFor(Vehicle.TypeCode)) - Vehicle.Cargo, 0.0) : 0.0;
+	Vehicle.RefillLitres = FuelSupply != nullptr ? FuelSupply->Draw(Missing) : Missing;
+	// A DRY REFILL FOR AN EMPTY TRUCK RELEASES ITS QUEUE (spec 2026-10-02 §7): ServiceBid's dry rule, live, on the same two
+	// figures - nothing on board and nothing granted, each below DoneWithin. Without it the truck went Idle in no time and
+	// StartNext sent it here again, every Step, its jobs held for ever. RELEASED, NOT REFUSED HERE: the jobs go back to the
+	// board, whose bid refuses them NoFuelStock - or gives them to a truck that still carries fuel (partial service beats
+	// none). A truck with cargo is not released: NextStep sends it straight there with what it has.
+	// ENFORCED BY: AirportOps.Fuel.DryRefillReleasesItsQueue
+	if (Policy != nullptr && Vehicle.Queue.Num() > 0 && Vehicle.Cargo < Policy->DoneWithin() && Vehicle.RefillLitres < Policy->DoneWithin())
+	{
+		for (const int32 JobId : Vehicle.Queue)
+		{
+			if (const FServiceJob* Job = FindJob(JobId))
+			{
+				UE_LOG(LogAirportOps, Log, TEXT("Fuel: depot dry - vehicle %d gives up job %d after %.0f L"), Vehicle.Id, Job->Id, Job->QuantityDelivered);
+			}
+		}
+		ReleaseJobsOf(Vehicle);
+	}
+	const double Seconds = Policy != nullptr && Home != nullptr
+		? Policy->FacilitySeconds(Vehicle.Cargo, TypeFor(Vehicle.TypeCode), PumpsAt(Vehicle.Home, *Home), Vehicle.RefillLitres) : 0.0;
+	Lifecycle(Vehicle).BeginFacility(Clock.Now() + Seconds);
+	if (Seconds > 0.0)
+	{
+		// REFILL BEFORE IT IS FREE (spec 2026-09-28-fuel-litres): what it pumped out, at the depot's
+		// pumps. Nothing pumped (a recall mid-leg, or a dry airport) makes this zero, and it is free on the next tick.
+		UE_LOG(LogAirportOps, Log, TEXT("Fuel: depot %d refilling vehicle %d (%.0f L, %.1f game min, stock left %.0f L)"),
+			Vehicle.Home.Index, Vehicle.Id, Vehicle.RefillLitres, Seconds / 60.0, FuelSupply != nullptr ? FuelSupply->Available() : -1.0);
+	}
+}
+
 ServiceBid::FResult UJobBoard::BidFor(const FServiceVehicle& Vehicle, const FServiceJob& Job, const UGroundTraffic& Traffic,
 	const URoadNetwork& Network, const USimClock& Clock, int32 QueueAhead) const
 {
@@ -301,7 +398,7 @@ ServiceBid::FResult UJobBoard::BidFor(const FServiceVehicle& Vehicle, const FSer
 	if (Policy == nullptr || Home == nullptr)
 	{
 		ServiceBid::FResult Unreachable;
-		Unreachable.bReachable = false;
+		Unreachable.Outcome = ServiceBid::EOutcome::NoWay;
 		return Unreachable;
 	}
 
@@ -319,6 +416,7 @@ ServiceBid::FResult UJobBoard::BidFor(const FServiceVehicle& Vehicle, const FSer
 	In.Type = &Type;
 	In.Policy = Policy;
 	In.Pumps = PumpsAt(Vehicle.Home, *Home);
+	In.FacilityAvailable = FuelAvailable();   // A SNAPSHOT - see FInput::FacilityAvailable for why that is accepted
 	In.FacilityNode = NodeIndex(Home->PoseNode);
 	In.DriveSeconds = [this, &Nodes, &Network, &Type, GamePerMovement](int32 From, int32 To)
 	{
@@ -349,11 +447,15 @@ ServiceBid::FResult UJobBoard::BidFor(const FServiceVehicle& Vehicle, const FSer
 	{
 	case EServiceVehicleState::AtFacility:
 		In.FreeAt = FMath::Max(Vehicle.StepEndsAt, Now);
-		In.CargoWhenFree = Policy->CargoAfterFacility(Vehicle.Cargo, Type);
+		// THE LITRES ALREADY GRANTED, not the stock: BeginFacility drew them, and the stock no longer holds them.
+		In.CargoWhenFree = Policy->CargoAfterFacility(Vehicle.Cargo, Type, Vehicle.RefillLitres);
 		break;
 	case EServiceVehicleState::ToFacility:
-		In.FreeAt = Now + RemainingDrive() + Policy->FacilitySeconds(Vehicle.Cargo, Type, In.Pumps);
-		In.CargoWhenFree = Policy->CargoAfterFacility(Vehicle.Cargo, Type);
+		In.FreeAt = Now + RemainingDrive() + Policy->FacilitySeconds(Vehicle.Cargo, Type, In.Pumps, In.FacilityAvailable);
+		In.CargoWhenFree = Policy->CargoAfterFacility(Vehicle.Cargo, Type, In.FacilityAvailable);
+		// THAT REFILL SPENDS THE SNAPSHOT TOO, so the simulation's own refills price only what it leaves - the rule
+		// ServiceBid::Finish applies between its trips, applied to the refill this vehicle is already driving to.
+		In.FacilityAvailable = FMath::Max(In.FacilityAvailable - FMath::Max(In.CargoWhenFree - Vehicle.Cargo, 0.0), 0.0);
 		break;
 	case EServiceVehicleState::ToJob:
 		if (Current != nullptr)
@@ -472,6 +574,8 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 		double BestFinish = TNumericLimits<double>::Max();
 		const FServiceVehicle* Next = nullptr;
 		double NextFinish = TNumericLimits<double>::Max();
+		int32 Bidders = 0;
+		int32 DryBidders = 0;   // ANY dry bidder, when none finishes, makes it NoFuelStock - see FJudgement::bNoStock
 		for (const FCandidate& Candidate : Eligible)
 		{
 			FServiceVehicle* Vehicle = FindVehicleMutable(Candidate.VehicleId);
@@ -480,7 +584,9 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 				continue;
 			}
 			const ServiceBid::FResult Bid = BidFor(*Vehicle, Job, Traffic, Network, Clock);
-			if (!Bid.bReachable)
+			++Bidders;
+			DryBidders += Bid.Outcome == ServiceBid::EOutcome::NoStock ? 1 : 0;
+			if (!Bid.Finishes())
 			{
 				continue;
 			}
@@ -500,9 +606,11 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 
 		if (Best == nullptr)
 		{
-			// NOTHING MAY BID. Unserviceable, which is TERMINAL until the graph changes - and there is no
-			// "busy" to fall back on here, because a busy vehicle bids with its queue.
+			// NOTHING MAY BID. Unserviceable, which is TERMINAL until the graph changes (or, for NoFuelStock, until fuel
+			// arrives - ReopenStockRefusals) - and there is no "busy" to fall back on here, because a busy vehicle bids
+			// with its queue.
 			++RevisionCount;   // See Revision: the job's state and reason changed, and the fuel line says why.
+			Judged.bNoStock = DryBidders > 0;
 			Job.State = EServiceJobState::Unserviceable;
 			Job.Why = RefusalOf(Judged);
 			Job.RefusedAtRevision = Revision;
@@ -517,6 +625,11 @@ void UJobBoard::AssignOpenJobs(UGroundTraffic& Traffic, const URoadNetwork& Netw
 				UE_LOG(LogAirportOps, Warning,
 					TEXT("Fuel: no road wide enough for any fuel vehicle from any depot - the first edge one does not fit is guideline edge %d"),
 					Judged.NarrowAt.Index);
+			}
+			else if (Job.Why == EServiceRefusal::NoFuelStock)
+			{
+				UE_LOG(LogAirportOps, Warning, TEXT("Fuel: %d of %d vehicle(s) bidding for aircraft %d carry no fuel, and the airport holds %.1f L"),
+					DryBidders, Bidders, Job.AircraftId, FuelAvailable());
 			}
 
 			// THE COUNTS THAT DECIDED IT, in the line itself. A bare reason sent the player to look at
@@ -609,14 +722,14 @@ void UJobBoard::RebidQueued(UGroundTraffic& Traffic, const URoadNetwork& Network
 				continue;
 			}
 			const ServiceBid::FResult Bid = BidFor(*Vehicle, *Job, Traffic, Network, Clock);
-			if (Bid.bReachable && Bid.Finish < BestFinish)
+			if (Bid.Finishes() && Bid.Finish < BestFinish)
 			{
 				Best = Vehicle;
 				BestFinish = Bid.Finish;
 			}
 		}
 
-		const double CurrentFinish = Current.bReachable ? Current.Finish : TNumericLimits<double>::Max();
+		const double CurrentFinish = Current.Finishes() ? Current.Finish : TNumericLimits<double>::Max();
 		if (Best == nullptr || BestFinish >= CurrentFinish - RebidMarginSeconds)
 		{
 			// STAYS - but with the promise brought up to date, so the card and the next re-bid read what

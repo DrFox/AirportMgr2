@@ -1,9 +1,13 @@
 #include "InspectorCards.h"
 
+#include "Model/FacilityPurchases.h"
+#include "Model/FuelSupply.h"
 #include "Model/GroundTraffic.h"
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
+#include "Model/OpsDesignDefaults.h"
 #include "Model/OpsNames.h"
+#include "Model/Pricing.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RunwayFacts.h"
 #include "Present/OpsRuntime.h"
@@ -267,7 +271,92 @@ FInspectorCardKey FDepotCard::KeyFor(const FInspectorCardInput& In) const
 		Key.Ledger = Ledger;
 		Key.LedgerRevision = Ledger->Revision();
 	}
+	// THE FUEL ROW'S INPUTS: stock, capacity, orders on the way, the contract - no revision covers a bowser drawing or a tanker
+	// arriving, so the quote itself is the key, at the rounding the line prints. Cheap: a handful of reads, no walk.
+	// ENFORCED BY: AirportMgr.Inspector.Cache.DepotSeesTheFuel
+	if (const UFuelSupply* Fuel = In.Runtime->GetFuelSupply())
+	{
+		Key.Fuel = ShownFuel(*Fuel);
+	}
 	return Key;
+}
+
+FFuelQuote FDepotCard::ShownFuel(const UFuelSupply& Supply)
+{
+	FFuelQuote Q = Supply.Quote(OpsDesignDefaults::SpotOrderLitres);
+	// THE NEAREST 100 L: a gauge, not a meter - pumping moves the stock every tick, and a line that recomposed (and walked the job
+	// board's backlog with it) every tick for a last digit nobody reads is the cost the card key exists to stop.
+	auto Shown = [](double Litres) { return FMath::RoundToDouble(Litres / 100.0) * 100.0; };
+	Q.StockLitres = Shown(Q.StockLitres);
+	Q.PendingLitres = Shown(Q.PendingLitres);
+	return Q;
+}
+
+FDepotFuelView FDepotCard::FuelViewOf(const FFuelQuote& Q, const UPricing* Pricing)
+{
+	FDepotFuelView V;
+	V.bShown = true;
+	auto Litres = [](double Value) { return FText::AsNumber(FMath::RoundToInt64(Value)); };
+	auto Money = [Pricing](double Amount) { return Pricing != nullptr ? Pricing->Format(Amount) : FText::AsNumber(FMath::RoundToInt64(Amount)); };
+	// UNBOUNDED IS NO TANK READER (a bare supply) - "of 1.8e308" is not a figure to print.
+	FText Line = Q.bBounded
+		? FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelLine", "Fuel {0} / {1} L"), Litres(Q.StockLitres), Litres(Q.CapacityLitres))
+		: FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelLineUnbounded", "Fuel {0} L"), Litres(Q.StockLitres));
+	if (Q.PendingLitres > 0.0)
+	{
+		Line = FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelOrdered", "{0} · {1} L ordered"), Line, Litres(Q.PendingLitres));
+	}
+	if (Q.ContractTier != INDEX_NONE)
+	{
+		Line = FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelContract", "{0} · contract {1} L/day, {2} {2}|plural(one=day,other=days)"),
+			Line, Litres(Q.ContractLitresPerDay), FText::AsNumber(Q.ContractDaysLeft));
+	}
+	V.Line = Line.ToString();
+
+	V.Spot = Q.Spot;
+	V.Sign = Q.Sign;
+	V.Cancel = Q.Cancel;
+	V.bContracted = Q.ContractTier != INDEX_NONE;
+	// A REFUSED BUTTON SAYS WHY on its caption, the module rows' rule; the tooltip keeps the figures either way.
+	auto Caption = [](const FText& Label, EFuelOrderRefusal Why)
+	{
+		return Why == EFuelOrderRefusal::None ? Label
+			: FText::Format(NSLOCTEXT("AirportMgr", "InspectorRefusedCaption", "{0} - {1}"), Label, UFacilityPurchases::FuelOrderRefusalText(Why));
+	};
+	auto Tip = [](const FText& Detail, EFuelOrderRefusal Why)
+	{
+		return Why == EFuelOrderRefusal::None ? Detail
+			: FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelRefusedTip", "{0}\n{1}"), UFacilityPurchases::FuelOrderRefusalText(Why), Detail);
+	};
+	V.SpotCaption = Caption(FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelSpot", "Order {0} L"), Litres(Q.SpotLitres)), Q.Spot);
+	// THE DELAY IN WORDS THAT FIT IT: whole hours, plural as needed, and minutes below an hour (a scenario may shorten it).
+	const int32 DelayMinutes = FMath::RoundToInt(Q.SpotDelaySeconds / 60.0);
+	const FText Delay = DelayMinutes < 60
+		? FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelDelayMinutes", "{0} game {0}|plural(one=minute,other=minutes)"), FText::AsNumber(DelayMinutes))
+		: FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelDelayHours", "{0} game {0}|plural(one=hour,other=hours)"), FText::AsNumber(FMath::RoundToInt(DelayMinutes / 60.0)));
+	V.SpotTip = Tip(FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelSpotTip", "{0} L for {1}, paid now; delivered in {2}"),
+		Litres(Q.SpotLitres), Money(Q.SpotCost), Delay), Q.Spot);
+	// SIGN OR UPGRADE, one button: the next tier either way (FFuelQuote::NextTier). Past the last tier there is no figure to name.
+	const bool bNextExists = Q.NextLitresPerDay > 0.0;
+	V.SignCaption = Caption(!V.bContracted
+		? (bNextExists ? FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelSign", "Contract {0} L/day"), Litres(Q.NextLitresPerDay))
+			: NSLOCTEXT("AirportMgr", "InspectorFuelSignNone", "Contract"))
+		: (bNextExists ? FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelUpgrade", "Upgrade to {0} L/day"), Litres(Q.NextLitresPerDay))
+			: NSLOCTEXT("AirportMgr", "InspectorFuelUpgradeNone", "Upgrade")), Q.Sign);
+	// THE FIRST DAY IS CHARGED WHOLE, whatever the hour of the signing: delivery and charge come at each day's end (take-or-pay), so a
+	// contract signed at 23:00 pays a full day an hour later. Said here, at the button, so it is no surprise on the ledger. An UPGRADE
+	// says the same, and that it starts a fresh term with no charge for the old one's days left.
+	V.SignTip = Tip(!V.bContracted
+		? FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelSignTip",
+			"{0} L a day for {1} a day, for {2} days. Delivered and charged in full at each day's end - the first day too, whatever the hour you sign. Cancelling costs part of the days left."),
+			Litres(Q.NextLitresPerDay), Money(Q.NextDailyCost), FText::AsNumber(Q.TermDays))
+		: FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelUpgradeTip",
+			"Replace the contract with {0} L a day for {1} a day, a fresh {2}-day term; no charge for the days left. Delivered and charged in full at each day's end - the first day too, whatever the hour."),
+			Litres(Q.NextLitresPerDay), Money(Q.NextDailyCost), FText::AsNumber(Q.TermDays)), Q.Sign);
+	V.CancelCaption = Caption(NSLOCTEXT("AirportMgr", "InspectorFuelCancel", "Cancel contract"), Q.Cancel);
+	V.CancelTip = Tip(FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelCancelTip", "Cancelling now charges {0} for the {1} {1}|plural(one=day,other=days) left"),
+		Money(Q.CancelCharge), FText::AsNumber(Q.ContractDaysLeft)), Q.Cancel);
+	return V;
 }
 
 bool FDepotCard::Compose(const FInspectorCardInput& In, FInspectorCardView& Out)
@@ -328,6 +417,11 @@ bool FDepotCard::Compose(const FInspectorCardInput& In, FInspectorCardView& Out)
 	{
 		++QuoteCalls;
 		Out.Quote = Runtime->QuoteFacility(DepotId);
+		// THE AIRPORT'S FUEL, on every depot's card: one pool (UFuelSupply's named deviation), so each depot shows the same row.
+		if (const UFuelSupply* Fuel = Runtime->GetFuelSupply())
+		{
+			Out.Fuel = FuelViewOf(ShownFuel(*Fuel), Runtime->GetPricing());
+		}
 	}
 	return true;
 }

@@ -6,16 +6,19 @@
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/FacilityPurchases.h"
+#include "Model/FuelSupply.h"
 #include "Model/GroundTraffic.h"
 #include "Model/JobBoard.h"
 #include "Model/Ledger.h"
 #include "Model/OpsDefinition.h"
+#include "Model/OpsAlerts.h"
 #include "Model/OpsEvents.h"
 #include "Model/VehicleCodes.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
+#include "Model/SimClock.h"
 #include "OpsEventsTestListener.h"
 #include "OpsSaveTestHelpers.h"
 #include "Model/RoutePolicy.h"
@@ -54,6 +57,17 @@ namespace
 		Edge.Width = 600.0;
 		Edge.bDerived = true;
 		Net.AddGuidelineEdge(MoveTemp(Edge));
+	}
+
+	/**
+	 * THE SHED'S ROW OF A QUOTE, by kind. The quote holds one row per offer in map order (the tank joined the shed on
+	 * 2026-10-02), so a test that read Modules[0] as "the shed" was reading whichever row the map listed first.
+	 */
+	const FModuleOfferQuote& FacilityWiredShedRow(const FFacilityQuote& Quote)
+	{
+		static const FModuleOfferQuote None;
+		const FModuleOfferQuote* Row = Quote.Modules.FindByPredicate([](const FModuleOfferQuote& Each) { return Each.Module == EDepotModule::Shed; });
+		return Row ? *Row : None;
 	}
 
 	struct FFacilityFuelField
@@ -233,14 +247,14 @@ bool FFacilityShedRelightsTest::RunTest(const FString&)
 
 	const FFacilityQuote Before = Runtime->QuoteFacility(Depot);
 	if (!TestTrue(TEXT("setup: the runtime's ceiling hook sees a second shed slot"),
-		Before.Modules.Num() == 1 && Before.Modules[0].Reserved >= 2)) { return false; }
+		FacilityWiredShedRow(Before).Reserved >= 2)) { return false; }
 	const UPlotPresenter* Plots = TestWorld.Buildings->GetPlotPresenter();
 	const int32 Lit = Plots->GetModuleCount();
 
 	const FPurchaseResult Shed = Runtime->BuyModule(Depot, EDepotModule::Shed);
 	TestTrue(TEXT("the shed is bought through the runtime's hooks"), Shed.Succeeded());
 	TestEqual(TEXT("and one more bay is lit - the module hook reached the facade and the rebuild"), Plots->GetModuleCount(), Lit + 1);
-	TestEqual(TEXT("the quote now owns two"), Runtime->QuoteFacility(Depot).Modules[0].Owned, 2);
+	TestEqual(TEXT("the quote now owns two"), FacilityWiredShedRow(Runtime->QuoteFacility(Depot)).Owned, 2);
 	TestEqual(TEXT("and has two bays"), Runtime->QuoteFacility(Depot).Bays, 2);
 	return true;
 }
@@ -358,7 +372,7 @@ bool FFacilityDragRefusesTest::RunTest(const FString&)
 	TestEqual(TEXT("the shed is refused while the drag is open"),
 		static_cast<int32>(Shed.Refusal), static_cast<int32>(EPurchaseRefusal::NotAFacility));
 	TestEqual(TEXT("and nothing is charged"), Runtime->GetLedger()->Balance(), Balance);
-	TestEqual(TEXT("nor built"), Runtime->QuoteFacility(Depot).Modules[0].Owned, 1);
+	TestEqual(TEXT("nor built"), FacilityWiredShedRow(Runtime->QuoteFacility(Depot)).Owned, 1);
 	Facade->EndInteractiveEdit(false);
 	TestTrue(TEXT("the depot's placement is still undoable - the history was not cleared"), Facade->CanUndo());
 	TestTrue(TEXT("with the drag closed, the same shed is bought"), Runtime->BuyModule(Depot, EDepotModule::Shed).Succeeded());
@@ -378,7 +392,7 @@ bool FFacilityMemoInvalidatesTest::RunTest(const FString&)
 	UOpsRuntime* Runtime = nullptr;
 	const FEntityInstanceId Wide = FacilityWiredDepot(TestWorld, Runtime);
 	if (!TestTrue(TEXT("setup: the wide depot is placed"), Wide.IsSet())) { return false; }
-	const int32 WideSheds = Runtime->QuoteFacility(Wide).Modules[0].Reserved;
+	const int32 WideSheds = FacilityWiredShedRow(Runtime->QuoteFacility(Wide)).Reserved;
 	if (!TestTrue(TEXT("setup: the wide plot reserves a second shed"), WideSheds >= 2)) { return false; }
 	const int32 Solves = Runtime->ReservationSolvesForTest();
 
@@ -393,7 +407,7 @@ bool FFacilityMemoInvalidatesTest::RunTest(const FString&)
 
 	const FFacilityQuote Q = Runtime->QuoteFacility(NarrowId);
 	TestTrue(TEXT("the narrow plot's ceiling is solved afresh"), Runtime->ReservationSolvesForTest() > Solves);
-	TestTrue(TEXT("and it holds fewer sheds than the wide one"), Q.Modules.Num() == 1 && Q.Modules[0].Reserved < WideSheds);
+	TestTrue(TEXT("and it holds fewer sheds than the wide one"), FacilityWiredShedRow(Q).Reserved < WideSheds);
 	return true;
 }
 
@@ -418,7 +432,7 @@ bool FFacilityRollbackResolvesTest::RunTest(const FString&)
 	if (!TestTrue(TEXT("setup: the second depot is placed"), SecondIndex != INDEX_NONE)) { return false; }
 	const FEntityInstanceId Depot = Actor->Network->EntityIdAt(SecondIndex);
 
-	const int32 WideSheds = Runtime->QuoteFacility(First).Modules[0].Reserved;
+	const int32 WideSheds = FacilityWiredShedRow(Runtime->QuoteFacility(First)).Reserved;
 	if (!TestTrue(TEXT("setup: a wide plot reserves a second shed"), WideSheds >= 2)) { return false; }
 
 	TArray<FVector2D> Narrow = Second;
@@ -429,7 +443,7 @@ bool FFacilityRollbackResolvesTest::RunTest(const FString&)
 		FRoadEditScope Edit(nullptr, Actor->Network, TEXT("re-plot"));
 		if (!TestTrue(TEXT("setup: the plot is narrowed inside the scope"),
 			FRoadNetworkTestAccess(*Actor->Network).SetEntityOutlineForTest(Depot, Narrow))) { return false; }
-		NarrowSheds = Runtime->QuoteFacility(Depot).Modules[0].Reserved;
+		NarrowSheds = FacilityWiredShedRow(Runtime->QuoteFacility(Depot)).Reserved;
 		TestTrue(TEXT("control: the narrow plot holds fewer sheds - the memo now holds THAT"), NarrowSheds < WideSheds);
 		const int32 Solves = Runtime->ReservationSolvesForTest();
 
@@ -437,7 +451,7 @@ bool FFacilityRollbackResolvesTest::RunTest(const FString&)
 		TestTrue(TEXT("the scope rolls back"), Edit.Rollback());
 		TestTrue(TEXT("in place: the network object is the one the memo was filled against"), Actor->Network == LiveBefore);
 
-		const int32 After = Runtime->QuoteFacility(Depot).Modules[0].Reserved;
+		const int32 After = FacilityWiredShedRow(Runtime->QuoteFacility(Depot)).Reserved;
 		TestTrue(TEXT("the ceiling was solved afresh - a pointer-keyed memo would answer from the failed edit"),
 			Runtime->ReservationSolvesForTest() > Solves);
 		TestEqual(TEXT("and it is the restored (wide) plot's, not the narrowed one's"), After, WideSheds);
@@ -517,8 +531,9 @@ bool FFacilityDetachClearsHooksTest::RunTest(const FString&)
 	TestFalse(TEXT("and the repair's removal hook (#266) - left set, it would remove modules from a field nobody drives"),
 		static_cast<bool>(Shop->ApplyModuleRemoval));
 	const FFacilityQuote Q = Shop->Quote(*TestWorld.Actor->Network, Depot);
-	TestTrue(TEXT("the shed row refuses NotAFacility"),
-		Q.Modules.Num() == 1 && Q.Modules[0].Refusal == EPurchaseRefusal::NotAFacility);
+	TestEqual(TEXT("one row per offer survives the detach"), Q.Modules.Num(), Runtime->GetFacilityPurchases()->ModuleOffers.Num());
+	TestTrue(TEXT("every module row refuses NotAFacility"),
+		Q.Modules.Num() > 0 && !Q.Modules.ContainsByPredicate([](const FModuleOfferQuote& Row) { return Row.Refusal != EPurchaseRefusal::NotAFacility; }));
 	return true;
 }
 
@@ -679,7 +694,10 @@ bool FFacilityRepairWiredTest::RunTest(const FString&)
 		TestEqual(TEXT("counting the sheds removed"), Refund->Count, 2 - Seats);
 		TestEqual(TEXT("with the refund as posted"), Refund->Amount, (2 - Seats) * Shed.Price, 1e-6);
 	}
-	TestEqual(TEXT("upkeep charges only the standing sheds"), Runtime->GetFacilityPurchases()->DailyUpkeep(*Actor->Network).Modules, Seats * Shed.UpkeepPerDay, 1e-9);
+	// The depot's one tank (FacilityWiredDepot's kit) stands and is charged too, now that the tank has an offer.
+	const FModuleOffer& Tank = Runtime->GetFacilityPurchases()->ModuleOffers.FindChecked(EDepotModule::Tank);
+	TestEqual(TEXT("upkeep charges only the standing sheds, and the tank"), Runtime->GetFacilityPurchases()->DailyUpkeep(*Actor->Network).Modules,
+		Seats * Shed.UpkeepPerDay + Tank.UpkeepPerDay, 1e-9);
 
 	Runtime->Tick(Step);
 	TestEqual(TEXT("once repaired, the next frame repairs nothing"), FacilityWiredRefunds(*Ledger), 1);
@@ -783,6 +801,338 @@ bool FFleetEveryBuyableTypeHasAChassisTest::RunTest(const FString&)
 		TestTrue(FString::Printf(TEXT("%s resolves to a chassis with a wheelbase"), *Row.Key.ToString()), Kind.Vehicle.Chassis.Wheelbase() > 0.0);
 	}
 	TestTrue(TEXT("the rig row is the rig: it tows its tank"), Board->TypeFor(AirsideVehicleCodes::Rig).Vehicle.Tow.Num() > 0);
+	return true;
+}
+
+// THE FUEL SUPPLY'S COMPOSITION (fuel-supply plan task 6): each fails if UOpsRuntime leaves one of the supply's seams unwired -
+// the tanks' capacity, the board's handle, the new game's stock, the day beat, the spot poll, the save, the delivery's wake-up.
+namespace
+{
+	/**
+	 * THE BOARD'S HANDLE ON THE SUPPLY, mutable - the stock a refill would draw, which the runtime's own getter keeps const.
+	 * Reaching it this way also asserts the link: a board with no supply returns null and the test stops there.
+	 */
+	UFuelSupply* FacilityWiredBoardSupply(UOpsRuntime& Runtime)
+	{
+		return Runtime.GetJobBoard()->FuelSupply.Get();
+	}
+
+	/** Seated tanks at Depot, read off the network and the plot's ceiling - NOT through UJobBoard::FuelCapacityLitres, which is
+	 *  what the runtime wires and so cannot be its own witness. */
+	int32 FacilityWiredSeatedTanks(UOpsRuntime& Runtime, const ARoadNetworkActor& Actor, FEntityInstanceId Depot)
+	{
+		const FEntityInstance* Entity = Actor.Network->GetEntity(Depot);
+		if (Entity == nullptr) { return 0; }
+		const int32 Owned = FacilityWiredOwned(Actor, Depot, EDepotModule::Tank);
+		return FMath::Min(Owned, Runtime.GetFacilityPurchases()->ReservedSlotsOf(Depot, *Entity, EDepotModule::Tank));
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelAttachWiresTheSupplyTest, "AirportOps.Present.Fuel.AttachWiresTheSupply",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelAttachWiresTheSupplyTest::RunTest(const FString&)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = nullptr;
+	const FEntityInstanceId Depot = FacilityWiredDepot(TestWorld, Runtime);
+	if (!TestTrue(TEXT("setup: the starter depot is placed"), Depot.IsSet())) { return false; }
+	const UScenario* Scenario = UAirportOpsSettings::ResolveDefaultScenario(*Runtime->GetCatalog());
+	if (!TestNotNull(TEXT("a scenario"), Scenario)) { return false; }
+
+	const UFuelSupply* Supply = Runtime->GetFuelSupply();
+	if (!TestNotNull(TEXT("the runtime owns a supply"), Supply)) { return false; }
+	TestTrue(TEXT("the board draws from the same supply"), Runtime->GetJobBoard()->FuelSupply == Supply);
+	TestTrue(TEXT("which pays from the runtime's ledger"), Supply->Ledger == Runtime->GetLedger());
+	TestEqual(TEXT("its figures are the scenario's"), Supply->Figures.LitresPerTank, Scenario->FuelSupply.LitresPerTank, 1e-9);
+	const int32 Tanks = FacilityWiredSeatedTanks(*Runtime, *TestWorld.Actor, Depot);
+	if (!TestTrue(FString::Printf(TEXT("CONTROL: the starter depot seats a tank (%d)"), Tanks), Tanks > 0)) { return false; }
+	TestEqual(TEXT("capacity is the seated tanks x LitresPerTank"), Supply->Capacity(), Tanks * Scenario->FuelSupply.LitresPerTank, 1e-6);
+	TestEqual(TEXT("a new game opens at the scenario's starting stock"), Supply->StockLitres, Scenario->FuelSupply.StartingStockLitres, 1e-9);
+
+	Runtime->Detach();
+	TestFalse(TEXT("a detach takes the capacity hook back - it read the old actor's network"), static_cast<bool>(Supply->CapacityOf));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelDayEndDeliversTest, "AirportOps.Present.Fuel.DayEndDeliversTheContract",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelDayEndDeliversTest::RunTest(const FString&)
+{
+	// THE CONTRACT RIDES THE DAY'S END (FDayEndedEvent, published by the upkeep beat): unwired, a signed contract charges
+	// nothing and delivers nothing, and the player who signed it waits for fuel that never comes.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = nullptr;
+	if (!TestTrue(TEXT("setup: the starter depot is placed"), FacilityWiredDepot(TestWorld, Runtime).IsSet())) { return false; }
+	UFuelSupply* Supply = FacilityWiredBoardSupply(*Runtime);
+	if (!TestNotNull(TEXT("setup: the board holds the supply"), Supply)) { return false; }
+	Supply->Draw(10000.0);   // room for a day of the smallest tier - a new game's tank is full
+	const double Before = Supply->StockLitres;
+	const double Day = Supply->Figures.ContractTiers[0].LitresPerDay;
+	if (!TestEqual(TEXT("tier 0 is signed through the forwarder"), Runtime->SignFuelContract(0), EFuelOrderRefusal::None)) { return false; }
+
+	USimClock* Clock = Runtime->GetClock();
+	Clock->SetUniformDay(USimClock::SecondsPerDay);   // 1 game s per real s
+	Runtime->RearmRepeatingSchedules();   // the day's length changed under the booking, as the upkeep tests re-book
+	const double Midnight = Clock->NextDayStart();
+	while (Clock->Now() < Midnight - 61.0) { Runtime->Tick(60.0); }
+	TestEqual(TEXT("nothing is delivered before the day ends"), Supply->StockLitres, Before, 1e-9);
+	Runtime->Tick(60.0);
+	Runtime->Tick(60.0);
+	TestEqual(TEXT("the day's litres arrived at midnight"), Supply->StockLitres, Before + Day, 1e-6);
+	TestTrue(TEXT("and were paid for on a FuelPurchase line"), Runtime->GetLedger()->Entries().ContainsByPredicate(
+		[](const FLedgerEntry& Row) { return Row.Category == ELedgerCategory::FuelPurchase; }));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelSpotSurvivesSaveTest, "AirportOps.Present.Fuel.SpotOrderSurvivesASave",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelSpotSurvivesSaveTest::RunTest(const FString&)
+{
+	// REVIEW FOCUS 3: THE ORDER'S DUE TIME IS SAVED, THE CLOCK'S QUEUE IS NOT. A per-order clock entry booked at the order
+	// would be gone in a fresh session; the repeating poll is re-armed with the other repeaters, so a load mid-delay still
+	// delivers what was paid for. And the load is NOT a new game: the stock is the save's, not the scenario's opening.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = nullptr;
+	if (!TestTrue(TEXT("setup: the starter depot is placed"), FacilityWiredDepot(TestWorld, Runtime).IsSet())) { return false; }
+	UFuelSupply* Supply = FacilityWiredBoardSupply(*Runtime);
+	if (!TestNotNull(TEXT("setup: the board holds the supply"), Supply)) { return false; }
+	Supply->Draw(20000.0);
+	const double Stock = Supply->StockLitres;
+	if (!TestEqual(TEXT("a spot order is taken"), Runtime->OrderSpotFuel(10000.0), EFuelOrderRefusal::None)) { return false; }
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_FuelSpotSurvivesASave"));
+	if (!TestTrue(TEXT("saved mid-delay"), Runtime->SaveToSlot(Slot))) { return false; }
+	Runtime->Detach();
+
+	UOpsRuntime* Fresh = NewObject<UOpsRuntime>();
+	Fresh->Attach(TestWorld.Actor);
+	if (!TestTrue(TEXT("loaded into a fresh session"), Fresh->LoadFromSlot(Slot))) { return false; }
+	const UFuelSupply* Loaded = Fresh->GetFuelSupply();
+	TestEqual(TEXT("the stock is the save's - a load is not a new game"), Loaded->StockLitres, Stock, 1e-9);
+	if (!TestEqual(TEXT("the order is still on the way"), Loaded->SpotOrders.Num(), 1)) { return false; }
+	const double Due = Loaded->SpotOrders[0].DueAt;
+
+	USimClock* Clock = Fresh->GetClock();
+	Clock->SetUniformDay(USimClock::SecondsPerDay);   // 1 game s per real s; the poll books in game seconds, so nothing re-books
+	for (int32 Step = 0; Step < 400 && Clock->Now() < Due + 120.0; ++Step) { Fresh->Tick(60.0); }
+	TestTrue(TEXT("setup: the clock passed the due time"), Clock->Now() >= Due + 120.0);
+	TestEqual(TEXT("the order arrived in the loaded session"), Loaded->StockLitres, Stock + 10000.0, 1e-6);
+	TestEqual(TEXT("and is no longer on the way"), Loaded->SpotOrders.Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelLoadReplacesSessionTest, "AirportOps.Present.Fuel.LoadReplacesTheSessionsFuel",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelLoadReplacesSessionTest::RunTest(const FString&)
+{
+	// A LOAD REPLACES THE SESSION, including what the save holds as DEFAULTS: tagged serialisation writes no property equal
+	// to the class default, so a save with an empty tank, no orders and no contract carries none of the three - and a load
+	// that did not clear them first kept this session's order, contract and stock (UAirport::OnBeforeRestore's reason).
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = nullptr;
+	if (!TestTrue(TEXT("setup: the starter depot is placed"), FacilityWiredDepot(TestWorld, Runtime).IsSet())) { return false; }
+	UFuelSupply* Supply = FacilityWiredBoardSupply(*Runtime);
+	if (!TestNotNull(TEXT("setup: the board holds the supply"), Supply)) { return false; }
+	Supply->Draw(Supply->StockLitres);
+	const OpsSaveTest::FScopedSlot Slot(TEXT("AirportOpsTest_FuelLoadReplacesTheSession"));
+	if (!TestTrue(TEXT("saved dry, with nothing ordered"), Runtime->SaveToSlot(Slot))) { return false; }
+
+	Supply->Receive(5000.0);
+	TestEqual(TEXT("setup: an order after the save"), Runtime->OrderSpotFuel(10000.0), EFuelOrderRefusal::None);
+	TestEqual(TEXT("setup: and a contract"), Runtime->SignFuelContract(0), EFuelOrderRefusal::None);
+	if (!TestTrue(TEXT("the save loads"), Runtime->LoadFromSlot(Slot))) { return false; }
+	TestEqual(TEXT("the stock is the save's empty tank"), Supply->StockLitres, 0.0, 1e-9);
+	TestEqual(TEXT("no order the save did not make"), Supply->SpotOrders.Num(), 0);
+	TestEqual(TEXT("and no contract"), Supply->Contract.Tier, static_cast<int32>(INDEX_NONE));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelDeliveryReopensWiredTest, "AirportOps.Present.Fuel.DeliveryReopensARefusedJob",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelDeliveryReopensWiredTest::RunTest(const FString&)
+{
+	// THE SEAM AT THE COMPOSITION (refactor contract): a delivery arriving through the runtime - the spot poll on the clock,
+	// the event on the bus, the board's re-open - wakes a job refused NoFuelStock. UJobBoard's own test calls
+	// ReopenStockRefusals by hand, so it passes with every runtime link cut.
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(0.0, 40000.0));
+	if (!TestNotNull(TEXT("a network"), Actor->Network.Get())) { return false; }
+	URoadNetwork& Net = *Actor->Network;
+	const FFacilityFuelField Field = FacilityFuelField(Net);
+
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+	UJobBoard* Board = Runtime->GetJobBoard();
+	UFuelSupply* Supply = FacilityWiredBoardSupply(*Runtime);
+	if (!TestNotNull(TEXT("setup: the board holds the supply"), Supply)) { return false; }
+	Supply->Draw(Supply->StockLitres);
+	Board->AddVehicleForTest(Board->VehiclesFor(EIcaoCode::C).TypeCode, Field.Depot, EServiceVehicleState::Idle, 0.0);
+
+	const FRoutePlan Plan = TestGraph::Probe(Net, Field.TaxiSouth, Net.GetEntity(Field.Stand)->PoseNode, ETraversalClass::Aircraft);
+	if (!TestTrue(TEXT("the aircraft routes to the stand"), Plan.IsValid())) { return false; }
+	if (!TestTrue(TEXT("and dispatches"), Actor->DispatchAgent(Plan, UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	constexpr float Step = 1.0f / 30.0f;
+	auto Refused = [Board]() { return Board->GetJobs().Num() > 0 && Board->GetJobs()[0].State == EServiceJobState::Unserviceable; };
+	for (int32 Tick = 0; Tick < 20000 && !Refused(); ++Tick) { Actor->Tick(Step); Runtime->Tick(Step); }
+	if (!TestTrue(TEXT("setup: parking made a refused job"), Refused())) { return false; }
+	if (!TestEqual(TEXT("setup: refused for want of stock"), Board->GetJobs()[0].Why, EServiceRefusal::NoFuelStock)) { return false; }
+
+	// A SHORT DELAY so the test waits game minutes, not two hours - a design figure, which the next attach or load re-applies.
+	Supply->Figures.SpotDelaySeconds = 60.0;
+	if (!TestEqual(TEXT("fuel is ordered through the forwarder"), Runtime->OrderSpotFuel(10000.0), EFuelOrderRefusal::None)) { return false; }
+	const double Due = Supply->SpotOrders[0].DueAt;
+	for (int32 Tick = 0; Tick < 20000 && Refused(); ++Tick) { Actor->Tick(Step); Runtime->Tick(Step); }
+	TestTrue(TEXT("CONTROL: no sooner than the order was due"), Runtime->GetClock()->Now() >= Due);
+	TestEqual(TEXT("CONTROL: the order arrived"), Supply->SpotOrders.Num(), 0);
+	TestFalse(TEXT("the refused job was re-opened by the delivery"), Refused());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelLowWokenTest, "AirportOps.Present.Fuel.FuelLowIsWokenByFuelEvents",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelLowWokenTest::RunTest(const FString&)
+{
+	// THE SEAM AT THE COMPOSITION: FuelLow is derived from the supply, and the alerts pass runs only when something marks it.
+	// The model test hands Recompute a supply by hand, so it passes with every runtime link cut. Measured as the pass running
+	// (RecomputeCountForTest) and as the alert standing, because a recompute that is woken but not given the supply raises
+	// nothing, and a supply that is given but never woken is read once and goes stale.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = nullptr;
+	const FEntityInstanceId Depot = FacilityWiredDepot(TestWorld, Runtime);
+	if (!TestTrue(TEXT("setup: the starter depot is placed"), Depot.IsSet())) { return false; }
+	UFuelSupply* Supply = FacilityWiredBoardSupply(*Runtime);
+	if (!TestNotNull(TEXT("setup: the board holds the supply"), Supply)) { return false; }
+	UOpsAlerts* Alerts = Runtime->GetAlerts();
+	auto Standing = [Alerts]() { return Alerts->GetAlerts().ContainsByPredicate([](const FOpsAlert& A) { return A.Key.Kind == EAlertKind::FuelLow; }); };
+	for (int32 Settle = 0; Settle < 3; ++Settle) { Runtime->Tick(0.0); }
+	TestFalse(TEXT("CONTROL: a full tank raises nothing"), Standing());
+
+	// A SIGNING publishes nothing and posts nothing, so only its forwarder can wake the pass. Cancelling it posts a charge, which wakes
+	// the pass by FMoneyPostedEvent (mutation-checked 2026-10-03: no forwarder mark is needed).
+	Supply->StockLitres = 0.1 * Supply->Capacity();   // no wake yet: a Draw publishes nothing
+	TestFalse(TEXT("CONTROL: nothing woke the pass, so the alert is not up yet"), Standing());
+	int32 Count = Alerts->RecomputeCountForTest();
+	if (!TestEqual(TEXT("a contract is signed through the forwarder"), Runtime->SignFuelContract(0), EFuelOrderRefusal::None)) { return false; }
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("signing ran the alerts pass"), Alerts->RecomputeCountForTest(), Count + 1);
+	TestFalse(TEXT("and a contracted airport is not low"), Standing());
+	Supply->Figures.CancelFraction = 0.0;
+	Count = Alerts->RecomputeCountForTest();
+	TestEqual(TEXT("cancelled through the forwarder"), Runtime->CancelFuelContract(), EFuelOrderRefusal::None);
+	Runtime->Tick(0.0);
+	TestTrue(TEXT("cancelling ran the alerts pass"), Alerts->RecomputeCountForTest() > Count);
+	TestTrue(TEXT("and the low stock, uncontracted, is an alert"), Standing());
+
+	// A SPOT ORDER AND ITS DELIVERY: the order counts as stock, the delivery is the event the pass is subscribed to.
+	Supply->Figures.SpotDelaySeconds = 60.0;
+	if (!TestEqual(TEXT("fuel is ordered through the forwarder"), Runtime->OrderSpotFuel(0.3 * Supply->Capacity()), EFuelOrderRefusal::None)) { return false; }
+	Runtime->Tick(0.0);
+	TestFalse(TEXT("an order on its way clears it"), Standing());
+	Count = Alerts->RecomputeCountForTest();
+	const double Due = Supply->SpotOrders[0].DueAt;
+	for (int32 Tick = 0; Tick < 2000 && Supply->SpotOrders.Num() > 0; ++Tick) { Runtime->Tick(10.0); }
+	TestTrue(TEXT("CONTROL: the order was delivered"), Supply->SpotOrders.Num() == 0 && Runtime->GetClock()->Now() >= Due);
+	TestTrue(TEXT("the delivery ran the alerts pass"), Alerts->RecomputeCountForTest() > Count);
+	TestFalse(TEXT("and 40% of the tanks is not low"), Standing());
+
+	// A TANK BOUGHT GROWS THE CAPACITY under a stock that was fine: 26% of the old tanks is under a quarter of any larger set. The
+	// alert must follow - woken by the JobBoard pass (FFacilityUpgradedEvent) and the network change, not by a subscription of its own.
+	const double OldCapacity = Supply->Capacity();
+	Supply->StockLitres = 0.26 * OldCapacity;
+	if (!TestTrue(TEXT("setup: a tank is bought"), Runtime->BuyModule(Depot, EDepotModule::Tank).Succeeded())) { return false; }
+	Runtime->Tick(0.0);
+	TestTrue(TEXT("CONTROL: the tanks grew"), Supply->Capacity() > OldCapacity);
+	TestTrue(TEXT("and 26% of the old tanks is now low"), Standing());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelOrdersAreToastedTest, "AirportOps.Present.Fuel.OrdersAreToasted",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelOrdersAreToastedTest::RunTest(const FString&)
+{
+	// A FUEL ORDER SPENDS MONEY, AND THE PLAYER HEARS OF IT the way a shed or a bowser is heard of: one purchase toast per success
+	// through the runtime's forwarders, the nouns and the figure on it, and none for a refusal.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = nullptr;
+	if (!TestTrue(TEXT("setup: the starter depot is placed"), FacilityWiredDepot(TestWorld, Runtime).IsSet())) { return false; }
+	UFuelSupply* Supply = FacilityWiredBoardSupply(*Runtime);
+	if (!TestNotNull(TEXT("setup: the board holds the supply"), Supply)) { return false; }
+	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
+	Runtime->GetEvents()->OnPurchase.AddDynamic(Listener, &UOpsEventsTestListener::OnPurchase);
+	Supply->Draw(Supply->StockLitres);
+
+	if (!TestEqual(TEXT("a spot order is taken"), Runtime->OrderSpotFuel(10000.0), EFuelOrderRefusal::None)) { return false; }
+	if (TestEqual(TEXT("and toasted once"), Listener->CountOf(TEXT("buy:FuelOrdered")), 1))
+	{
+		const FOpsPurchase& Ordered = Listener->Purchases.Last();
+		TestEqual(TEXT("at what it cost"), Ordered.Amount, 10000.0 * Supply->Figures.SpotPricePerLitre, 1e-6);
+		TestTrue(FString::Printf(TEXT("naming the litres ('%s')"), *Ordered.Name.ToString()), Ordered.Name.ToString().Contains(TEXT("10,000")));
+		TestFalse(TEXT("with the money worded"), Ordered.Money.IsEmpty());
+	}
+	if (!TestEqual(TEXT("the smallest contract signs"), Runtime->SignFuelContract(0), EFuelOrderRefusal::None)) { return false; }
+	if (TestEqual(TEXT("and is toasted once"), Listener->CountOf(TEXT("buy:FuelContractSigned")), 1))
+	{
+		const FFuelContractTier& Tier = Supply->Figures.ContractTiers[0];
+		TestEqual(TEXT("at ONE DAY's cost - the day end charges it"), Listener->Purchases.Last().Amount, Tier.LitresPerDay * Tier.PricePerLitre, 1e-6);
+	}
+	const int32 Before = Listener->Purchases.Num();
+	TestEqual(TEXT("a skipped tier is refused"), Runtime->SignFuelContract(2), EFuelOrderRefusal::AlreadyContracted);
+	TestEqual(TEXT("and toasts nothing"), Listener->Purchases.Num(), Before);
+	// AN UPGRADE IS TOASTED AS A SIGNING, at the new tier's day.
+	if (TestEqual(TEXT("the next tier is an upgrade"), Runtime->SignFuelContract(1), EFuelOrderRefusal::None)
+		&& TestEqual(TEXT("and is toasted as signed"), Listener->CountOf(TEXT("buy:FuelContractSigned")), 2))
+	{
+		const FFuelContractTier& Up = Supply->Figures.ContractTiers[1];
+		TestEqual(TEXT("at the new tier's day"), Listener->Purchases.Last().Amount, Up.LitresPerDay * Up.PricePerLitre, 1e-6);
+	}
+	const double Charge = Supply->Quote(0.0).CancelCharge;
+	if (!TestEqual(TEXT("the contract cancels"), Runtime->CancelFuelContract(), EFuelOrderRefusal::None)) { return false; }
+	if (TestEqual(TEXT("and is toasted once"), Listener->CountOf(TEXT("buy:FuelContractCancelled")), 1))
+	{
+		TestEqual(TEXT("at the charge it was quoted"), Listener->Purchases.Last().Amount, Charge, 1e-6);
+	}
+	TestEqual(TEXT("a cancel with nothing running is refused"), Runtime->CancelFuelContract(), EFuelOrderRefusal::NoContract);
+	TestEqual(TEXT("and toasts nothing"), Listener->CountOf(TEXT("buy:FuelContractCancelled")), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelPouredAwayIsToastedTest, "AirportOps.Present.Fuel.PouredAwayIsToasted",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelPouredAwayIsToastedTest::RunTest(const FString&)
+{
+	// TAKE-OR-PAY POURS AWAY what the tanks cannot hold, paid for all the same - and before this the only word of it was a log line.
+	// The player hears of it once per day that overflowed, with the litres lost, and ONLY then: a day that fits whole is no news.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = nullptr;
+	if (!TestTrue(TEXT("setup: the starter depot is placed"), FacilityWiredDepot(TestWorld, Runtime).IsSet())) { return false; }
+	UFuelSupply* Supply = FacilityWiredBoardSupply(*Runtime);
+	if (!TestNotNull(TEXT("setup: the board holds the supply"), Supply)) { return false; }
+	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
+	Runtime->GetEvents()->OnPurchase.AddDynamic(Listener, &UOpsEventsTestListener::OnPurchase);
+	Supply->Draw(Supply->StockLitres);
+	if (!TestEqual(TEXT("setup: the 5,000 L tier signs"), Runtime->SignFuelContract(0), EFuelOrderRefusal::None)) { return false; }
+
+	Supply->DeliverContractDay(Runtime->GetClock()->Now());
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("CONTROL: the day arrived whole"), Supply->StockLitres, 5000.0, 1e-9);
+	TestEqual(TEXT("CONTROL: and a day that fits is not toasted"), Listener->CountOf(TEXT("buy:FuelPouredAway")), 0);
+
+	Supply->StockLitres = Supply->Capacity() - 1000.0;   // room for 1,000 of the day's 5,000
+	Supply->DeliverContractDay(Runtime->GetClock()->Now());
+	Runtime->Tick(0.0);
+	if (TestEqual(TEXT("a day that overflowed is toasted once"), Listener->CountOf(TEXT("buy:FuelPouredAway")), 1))
+	{
+		const FString Name = Listener->Purchases.Last().Name.ToString();
+		TestTrue(FString::Printf(TEXT("naming the 4,000 L lost ('%s')"), *Name), Name.Contains(TEXT("4,000")));
+	}
 	return true;
 }
 

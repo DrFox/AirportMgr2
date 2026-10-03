@@ -44,10 +44,11 @@ bool FBuildBarWidgetTest::RunTest(const FString& Parameters)
 		TestEqual(*FString::Printf(TEXT("section %s has one button per action"), ActionSectionName(Section)),
 			Bar->ButtonCountForTest(Section), Expected);
 	}
-	// THE THREE PURCHASE VERBS ARE ROWS, NOT BUTTONS: registered, and still one bar button fewer each.
+	// THE DEPOT CARD'S VERBS ARE ROWS, NOT BUTTONS - the three purchases and the fuel row's three (2026-10-03): registered, and
+	// still one bar button fewer each.
 	int32 InspectorOnly = 0;
 	for (const FBuildAction& A : BuildActions()) { InspectorOnly += A.bInspectorOnly ? 1 : 0; }
-	TestEqual(TEXT("three inspector-only rows exist, and the per-section counts above drew none of them"), InspectorOnly, 3);
+	TestEqual(TEXT("six inspector-only rows exist, and the per-section counts above drew none of them"), InspectorOnly, 6);
 	TestTrue(TEXT("the bar has a root widget to show"), Bar->HasRootWidgetForTest());
 	return true;
 }

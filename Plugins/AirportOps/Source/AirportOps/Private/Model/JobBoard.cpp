@@ -48,6 +48,15 @@ void UJobBoard::Serialize(FArchive& Ar)
 	++RevisionCount;
 	for (FServiceVehicle& Vehicle : Vehicles)
 	{
+		// A REFILL CUT SHORT BY THE SAVE IS SETTLED, not dropped: its litres left the stock at BeginFacility and the saved
+		// stock does not hold them, so the vehicle takes them now. Anywhere else RefillLitres is zero, and stays so.
+		// ENFORCED BY: AirportOps.Fuel.SaveMidRefillKeepsTheGrant
+		const IServiceRolePolicy* Policy = PolicyFor(Vehicle.Role);
+		if (Vehicle.State == EServiceVehicleState::AtFacility && Policy != nullptr)
+		{
+			Vehicle.Cargo = Policy->CargoAfterFacility(Vehicle.Cargo, TypeFor(Vehicle.TypeCode), Vehicle.RefillLitres);
+		}
+		Vehicle.RefillLitres = 0.0;
 		// EVERY VEHICLE IDLE AT HOME with nothing held - agents, and the jobs of aircraft that are not restored,
 		// are things a load clears. The lifecycle moves FleetRevision (once per vehicle).
 		Lifecycle(Vehicle).ResetForRestore();
@@ -458,22 +467,6 @@ void UJobBoard::SyncFleet(UGroundTraffic& Traffic, const URoadNetwork& Network, 
 	Fleet().ForgetRemovedDepots(Network);
 }
 
-void UJobBoard::BeginFacility(FServiceVehicle& Vehicle, const URoadNetwork& Network, const USimClock& Clock)
-{
-	const IServiceRolePolicy* Policy = PolicyFor(Vehicle.Role);
-	const FEntityInstance* Home = Network.GetEntity(Vehicle.Home);
-	const double Seconds = Policy != nullptr && Home != nullptr
-		? Policy->FacilitySeconds(Vehicle.Cargo, TypeFor(Vehicle.TypeCode), PumpsAt(Vehicle.Home, *Home)) : 0.0;
-	Lifecycle(Vehicle).BeginFacility(Clock.Now() + Seconds);
-	if (Seconds > 0.0)
-	{
-		// REFILL BEFORE IT IS FREE (spec 2026-09-28-fuel-litres): what it pumped out, at the depot's
-		// pumps. Nothing pumped (a recall mid-leg) makes this zero, and it is free on the next tick.
-		UE_LOG(LogAirportOps, Log, TEXT("Fuel: depot %d refilling vehicle %d (%.0f L, %.1f game min)"),
-			Vehicle.Home.Index, Vehicle.Id, FFuelRolePolicy::CapacityOf(TypeFor(Vehicle.TypeCode)) - Vehicle.Cargo, Seconds / 60.0);
-	}
-}
-
 void UJobBoard::StartNext(FServiceVehicle& Vehicle, UGroundTraffic& Traffic, const URoadNetwork& Network,
 	const USimClock& Clock)
 {
@@ -560,7 +553,7 @@ void UJobBoard::StartNext(FServiceVehicle& Vehicle, UGroundTraffic& Traffic, con
 		}
 
 		// THE POLICY'S RULE, the one the bid priced: straight there, or the facility first.
-		if (Policy->NextStep(Vehicle.Cargo, Type, Job.QuantityOwed) == EServiceStep::ViaFacility)
+		if (Policy->NextStep(Vehicle.Cargo, Type, Job.QuantityOwed, FuelAvailable()) == EServiceStep::ViaFacility)
 		{
 			if (bAtHome)
 			{
@@ -926,8 +919,9 @@ bool UJobBoard::Step(UGroundTraffic& Traffic, const URoadNetwork& Network, const
 			const IServiceRolePolicy* Policy = PolicyFor(Vehicle.Role);
 			if (Policy != nullptr)
 			{
-				Vehicle.Cargo = Policy->CargoAfterFacility(Vehicle.Cargo, TypeFor(Vehicle.TypeCode));
+				Vehicle.Cargo = Policy->CargoAfterFacility(Vehicle.Cargo, TypeFor(Vehicle.TypeCode), Vehicle.RefillLitres);
 			}
+			Vehicle.RefillLitres = 0.0;   // GRANTED ONCE, at BeginFacility; spent here.
 			UE_LOG(LogAirportOps, Log, TEXT("Fuel: vehicle %d refilled at depot %d"), Vehicle.Id, Vehicle.Home.Index);
 			Lifecycle(Vehicle).BecomeIdle();
 			ToDecide.Add(Vehicle.Id);

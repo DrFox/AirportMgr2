@@ -86,29 +86,46 @@ is worth +65%. Whether a newly opened class also brings a new airline is §5's b
 
 ## 7. Fuel supply
 
-### Today
+### Before (to 2026-10-02)
+
+Superseded by Ruled below.
 
 The depot holds unlimited fuel for free: a returning bowser refills at the pump rate
-(`ServiceRolePolicy.cpp:42`) and nothing is bought. Fuel is pure margin at 1.5 per litre,
+(`ServiceRolePolicy.cpp:42`) and nothing is bought. Fuel is pure margin at 1.5 per litre (the first draft's price; shipped 2.0),
 about 75% of a small airport's income.
 
 ### Ruled
 
-- **Stock.** The depot holds litres. Bowser refills draw it down.
-- **Capacity.** The depot's tank add-on modules set the most it can hold.
-- **Contract.** Litres per day at a contract price, delivered daily, for a fixed term of game
-  days, cancellable for a charge (GDD §12's shape). **Take-or-pay:** litres that do not fit
-  the tanks are paid for and not added. Larger contract tiers need more tank capacity, and
-  the larger tiers sit on the cargo milestone track.
-- **Spot.** A one-shot order at a premium, arriving after a game-time delay. A timer for now.
-- **Dry depot.** When a bowser cannot refill, the flight **leaves without fuel**. The fuel
-  revenue is lost; there is no wait and no fine.
+- **Stock.** ONE airport-wide pool of litres; bowser refills draw it down. **Deviation from the
+  first draft ("the depot holds litres")**: depots can be many and a per-depot stock would need a
+  tanker route between them. Capacity is derived, not stored: seated Tank modules x 30,000 L across
+  live depots. Stock above capacity (the tanks shrank: a depot bulldozed, or the plot repair removing
+  a tank - there is no module sell) is kept, never topped up. A new game starts with
+  30,000 L (one full starter tank, 27,000 at contract price).
+- **Capacity.** Tank module 20,000, upkeep 100/day.
+- **Contract.** Tiers 5k/10k/20k/40k L/day at 0.9, 7-day term, cancellable (cancel charge = days left
+  x litres x price x 0.5). **Take-or-pay** at day end: paid in full, only what fits is added.
+  **Tier gate: `LitresPerDay <= capacity`.** While contracted the card offers the next tier up (fresh
+  term, no charge); a downgrade is a cancel. Milestone gating of tiers is deferred until the cargo
+  track exists.
+- **Spot.** 1.2/L, charged on order, arrives after 7,200 game seconds. Refused if no room (free space
+  minus pending orders) or unaffordable. The card's button asks for 10,000 L and orders what fits,
+  in whole 100 L, when less does. **Not take-or-pay:** litres that no longer fit when the order
+  arrives (a contract day or a bulldozed depot filled the room) are refunded at the spot price on a
+  FuelPurchase line. A contract day that overflows is toasted with the litres poured away.
+  Deliveries are polled every game minute: orders' due times
+  are saved, the clock queue is not, so the poll re-arms itself after a load.
+- **Dry depot.** `EServiceRefusal::NoFuelStock`. Partial service beats none; the flight leaves at its
+  deadline with what it got. The airline `ShortfallPenalty` is unchanged (satisfaction hit, no fine).
+  A delivery re-opens `NoFuelStock` jobs.
+- **FuelLow alert.** Stock + pending spot < 25% of capacity, no contract, capacity > 0.
+- **Bought vehicles** still arrive full (owner ruling; a bowser comes with its first load).
 - **Sell price** stays fixed until the revenue track unlocks editing it.
 
 The skill this creates is forecasting: too large a contract pays for fuel poured away, too
 small a contract pays spot prices or loses sales.
 
-First-guess prices for the model: sell 1.5, contract 0.9, spot 1.2 per litre.
+Shipped prices: sell 2.0 (UPricing::FuelPricePerLitre; the model takes it via --fuel-price), contract 0.9, spot 1.2 per litre.
 
 ### Later
 
@@ -165,6 +182,12 @@ Starting balance = opening build + 50,000 (about 257,000).
 Owner's target for the first tubeliner: about **7 hours**. The model's 5.7 h is a FLOOR: it
 prices only runway, taxiway and stands, because the terminal, Control tier and Code C
 certification that a real tubeliner step needs do not exist to price yet.
+
+**Fuel supply shipped (2026-10-02):** re-run with contract 0.9 / spot 1.2, the command in `pacing_model.py`'s
+header scenario (`--contract-share 0.8 --fuel-loss 0.1 --fee-scale 5 --fuel-price 2.0 --build-scale 0.4
+--start-balance 260000`) gives Pave 1.6 h, Saab 2.9 h, tubeliner 5.7 h: unmoved, since the model already used
+those prices. Not modelled: the 30,000 L starting stock (27,000 at contract price, a one-off) and tank upkeep
+(100/day per tank).
 
 **Other services will add income** - cargo, passengers, catering and the rest. Each one
 speeds the whole ladder, so each re-solves the scales when it lands: price a new service so

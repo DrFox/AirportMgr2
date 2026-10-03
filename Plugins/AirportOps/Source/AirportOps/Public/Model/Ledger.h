@@ -32,7 +32,9 @@ enum class ELedgerCategory : uint8
 	/** RollUp's summary of everything older than MaxDays. Never posted directly. */
 	BroughtForward,
 	/** A vehicle bought (negative) or sold (positive) - UFacilityPurchases. Appended, not inserted. */
-	Fleet
+	Fleet,
+	/** Fuel bought - contract days, spot orders and contract cancellations (spec 2026-10-02 §7). Appended. */
+	FuelPurchase
 };
 
 /** One movement of money. Append-only: entries are never edited, only followed by more. */

@@ -89,6 +89,10 @@ struct FDepotCapability
 	 */
 	int32 Pumps() const { return bLegacyPlotless ? 1 : FMath::Max(SeatedOf(EDepotModule::Pump), 1); }
 
+	/** Seated tanks: what bounds the airport's fuel stock (spec 2026-10-02 §7). One for a plotless depot, by the same
+	 *  legacy exemption Pumps() reads - a depot placed before modules existed has always had somewhere to keep fuel. */
+	int32 Tanks() const { return bLegacyPlotless ? 1 : SeatedOf(EDepotModule::Tank); }
+
 	/** Owned modules of Module the plot does NOT seat - what the presenter drops and the repair removes; 0 out of range. */
 	int32 UnseatedOf(EDepotModule Module) const { return OwnedOf(Module) - SeatedOf(Module); }
 

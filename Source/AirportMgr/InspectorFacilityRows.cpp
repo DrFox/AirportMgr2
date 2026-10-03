@@ -17,7 +17,8 @@ namespace
 	/** THE ONE TABLE of the BuildActions rows the purchase rows run, in EAction order: OwnsAction and Build's search by id both
 	 *  read it. Prefixed against the unity build. */
 	const TCHAR* const InspectorFacilityActionIds[] = {
-		TEXT("selection.buy_module"), TEXT("selection.buy_vehicle"), TEXT("selection.sell_vehicle") };
+		TEXT("selection.buy_module"), TEXT("selection.buy_vehicle"), TEXT("selection.sell_vehicle"),
+		TEXT("selection.fuel_spot"), TEXT("selection.fuel_contract_up"), TEXT("selection.fuel_contract_cancel") };
 	static_assert(UE_ARRAY_COUNT(InspectorFacilityActionIds) == static_cast<int32>(UInspectorFacilityRows::EAction::Count),
 		"an EAction needs its BuildActions id in the table, in the same order");
 }
@@ -69,16 +70,24 @@ void UInspectorFacilityRows::Build(const UUIStyle& InStyle)
 		InStyle.ApplyText(*Field, EUITextRole::Body, InStyle.InkMuted);
 		Box->AddChildToHorizontalBox(Field)->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f));
 	};
-	Panel(ShedsRow, UHorizontalBox::StaticClass(), TEXT("ShedsRow"));
-	RowText(ShedsText, TEXT("ShedsText"), ShedsRow);
-	// RowText's rule: built only into a row that exists, never an orphan.
-	if (UHorizontalBox* Box = Cast<UHorizontalBox>(ShedsRow); Box != nullptr && BuyModuleButton == nullptr && Actions.IsValidIndex(IndexOf(EAction::BuyModule)))
+	// THE MODULE ROWS' LIST, empty: Show builds one row per module on offer into it (RebuildModuleRows).
+	Panel(ModuleList, UVerticalBox::StaticClass(), TEXT("ModuleList"));
+	Panel(FuelRow, UHorizontalBox::StaticClass(), TEXT("FuelRow"));
+	RowText(FuelText, TEXT("FuelText"), FuelRow);
+	Panel(FuelButtonsRow, UHorizontalBox::StaticClass(), TEXT("FuelButtonsRow"));
+	// RowText's rule: built only into a row that exists, never an orphan - and only for an action the registry has.
+	auto RowButton = [&](TObjectPtr<UUiButton>& Field, const TCHAR* Name, EAction Action)
 	{
-		BuyModuleButton = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass(), TEXT("BuyModuleButton"));
-		BuyModuleButton->SetLabel(Actions[IndexOf(EAction::BuyModule)].Label);
-		BuyModuleButton->Build(InStyle, EUiButtonKind::Secondary);
-		Box->AddChildToHorizontalBox(BuyModuleButton);
-	}
+		UHorizontalBox* Box = Cast<UHorizontalBox>(FuelButtonsRow);
+		if (Field != nullptr || Box == nullptr || !Actions.IsValidIndex(IndexOf(Action))) { return; }
+		Field = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass(), Name);
+		Field->SetLabel(Actions[IndexOf(Action)].Label);
+		Field->Build(InStyle, EUiButtonKind::Secondary);
+		Box->AddChildToHorizontalBox(Field)->SetPadding(FMargin(0.0f, 0.0f, 6.0f, 0.0f));
+	};
+	RowButton(FuelSpotButton, TEXT("FuelSpotButton"), EAction::FuelSpot);
+	RowButton(FuelContractButton, TEXT("FuelContractButton"), EAction::FuelContractUp);
+	RowButton(FuelCancelButton, TEXT("FuelCancelButton"), EAction::FuelContractCancel);
 	Panel(VehiclesRow, UHorizontalBox::StaticClass(), TEXT("VehiclesRow"));
 	RowText(VehiclesText, TEXT("VehiclesText"), VehiclesRow);
 	if (UHorizontalBox* Box = Cast<UHorizontalBox>(VehiclesRow); Box != nullptr && BuyVehicleMenu == nullptr && Actions.IsValidIndex(IndexOf(EAction::BuyVehicle)))
@@ -92,12 +101,14 @@ void UInspectorFacilityRows::Build(const UUIStyle& InStyle)
 	{
 		if (!Actions.IsValidIndex(Found))
 		{
-			UE_LOG(LogInspector, Warning, TEXT("A selection.buy_module/buy_vehicle/sell_vehicle row is missing from BuildActions(): the depot card cannot buy or sell"));
+			UE_LOG(LogInspector, Warning, TEXT("A depot-card row (selection.buy_module/buy_vehicle/sell_vehicle/fuel_*) is missing from BuildActions(): the depot card cannot buy, sell or order"));
 			break;
 		}
 	}
 
-	if (BuyModuleButton != nullptr) { BuyModuleButton->OnClicked.AddDynamic(this, &UInspectorFacilityRows::HandleBuyModule); }
+	if (FuelSpotButton != nullptr) { FuelSpotButton->OnClicked.AddDynamic(this, &UInspectorFacilityRows::HandleFuelSpot); }
+	if (FuelContractButton != nullptr) { FuelContractButton->OnClicked.AddDynamic(this, &UInspectorFacilityRows::HandleFuelContract); }
+	if (FuelCancelButton != nullptr) { FuelCancelButton->OnClicked.AddDynamic(this, &UInspectorFacilityRows::HandleFuelCancel); }
 	if (BuyVehicleMenu != nullptr)
 	{
 		// WEAK - a lambda held by a child widget that captured a raw pointer to its owner is the shape that dangles the
@@ -110,7 +121,7 @@ void UInspectorFacilityRows::Build(const UUIStyle& InStyle)
 	SetVisibility(ESlateVisibility::Collapsed);
 }
 
-void UInspectorFacilityRows::Show(const FFacilityQuote& Quote)
+void UInspectorFacilityRows::Show(const FFacilityQuote& Quote, const FDepotFuelView& Fuel)
 {
 	LastQuote = Quote;
 	const bool bCard = Quote.IsFacility();
@@ -125,28 +136,65 @@ void UInspectorFacilityRows::Show(const FFacilityQuote& Quote)
 	{
 		if (Block != nullptr && Block->GetText().ToString() != Text) { Block->SetText(FText::FromString(Text)); }
 	};
+	// A BUTTON'S CAPTION, ENABLED STATE AND TOOLTIP, each set only when it moved - SetLabel and SetToolTipText rebuild on every call.
+	auto Paint = [](UUiButton* Button, const FText& Caption, bool bCan, const FText& Tip)
+	{
+		if (Button == nullptr) { return; }
+		const UTextBlock* Current = Button->GetLabel();
+		if (Current == nullptr || !Current->GetText().EqualTo(Caption)) { Button->SetLabel(Caption); }
+		if (!Button->GetToolTipText().EqualTo(Tip)) { Button->SetToolTipText(Tip); }
+		Button->SetState(bCan, false);
+	};
 	// THE WIDGET'S OWN ROOT: self-hit-test-invisible, as a UserWidget defaults to, so its gaps let a click through to the window;
 	// the buttons inside are Visible and take theirs.
 	Visible(this, bCard, ESlateVisibility::SelfHitTestInvisible);
-	ShowRow(ShedsRow, bCard && Quote.Modules.Num() > 0);
+
+	// ONE ROW PER MODULE, IN KIND ORDER (Modules is TMap order, which is not stable - a shed that swapped places with the tank between
+	// two quotes would rebuild the rows and move the button under the cursor). Rebuilt only when the kinds on offer change.
+	TArray<const FModuleOfferQuote*> Modules;
+	if (bCard)
+	{
+		for (const FModuleOfferQuote& Module : Quote.Modules) { Modules.Add(&Module); }
+		Modules.Sort([](const FModuleOfferQuote& A, const FModuleOfferQuote& B) { return A.Module < B.Module; });
+	}
+	FString ModuleKey;
+	for (const FModuleOfferQuote* Module : Modules) { ModuleKey += FString::Printf(TEXT("%d,"), static_cast<int32>(Module->Module)); }
+	// THE KEY IS TAKEN ONLY WHEN THE ROWS WERE BUILT: a Show before Build (no list, no style) builds nothing, and a key taken then
+	// would stop the next Show building them for the same modules.
+	if (ModuleKey != LastModuleKey && RebuildModuleRows(Modules))
+	{
+		LastModuleKey = ModuleKey;
+	}
+	ShowRow(ModuleList, Modules.Num() > 0);
+	for (int32 Index = 0; Index < ModuleRows.Num() && Index < Modules.Num(); ++Index)
+	{
+		const FModuleOfferQuote& Module = *Modules[Index];
+		UInspectorModuleRow* Row = ModuleRows[Index];
+		SetIfChanged(Row->Line, FString::Printf(TEXT("%s %d / %d space"), *Module.PluralName.ToString(), Module.Owned, Module.Reserved));
+		// A REFUSED BUY SAYS WHY on its own caption - a greyed button with no reason teaches nothing.
+		const bool bCan = Module.Refusal == EPurchaseRefusal::None;
+		const FText Caption = bCan ? Module.Label
+			: FText::Format(NSLOCTEXT("AirportMgr", "InspectorRefusedCaption", "{0} - {1}"), Module.Label, UFacilityPurchases::RefusalText(Module.Refusal));
+		// THE TOOLTIP IS THE CAPTION, refusal and all: a caption clipped by a narrow card still says why on hover.
+		Paint(Row->BuyButton, Caption, bCan, Caption);
+	}
+
+	// THE FUEL ROW: the line, and the three buttons from the same view - Sign OR Cancel, by whether a contract runs (FDepotFuelView).
+	const bool bFuel = bCard && Fuel.bShown;
+	ShowRow(FuelRow, bFuel);
+	ShowRow(FuelButtonsRow, bFuel);
+	if (bFuel)
+	{
+		SetIfChanged(FuelText, Fuel.Line);
+		Paint(FuelSpotButton, Fuel.SpotCaption, Fuel.Spot == EFuelOrderRefusal::None, Fuel.SpotTip);
+		Paint(FuelContractButton, Fuel.SignCaption, Fuel.Sign == EFuelOrderRefusal::None, Fuel.SignTip);
+		Paint(FuelCancelButton, Fuel.CancelCaption, Fuel.Cancel == EFuelOrderRefusal::None, Fuel.CancelTip);
+		ShowRow(FuelContractButton, true);
+		ShowRow(FuelCancelButton, Fuel.bContracted);
+	}
+
 	ShowRow(VehiclesRow, bCard);
 	ShowRow(FleetList, bCard && Quote.Fleet.Num() > 0);
-
-	if (bCard && Quote.Modules.Num() > 0)
-	{
-		const FModuleOfferQuote& Module = Quote.Modules[0];
-		SetIfChanged(ShedsText, FString::Printf(TEXT("%s %d / %d space"), *Module.PluralName.ToString(), Module.Owned, Module.Reserved));
-		if (BuyModuleButton != nullptr)
-		{
-			// A REFUSED BUY SAYS WHY on its own caption - a greyed button with no reason teaches nothing.
-			const bool bCan = Module.Refusal == EPurchaseRefusal::None;
-			const FText Caption = bCan ? Module.Label
-				: FText::Format(NSLOCTEXT("AirportMgr", "InspectorRefusedCaption", "{0} - {1}"), Module.Label, UFacilityPurchases::RefusalText(Module.Refusal));
-			const UTextBlock* Current = BuyModuleButton->GetLabel();
-			if (Current == nullptr || !Current->GetText().EqualTo(Caption)) { BuyModuleButton->SetLabel(Caption); }
-			BuyModuleButton->SetState(bCan, false);
-		}
-	}
 	if (bCard)
 	{
 		SetIfChanged(VehiclesText, FString::Printf(TEXT("Vehicles %d / %d bays"), Quote.Vehicles, Quote.Bays));
@@ -219,6 +267,65 @@ void UInspectorFacilityRows::RebuildFleetRows()
 	}
 }
 
+bool UInspectorFacilityRows::RebuildModuleRows(const TArray<const FModuleOfferQuote*>& Modules)
+{
+	// THE FLEET ROWS' SHAPE: a row object per line, holding what its click needs (its module), built into the list.
+	if (ModuleList != nullptr) { ModuleList->ClearChildren(); }
+	ModuleRows.Reset();
+	if (ModuleList == nullptr || Style == nullptr) { return false; }
+	for (const FModuleOfferQuote* Module : Modules)
+	{
+		UInspectorModuleRow* Row = NewObject<UInspectorModuleRow>(this);
+		Row->Module = Module->Module;
+		Row->Owner = this;
+		UHorizontalBox* Box = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+		Row->Line = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+		Style->ApplyText(*Row->Line, EUITextRole::Body, Style->InkMuted);
+		Box->AddChildToHorizontalBox(Row->Line)->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f));
+		Row->BuyButton = WidgetTree->ConstructWidget<UUiButton>(UUiButton::StaticClass());
+		Row->BuyButton->SetLabel(Module->Label);
+		Row->BuyButton->Build(*Style, EUiButtonKind::Secondary);
+		Row->BuyButton->OnClicked.AddDynamic(Row, &UInspectorModuleRow::HandleBuy);
+		Box->AddChildToHorizontalBox(Row->BuyButton);
+		ModuleList->AddChild(Box);
+		ModuleRows.Add(Row);
+	}
+	return true;
+}
+
+void UInspectorModuleRow::HandleBuy()
+{
+	if (UInspectorFacilityRows* Rows = Owner.Get())
+	{
+		Rows->OnModuleBuy(*this);
+	}
+}
+
+void UInspectorFacilityRows::OnModuleBuy(const UInspectorModuleRow& Row)
+{
+	if (!RunActionSource)
+	{
+		UE_LOG(LogInspector, Warning, TEXT("Buy %s click ignored: nothing to run it through"), *UEnum::GetValueAsString(Row.Module));
+		return;
+	}
+	// THE ROW'S MODULE IS THE ARGUMENT of the run (DepotModuleCode, the one spelling the verb matches) - the sell row's shape.
+	RunActionSource(IndexOf(EAction::BuyModule), FBuildActionArg::OfCode(DepotModuleCode(Row.Module)));
+}
+
+void UInspectorFacilityRows::RunPlain(EAction Action)
+{
+	if (!RunActionSource)
+	{
+		UE_LOG(LogInspector, Warning, TEXT("Fuel click (action %d) ignored: nothing to run it through"), static_cast<int32>(Action));
+		return;
+	}
+	RunActionSource(IndexOf(Action), FBuildActionArg());
+}
+
+void UInspectorFacilityRows::HandleFuelSpot() { RunPlain(EAction::FuelSpot); }
+void UInspectorFacilityRows::HandleFuelContract() { RunPlain(EAction::FuelContractUp); }
+void UInspectorFacilityRows::HandleFuelCancel() { RunPlain(EAction::FuelContractCancel); }
+
 void UInspectorFleetRow::HandleSell()
 {
 	if (UInspectorFacilityRows* Rows = Owner.Get())
@@ -273,11 +380,6 @@ void UInspectorFacilityRows::HandleBuyVehicleChosen(int32 Index)
 	RunActionSource(IndexOf(EAction::BuyVehicle), FBuildActionArg::OfCode(ShownVehicleCodes[Index]));
 }
 
-void UInspectorFacilityRows::HandleBuyModule()
-{
-	if (RunActionSource) { RunActionSource(IndexOf(EAction::BuyModule), FBuildActionArg()); }
-}
-
 void UInspectorFacilityRows::DisarmSale()
 {
 	// THE ROWS' OWN CAPTION STATE, which is all there is to disarm (#448). It was BOTH HALVES - the row's bArmed and the controller's
@@ -297,10 +399,33 @@ FString UInspectorFacilityRows::SellCaptionForTest(int32 Row) const
 	return Caption != nullptr ? Caption->GetText().ToString() : FString();
 }
 
-void UInspectorFacilityRows::ClickBuyModuleForTest()
+void UInspectorFacilityRows::ClickBuyModuleForTest(int32 Row)
 {
-	if (BuyModuleButton != nullptr) { BuyModuleButton->OnClicked.Broadcast(); }
+	if (ModuleRows.IsValidIndex(Row) && ModuleRows[Row]->BuyButton != nullptr) { ModuleRows[Row]->BuyButton->OnClicked.Broadcast(); }
 }
+
+UUiButton* UInspectorFacilityRows::FuelButtonForTest(EAction Action) const
+{
+	switch (Action)
+	{
+	case EAction::FuelSpot:           return FuelSpotButton;
+	case EAction::FuelContractUp:     return FuelContractButton;
+	case EAction::FuelContractCancel: return FuelCancelButton;
+	default:                          return nullptr;
+	}
+}
+
+void UInspectorFacilityRows::ClickFuelForTest(EAction Action)
+{
+	if (UUiButton* Button = FuelButtonForTest(Action)) { Button->OnClicked.Broadcast(); }
+}
+
+bool UInspectorFacilityRows::IsFuelRowShownForTest() const
+{
+	return FuelRow != nullptr && FuelRow->GetVisibility() == ESlateVisibility::Visible;
+}
+
+FString UInspectorFacilityRows::FuelTextForTest() const { return FuelText != nullptr ? FuelText->GetText().ToString() : FString(); }
 
 void UInspectorFacilityRows::ChooseBuyVehicleForTest(int32 Line)
 {
@@ -315,12 +440,18 @@ bool UInspectorFacilityRows::AreFacilityRowsShownForTest() const
 {
 	return VehiclesRow != nullptr && VehiclesRow->GetVisibility() == ESlateVisibility::Visible;
 }
-FString UInspectorFacilityRows::ShedsTextForTest() const { return ShedsText != nullptr ? ShedsText->GetText().ToString() : FString(); }
-FString UInspectorFacilityRows::VehiclesTextForTest() const { return VehiclesText != nullptr ? VehiclesText->GetText().ToString() : FString(); }
-bool UInspectorFacilityRows::IsBuyModuleEnabledForTest() const { return BuyModuleButton != nullptr && BuyModuleButton->GetIsEnabled(); }
-FString UInspectorFacilityRows::BuyModuleCaptionForTest() const
+FString UInspectorFacilityRows::ModuleTextForTest(int32 Row) const
 {
-	const UTextBlock* Caption = BuyModuleButton != nullptr ? BuyModuleButton->GetLabel() : nullptr;
+	return ModuleRows.IsValidIndex(Row) && ModuleRows[Row]->Line != nullptr ? ModuleRows[Row]->Line->GetText().ToString() : FString();
+}
+FString UInspectorFacilityRows::VehiclesTextForTest() const { return VehiclesText != nullptr ? VehiclesText->GetText().ToString() : FString(); }
+bool UInspectorFacilityRows::IsBuyModuleEnabledForTest(int32 Row) const
+{
+	return ModuleRows.IsValidIndex(Row) && ModuleRows[Row]->BuyButton != nullptr && ModuleRows[Row]->BuyButton->GetIsEnabled();
+}
+FString UInspectorFacilityRows::BuyModuleCaptionForTest(int32 Row) const
+{
+	const UTextBlock* Caption = ModuleRows.IsValidIndex(Row) && ModuleRows[Row]->BuyButton != nullptr ? ModuleRows[Row]->BuyButton->GetLabel() : nullptr;
 	return Caption != nullptr ? Caption->GetText().ToString() : FString();
 }
 bool UInspectorFacilityRows::IsSellEnabledForTest(int32 Row) const

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/FacilityPurchases.h"
+#include "Model/FuelSupply.h"
 #include "Model/InspectFacts.h"
 #include "Model/OpsAlerts.h"
 #include "Tool/Selection.h"
@@ -14,6 +15,7 @@ class UGroundTraffic;
 class UJobBoard;
 class ULedger;
 class UOpsRuntime;
+class UPricing;
 class URoadNetwork;
 class USimClock;
 
@@ -59,6 +61,33 @@ enum class EInspectorVerbs : uint8
 ENUM_CLASS_FLAGS(EInspectorVerbs)
 
 /**
+ * THE DEPOT CARD'S FUEL ROW, worded (2026-10-03): the stock line, and the three fuel buttons' captions, reasons and tooltips - all
+ * composed from ONE FFuelQuote by FDepotCard::FuelViewOf, so the line and the buttons under it cannot disagree, and the BuildActions
+ * rows behind the buttons gate on the same quote's refusals. Default (bShown false) collapses the row: every card but a depot's.
+ */
+struct FDepotFuelView
+{
+	bool bShown = false;
+	/** "Fuel 12,000 / 30,000 L · contract 5,000 L/day, 6 days" - the figures at the quote's own rounding. */
+	FString Line;
+	/** The verdicts, None when the verb may run; the rows grey a button on anything else, with the reason on its caption. */
+	EFuelOrderRefusal Spot = EFuelOrderRefusal::None;
+	EFuelOrderRefusal Sign = EFuelOrderRefusal::None;
+	EFuelOrderRefusal Cancel = EFuelOrderRefusal::None;
+	/** Captions as shown - a refused one carries its reason ("Order 10,000 L - No room in the tanks - buy a tank"). */
+	FText SpotCaption;
+	FText SignCaption;
+	FText CancelCaption;
+	/** What a click would do, in figures: the spot price and delay, the contract's daily cost and term, the cancel charge. */
+	FText SpotTip;
+	FText SignTip;
+	FText CancelTip;
+	/** A contract runs: the contract button UPGRADES to the next tier (ruled 2026-10-03) and Cancel is offered beside it. With none,
+	 *  the button signs tier 0 and Cancel is not shown - a greyed "Cancel - No contract" beside every uncontracted depot taught nothing. */
+	bool bContracted = false;
+};
+
+/**
  * WHAT A CARD SAYS: the whole of it, in one value. The widget paints this and nothing else, so the outputs of a card cannot be
  * saved and restored field by field: the card keeps its last view as one object (FInspectorKeyedCard) and hands it out whole,
  * which is what made "a missed restore field shows the previous card's caption" unrepresentable.
@@ -88,6 +117,8 @@ struct FInspectorCardView
 	 * are one answer from one key and cannot disagree (spec §4: the card cannot disagree with the rules).
 	 */
 	FFacilityQuote Quote;
+	/** A DEPOT'S fuel row (FDepotFuelView), composed in the same Describe as the quote, under the same key - default collapses it. */
+	FDepotFuelView Fuel;
 	/**
 	 * WHERE THE SUBJECT IS, for the Locate button (2026-10-02, every card): the alert Go's own FAlertFocus, so Locate goes through
 	 * ARoadBuildController::SelectAndFocus like Go and Show - an agent by id (found where it is NOW, at the click), a stand or depot
@@ -188,6 +219,9 @@ struct FInspectorCardKey
 	int64 Minute = 0;
 	FWeakObjectPtr Ledger;
 	int32 LedgerRevision = 0;
+	/** A depot's only: THE FUEL QUOTE the row is worded from, at the litres the line prints (FDepotCard::ShownFuel) - so a tanker
+	 *  arriving or a bowser drawing moves it with no ledger post, and pumping recomposes once per printed step, not per tick. */
+	FFuelQuote Fuel;
 
 	/** DEFAULTED: a field added above is compared without anyone remembering to add it to a hand-written list. */
 	bool operator==(const FInspectorCardKey& Other) const = default;
@@ -270,6 +304,16 @@ public:
 	int32 BacklogCount() const { return BacklogCalls; }
 	/** How many times it asked UOpsRuntime::QuoteFacility - once per key, not once per tick (#441). */
 	int32 QuoteCount() const { return QuoteCalls; }
+
+	/**
+	 * The supply's quote, its litres ROUNDED TO WHAT THE LINE PRINTS (the nearest 100 L), with the card's spot order on offer
+	 * (OpsDesignDefaults::SpotOrderLitres, or the whole 100 L that fit - UFuelSupply::SpotOfferOf, so it needs no rounding here). THE ONE ROUNDING, read by the key and by the composition, so two quotes that print the
+	 * same line are one key. The refusals are the supply's own, unrounded.
+	 */
+	static FFuelQuote ShownFuel(const UFuelSupply& Supply);
+
+	/** The fuel row's words from Q - see FDepotFuelView. Pricing words the money; null prints bare figures (a headless test). */
+	static FDepotFuelView FuelViewOf(const FFuelQuote& Q, const UPricing* Pricing);
 
 protected:
 	virtual FInspectorCardKey KeyFor(const FInspectorCardInput& In) const override;
