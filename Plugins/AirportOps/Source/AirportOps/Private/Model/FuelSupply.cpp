@@ -3,7 +3,6 @@
 #include "AirportOpsLog.h"
 #include "Model/Ledger.h"
 #include "Model/OpsEventBus.h"
-#include "Model/ServiceRolePolicy.h"
 
 void UFuelSupply::OnBeforeRestore()
 {
@@ -27,11 +26,6 @@ bool UFuelSupply::IsLow() const
 	if (!CapacityOf) { return false; }
 	const double Cap = Capacity();
 	return Cap > 0.0 && Contract.Tier == INDEX_NONE && Available() + PendingSpotLitres() < 0.25 * Cap;
-}
-
-bool UFuelSupply::IsDry() const
-{
-	return Available() < FFuelRolePolicy::FuelledWithinLitres;
 }
 
 double UFuelSupply::Draw(double Litres)
@@ -94,11 +88,32 @@ int32 UFuelSupply::ReceiveDueSpot(double Now)
 			const double Added = Receive(Litres);
 			SpotOrders.RemoveAt(Index);
 			++Delivered;
-			UE_LOG(LogAirportOps, Log, TEXT("Fuel: spot delivery %.0f L (%.0f added), stock %.0f L"), Litres, Added, StockLitres);
+			// SPOT IS NOT TAKE-OR-PAY (ruled 2026-10-03): JudgeSpot measured the room at the order, but a contract day or a depot
+			// bulldozed since can have filled it. What does not fit is REFUNDED at the spot price, on its own FuelPurchase line - not
+			// poured away as a contract day's is, because the contract's terms say so and the spot order's never did. At today's
+			// price, not a stored one: the figures are the scenario's and do not move within a session (UPricing's reason).
+			// ENFORCED BY: AirportOps.Model.FuelSupply.SpotThatDoesNotFitIsRefunded
+			const double Refund = Ledger != nullptr && Added < Litres ? SpotCostOf(Litres - Added) : 0.0;
+			if (Refund > 0.0)
+			{
+				Ledger->Post(Now, ELedgerCategory::FuelPurchase, Refund, FText::Format(NSLOCTEXT("Ledger", "FuelSpotRefund",
+					"Spot fuel refund, {0} L did not fit"), FText::AsNumber(FMath::RoundToInt(Litres - Added))));
+			}
+			UE_LOG(LogAirportOps, Log, TEXT("Fuel: spot delivery %.0f L (%.0f added, %.0f did not fit, %.0f refunded), stock %.0f L"),
+				Litres, Added, Litres - Added, Refund, StockLitres);
 			if (Bus != nullptr) { Bus->Publish(FFuelDeliveredEvent{ Litres, Added, false }); }
 		}
 	}
 	return Delivered;
+}
+
+double UFuelSupply::SpotOfferOf(double Wanted) const
+{
+	// `!(Wanted > 0)` for JudgeSpot's NaN reason: a NaN fails every room test below and would be "topped up" to the room.
+	const double Room = FreeSpace() - PendingSpotLitres();
+	if (!(Wanted > 0.0) || Wanted <= Room) { return Wanted; }
+	const double Fit = FMath::FloorToDouble(Room / SpotStepLitres) * SpotStepLitres;
+	return Fit > 0.0 ? Fit : Wanted;
 }
 
 double UFuelSupply::SpotCostOf(double Litres) const
@@ -158,12 +173,12 @@ FFuelQuote UFuelSupply::Quote(double SpotLitres) const
 	Out.CapacityLitres = Capacity();
 	Out.bBounded = static_cast<bool>(CapacityOf);
 	Out.PendingLitres = PendingSpotLitres();
-	Out.SpotLitres = SpotLitres;
-	Out.SpotCost = SpotCostOf(SpotLitres);
+	Out.SpotLitres = SpotOfferOf(SpotLitres);
+	Out.SpotCost = SpotCostOf(Out.SpotLitres);
 	Out.SpotDelaySeconds = Figures.SpotDelaySeconds;
 	Out.TermDays = Figures.ContractTermDays;
 	// THE VERDICTS ARE THE JUDGES' OWN CALLS, not re-derived: the command runs the same Judge, so the card cannot light a refusal.
-	Out.Spot = JudgeSpot(SpotLitres);
+	Out.Spot = JudgeSpot(Out.SpotLitres);
 	const bool bRunning = Contract.Tier != INDEX_NONE && Figures.ContractTiers.IsValidIndex(Contract.Tier);
 	if (bRunning)
 	{

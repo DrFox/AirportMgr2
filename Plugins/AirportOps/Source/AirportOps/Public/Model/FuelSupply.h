@@ -50,7 +50,8 @@ struct FFuelQuote
 	/** What a cancel would charge now: CancelContract's own figure. */
 	double CancelCharge = 0.0;
 
-	/** The spot order the card offers: its litres, what it costs now, and how long it takes. */
+	/** The spot order the card offers - UFuelSupply::SpotOfferOf, so the litres the button will ORDER, which may be fewer than it
+	 *  was asked for - what it costs now, and how long it takes. */
 	double SpotLitres = 0.0;
 	double SpotCost = 0.0;
 	double SpotDelaySeconds = 0.0;
@@ -100,7 +101,8 @@ public:
 	 */
 	virtual void OnBeforeRestore() override;
 
-	/** Litres held. May exceed Capacity() after a tank is sold - see FreeSpace. */
+	/** Litres held. May exceed Capacity() once the tanks shrink - a depot bulldozed, or #266's plot repair removing a tank (no
+	 *  module is sold back by the player) - see FreeSpace. */
 	UPROPERTY() double StockLitres = 0.0;
 
 	/** Design figures, from the scenario. Transient - see UPricing for why figures are never saved. */
@@ -119,14 +121,12 @@ public:
 	 * 'vehicle row capacity' rule, which reads any `->Capacity` outside two files as a vehicle row's, would otherwise fire).
 	 */
 	bool IsLow() const;
-	/** Below the half-litre a fuel job is judged done within - FFuelRolePolicy::FuelledWithinLitres, the ONE tolerance. */
-	bool IsDry() const;
 
 	/** Takes up to Litres from the stock; returns what was granted. */
 	double Draw(double Litres);
 	/** The running contract, if any. Saved. */
 	UPROPERTY() FFuelContract Contract;
-	/** Spot orders paid and not yet delivered. Saved. */
+	/** Spot orders paid and not yet delivered. Saved. What does not fit when one arrives is refunded (ReceiveDueSpot). */
 	UPROPERTY() TArray<FFuelSpotOrder> SpotOrders;
 
 	/** The books fuel is paid from. Transient, set by the runtime; null (a bare test) buys for free. */
@@ -136,6 +136,20 @@ public:
 
 	double PendingSpotLitres() const;
 	EFuelOrderRefusal JudgeSpot(double Litres) const;
+	/**
+	 * The spot order a button asking for Wanted litres places: Wanted when it fits, else the room left (free space less what is on
+	 * the way) in whole SpotStepLitres, and Wanted again when not one step fits - so JudgeSpot refuses it NoRoom, with the size the
+	 * player asked for in the sentence. Quote and the card's verb both call it, so the caption names the litres the click orders.
+	 * ENFORCED BY: AirportOps.Model.FuelSupply.SpotTopsUpWhatFits, AirportMgr.Actions.FuelSpotTopsUpWhatFits
+	 */
+	double SpotOfferOf(double Wanted) const;
+	/**
+	 * A top-up is offered in these steps. THE CARD'S GAUGE PRINTS TO THE NEAREST 100 L (FDepotCard::ShownFuel), and the offer is in
+	 * the card's key: an offer of the exact room would move with every litre a bowser draws near full tanks and recompose the card
+	 * every tick, the cost that key exists to stop. A room under one step is refused, not offered - a deviation from the review's
+	 * "anything over the half-litre fuelled tolerance", chosen 2026-10-03 (not ruled) because a 40 L tanker is no order anyone means.
+	 */
+	static constexpr double SpotStepLitres = 100.0;
 	EFuelOrderRefusal OrderSpot(double Litres, double Now);
 	int32 ReceiveDueSpot(double Now);
 
@@ -152,7 +166,7 @@ public:
 	double Receive(double Litres);
 
 	/**
-	 * The card's row, with a spot order of SpotLitres on offer - see FFuelQuote. THE NEXT TIER is the one after the running
+	 * The card's row, with a spot order of up to SpotLitres on offer (SpotOfferOf) - see FFuelQuote. THE NEXT TIER is the one after the running
 	 * contract, the smallest while none runs: the card signs tier 0, then upgrades one tier at a time (JudgeContract).
 	 */
 	FFuelQuote Quote(double SpotLitres) const;

@@ -27,6 +27,7 @@
 #include "Model/Pricing.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadNetwork.h"
+#include "Model/ServiceRolePolicy.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
@@ -241,7 +242,7 @@ FPurchaseResult UOpsRuntime::SellVehicle(int32 VehicleId)
 }
 
 // THE FUEL FORWARDERS: the clock's Now, and nothing else. No attach guard, unlike BuyModule's: an order needs no network (an
-// unattached supply has no CapacityOf and holds anything, which only a test reaches). No log: the supply logs what it did,
+// unattached supply has no CapacityOf and holds anything - UFuelSupply::Capacity). No log: the supply logs what it did,
 // and a refusal is returned for the caller to word.
 //
 // A SUCCESS IS A PURCHASE TOAST (2026-10-03), through the face the vehicle and module purchases use (FOpsPurchase - the nouns here,
@@ -740,7 +741,7 @@ void UOpsRuntime::WireBus()
 	// for most of what moves them: the job board pass marks Alerts as it ends, and a delivery (FFuelDeliveredEvent), a tank bought
 	// (FFacilityUpgradedEvent) and a tank refunded (FModulesRefundedEvent) each dirty that pass above; a falling stock is the same
 	// pass, since BeginFacility's refill Draw runs inside its Step; a spot order and a cancel post to the ledger (FMoneyPostedEvent
-	// above); a tank sold or bulldozed is the network change. Only SignFuelContract has no wake, and marks Alerts itself.
+	// above); a depot bulldozed is the network change. Only SignFuelContract has no wake, and marks Alerts itself.
 	// ENFORCED BY: AirportOps.Present.Fuel.FuelLowIsWokenByFuelEvents (sign, cancel, order, delivery and a tank bought each update
 	// the alert; the subscriptions this replaces were mutation-checked redundant on 2026-10-03)
 
@@ -809,6 +810,24 @@ void UOpsRuntime::WireBus()
 		Purchase.Count = E.Count;
 		Purchase.Amount = E.Amount;
 		Purchase.Money = Pricing->Format(E.Amount);
+		Events->NotifyPurchase(Purchase);
+	});
+
+	// TAKE-OR-PAY'S LOSS IS NEWS (2026-10-03 review): a contract day the tanks could not hold was paid whole and poured partly away,
+	// and the only word of it was the supply's log line. A spot delivery that did not fit is REFUNDED (UFuelSupply::ReceiveDueSpot),
+	// so it lost nothing and says nothing here. Under the half-litre a fuel job is judged done within (the policy's one tolerance)
+	// nothing was lost - the floor keeps "0 L poured away" off the feed.
+	// ENFORCED BY: AirportOps.Present.Fuel.PouredAwayIsToasted, AirportMgr.UI.ToastsWordSavesAndPurchases
+	Bus.Subscribe<FFuelDeliveredEvent>(EOpsTier::Presentation, TEXT("OpsEvents"), [this](const FFuelDeliveredEvent& E)
+	{
+		const double Lost = E.Litres - E.Added;
+		if (!E.bContract || Lost < FFuelRolePolicy::FuelledWithinLitres)
+		{
+			return;
+		}
+		FOpsPurchase Purchase;
+		Purchase.Kind = EOpsPurchaseKind::FuelPouredAway;
+		Purchase.Name = FText::Format(NSLOCTEXT("AirportOps", "FuelPouredAwayName", "{0} L of contract fuel"), FText::AsNumber(FMath::RoundToInt64(Lost)));
 		Events->NotifyPurchase(Purchase);
 	});
 

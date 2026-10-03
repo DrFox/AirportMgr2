@@ -99,7 +99,8 @@ about 75% of a small airport's income.
 - **Stock.** ONE airport-wide pool of litres; bowser refills draw it down. **Deviation from the
   first draft ("the depot holds litres")**: depots can be many and a per-depot stock would need a
   tanker route between them. Capacity is derived, not stored: seated Tank modules x 30,000 L across
-  live depots. Stock above capacity (tanks sold) is kept, never topped up. A new game starts with
+  live depots. Stock above capacity (the tanks shrank: a depot bulldozed, or the plot repair removing
+  a tank - there is no module sell) is kept, never topped up. A new game starts with
   30,000 L (one full starter tank, 27,000 at contract price).
 - **Capacity.** Tank module 20,000, upkeep 100/day.
 - **Contract.** Tiers 5k/10k/20k/40k L/day at 0.9, 7-day term, cancellable (cancel charge = days left
@@ -108,7 +109,11 @@ about 75% of a small airport's income.
   term, no charge); a downgrade is a cancel. Milestone gating of tiers is deferred until the cargo
   track exists.
 - **Spot.** 1.2/L, charged on order, arrives after 7,200 game seconds. Refused if no room (free space
-  minus pending orders) or unaffordable. Deliveries are polled every game minute: orders' due times
+  minus pending orders) or unaffordable. The card's button asks for 10,000 L and orders what fits,
+  in whole 100 L, when less does. **Not take-or-pay:** litres that no longer fit when the order
+  arrives (a contract day or a bulldozed depot filled the room) are refunded at the spot price on a
+  FuelPurchase line. A contract day that overflows is toasted with the litres poured away.
+  Deliveries are polled every game minute: orders' due times
   are saved, the clock queue is not, so the poll re-arms itself after a load.
 - **Dry depot.** `EServiceRefusal::NoFuelStock`. Partial service beats none; the flight leaves at its
   deadline with what it got. The airline `ShortfallPenalty` is unchanged (satisfaction hit, no fine).

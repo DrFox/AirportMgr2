@@ -4491,7 +4491,9 @@ bool FFuelDryMidJobTest::RunTest(const FString&)
 	F.FixtureLitres = 30000.0;   // more than one tank-load, so a second trip is owed
 	F.Build(true);
 	F.Service->StarterFleet = { F.Service->VehiclesFor(EIcaoCode::C).TypeCode };
-	F.ParkAircraft();
+	FTurnaroundRecorder Recorder(*F.Service);
+	const int32 Aircraft = F.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
 	if (!TestTrue(TEXT("the job ends"), F.AdvanceUntil([&]()
 		{
 			return F.Service->GetJobs().Num() > 0 && F.Service->GetJobs()[0].State == EServiceJobState::Unserviceable;
@@ -4500,6 +4502,7 @@ bool FFuelDryMidJobTest::RunTest(const FString&)
 	TestEqual(TEXT("the job ended for want of stock"), Job.Why, EServiceRefusal::NoFuelStock);
 	TestTrue(FString::Printf(TEXT("and kept what the first trip delivered (%.0f L)"), Job.QuantityDelivered),
 		Job.QuantityDelivered > 0.0 && Job.QuantityDelivered < F.FixtureLitres);
+	const double KeptLitres = Job.QuantityDelivered;
 	if (!TestEqual(TEXT("one vehicle, the bowser"), F.Service->GetVehicles().Num(), 1)) { return false; }
 	// RE-FOUND BY ID on every read: a reference into the vehicle array would dangle if a Step grew it.
 	const int32 TruckId = F.Service->GetVehicles()[0].Id;
@@ -4515,6 +4518,24 @@ bool FFuelDryMidJobTest::RunTest(const FString&)
 	TestEqual(TEXT("the truck is idle, not cycling the depot"), static_cast<int32>(TruckState()), static_cast<int32>(EServiceVehicleState::Idle));
 	TestEqual(TEXT("and made no depot visit while idle"), Visits, 0);
 	TestEqual(TEXT("the job stays refused"), F.Service->GetJobs()[0].State, EServiceJobState::Unserviceable);
+
+	// THE PARTIAL PATH'S DEPARTURE (spec §7: "the flight leaves at its deadline with what it got"). DryDepotFlightLeavesUnfuelled
+	// pins the nothing-delivered path. NO RUNWAY UNTIL NOW, so the truck's idling above is measured with the job still on the
+	// board (with one from the start, the departure drops the job the Step it goes dry). The deadline is long past and only the
+	// runway held the aircraft: laid, it goes at once - not held for a second trip that cannot come - and ends PartFuelled with
+	// the first trip's litres.
+	TestEqual(TEXT("CONTROL: no runway, no departure yet"), Recorder.Drained(), 0);
+	F.LayRunway();
+	TestTrue(TEXT("it leaves, its deadline passed"), F.AdvanceUntil([&]()
+		{
+			const FRoadAgent* Agent = F.Traffic->FindAgent(Aircraft);
+			return Agent == nullptr || Agent->Phase != EAgentPhase::Parked;
+		}, 300.0));
+	if (TestEqual(TEXT("its departure ends the turnaround once"), Recorder.Drained(), 1))
+	{
+		TestEqual(TEXT("part-fuelled"), static_cast<int32>(Recorder.Ended[0].Outcome), static_cast<int32>(EFuelOutcome::PartFuelled));
+		TestEqual(TEXT("with what the first trip delivered"), Recorder.Ended[0].Delivered, KeptLitres, 1e-6);
+	}
 	return true;
 }
 

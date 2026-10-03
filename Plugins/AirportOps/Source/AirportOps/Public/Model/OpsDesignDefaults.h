@@ -31,7 +31,8 @@ namespace OpsDesignDefaults
 	 *  small field: the pacing model sold ~15,000-25,000 L a day at three stands (2026-10-02). */
 	inline constexpr double LitresPerTank = 30000.0;
 
-	/** The spot order the depot card's one button places (2026-10-03): a third of a tank, so a starter depot can take one
-	 *  with a morning's fuel already drawn, and a fixed size because a litres picker is UI nobody has asked for yet. */
+	/** The spot order the depot card's one button asks for (2026-10-03): a third of a tank, so a starter depot can take one
+	 *  with a morning's fuel already drawn, and one size because a litres picker is UI nobody has asked for yet. Fewer when
+	 *  fewer fit (UFuelSupply::SpotOfferOf). */
 	inline constexpr double SpotOrderLitres = 10000.0;
 }

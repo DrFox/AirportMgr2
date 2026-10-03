@@ -1477,6 +1477,39 @@ bool FFuelSpotRefusalIsShownTest::RunTest(const FString& Parameters)
 }
 
 /**
+ * THE ORDER BUTTON TOPS UP WHAT FITS (2026-10-03 review): with 25,000 L held of 30,000, the fixed 10,000 L order was refused NoRoom
+ * though 5,000 L fitted. The card offers the 5,000, captioned with what it will order, and the click orders exactly that - the
+ * caption, the row's enable and the order all read the one quote.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelSpotCardTopsUpTest,
+	"AirportMgr.Actions.FuelSpotTopsUpWhatFits",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelSpotCardTopsUpTest::RunTest(const FString& Parameters)
+{
+	FInspectorDepotRig Rig;
+	if (!TestTrue(TEXT("setup: depot, runtime, controller and panel"), Rig.Build())) { return false; }
+	UFuelSupply* Supply = Rig.Runtime->GetJobBoard()->FuelSupply.Get();
+	const FBuildAction* Spot = FindAction(FName(TEXT("selection.fuel_spot")));
+	if (!TestTrue(TEXT("setup: the supply and the spot row"), Supply != nullptr && Spot != nullptr)) { return false; }
+	using EAction = UInspectorFacilityRows::EAction;
+	UUiButton* Button = Rig.Panel->FacilityRows->FuelButtonForTest(EAction::FuelSpot);
+	if (!TestNotNull(TEXT("setup: the card built an Order button"), Button)) { return false; }
+
+	Supply->StockLitres = Supply->Capacity() - 5000.0;
+	Rig.Refresh();
+	TestTrue(TEXT("5,000 L of room: the spot row is enabled"), Spot->IsEnabled(FBuildActionContext(*Rig.Controller)));
+	TestTrue(TEXT("and the Order button lit"), Button->GetIsEnabled());
+	const FString Caption = Button->GetLabel() != nullptr ? Button->GetLabel()->GetText().ToString() : FString();
+	TestTrue(FString::Printf(TEXT("captioned with the litres it will order ('%s')"), *Caption), Caption.StartsWith(TEXT("Order 5,000 L")));
+	Rig.Panel->FacilityRows->ClickFuelForTest(EAction::FuelSpot);
+	TestEqual(TEXT("the click placed one order"), Supply->SpotOrders.Num(), 1);
+	TestEqual(TEXT("of the 5,000 L the caption named"), Supply->PendingSpotLitres(), 5000.0, 1e-6);
+	return true;
+}
+
+/**
  * THE FUEL IS IN THE DEPOT CARD'S KEY (2026-10-03): a bowser drawing or a tanker arriving moves no revision of the board, the ledger
  * or the network - so with the fuel left out of FInspectorCardKey the line would hold the old stock until something else moved.
  */

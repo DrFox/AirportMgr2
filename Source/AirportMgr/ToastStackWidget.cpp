@@ -229,6 +229,12 @@ void UToastStackWidget::OnPurchase(const FOpsPurchase& Purchase)
 			: FText::Format(NSLOCTEXT("AirportMgr", "FuelContractCancelledFree", "Cancelled {0}"), Purchase.Name),
 			ENotificationSeverity::Info);
 		return;
+	case EOpsPurchaseKind::FuelPouredAway:
+		// A WARNING, the repair's reason: the player did not choose it, it cost them, and the fix - more tanks, or a smaller
+		// contract - is theirs to make. No figure: the money is on the day's own line.
+		Notifications->PostFeed(FText::Format(NSLOCTEXT("AirportMgr", "FuelPouredAway", "Tanks full — {0} poured away"), Purchase.Name),
+			ENotificationSeverity::Warning);
+		return;
 	}
 }
 AIRSIDE_EXHAUSTIVE_SWITCH_END

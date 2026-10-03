@@ -33,7 +33,7 @@ bool FFuelSupplyDrawTest::RunTest(const FString&)
 	TestEqual(TEXT("and leaves the rest"), Supply->StockLitres, 400.0, 1e-9);
 	TestEqual(TEXT("a draw beyond it is granted only what is there"), Supply->Draw(600.0), 400.0, 1e-9);
 	TestEqual(TEXT("leaving nothing - never a negative stock"), Supply->StockLitres, 0.0, 1e-9);
-	TestTrue(TEXT("and the supply is dry"), Supply->IsDry());
+	TestEqual(TEXT("and nothing is available"), Supply->Available(), 0.0, 1e-9);
 	TestEqual(TEXT("a negative draw grants nothing and adds nothing"), Supply->Draw(-50.0), 0.0, 1e-9);
 	TestEqual(TEXT("CONTROL: the stock did not move"), Supply->StockLitres, 0.0, 1e-9);
 	return true;
@@ -54,7 +54,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelSupplyOverCapacityTest, "AirportOps.Model.
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FFuelSupplyOverCapacityTest::RunTest(const FString&)
 {
-	// A TANK SOLD UNDER THE STOCK (review focus 4): the fuel is not destroyed and not refunded - it is held, and nothing
+	// THE TANKS SHRANK UNDER THE STOCK - a depot bulldozed, or the plot repair (review focus 4): the fuel is not destroyed and not refunded - it is held, and nothing
 	// more is taken until it is drawn below the new capacity.
 	UFuelSupply* Supply = SupplyHolding(50000.0, 30000.0);
 	TestEqual(TEXT("free space is never negative"), Supply->FreeSpace(), 0.0, 1e-9);
@@ -369,6 +369,69 @@ bool FFuelRefusalSentencesTest::RunTest(const FString&)
 	}
 	TestEqual(TEXT("Can't afford reads as the shed's does"), UFacilityPurchases::FuelOrderRefusalText(EFuelOrderRefusal::CannotAfford).ToString(),
 		UFacilityPurchases::RefusalText(EPurchaseRefusal::CannotAfford).ToString());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelSpotOverflowRefundedTest, "AirportOps.Model.FuelSupply.SpotThatDoesNotFitIsRefunded",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelSpotOverflowRefundedTest::RunTest(const FString&)
+{
+	// SPOT IS NOT TAKE-OR-PAY (ruled 2026-10-03): JudgeSpot measures the room at the ORDER, but a contract day - or a depot
+	// bulldozed - can fill the tanks before the tanker arrives. The litres that do not fit come back as money, at the spot
+	// price, on a positive FuelPurchase line; before the ruling they were added as 0 and the money was simply gone.
+	UFuelSupply* Supply = SupplyWithLedger(15000.0, 30000.0, 1e6);
+	const FFuelSupplyFigures& Fig = Supply->Figures;
+	if (!TestEqual(TEXT("setup: a 10,000 L spot order fits 15,000 L of room"), Supply->OrderSpot(10000.0, 0.0), EFuelOrderRefusal::None)) { return false; }
+	if (!TestEqual(TEXT("setup: the 10,000 L tier signs"), Supply->SignContract(1, 0.0), EFuelOrderRefusal::None)) { return false; }
+	Supply->DeliverContractDay(3600.0);   // the contract arrives first: 25,000 of 30,000
+	if (!TestEqual(TEXT("setup: the contract day filled to 25,000"), Supply->StockLitres, 25000.0, 1e-9)) { return false; }
+	const double Before = Supply->Ledger->Balance();
+	const int32 Rows = Supply->Ledger->Entries().Num();
+	TestEqual(TEXT("the spot order arrives"), Supply->ReceiveDueSpot(Fig.SpotDelaySeconds), 1);
+	TestEqual(TEXT("only what fitted was added"), Supply->StockLitres, 30000.0, 1e-9);
+	TestEqual(TEXT("the 5,000 L that did not fit are refunded at the spot price"), Supply->Ledger->Balance() - Before,
+		Supply->SpotCostOf(10000.0 - 5000.0), 1e-6);
+	TestTrue(TEXT("CONTROL: a refund that is not zero"), Supply->SpotCostOf(5000.0) > 0.0);
+	if (TestEqual(TEXT("on one ledger line"), Supply->Ledger->Entries().Num(), Rows + 1))
+	{
+		const FLedgerEntry& Row = Supply->Ledger->Entries().Last();
+		TestEqual(TEXT("a fuel purchase line"), Row.Category, ELedgerCategory::FuelPurchase);
+		TestTrue(TEXT("money IN"), Row.Amount > 0.0);
+	}
+
+	// CONTROL: no contract, so the order fits as it did when it was paid for - added whole, and no refund line.
+	UFuelSupply* Clear = SupplyWithLedger(15000.0, 30000.0, 1e6);
+	Clear->OrderSpot(10000.0, 0.0);
+	const double ClearBefore = Clear->Ledger->Balance();
+	const int32 ClearRows = Clear->Ledger->Entries().Num();
+	TestEqual(TEXT("CONTROL: the order arrives"), Clear->ReceiveDueSpot(Fig.SpotDelaySeconds), 1);
+	TestEqual(TEXT("CONTROL: added whole"), Clear->StockLitres, 25000.0, 1e-9);
+	TestEqual(TEXT("CONTROL: the balance did not move"), Clear->Ledger->Balance(), ClearBefore, 1e-9);
+	TestEqual(TEXT("CONTROL: and no line was posted"), Clear->Ledger->Entries().Num(), ClearRows);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelSpotTopsUpTest, "AirportOps.Model.FuelSupply.SpotTopsUpWhatFits",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelSpotTopsUpTest::RunTest(const FString&)
+{
+	// THE CARD'S ONE BUTTON ASKS FOR 10,000 L; with 25,000 of 30,000 held it used to refuse NoRoom though 5,000 L fitted. It
+	// offers what fits now - quote and command agreeing (QuoteIsTheJudges' rule) - and refuses only when nothing does.
+	UFuelSupply* Supply = SupplyWithLedger(25000.0, 30000.0, 1e6);
+	FFuelQuote Q = Supply->Quote(10000.0);
+	TestEqual(TEXT("the quote offers the 5,000 L that fit"), Q.SpotLitres, 5000.0, 1e-9);
+	TestEqual(TEXT("at their price"), Q.SpotCost, Supply->SpotCostOf(5000.0), 1e-6);
+	TestEqual(TEXT("and takes it"), Q.Spot, EFuelOrderRefusal::None);
+	TestEqual(TEXT("CONTROL: the command agrees"), Supply->OrderSpot(Q.SpotLitres, 0.0), EFuelOrderRefusal::None);
+	TestEqual(TEXT("and 5,000 L are on the way"), Supply->PendingSpotLitres(), 5000.0, 1e-9);
+	// NOTHING FITS NOW (the 5,000 L on the way fill the room): the full size is quoted, refused.
+	Q = Supply->Quote(10000.0);
+	TestEqual(TEXT("no room: the full order is quoted"), Q.SpotLitres, 10000.0, 1e-9);
+	TestEqual(TEXT("and refused NoRoom"), Q.Spot, EFuelOrderRefusal::NoRoom);
+	TestEqual(TEXT("CONTROL: the command agrees"), Supply->OrderSpot(Q.SpotLitres, 0.0), EFuelOrderRefusal::NoRoom);
+	// ROOM FOR THE WHOLE ORDER: the asked size, not the room.
+	UFuelSupply* Empty = SupplyWithLedger(0.0, 30000.0, 1e6);
+	TestEqual(TEXT("CONTROL: empty tanks quote the asked 10,000 L"), Empty->Quote(10000.0).SpotLitres, 10000.0, 1e-9);
 	return true;
 }
 

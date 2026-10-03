@@ -270,8 +270,12 @@ namespace
 				UE_LOG(LogRoadBuild, Warning, TEXT("Fuel order: no ops runtime."));
 				return;
 			}
-			const EFuelOrderRefusal Why = Ctx.Runtime->OrderSpotFuel(OpsDesignDefaults::SpotOrderLitres);
-			UE_LOG(LogRoadBuild, Log, TEXT("Fuel order %.0f L: %s"), OpsDesignDefaults::SpotOrderLitres,
+			// THE QUOTE'S SIZE (UFuelSupply::SpotOfferOf): the top-up the caption named, not the button's fixed ask - which would be
+			// refused NoRoom where the card had offered what fits.
+			const UFuelSupply* Supply = Ctx.Runtime->GetFuelSupply();
+			const double Litres = Supply != nullptr ? Supply->SpotOfferOf(OpsDesignDefaults::SpotOrderLitres) : OpsDesignDefaults::SpotOrderLitres;
+			const EFuelOrderRefusal Why = Ctx.Runtime->OrderSpotFuel(Litres);
+			UE_LOG(LogRoadBuild, Log, TEXT("Fuel order %.0f L: %s"), Litres,
 				Why == EFuelOrderRefusal::None ? TEXT("taken") : *UFacilityPurchases::FuelOrderRefusalText(Why).ToString());
 		}
 
@@ -560,7 +564,8 @@ namespace
 
 		// THE FUEL ROW (2026-10-03, fuel-supply spec §7): order a spot load, sign a contract, cancel it - the depot card's buttons,
 		// INSPECTOR ONLY and keyless for the purchases' reason (a key that spent money on whatever was selected is a misclick). No
-		// argument: the spot order is one fixed size (OpsDesignDefaults::SpotOrderLitres) and the contract the quote's next tier.
+		// argument: the spot order is one size (OpsDesignDefaults::SpotOrderLitres, or what fits - SpotOfferOf) and the contract the
+		// quote's next tier.
 		// ENFORCED BY: AirportMgr.Actions.FacilityVerbsRegistered, AirportMgr.Actions.FuelVerbsReachTheSupply
 		{
 			FBuildAction Spot = Make(TEXT("selection.fuel_spot"), EActionSection::Selection,

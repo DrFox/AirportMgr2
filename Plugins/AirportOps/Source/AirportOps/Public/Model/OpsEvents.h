@@ -44,7 +44,10 @@ enum class EOpsPurchaseKind : uint8
 	/** A fuel contract signed. Name says the tier and term; Amount is ONE DAY's cost, charged at each day end - signing pays nothing. */
 	FuelContractSigned,
 	/** A fuel contract cancelled. Amount is the cancellation charge, 0 when the term had run out. */
-	FuelContractCancelled
+	FuelContractCancelled,
+	/** A contract day the tanks could not hold: take-or-pay, paid whole, and the rest poured away. Name is the litres LOST; Amount 0 -
+	 *  the money went on the day's own FuelPurchase line, and this is the news that part of it bought nothing. */
+	FuelPouredAway
 };
 
 /**

@@ -307,7 +307,7 @@ public:
 
 	/**
 	 * The supply's quote, its litres ROUNDED TO WHAT THE LINE PRINTS (the nearest 100 L), with the card's spot order on offer
-	 * (OpsDesignDefaults::SpotOrderLitres). THE ONE ROUNDING, read by the key and by the composition, so two quotes that print the
+	 * (OpsDesignDefaults::SpotOrderLitres, or the whole 100 L that fit - UFuelSupply::SpotOfferOf, so it needs no rounding here). THE ONE ROUNDING, read by the key and by the composition, so two quotes that print the
 	 * same line are one key. The refusals are the supply's own, unrounded.
 	 */
 	static FFuelQuote ShownFuel(const UFuelSupply& Supply);

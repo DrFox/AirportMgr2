@@ -1103,4 +1103,37 @@ bool FFuelOrdersAreToastedTest::RunTest(const FString&)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelPouredAwayIsToastedTest, "AirportOps.Present.Fuel.PouredAwayIsToasted",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelPouredAwayIsToastedTest::RunTest(const FString&)
+{
+	// TAKE-OR-PAY POURS AWAY what the tanks cannot hold, paid for all the same - and before this the only word of it was a log line.
+	// The player hears of it once per day that overflowed, with the litres lost, and ONLY then: a day that fits whole is no news.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("an actor"), TestWorld.Actor)) { return false; }
+	UOpsRuntime* Runtime = nullptr;
+	if (!TestTrue(TEXT("setup: the starter depot is placed"), FacilityWiredDepot(TestWorld, Runtime).IsSet())) { return false; }
+	UFuelSupply* Supply = FacilityWiredBoardSupply(*Runtime);
+	if (!TestNotNull(TEXT("setup: the board holds the supply"), Supply)) { return false; }
+	UOpsEventsTestListener* Listener = NewObject<UOpsEventsTestListener>();
+	Runtime->GetEvents()->OnPurchase.AddDynamic(Listener, &UOpsEventsTestListener::OnPurchase);
+	Supply->Draw(Supply->StockLitres);
+	if (!TestEqual(TEXT("setup: the 5,000 L tier signs"), Runtime->SignFuelContract(0), EFuelOrderRefusal::None)) { return false; }
+
+	Supply->DeliverContractDay(Runtime->GetClock()->Now());
+	Runtime->Tick(0.0);
+	TestEqual(TEXT("CONTROL: the day arrived whole"), Supply->StockLitres, 5000.0, 1e-9);
+	TestEqual(TEXT("CONTROL: and a day that fits is not toasted"), Listener->CountOf(TEXT("buy:FuelPouredAway")), 0);
+
+	Supply->StockLitres = Supply->Capacity() - 1000.0;   // room for 1,000 of the day's 5,000
+	Supply->DeliverContractDay(Runtime->GetClock()->Now());
+	Runtime->Tick(0.0);
+	if (TestEqual(TEXT("a day that overflowed is toasted once"), Listener->CountOf(TEXT("buy:FuelPouredAway")), 1))
+	{
+		const FString Name = Listener->Purchases.Last().Name.ToString();
+		TestTrue(FString::Printf(TEXT("naming the 4,000 L lost ('%s')"), *Name), Name.Contains(TEXT("4,000")));
+	}
+	return true;
+}
+
 #endif

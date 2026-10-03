@@ -457,6 +457,8 @@ bool FToastsWordSavesAndPurchasesTest::RunTest(const FString& Parameters)
 		{ EOpsPurchaseKind::FuelContractSigned, 45000.0, TEXT("Signed Fuel bowser — $45,000 a day"), ENotificationSeverity::Info },
 		{ EOpsPurchaseKind::FuelContractCancelled, 45000.0, TEXT("Cancelled Fuel bowser — $45,000 charged"), ENotificationSeverity::Info },
 		{ EOpsPurchaseKind::FuelContractCancelled, 0.0, TEXT("Cancelled Fuel bowser"), ENotificationSeverity::Info },
+		// TAKE-OR-PAY'S LOSS: a warning, naming what was lost, with no figure (the day's own line carries the money).
+		{ EOpsPurchaseKind::FuelPouredAway, 0.0, TEXT("Tanks full — Fuel bowser poured away"), ENotificationSeverity::Warning },
 	};
 	for (const FPurchaseCase& Case : PurchaseCases)
 	{
