@@ -316,6 +316,16 @@ void ARoadBuildHUD::Line(const FVector2D& From, const FVector2D& To, EPreviewSty
 	FVector2D ScreenB;
 	if (!ProjectPlanePoint(From, PlaneZ, ScreenA) || !ProjectPlanePoint(To, PlaneZ, ScreenB))
 	{
+		// HALVED, NOT DROPPED (2026-10-03): a 600 m land tile edge nearly always has an end off screen, and dropping
+		// the whole line drew the Buy land ghosts as stray fragments. Bisect until the on-screen pieces project; a
+		// piece under MinPiece is let go, so a line wholly off screen costs at most Length/MinPiece projections.
+		constexpr double MinPiece = 1000.0;
+		if (FVector2D::DistSquared(From, To) > FMath::Square(MinPiece))
+		{
+			const FVector2D Mid = (From + To) * 0.5;
+			Line(From, Mid, Style);
+			Line(Mid, To, Style);
+		}
 		return;
 	}
 
