@@ -195,6 +195,6 @@ private:
 
 	TArray<FUiMenuItem> BuyVehicleItems() const;
 	void RebuildFleetRows();
-	/** One row per module in Modules, which is sorted by kind. */
-	void RebuildModuleRows(const TArray<const FModuleOfferQuote*>& Modules);
+	/** One row per module in Modules, which is sorted by kind. False when there is nothing to build into (before Build). */
+	bool RebuildModuleRows(const TArray<const FModuleOfferQuote*>& Modules);
 };

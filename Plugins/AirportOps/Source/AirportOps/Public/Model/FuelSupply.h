@@ -55,13 +55,15 @@ struct FFuelQuote
 	double SpotCost = 0.0;
 	double SpotDelaySeconds = 0.0;
 
-	/** The tier the card's Sign button would sign (see Quote), its day, and the term it signs for; INDEX_NONE past the last. */
+	/** The tier the card's Sign/Upgrade button would sign (see Quote), its day, and the term it signs for. Past the last tier it is
+	 *  still Contract.Tier + 1, with a zero day, and Sign reads UnknownTier. */
 	int32 NextTier = INDEX_NONE;
 	double NextLitresPerDay = 0.0;
 	double NextDailyCost = 0.0;
 	int32 TermDays = 0;
 
-	/** The three verbs' verdicts: JudgeSpot, JudgeContract(NextTier), and NoContract with nothing to cancel. */
+	/** The three verbs' verdicts: JudgeSpot, JudgeContract(NextTier) (a sign, or an upgrade while contracted), and NoContract with
+	 *  nothing to cancel. */
 	EFuelOrderRefusal Spot = EFuelOrderRefusal::None;
 	EFuelOrderRefusal Sign = EFuelOrderRefusal::None;
 	EFuelOrderRefusal Cancel = EFuelOrderRefusal::None;
@@ -137,7 +139,10 @@ public:
 	EFuelOrderRefusal OrderSpot(double Litres, double Now);
 	int32 ReceiveDueSpot(double Now);
 
+	/** None for a sign with no contract running, or for an UPGRADE - Tier == Contract.Tier + 1 - while one runs; AlreadyContracted
+	 *  for any other tier while one runs; UnknownTier past the last; NoRoom when the tier's day exceeds the tanks. */
 	EFuelOrderRefusal JudgeContract(int32 Tier) const;
+	/** Signs Tier, or upgrades to it: the contract becomes Tier with a fresh term. Charges nothing - each day end does. */
 	EFuelOrderRefusal SignContract(int32 Tier, double Now);
 	EFuelOrderRefusal CancelContract(double Now);
 	/** One day of the contract: charged whole (take-or-pay), added as far as the tanks allow. Called at day end. */
@@ -148,13 +153,15 @@ public:
 
 	/**
 	 * The card's row, with a spot order of SpotLitres on offer - see FFuelQuote. THE NEXT TIER is the one after the running
-	 * contract, the smallest while none runs; since one contract runs at a time (JudgeContract's AlreadyContracted), a running one
-	 * makes the Sign verdict AlreadyContracted whatever the tier, and the card's Sign is in practice the smallest tier. Larger
-	 * tiers wait for a tier picker (2026-10-03: the brief's ruling, said in the task report).
+	 * contract, the smallest while none runs: the card signs tier 0, then upgrades one tier at a time (JudgeContract).
 	 */
 	FFuelQuote Quote(double SpotLitres) const;
 
 private:
 	/** What cancelling Of would charge: the days left at the tier's daily cost, times CancelFraction. Quote and CancelContract both. */
 	double CancelChargeOf(const FFuelContract& Of) const;
+
+public:
+	/** What a spot order of Litres costs now - JudgeSpot's affordability, OrderSpot's posting, Quote's figure and the toast's, one sum. */
+	double SpotCostOf(double Litres) const;
 };

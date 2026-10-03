@@ -1083,8 +1083,15 @@ bool FFuelOrdersAreToastedTest::RunTest(const FString&)
 		TestEqual(TEXT("at ONE DAY's cost - the day end charges it"), Listener->Purchases.Last().Amount, Tier.LitresPerDay * Tier.PricePerLitre, 1e-6);
 	}
 	const int32 Before = Listener->Purchases.Num();
-	TestEqual(TEXT("a second contract is refused"), Runtime->SignFuelContract(1), EFuelOrderRefusal::AlreadyContracted);
+	TestEqual(TEXT("a skipped tier is refused"), Runtime->SignFuelContract(2), EFuelOrderRefusal::AlreadyContracted);
 	TestEqual(TEXT("and toasts nothing"), Listener->Purchases.Num(), Before);
+	// AN UPGRADE IS TOASTED AS A SIGNING, at the new tier's day.
+	if (TestEqual(TEXT("the next tier is an upgrade"), Runtime->SignFuelContract(1), EFuelOrderRefusal::None)
+		&& TestEqual(TEXT("and is toasted as signed"), Listener->CountOf(TEXT("buy:FuelContractSigned")), 2))
+	{
+		const FFuelContractTier& Up = Supply->Figures.ContractTiers[1];
+		TestEqual(TEXT("at the new tier's day"), Listener->Purchases.Last().Amount, Up.LitresPerDay * Up.PricePerLitre, 1e-6);
+	}
 	const double Charge = Supply->Quote(0.0).CancelCharge;
 	if (!TestEqual(TEXT("the contract cancels"), Runtime->CancelFuelContract(), EFuelOrderRefusal::None)) { return false; }
 	if (TestEqual(TEXT("and is toasted once"), Listener->CountOf(TEXT("buy:FuelContractCancelled")), 1))

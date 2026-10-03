@@ -316,7 +316,7 @@ FDepotFuelView FDepotCard::FuelViewOf(const FFuelQuote& Q, const UPricing* Prici
 	V.Spot = Q.Spot;
 	V.Sign = Q.Sign;
 	V.Cancel = Q.Cancel;
-	V.bOfferSign = Q.ContractTier == INDEX_NONE;
+	V.bContracted = Q.ContractTier != INDEX_NONE;
 	// A REFUSED BUTTON SAYS WHY on its caption, the module rows' rule; the tooltip keeps the figures either way.
 	auto Caption = [](const FText& Label, EFuelOrderRefusal Why)
 	{
@@ -329,16 +329,30 @@ FDepotFuelView FDepotCard::FuelViewOf(const FFuelQuote& Q, const UPricing* Prici
 			: FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelRefusedTip", "{0}\n{1}"), UFacilityPurchases::FuelOrderRefusalText(Why), Detail);
 	};
 	V.SpotCaption = Caption(FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelSpot", "Order {0} L"), Litres(Q.SpotLitres)), Q.Spot);
-	V.SpotTip = Tip(FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelSpotTip", "{0} L for {1}, paid now; delivered in {2} game hours"),
-		Litres(Q.SpotLitres), Money(Q.SpotCost), FText::AsNumber(FMath::RoundToInt(Q.SpotDelaySeconds / 3600.0))), Q.Spot);
-	V.SignCaption = Caption(Q.NextTier != INDEX_NONE
-		? FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelSign", "Contract {0} L/day"), Litres(Q.NextLitresPerDay))
-		: NSLOCTEXT("AirportMgr", "InspectorFuelSignNone", "Contract"), Q.Sign);
+	// THE DELAY IN WORDS THAT FIT IT: whole hours, plural as needed, and minutes below an hour (a scenario may shorten it).
+	const int32 DelayMinutes = FMath::RoundToInt(Q.SpotDelaySeconds / 60.0);
+	const FText Delay = DelayMinutes < 60
+		? FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelDelayMinutes", "{0} game {0}|plural(one=minute,other=minutes)"), FText::AsNumber(DelayMinutes))
+		: FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelDelayHours", "{0} game {0}|plural(one=hour,other=hours)"), FText::AsNumber(FMath::RoundToInt(DelayMinutes / 60.0)));
+	V.SpotTip = Tip(FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelSpotTip", "{0} L for {1}, paid now; delivered in {2}"),
+		Litres(Q.SpotLitres), Money(Q.SpotCost), Delay), Q.Spot);
+	// SIGN OR UPGRADE, one button: the next tier either way (FFuelQuote::NextTier). Past the last tier there is no figure to name.
+	const bool bNextExists = Q.NextLitresPerDay > 0.0;
+	V.SignCaption = Caption(!V.bContracted
+		? (bNextExists ? FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelSign", "Contract {0} L/day"), Litres(Q.NextLitresPerDay))
+			: NSLOCTEXT("AirportMgr", "InspectorFuelSignNone", "Contract"))
+		: (bNextExists ? FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelUpgrade", "Upgrade to {0} L/day"), Litres(Q.NextLitresPerDay))
+			: NSLOCTEXT("AirportMgr", "InspectorFuelUpgradeNone", "Upgrade")), Q.Sign);
 	// THE FIRST DAY IS CHARGED WHOLE, whatever the hour of the signing: delivery and charge come at each day's end (take-or-pay), so a
-	// contract signed at 23:00 pays a full day an hour later. Said here, at the button, so it is no surprise on the ledger.
-	V.SignTip = Tip(FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelSignTip",
-		"{0} L a day for {1} a day, for {2} days. Delivered and charged in full at each day's end - the first day too, whatever the hour you sign. Cancelling costs part of the days left."),
-		Litres(Q.NextLitresPerDay), Money(Q.NextDailyCost), FText::AsNumber(Q.TermDays)), Q.Sign);
+	// contract signed at 23:00 pays a full day an hour later. Said here, at the button, so it is no surprise on the ledger. An UPGRADE
+	// says the same, and that it starts a fresh term with no charge for the old one's days left.
+	V.SignTip = Tip(!V.bContracted
+		? FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelSignTip",
+			"{0} L a day for {1} a day, for {2} days. Delivered and charged in full at each day's end - the first day too, whatever the hour you sign. Cancelling costs part of the days left."),
+			Litres(Q.NextLitresPerDay), Money(Q.NextDailyCost), FText::AsNumber(Q.TermDays))
+		: FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelUpgradeTip",
+			"Replace the contract with {0} L a day for {1} a day, a fresh {2}-day term; no charge for the days left. Delivered and charged in full at each day's end - the first day too, whatever the hour."),
+			Litres(Q.NextLitresPerDay), Money(Q.NextDailyCost), FText::AsNumber(Q.TermDays)), Q.Sign);
 	V.CancelCaption = Caption(NSLOCTEXT("AirportMgr", "InspectorFuelCancel", "Cancel contract"), Q.Cancel);
 	V.CancelTip = Tip(FText::Format(NSLOCTEXT("AirportMgr", "InspectorFuelCancelTip", "Cancelling now charges {0} for the {1} {1}|plural(one=day,other=days) left"),
 		Money(Q.CancelCharge), FText::AsNumber(Q.ContractDaysLeft)), Q.Cancel);

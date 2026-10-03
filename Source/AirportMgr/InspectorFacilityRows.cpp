@@ -159,10 +159,11 @@ void UInspectorFacilityRows::Show(const FFacilityQuote& Quote, const FDepotFuelV
 	}
 	FString ModuleKey;
 	for (const FModuleOfferQuote* Module : Modules) { ModuleKey += FString::Printf(TEXT("%d,"), static_cast<int32>(Module->Module)); }
-	if (ModuleKey != LastModuleKey)
+	// THE KEY IS TAKEN ONLY WHEN THE ROWS WERE BUILT: a Show before Build (no list, no style) builds nothing, and a key taken then
+	// would stop the next Show building them for the same modules.
+	if (ModuleKey != LastModuleKey && RebuildModuleRows(Modules))
 	{
 		LastModuleKey = ModuleKey;
-		RebuildModuleRows(Modules);
 	}
 	ShowRow(ModuleList, Modules.Num() > 0);
 	for (int32 Index = 0; Index < ModuleRows.Num() && Index < Modules.Num(); ++Index)
@@ -174,7 +175,8 @@ void UInspectorFacilityRows::Show(const FFacilityQuote& Quote, const FDepotFuelV
 		const bool bCan = Module.Refusal == EPurchaseRefusal::None;
 		const FText Caption = bCan ? Module.Label
 			: FText::Format(NSLOCTEXT("AirportMgr", "InspectorRefusedCaption", "{0} - {1}"), Module.Label, UFacilityPurchases::RefusalText(Module.Refusal));
-		Paint(Row->BuyButton, Caption, bCan, Module.Label);
+		// THE TOOLTIP IS THE CAPTION, refusal and all: a caption clipped by a narrow card still says why on hover.
+		Paint(Row->BuyButton, Caption, bCan, Caption);
 	}
 
 	// THE FUEL ROW: the line, and the three buttons from the same view - Sign OR Cancel, by whether a contract runs (FDepotFuelView).
@@ -187,8 +189,8 @@ void UInspectorFacilityRows::Show(const FFacilityQuote& Quote, const FDepotFuelV
 		Paint(FuelSpotButton, Fuel.SpotCaption, Fuel.Spot == EFuelOrderRefusal::None, Fuel.SpotTip);
 		Paint(FuelContractButton, Fuel.SignCaption, Fuel.Sign == EFuelOrderRefusal::None, Fuel.SignTip);
 		Paint(FuelCancelButton, Fuel.CancelCaption, Fuel.Cancel == EFuelOrderRefusal::None, Fuel.CancelTip);
-		ShowRow(FuelContractButton, Fuel.bOfferSign);
-		ShowRow(FuelCancelButton, !Fuel.bOfferSign);
+		ShowRow(FuelContractButton, true);
+		ShowRow(FuelCancelButton, Fuel.bContracted);
 	}
 
 	ShowRow(VehiclesRow, bCard);
@@ -265,12 +267,12 @@ void UInspectorFacilityRows::RebuildFleetRows()
 	}
 }
 
-void UInspectorFacilityRows::RebuildModuleRows(const TArray<const FModuleOfferQuote*>& Modules)
+bool UInspectorFacilityRows::RebuildModuleRows(const TArray<const FModuleOfferQuote*>& Modules)
 {
 	// THE FLEET ROWS' SHAPE: a row object per line, holding what its click needs (its module), built into the list.
 	if (ModuleList != nullptr) { ModuleList->ClearChildren(); }
 	ModuleRows.Reset();
-	if (ModuleList == nullptr || Style == nullptr) { return; }
+	if (ModuleList == nullptr || Style == nullptr) { return false; }
 	for (const FModuleOfferQuote* Module : Modules)
 	{
 		UInspectorModuleRow* Row = NewObject<UInspectorModuleRow>(this);
@@ -288,6 +290,7 @@ void UInspectorFacilityRows::RebuildModuleRows(const TArray<const FModuleOfferQu
 		ModuleList->AddChild(Box);
 		ModuleRows.Add(Row);
 	}
+	return true;
 }
 
 void UInspectorModuleRow::HandleBuy()

@@ -156,7 +156,9 @@ bool FFuelContractTierTest::RunTest(const FString&)
 	TestEqual(TEXT("40,000 does not"), Supply->JudgeContract(3), EFuelOrderRefusal::NoRoom);
 	TestEqual(TEXT("there is no fifth tier"), Supply->JudgeContract(4), EFuelOrderRefusal::UnknownTier);
 	Supply->SignContract(0, 0.0);
-	TestEqual(TEXT("one contract at a time"), Supply->JudgeContract(1), EFuelOrderRefusal::AlreadyContracted);
+	TestEqual(TEXT("one contract at a time - a skipped tier is no upgrade"), Supply->JudgeContract(2), EFuelOrderRefusal::AlreadyContracted);
+	TestEqual(TEXT("nor is the running tier again"), Supply->JudgeContract(0), EFuelOrderRefusal::AlreadyContracted);
+	TestEqual(TEXT("but the next one is an upgrade"), Supply->JudgeContract(1), EFuelOrderRefusal::None);
 	return true;
 }
 
@@ -296,8 +298,9 @@ bool FFuelQuoteIsTheJudgesTest::RunTest(const FString&)
 	TestEqual(TEXT("the running tier is quoted"), Q.ContractTier, 0);
 	TestEqual(TEXT("with its days"), Q.ContractDaysLeft, Fig.ContractTermDays);
 	TestEqual(TEXT("and its day's litres"), Q.ContractLitresPerDay, Fig.ContractTiers[0].LitresPerDay, 1e-9);
-	TestEqual(TEXT("a running contract refuses a second"), Q.Sign, EFuelOrderRefusal::AlreadyContracted);
-	TestEqual(TEXT("CONTROL: and so does the command, for the tier the quote names"), Supply->SignContract(1, 0.0), EFuelOrderRefusal::AlreadyContracted);
+	TestEqual(TEXT("a running contract offers the next tier as an upgrade"), Q.NextTier, 1);
+	TestEqual(TEXT("which is allowed"), Q.Sign, EFuelOrderRefusal::None);
+	TestEqual(TEXT("CONTROL: a tier the quote does not name is refused by the command"), Supply->SignContract(2, 0.0), EFuelOrderRefusal::AlreadyContracted);
 	TestEqual(TEXT("it may be cancelled"), Q.Cancel, EFuelOrderRefusal::None);
 	const double Before = Supply->Ledger->Balance();
 	TestEqual(TEXT("the cancel runs"), Supply->CancelContract(0.0), EFuelOrderRefusal::None);
@@ -312,6 +315,39 @@ bool FFuelQuoteIsTheJudgesTest::RunTest(const FString&)
 	Supply->Ledger->Post(0.0, ELedgerCategory::FuelPurchase, -Supply->Ledger->Balance(), FText::FromString(TEXT("test: spent")));
 	TestEqual(TEXT("broke: quoted CannotAfford"), Supply->Quote(10000.0).Spot, EFuelOrderRefusal::CannotAfford);
 	TestEqual(TEXT("CONTROL: and the command agrees"), Supply->OrderSpot(10000.0, 0.0), EFuelOrderRefusal::CannotAfford);
+
+	// THE UPGRADE'S TWO REFUSALS, quote and command agreeing: past the last tier, and a tier the tanks cannot hold a day of.
+	UFuelSupply* Small = SupplyWithLedger(0.0, 15000.0, 1e9);
+	Small->SignContract(1, 0.0);   // 10,000 L a day fits 15,000
+	TestEqual(TEXT("an upgrade to 20,000 L a day on 15,000 L of tanks is quoted NoRoom"), Small->Quote(10000.0).Sign, EFuelOrderRefusal::NoRoom);
+	TestEqual(TEXT("CONTROL: and the command agrees"), Small->SignContract(2, 0.0), EFuelOrderRefusal::NoRoom);
+	UFuelSupply* Big = SupplyWithLedger(0.0, 1e6, 1e9);
+	Big->SignContract(0, 0.0);
+	for (int32 Tier = 1; Tier < Big->Figures.ContractTiers.Num(); ++Tier) { Big->SignContract(Tier, 0.0); }
+	const FFuelQuote Top = Big->Quote(10000.0);
+	TestEqual(TEXT("CONTROL: the largest tier runs"), Top.ContractTier, Big->Figures.ContractTiers.Num() - 1);
+	TestEqual(TEXT("past the last tier the upgrade is quoted UnknownTier"), Top.Sign, EFuelOrderRefusal::UnknownTier);
+	TestEqual(TEXT("CONTROL: and the command agrees"), Big->SignContract(Top.NextTier, 0.0), EFuelOrderRefusal::UnknownTier);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelUpgradeTest, "AirportOps.Model.FuelSupply.UpgradeReplacesTheContract",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FFuelUpgradeTest::RunTest(const FString&)
+{
+	// RULED 2026-10-03: while a contract runs, the next tier REPLACES it - its own litres, a fresh term, and no charge for the days
+	// the old one had left (a downgrade is a cancel, which is charged).
+	UFuelSupply* Supply = SupplyWithLedger(0.0, 30000.0, 100000.0);
+	const FFuelSupplyFigures& Fig = Supply->Figures;
+	TestEqual(TEXT("tier 0 signs"), Supply->SignContract(0, 0.0), EFuelOrderRefusal::None);
+	Supply->DeliverContractDay(86400.0);
+	if (!TestEqual(TEXT("setup: a day of the term is used"), Supply->Contract.DaysLeft, Fig.ContractTermDays - 1)) { return false; }
+	const double Before = Supply->Ledger->Balance();
+	TestEqual(TEXT("the upgrade to tier 1 runs"), Supply->SignContract(1, 90000.0), EFuelOrderRefusal::None);
+	TestEqual(TEXT("the contract is tier 1 now"), Supply->Contract.Tier, 1);
+	TestEqual(TEXT("with a FRESH term"), Supply->Contract.DaysLeft, Fig.ContractTermDays);
+	TestEqual(TEXT("and no charge was posted"), Supply->Ledger->Balance(), Before, 1e-6);
+	TestEqual(TEXT("its next day delivers the new tier's litres"), Supply->Quote(0.0).ContractLitresPerDay, Fig.ContractTiers[1].LitresPerDay, 1e-9);
 	return true;
 }
 
@@ -320,7 +356,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FFuelRefusalSentencesTest, "AirportOps.Model.Fu
 bool FFuelRefusalSentencesTest::RunTest(const FString&)
 {
 	// A GREYED BUTTON SAYS WHY: every refusal but None has words, and no two share them (a reason that reads like another teaches
-	// the wrong fix). Walked by value, so an enumerator appended without a case goes red here.
+	// the wrong fix). A MISSING CASE is not this test's to catch - the switch is exhaustive, a build error (C4062 via
+	// AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN); this walks the values up to the last one known and catches empty or shared words.
 	TestTrue(TEXT("None says nothing"), UFacilityPurchases::FuelOrderRefusalText(EFuelOrderRefusal::None).IsEmpty());
 	TSet<FString> Seen;
 	for (uint8 Value = 1; Value <= static_cast<uint8>(EFuelOrderRefusal::NoContract); ++Value)

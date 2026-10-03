@@ -250,7 +250,8 @@ public:
 	/**
 	 * The fuel row's reason, one sentence per EFuelOrderRefusal (2026-10-03) - BESIDE RefusalText so the depot card's two kinds of
 	 * greyed button speak from one place, and Can't afford reads the same on a shed and on a spot order. Empty for None.
-	 * ENFORCED BY: AirportOps.Model.FuelSupply.EveryRefusalHasASentence
+	 * ENFORCED BY: C4062 as an error (AIRSIDE_EXHAUSTIVE_SWITCH_BEGIN) for a missing case; AirportOps.Model.FuelSupply.EveryRefusalHasASentence
+	 * for empty or shared words
 	 */
 	static FText FuelOrderRefusalText(EFuelOrderRefusal Why);
 

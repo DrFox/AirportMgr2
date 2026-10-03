@@ -62,7 +62,7 @@ EFuelOrderRefusal UFuelSupply::JudgeSpot(double Litres) const
 	// `Litres <= 0`: NaN compares false both ways, so the latter - and the room test after it - let a NaN order through.
 	// ENFORCED BY: AirportOps.Model.FuelSupply.SpotRefusalsChargeNothing
 	if (!(Litres > 0.0) || Litres > FreeSpace() - PendingSpotLitres()) { return EFuelOrderRefusal::NoRoom; }
-	if (Ledger != nullptr && Ledger->Balance() < Litres * Figures.SpotPricePerLitre) { return EFuelOrderRefusal::CannotAfford; }
+	if (Ledger != nullptr && Ledger->Balance() < SpotCostOf(Litres)) { return EFuelOrderRefusal::CannotAfford; }
 	return EFuelOrderRefusal::None;
 }
 
@@ -72,7 +72,7 @@ EFuelOrderRefusal UFuelSupply::OrderSpot(double Litres, double Now)
 	if (Why != EFuelOrderRefusal::None) { return Why; }
 	if (Ledger != nullptr)
 	{
-		Ledger->Post(Now, ELedgerCategory::FuelPurchase, -Litres * Figures.SpotPricePerLitre,
+		Ledger->Post(Now, ELedgerCategory::FuelPurchase, -SpotCostOf(Litres),
 			FText::Format(NSLOCTEXT("Ledger", "FuelSpot", "Spot fuel, {0} L"), FText::AsNumber(FMath::RoundToInt(Litres))));
 	}
 	FFuelSpotOrder Order;
@@ -101,9 +101,18 @@ int32 UFuelSupply::ReceiveDueSpot(double Now)
 	return Delivered;
 }
 
+double UFuelSupply::SpotCostOf(double Litres) const
+{
+	return Litres * Figures.SpotPricePerLitre;
+}
+
 EFuelOrderRefusal UFuelSupply::JudgeContract(int32 Tier) const
 {
-	if (Contract.Tier != INDEX_NONE) { return EFuelOrderRefusal::AlreadyContracted; }
+	// ONE CONTRACT AT A TIME, BUT IT MAY GROW (ruled 2026-10-03): while one runs, the only tier that may be signed is the NEXT one -
+	// an UPGRADE, which replaces it with a fresh term and charges nothing; any other tier is refused. A downgrade is a cancel, which
+	// is charged - so growing is free and shrinking is not, and the player is never stuck on the smallest tier the card could sign.
+	// ENFORCED BY: AirportOps.Model.FuelSupply.UpgradeReplacesTheContract
+	if (Contract.Tier != INDEX_NONE && Tier != Contract.Tier + 1) { return EFuelOrderRefusal::AlreadyContracted; }
 	if (!Figures.ContractTiers.IsValidIndex(Tier)) { return EFuelOrderRefusal::UnknownTier; }
 	// STORAGE GATES THE TIERS (spec §7): a tier whose day the tanks cannot hold would pour fuel away from the first day.
 	if (Figures.ContractTiers[Tier].LitresPerDay > Capacity()) { return EFuelOrderRefusal::NoRoom; }
@@ -114,9 +123,12 @@ EFuelOrderRefusal UFuelSupply::SignContract(int32 Tier, double Now)
 {
 	const EFuelOrderRefusal Why = JudgeContract(Tier);
 	if (Why != EFuelOrderRefusal::None) { return Why; }
+	// AN UPGRADE REPLACES THE RUNNING CONTRACT WHOLE: the new tier, a fresh term, no charge for the days the old one had left.
+	const int32 Was = Contract.Tier;
 	Contract.Tier = Tier;
 	Contract.DaysLeft = Figures.ContractTermDays;
-	UE_LOG(LogAirportOps, Log, TEXT("Fuel: contract signed at %.0f, %.0f L a day for %d day(s)"),
+	UE_LOG(LogAirportOps, Log, TEXT("Fuel: contract %s at %.0f, %.0f L a day for %d day(s)"),
+		Was == INDEX_NONE ? TEXT("signed") : *FString::Printf(TEXT("upgraded from tier %d"), Was),
 		Now, Figures.ContractTiers[Tier].LitresPerDay, Contract.DaysLeft);
 	return EFuelOrderRefusal::None;
 }
@@ -147,7 +159,7 @@ FFuelQuote UFuelSupply::Quote(double SpotLitres) const
 	Out.bBounded = static_cast<bool>(CapacityOf);
 	Out.PendingLitres = PendingSpotLitres();
 	Out.SpotLitres = SpotLitres;
-	Out.SpotCost = SpotLitres * Figures.SpotPricePerLitre;
+	Out.SpotCost = SpotCostOf(SpotLitres);
 	Out.SpotDelaySeconds = Figures.SpotDelaySeconds;
 	Out.TermDays = Figures.ContractTermDays;
 	// THE VERDICTS ARE THE JUDGES' OWN CALLS, not re-derived: the command runs the same Judge, so the card cannot light a refusal.
@@ -162,6 +174,7 @@ FFuelQuote UFuelSupply::Quote(double SpotLitres) const
 		Out.ContractDailyCost = Tier.LitresPerDay * Tier.PricePerLitre;
 		Out.CancelCharge = CancelChargeOf(Contract);
 	}
+	// THE NEXT TIER, kept even past the last: JudgeContract then says UnknownTier, the reason the card shows ("No larger contract").
 	Out.NextTier = Contract.Tier == INDEX_NONE ? 0 : Contract.Tier + 1;
 	if (Figures.ContractTiers.IsValidIndex(Out.NextTier))
 	{
@@ -169,11 +182,7 @@ FFuelQuote UFuelSupply::Quote(double SpotLitres) const
 		Out.NextLitresPerDay = Next.LitresPerDay;
 		Out.NextDailyCost = Next.LitresPerDay * Next.PricePerLitre;
 	}
-	else
-	{
-		Out.NextTier = INDEX_NONE;
-	}
-	// JudgeContract asks AlreadyContracted FIRST, so a running contract reads that whatever NextTier is - one at a time.
+	// THE COMMAND'S OWN JUDGE for the tier the button names - a sign with none running, an upgrade with one.
 	Out.Sign = JudgeContract(Out.NextTier);
 	Out.Cancel = bRunning ? EFuelOrderRefusal::None : EFuelOrderRefusal::NoContract;
 	return Out;

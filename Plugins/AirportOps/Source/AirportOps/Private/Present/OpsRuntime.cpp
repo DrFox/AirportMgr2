@@ -257,7 +257,7 @@ EFuelOrderRefusal UOpsRuntime::OrderSpotFuel(double Litres)
 		FOpsPurchase Purchase;
 		Purchase.Kind = EOpsPurchaseKind::FuelOrdered;
 		Purchase.Name = FText::Format(NSLOCTEXT("AirportOps", "FuelOrderedName", "{0} L of fuel"), FText::AsNumber(FMath::RoundToInt64(Litres)));
-		Purchase.Amount = Litres * FuelSupply->Figures.SpotPricePerLitre;
+		Purchase.Amount = FuelSupply->SpotCostOf(Litres);
 		Purchase.Money = Pricing->Format(Purchase.Amount);
 		Events->NotifyPurchase(Purchase);
 	}

@@ -82,9 +82,9 @@ struct FDepotFuelView
 	FText SpotTip;
 	FText SignTip;
 	FText CancelTip;
-	/** ONE OF SIGN AND CANCEL is offered: Sign while no contract runs, Cancel while one does - a greyed "Cancel - No contract" beside
-	 *  every uncontracted depot taught nothing. */
-	bool bOfferSign = true;
+	/** A contract runs: the contract button UPGRADES to the next tier (ruled 2026-10-03) and Cancel is offered beside it. With none,
+	 *  the button signs tier 0 and Cancel is not shown - a greyed "Cancel - No contract" beside every uncontracted depot taught nothing. */
+	bool bContracted = false;
 };
 
 /**

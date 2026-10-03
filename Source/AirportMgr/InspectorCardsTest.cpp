@@ -691,7 +691,9 @@ bool FInspectorDepotFuelAndTankTest::RunTest(const FString&)
 	Fuel.ContractLitresPerDay = 5000.0;
 	Fuel.ContractDailyCost = 4500.0;
 	Fuel.SpotLitres = 10000.0;
-	Fuel.Sign = EFuelOrderRefusal::AlreadyContracted;
+	Fuel.NextTier = 1;
+	Fuel.NextLitresPerDay = 10000.0;
+	Fuel.Sign = EFuelOrderRefusal::NoRoom;
 	Fuel.Cancel = EFuelOrderRefusal::None;
 	Rows->Show(Quote, FDepotCard::FuelViewOf(Fuel, nullptr));
 
@@ -703,6 +705,32 @@ bool FInspectorDepotFuelAndTankTest::RunTest(const FString&)
 		TestEqual(TEXT("the shed first, in kind order"), Rows->ModuleTextForTest(0), FString(TEXT("Sheds 1 / 3 space")));
 		TestEqual(TEXT("the tank's row counts its tanks"), Rows->ModuleTextForTest(1), FString(TEXT("Fuel tanks 1 / 2 space")));
 	}
+	// CONTRACTED: Upgrade AND Cancel, the upgrade greyed with its reason.
+	using EAction = UInspectorFacilityRows::EAction;
+	TestTrue(TEXT("the Upgrade button is shown while contracted"), Rows->FuelButtonForTest(EAction::FuelContractUp)->GetVisibility() == ESlateVisibility::Visible);
+	TestTrue(TEXT("beside Cancel"), Rows->FuelButtonForTest(EAction::FuelContractCancel)->GetVisibility() == ESlateVisibility::Visible);
+	TestTrue(TEXT("an upgrade that does not fit is greyed"), !Rows->FuelButtonForTest(EAction::FuelContractUp)->GetIsEnabled());
+	TestTrue(TEXT("with the NoRoom reason on its tooltip"), Rows->FuelButtonForTest(EAction::FuelContractUp)->GetToolTipText().ToString()
+		.Contains(UFacilityPurchases::FuelOrderRefusalText(EFuelOrderRefusal::NoRoom).ToString()));
+	// THE SPOT DELAY IN WORDS: plural hours, and minutes below an hour.
+	FFuelQuote Short = Fuel;
+	Short.SpotDelaySeconds = 7200.0;
+	TestTrue(TEXT("two hours, plural"), FDepotCard::FuelViewOf(Short, nullptr).SpotTip.ToString().Contains(TEXT("2 game hours")));
+	Short.SpotDelaySeconds = 3600.0;
+	TestTrue(TEXT("one hour, singular"), FDepotCard::FuelViewOf(Short, nullptr).SpotTip.ToString().Contains(TEXT("1 game hour")));
+	Short.SpotDelaySeconds = 1800.0;
+	TestTrue(TEXT("half an hour in minutes"), FDepotCard::FuelViewOf(Short, nullptr).SpotTip.ToString().Contains(TEXT("30 game minutes")));
+	// NO CONTRACT: the button signs, and Cancel is not offered.
+	FFuelQuote Uncontracted = Fuel;
+	Uncontracted.ContractTier = INDEX_NONE;
+	Uncontracted.NextTier = 0;
+	Uncontracted.NextLitresPerDay = 5000.0;
+	Uncontracted.Sign = EFuelOrderRefusal::None;
+	Uncontracted.Cancel = EFuelOrderRefusal::NoContract;
+	Rows->Show(Quote, FDepotCard::FuelViewOf(Uncontracted, nullptr));
+	TestTrue(TEXT("no contract: the button signs"), Rows->FuelButtonForTest(EAction::FuelContractUp)->GetLabel()->GetText().ToString().StartsWith(TEXT("Contract 5,000 L/day")));
+	TestTrue(TEXT("and Cancel is not offered"), Rows->FuelButtonForTest(EAction::FuelContractCancel)->GetVisibility() == ESlateVisibility::Collapsed);
+
 	TArray<FBuildActionArg> Ran;
 	TArray<int32> RanIndex;
 	Rows->RunActionSource = [&Ran, &RanIndex](int32 Index, const FBuildActionArg& Arg) { RanIndex.Add(Index); Ran.Add(Arg); };

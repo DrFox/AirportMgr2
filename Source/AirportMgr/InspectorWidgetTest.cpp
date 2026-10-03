@@ -1412,13 +1412,18 @@ bool FFuelVerbsReachTheSupplyTest::RunTest(const FString& Parameters)
 
 	Rig.Refresh();
 	TestTrue(FString::Printf(TEXT("the line says the contract ('%s')"), *Rows->FuelTextForTest()), Rows->FuelTextForTest().Contains(TEXT("contract 5,000 L/day")));
-	TestTrue(TEXT("Sign has left the card"), Rows->FuelButtonForTest(EAction::FuelContractUp)->GetVisibility() == ESlateVisibility::Collapsed);
-	TestTrue(TEXT("Cancel is on it"), Rows->FuelButtonForTest(EAction::FuelContractCancel)->GetVisibility() == ESlateVisibility::Visible);
-	const FBuildAction* Sign = FindAction(FName(TEXT("selection.fuel_contract_up")));
-	if (TestNotNull(TEXT("the sign row is registered"), Sign))
-	{
-		TestFalse(TEXT("ONE CONTRACT AT A TIME: the sign row is disabled while one runs"), Sign->IsEnabled(FBuildActionContext(*Rig.Controller)));
-	}
+	// CONTRACTED: BOTH BUTTONS (ruled 2026-10-03) - Upgrade to the next tier, and Cancel.
+	UUiButton* Up = Rows->FuelButtonForTest(EAction::FuelContractUp);
+	TestTrue(TEXT("the contract button stays, as Upgrade"), Up->GetVisibility() == ESlateVisibility::Visible);
+	TestTrue(FString::Printf(TEXT("captioned with the next tier ('%s')"), *Up->GetLabel()->GetText().ToString()), Up->GetLabel()->GetText().ToString().StartsWith(TEXT("Upgrade to 10,000 L/day")));
+	TestTrue(FString::Printf(TEXT("its tooltip says a fresh term ('%s')"), *Up->GetToolTipText().ToString()), Up->GetToolTipText().ToString().Contains(TEXT("fresh")));
+	TestTrue(TEXT("and Cancel is on the card beside it"), Rows->FuelButtonForTest(EAction::FuelContractCancel)->GetVisibility() == ESlateVisibility::Visible);
+	const double Balance = Rig.Runtime->GetLedger()->Balance();
+	Rows->ClickFuelForTest(EAction::FuelContractUp);
+	TestEqual(TEXT("the Upgrade button upgraded to tier 1"), Supply->Contract.Tier, 1);
+	TestEqual(TEXT("for a fresh term"), Supply->Contract.DaysLeft, Supply->Figures.ContractTermDays);
+	TestEqual(TEXT("charging nothing"), Rig.Runtime->GetLedger()->Balance(), Balance, 0.01);
+	Rig.Refresh();
 	Rows->ClickFuelForTest(EAction::FuelContractCancel);
 	TestEqual(TEXT("the Cancel button cancelled it"), Supply->Contract.Tier, static_cast<int32>(INDEX_NONE));
 
